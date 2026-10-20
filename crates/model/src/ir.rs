@@ -2121,6 +2121,10 @@ pub struct Group {
     /// most and the nesting never loops; `DrawingsSection::group_leaves`
     /// and friends (`groups.rs`) read the tree.
     pub member_ids: Vec<String>,
+    /// `EDA_GROUP::m_designBlockLibId`: the `Lib:Name` of the design block this group was placed from or saved to (`(lib_id "Lib:Name")` in the group's form), empty for a
+    /// group with no such link. The link is what Place Linked Design Block, Save to Linked Design Block and Apply Design Block Layout read.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub design_block: String,
 }
 
 impl Group {

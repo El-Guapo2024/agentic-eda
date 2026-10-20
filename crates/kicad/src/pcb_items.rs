@@ -370,8 +370,8 @@ pub(crate) fn write_groups(out: &mut String, groups: &[&Group], written: &BTreeM
     }
 }
 
-/// `PCB_IO_KICAD_SEXPR::format( const PCB_GROUP* )`: a name, a uuid and the sorted uuids of the
-/// members. A group with no member on the board is not written (`if( memberIds.empty() ) return;`).
+/// `PCB_IO_KICAD_SEXPR::format( const PCB_GROUP* )`: a name, a uuid, the lock, the link to the design block the group was placed from or saved to
+/// (`(lib_id "Lib:Name")`, `HasDesignBlockLink`) and the sorted uuids of the members. A group with no member on the board is not written (`if( memberIds.empty() ) return;`).
 pub(crate) fn write_group(out: &mut String, g: &Group, uuid: &str, locked: bool, mut members: Vec<String>) {
     if members.is_empty() {
         return;
@@ -381,6 +381,9 @@ pub(crate) fn write_group(out: &mut String, g: &Group, uuid: &str, locked: bool,
     write!(out, "\t(group {} (uuid \"{uuid}\")", sexpr_str(&g.name)).unwrap();
     if locked {
         write!(out, " (locked yes)").unwrap();
+    }
+    if !g.design_block.is_empty() {
+        write!(out, " (lib_id {})", sexpr_str(&g.design_block)).unwrap();
     }
     write!(out, " (members").unwrap();
     for m in &members {

@@ -64,7 +64,7 @@ fn grouped(m: &ConstraintModel) -> SchematicSection {
         sch.labels.push(NetLabel { id: format!("l_{net}"), net, at: end, kind: LabelKind::Local });
     }
     sch.texts.push(SchematicText { id: "txt_note".into(), content: "a note".into(), at: Point { x: 30_000, y: 40_000 }, angle: 0, size_um: 1_270 });
-    let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|s| s.to_string()).collect() };
+    let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|s| s.to_string()).collect(), design_block: String::new() };
     sch.extras.groups = vec![group("grp_inner", "net A", &["w_NET_A", "l_NET_A"]), group("grp_outer", "gate", &["grp_inner", "U1"]), group("grp_other", "the rest", &["l_NET_B", "l_NET_Y", "txt_note"])];
     sch
 }
@@ -156,7 +156,7 @@ fn a_sheet_without_groups_writes_none_and_a_locked_group_says_so() {
 fn a_group_none_of_whose_members_is_written_is_not_written() {
     let m = model();
     let mut sch = grouped(&m);
-    sch.extras.groups.push(Group { id: "grp_ghost".into(), name: "ghost".into(), member_ids: vec!["no_such_item".into(), "nor_this".into()] });
+    sch.extras.groups.push(Group { id: "grp_ghost".into(), name: "ghost".into(), member_ids: vec!["no_such_item".into(), "nor_this".into()], design_block: String::new() });
     let file = export_kicad_sch(&design_with(sch), &m, &META).unwrap();
     assert!(!file.contains("\"ghost\""), "an empty group is not written (`if( aGroup->GetItems().empty() ) return;`)");
     assert_eq!(group_forms(&file).len(), 3);
@@ -236,6 +236,42 @@ fn a_loop_of_groups_in_a_file_made_by_hand_is_dropped_not_followed() {
             at = back.extras.parent_group(&p.id);
         }
     }
+}
+
+#[test]
+fn a_group_linked_to_a_design_block_writes_its_lib_id_and_reads_back_with_the_link() {
+    let m = model();
+    let mut sch = grouped(&m);
+    // `(lib_id "Lib:Name")` is the link (`SCH_IO_KICAD_SEXPR::saveGroup`: after the lock, before the members); a group of one item that is linked is written and kept
+    sch.extras.groups[2].design_block = "Power:Buck".to_string();
+    sch.extras.groups.push(Group { id: "grp_solo".into(), name: "alone".into(), member_ids: vec!["U1".into()], design_block: "Power:Single".into() });
+    // U1 is held by "gate": a member is one group's at a time, so the one-item group takes the text instead
+    sch.extras.groups[1].member_ids.retain(|m| m != "U1");
+    let file = export_kicad_sch(&design_with(sch), &m, &META).unwrap();
+    let line = file.lines().find(|l| l.contains("\"the rest\"")).expect("the group is written");
+    assert!(line.contains("(lib_id \"Power:Buck\")") && line.find("(uuid").unwrap() < line.find("(lib_id").unwrap() && line.find("(lib_id").unwrap() < line.find("(members").unwrap(), "{line}");
+    assert!(!file.lines().find(|l| l.contains("\"net A\"")).unwrap().contains("lib_id"), "an unlinked group writes none");
+    let (design, _, _) = import_kicad_sch(&file).expect("the file reads back");
+    let back = design.schematic.unwrap().extras.groups;
+    let link_of = |name: &str| back.iter().find(|g| g.name == name).map(|g| (g.design_block.clone(), g.member_ids.len()));
+    assert_eq!(link_of("the rest"), Some(("Power:Buck".to_string(), 3)));
+    assert_eq!(link_of("alone"), Some(("Power:Single".to_string(), 1)), "a group of one that is linked is kept");
+    assert_eq!(link_of("net A").map(|l| l.0), Some(String::new()));
+    // a link that is no `Lib:Name` is read as none
+    let broken = file.replace("(lib_id \"Power:Buck\")", "(lib_id \"nonsense\")");
+    let (design, _, _) = import_kicad_sch(&broken).unwrap();
+    assert!(design.schematic.unwrap().extras.groups.iter().all(|g| g.design_block != "nonsense"));
+    // and the clipboard carries the link of a copied group
+    let text = copy_of(&m, &grouped_with_link(&m), &["grp_other"]);
+    assert!(text.contains("(lib_id \"Power:Buck\")"), "{text}");
+    let fragment = parse_clipboard(&text).expect("reads back");
+    assert_eq!(fragment.section.extras.groups.iter().find(|g| g.name == "the rest").map(|g| g.design_block.clone()), Some("Power:Buck".to_string()));
+}
+
+fn grouped_with_link(m: &ConstraintModel) -> SchematicSection {
+    let mut sch = grouped(m);
+    sch.extras.groups[2].design_block = "Power:Buck".to_string();
+    sch
 }
 
 // ---------------------------------------------------------------------------------------------------------------------- the clipboard

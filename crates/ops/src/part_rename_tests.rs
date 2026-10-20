@@ -61,7 +61,7 @@ fn fixture() -> (ConstraintModel, Design) {
             footprint_extras: vec![FootprintExtra { id: "R1".into(), ..Default::default() }],
             zone_overrides: vec![FootprintZoneOverrides { id: "U1".into(), ..Default::default() }],
             locked_ids: vec!["R1".into(), "U1".into()],
-            groups: vec![Group { id: "grp_1".into(), name: "g".into(), member_ids: vec!["R1".into(), "U1".into(), "trk_1".into()] }],
+            groups: vec![Group { id: "grp_1".into(), name: "g".into(), member_ids: vec!["R1".into(), "U1".into(), "trk_1".into()], design_block: String::new() }],
             ..Default::default()
         }),
         footprint_library: None,

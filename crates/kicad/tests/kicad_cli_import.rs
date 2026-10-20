@@ -448,7 +448,7 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
     let mut members = vec![footprint.clone(), arc_id.clone()];
     members.extend(via_id);
     let drawings = board.drawings.as_mut().unwrap();
-    drawings.groups = vec![Group { id: String::new(), name: "kept together".into(), member_ids: members.clone() }];
+    drawings.groups = vec![Group { id: String::new(), name: "kept together".into(), member_ids: members.clone(), design_block: String::new() }];
     drawings.locked_ids = vec![footprint.clone(), arc_id.clone()];
     board.assign_missing_ids();
 

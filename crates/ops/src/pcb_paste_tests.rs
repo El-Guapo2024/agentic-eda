@@ -42,7 +42,7 @@ fn duplicate_copies_a_dimension_in_place_under_a_new_id() {
 fn duplicating_a_group_copies_its_members_into_a_group_of_their_own() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
-    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["trk_a", "shp_seg", "U1"]) });
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["trk_a", "shp_seg", "U1"]), design_block: String::new() });
     let mut b = Board::new(d, &m, 100, 300);
     b.apply(&Cmd::Duplicate { ids: ids(&["grp_a"]) }).unwrap();
 
@@ -61,7 +61,7 @@ fn duplicating_a_group_copies_its_members_into_a_group_of_their_own() {
 fn the_copy_of_a_member_of_a_group_joins_that_group() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
-    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["shp_seg", "txt_a"]) });
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["shp_seg", "txt_a"]), design_block: String::new() });
     let mut b = Board::new(d, &m, 100, 300);
     b.apply(&Cmd::Duplicate { ids: ids(&["shp_seg"]) }).unwrap();
     let g = drawings(&b).groups.iter().find(|g| g.id == "grp_a").unwrap();
@@ -229,7 +229,7 @@ fn copper_on_a_layer_the_board_lacks_is_dropped() {
 fn a_pasted_group_is_a_group_again_over_the_new_ids() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
-    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["shp_seg", "txt_a", "dim_a"]) });
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["shp_seg", "txt_a", "dim_a"]), design_block: String::new() });
     let text = eda_kicad::export_pcb_clipboard(&d, &model(&["F.Cu", "B.Cu"]), &ids(&["grp_a"]), p(0, 0)).unwrap();
     let mut b = target(&m);
     b.apply(&Cmd::PasteClipboard { text, at: p(1_000, 1_000) }).unwrap();

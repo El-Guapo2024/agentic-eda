@@ -72,7 +72,7 @@ mod bus;
 pub use bus::expand_bus_members;
 
 mod sch_clipboard;
-pub use sch_clipboard::{parse_clipboard, write_clipboard, CopyInput, CopyOutput};
+pub use sch_clipboard::{fragment_as_sheet_file, parse_clipboard, write_clipboard, CopyInput, CopyOutput};
 mod sch_extras_io;
 pub mod sch_overlap;
 mod sch_import;

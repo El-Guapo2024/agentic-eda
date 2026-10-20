@@ -149,10 +149,11 @@ pub(crate) fn build_groups(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &
             if key.is_some() {
                 self.visiting.pop();
             }
-            let built = if members.len() < 2 {
+            // A group of one is not a group, unless it is linked to a design block: `SaveSelectionAsDesignBlock` and a block placed as a sheet make those.
+            let built = if members.len() < 2 && !(members.len() == 1 && !g.lib_id.is_empty()) {
                 Built::Dropped(members)
             } else {
-                let mut group = Group { id: String::new(), name: g.name.clone(), member_ids: members };
+                let mut group = Group { id: String::new(), name: g.name.clone(), member_ids: members, design_block: g.lib_id.clone() };
                 group.id = eda_model::ir::next_item_id("grp", &group.id_seed(), &self.names);
                 self.names.insert(group.id.clone());
                 let id = group.id.clone();
@@ -188,6 +189,9 @@ pub(crate) struct RawGroup {
     pub members: Vec<String>,
     /// `(locked yes)`.
     pub locked: bool,
+    /// `(lib_id "Lib:Name")`: the design block the group is linked to (`EDA_GROUP::m_designBlockLibId`), empty for none. A link that `LIB_ID::Parse` would refuse is read
+    /// as none.
+    pub lib_id: String,
 }
 
 /// `PCB_IO_KICAD_SEXPR_PARSER::parseGROUP`: `(group "name" (uuid ..) [(locked yes)] [(lib_id ..)] (members "uuid" ..))`.
@@ -198,7 +202,8 @@ pub(crate) fn import_groups(root: &[Sexpr]) -> Vec<RawGroup> {
             let uuid = sexpr::find(g, "uuid").or_else(|| sexpr::find(g, "id")).and_then(|u| sexpr::txt(u, 1)).map(str::to_string);
             let members = sexpr::find(g, "members").map(|m| m.iter().skip(1).filter_map(Sexpr::text).map(str::to_string).collect()).unwrap_or_default();
             let locked = sexpr::find(g, "locked").is_some_and(|l| sexpr::txt(l, 1) != Some("no"));
-            RawGroup { name, uuid, members, locked }
+            let lib_id = sexpr::find(g, "lib_id").and_then(|l| sexpr::txt(l, 1)).and_then(|t| eda_model::groups::check_design_block_id(t).ok()).unwrap_or_default();
+            RawGroup { name, uuid, members, locked, lib_id }
         })
         .collect()
 }

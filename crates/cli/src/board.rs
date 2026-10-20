@@ -52,6 +52,9 @@ pub(crate) mod carry;
 #[path = "pcb_edit_details_tests.rs"]
 mod edit_details_tests;
 #[cfg(test)]
+#[path = "design_block_tests.rs"]
+mod design_block_tests;
+#[cfg(test)]
 #[path = "fp_assign_tests.rs"]
 mod fp_assign_tests;
 #[cfg(test)]
@@ -1224,7 +1227,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::Ungroup { ids } => format!("ungroup {}", ids.join(" ")),
         Cmd::AddToGroup { group_id, ids } => format!("group add-to {group_id} {}", ids.join(" ")),
         Cmd::RemoveFromGroup { ids } => format!("group remove-from {}", ids.join(" ")),
-        Cmd::EditGroup { id, name, member_ids } => format!("group edit {id} --name {name:?} --members {}", member_ids.join(" ")),
+        Cmd::EditGroup { id, name, member_ids, design_block } => format!("group edit {id} --name {name:?} --members {}{}", member_ids.join(" "), design_block.as_ref().map_or(String::new(), |b| format!(" --design-block {b:?}"))),
+        Cmd::LinkDesignBlock { ids, block } => format!("design-block link {block} {}", ids.join(" ")),
+        Cmd::PlaceDesignBlock { block, at, as_group, group_name, text } => format!("design-block place {block} --at {},{}{}{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), if *as_group { " --group" } else { "" }, if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") }, text.len()),
         Cmd::CreateArray { ids, arrange, .. } => format!("array{} {}", if *arrange { " --arrange" } else { "" }, ids.join(" ")),
         Cmd::AddDimension { .. } => "dimension add".to_string(),
         Cmd::DeleteDimension { id } => format!("dimension delete {id}"),
@@ -1338,7 +1343,16 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddSchLine { pts, .. } => format!("schematic line --points {}", pts.len()),
         Cmd::DeleteSchLine { id } => format!("schematic delete-line {id}"),
         Cmd::AddSheet { name, file, at, .. } => format!("schematic sheet {name:?} --file {file:?} --at {},{}", mm(at.x), mm(at.y)),
-        Cmd::ImportSheet { source, as_sheet, name, file, at, keep_annotations, .. } => format!("schematic import-sheet {source:?} {} --name {name:?} --file {file:?} --at {},{}{}", if *as_sheet { "--as-sheet" } else { "--contents" }, mm(at.x), mm(at.y), if *keep_annotations { " --keep-annotations" } else { "" }),
+        Cmd::ImportSheet { source, as_sheet, name, file, at, keep_annotations, as_group, group_name, block, .. } => format!(
+            "schematic import-sheet {source:?} {} --name {name:?} --file {file:?} --at {},{}{}{}{}{}",
+            if *as_sheet { "--as-sheet" } else { "--contents" },
+            mm(at.x),
+            mm(at.y),
+            if *keep_annotations { " --keep-annotations" } else { "" },
+            if *as_group { " --group" } else { "" },
+            if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") },
+            if block.is_empty() { String::new() } else { format!(" --design-block {block:?}") },
+        ),
         Cmd::SwapSchItems { a, b } => format!("schematic swap {a} {b}"),
         Cmd::PasteSch { fragment, dx, dy, .. } => format!("schematic paste --items {} --by {},{}", fragment.section.symbols.len() + fragment.section.power_symbols.len() + fragment.section.wires.len() + fragment.section.labels.len() + fragment.section.texts.len() + fragment.section.no_connects.len() + fragment.section.bus_entries.len() + fragment.section.junctions.len() + fragment.section.lines.len() + fragment.section.extras.graphics.len(), mm(*dx), mm(*dy)),
         Cmd::SchEdit(c) => c.describe(),
@@ -1537,6 +1551,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddToGroup { .. } => "group-add-to",
         Cmd::RemoveFromGroup { .. } => "group-remove-from",
         Cmd::EditGroup { .. } => "group-edit",
+        Cmd::LinkDesignBlock { .. } => "group-edit",
+        Cmd::PlaceDesignBlock { .. } => "duplicate",
         Cmd::CreateArray { .. } => "create-array",
         Cmd::AddDimension { .. } => "dimension-add",
         Cmd::DeleteDimension { .. } => "dimension-delete",
@@ -5794,8 +5810,8 @@ mod tests {
             sch.assign_missing_ids();
             // inner = {R1, R2}, outer = {inner, txt_a}
             sch.extras.groups = vec![
-                eda_model::ir::Group { id: "grp_inner".into(), name: "pair".into(), member_ids: vec!["R1".into(), "R2".into()] },
-                eda_model::ir::Group { id: "grp_outer".into(), name: "all".into(), member_ids: vec!["grp_inner".into(), "txt_a".into()] },
+                eda_model::ir::Group { id: "grp_inner".into(), name: "pair".into(), member_ids: vec!["R1".into(), "R2".into()], design_block: String::new() },
+                eda_model::ir::Group { id: "grp_outer".into(), name: "all".into(), member_ids: vec!["grp_inner".into(), "txt_a".into()], design_block: String::new() },
             ];
         }
         save(&dir, &design).unwrap();
@@ -5808,7 +5824,7 @@ mod tests {
             Cmd::SchEdit(V::Ungroup { ids: ids(&["grp_outer"]) }),
             Cmd::SchEdit(V::AddToGroup { group_id: "grp_inner".into(), ids: ids(&["txt_b"]) }),
             Cmd::SchEdit(V::RemoveFromGroup { ids: ids(&["txt_a"]) }),
-            Cmd::SchEdit(V::EditGroup { id: "grp_outer".into(), name: "renamed".into(), member_ids: ids(&["grp_inner", "txt_b"]) }),
+            Cmd::SchEdit(V::EditGroup { id: "grp_outer".into(), name: "renamed".into(), member_ids: ids(&["grp_inner", "txt_b"]), design_block: None }),
             Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Rotate { ids: ids(&["grp_outer"]), vertices: Default::default(), ccw: true, about: None, grid: 0 }),
             Cmd::SchMove(M::Mirror { ids: ids(&["grp_outer"]), vertices: Default::default(), vertical: false, about: None, grid: 0 }),

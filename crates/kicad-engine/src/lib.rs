@@ -1623,6 +1623,33 @@ pub fn export_symbol_svg(work: &Path, root: &Path, name: &str, kicad_sym: &str, 
     run_export(&cli, "sym", "svg", args, &input, &out_dir, true, "svg", &stem, root)
 }
 
+/// `kicad-cli sch export svg` or `pcb export svg` on a file as it is -- a design block's schematic or board, which is not the design's -- into `out_dir`, and the
+/// SVG's text. `scope` is `sch` or `pcb`. The schematic is drawn without the drawing sheet or a background; the board is its area only (`--page-size-mode 2`), one file
+/// (`--mode-single`) of the copper, silkscreen, courtyard and outline layers. This is what the Design Blocks panel's preview shows (`SCH_DESIGN_BLOCK_PREVIEW_WIDGET`,
+/// `PCB_DESIGN_BLOCK_PREVIEW_WIDGET`); a run takes about a second.
+pub fn export_file_svg(scope: &str, input: &Path, out_dir: &Path) -> Result<String, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    if scope != "sch" && scope != "pcb" {
+        return Err(fail("kicad_cli_export", scope, "an svg preview is of a schematic (sch) or a board (pcb)"));
+    }
+    let stem = file_stem(&input.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "block".into()));
+    let args: Vec<String> = if scope == "sch" {
+        ["--no-background-color", "--exclude-drawing-sheet"].iter().map(|a| a.to_string()).collect()
+    } else {
+        ["--mode-single", "--layers", "F.Cu,B.Cu,F.SilkS,B.SilkS,F.Courtyard,B.Courtyard,Edge.Cuts", "--page-size-mode", "2", "--exclude-drawing-sheet"].iter().map(|a| a.to_string()).collect()
+    };
+    run_export(&cli, scope, "svg", &args, input, out_dir, scope == "sch", "svg", &stem, out_dir)?;
+    let produced = out_dir.join(format!("{stem}.svg"));
+    // kicad-cli names a schematic's svg after the file it was given (`<name>.svg`); look for the one it wrote when the name differs
+    let found = if produced.is_file() {
+        Some(produced)
+    } else {
+        std::fs::read_dir(out_dir).ok().and_then(|d| d.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "svg")))
+    };
+    let path = found.ok_or_else(|| fail("kicad_cli_export", "svg", "kicad-cli wrote no svg"))?;
+    std::fs::read_to_string(&path).map_err(|e| fail("kicad_cli_export", "svg", format!("could not read {}: {e}", path.display())))
+}
+
 /// KiCad's stock plugin scripts (the legacy BOM generators): `EDA_KICAD_PLUGINS`, else the folder of the installed KiCad that kicad-cli belongs to
 /// (`Contents/SharedSupport/plugins` in the macOS app, `share/kicad/plugins` elsewhere).
 pub fn bom_plugins_dir() -> Option<PathBuf> {

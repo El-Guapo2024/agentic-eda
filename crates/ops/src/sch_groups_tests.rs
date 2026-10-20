@@ -91,8 +91,8 @@ fn members(s: &SchematicSection, id: &str) -> Vec<String> {
 fn nested() -> SchematicSection {
     let mut s = sheet();
     s.extras.groups = vec![
-        Group { id: "grp_inner".into(), name: "inner".into(), member_ids: ids(&["R1", "R2", "wire_in", "txt_a"]) },
-        Group { id: "grp_outer".into(), name: "outer".into(), member_ids: ids(&["grp_inner", "R3"]) },
+        Group { id: "grp_inner".into(), name: "inner".into(), member_ids: ids(&["R1", "R2", "wire_in", "txt_a"]), design_block: String::new() },
+        Group { id: "grp_outer".into(), name: "outer".into(), member_ids: ids(&["grp_inner", "R3"]), design_block: String::new() },
     ];
     s
 }
@@ -203,19 +203,19 @@ fn remove_items_dissolves_a_group_left_with_one() {
 fn group_properties_set_the_name_and_the_members() {
     let m = ConstraintModel::default();
     let mut b = board(&m, nested());
-    run(&mut b, V::EditGroup { id: "grp_inner".into(), name: "power stage".into(), member_ids: ids(&["R1", "R2", "lbl_a"]) });
+    run(&mut b, V::EditGroup { id: "grp_inner".into(), name: "power stage".into(), member_ids: ids(&["R1", "R2", "lbl_a"]), design_block: None });
     let s = sch(&b);
     assert_eq!(s.extras.group("grp_inner").unwrap().name, "power stage");
     assert_eq!(members(&s, "grp_inner"), ids(&["R1", "R2", "lbl_a"]), "wire_in and txt_a are released");
     assert!(s.extras.parent_group("wire_in").is_none());
     // a member taken from another group leaves it
-    run(&mut b, V::EditGroup { id: "grp_inner".into(), name: "power stage".into(), member_ids: ids(&["R1", "R2", "R3"]) });
+    run(&mut b, V::EditGroup { id: "grp_inner".into(), name: "power stage".into(), member_ids: ids(&["R1", "R2", "R3"]), design_block: None });
     assert_eq!(members(&sch(&b), "grp_inner"), ids(&["R1", "R2", "R3"]));
     assert!(!sch(&b).extras.is_group("grp_outer"), "the outer group lost R3 and had only the inner one left");
     let mut b = board(&m, nested());
-    assert_eq!(refuse(&mut b, V::EditGroup { id: "grp_inner".into(), name: String::new(), member_ids: ids(&["R1", "grp_outer"]) }), "ops_bad_group");
-    assert_eq!(refuse(&mut b, V::EditGroup { id: "grp_nope".into(), name: String::new(), member_ids: ids(&["R1", "R2"]) }), "ops_unknown_group");
-    assert_eq!(refuse(&mut b, V::EditGroup { id: "grp_inner".into(), name: String::new(), member_ids: ids(&["R1", "pin:R2:1"]) }), "ops_unknown_item");
+    assert_eq!(refuse(&mut b, V::EditGroup { id: "grp_inner".into(), name: String::new(), member_ids: ids(&["R1", "grp_outer"]), design_block: None }), "ops_bad_group");
+    assert_eq!(refuse(&mut b, V::EditGroup { id: "grp_nope".into(), name: String::new(), member_ids: ids(&["R1", "R2"]), design_block: None }), "ops_unknown_group");
+    assert_eq!(refuse(&mut b, V::EditGroup { id: "grp_inner".into(), name: String::new(), member_ids: ids(&["R1", "pin:R2:1"]), design_block: None }), "ops_unknown_item");
 }
 
 #[test]
@@ -224,7 +224,7 @@ fn the_verbs_round_trip_as_json() {
     let json = serde_json::to_value(&cmd).unwrap();
     assert_eq!(json, serde_json::json!({ "op": "sch_edit", "verb": "add_to_group", "group_id": "grp_a", "ids": ["R1"] }));
     assert_eq!(serde_json::from_value::<Cmd>(json).unwrap(), cmd);
-    assert_eq!(serde_json::to_value(Cmd::SchEdit(V::EditGroup { id: "g".into(), name: "n".into(), member_ids: ids(&["a", "b"]) })).unwrap()["verb"], "edit_group");
+    assert_eq!(serde_json::to_value(Cmd::SchEdit(V::EditGroup { id: "g".into(), name: "n".into(), member_ids: ids(&["a", "b"]), design_block: None })).unwrap()["verb"], "edit_group");
     assert_eq!(Cmd::SchEdit(V::Group { ids: ids(&["a", "b"]) }).domain(), Domain::Schematic);
     assert!(!Cmd::SchEdit(V::Ungroup { ids: ids(&["a"]) }).edits_connectivity(), "a group is a set of names");
 }
@@ -431,7 +431,7 @@ fn grouped_fragment() -> SchFragment {
     section.wires.push(wire("w1", &[p(100_000, 46_190), p(120_000, 46_190)]));
     section.labels.push(NetLabel { id: "l1".into(), net: "SDA".into(), at: p(130_000, 46_190), kind: LabelKind::Local });
     section.texts.push(SchematicText { id: "t1".into(), content: "outside".into(), at: p(100_000, 70_000), angle: 0, size_um: 1_270 });
-    section.extras.groups = vec![Group { id: "grp_a".into(), name: "inner".into(), member_ids: ids(&["R1", "w1"]) }, Group { id: "grp_b".into(), name: "outer".into(), member_ids: ids(&["grp_a", "R2", "l1"]) }];
+    section.extras.groups = vec![Group { id: "grp_a".into(), name: "inner".into(), member_ids: ids(&["R1", "w1"]), design_block: String::new() }, Group { id: "grp_b".into(), name: "outer".into(), member_ids: ids(&["grp_a", "R2", "l1"]), design_block: String::new() }];
     let lib_symbols = ["Device:R"].iter().filter_map(|id| eda_model::symbol::builtin(id)).map(|s| LibrarySymbol::from_engine_symbol(&s)).collect();
     SchFragment { section, lib_symbols, notes: vec![], sheet_screens: Default::default() }
 }

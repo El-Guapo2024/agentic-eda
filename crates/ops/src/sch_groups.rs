@@ -41,6 +41,12 @@ fn memberable(sch: &SchematicSection) -> BTreeSet<String> {
     out
 }
 
+/// The ids a group of this sheet may list as a member (`IsGroupableType`; a pin, a field and a sheet pin are not): what the studio's server keeps of a selection that is to be
+/// linked to a design block.
+pub fn groupable_ids(sch: &SchematicSection) -> BTreeSet<String> {
+    memberable(sch)
+}
+
 /// The ids on the sheet before and after a command, to see what left: items, and groups.
 pub(crate) fn sheet_ids(sch: &SchematicSection) -> BTreeSet<String> {
     memberable(sch)
@@ -93,10 +99,17 @@ impl Board<'_> {
         Ok(())
     }
 
-    /// `SchCmd::EditGroup` (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): a name and the member list. See [`GroupHost::set_group`].
-    pub(crate) fn sch_edit_group(&mut self, id: &str, name: &str, member_ids: &[String]) -> Result<(), Vec<CheckResult>> {
+    /// `SchCmd::EditGroup` (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): a name, the member list and the design block link. See [`GroupHost::set_group`].
+    pub(crate) fn sch_edit_group(&mut self, id: &str, name: &str, member_ids: &[String], design_block: Option<&str>) -> Result<(), Vec<CheckResult>> {
         self.check_members(member_ids)?;
-        self.schematic_mut()?.extras.set_group(id, name, member_ids).map_err(refused)
+        self.schematic_mut()?.extras.set_group(id, name, member_ids, design_block).map_err(refused)
+    }
+
+    /// `SchCmd::LinkDesignBlock`: see [`GroupHost::link_design_block`]. The ids must be groupable items of the sheet (`SaveSelectionAsDesignBlock` leaves out an item that belongs to
+    /// a symbol -- its pins and fields -- and one that `IsGroupableType` refuses), or groups.
+    pub(crate) fn sch_link_design_block(&mut self, ids: &[String], block: &str) -> Result<(), Vec<CheckResult>> {
+        self.check_members(ids)?;
+        self.schematic_mut()?.extras.link_design_block(ids, block).map(|_| ()).map_err(refused)
     }
 
     /// The ids of the sheet in view before a command, when it has groups to keep honest ([`Board::tidy_sch_groups`]); `None` without any.

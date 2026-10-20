@@ -259,8 +259,19 @@ pub enum SchCmd {
     /// Remove Items (`GROUP_TOOL::RemoveFromGroup`): each id leaves the group it is in. A group left with fewer than two members dissolves. Refused when none is in a group.
     RemoveFromGroup { ids: Vec<String> },
     /// Group Properties (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): the group `id` is renamed and its members are exactly `member_ids`, each pulled out of the group
-    /// it was in, the previous members not listed released.
-    EditGroup { id: String, name: String, member_ids: Vec<String> },
+    /// it was in, the previous members not listed released. `design_block` is the dialog's "Library link:" box: `Some("")` clears the link, `Some("Lib:Name")` sets it (refused
+    /// as "Invalid library link" when it is not an id of that shape), `None` leaves it.
+    EditGroup {
+        id: String,
+        name: String,
+        member_ids: Vec<String>,
+        #[serde(default)]
+        design_block: Option<String>,
+    },
+    /// What a successful Save Selection as Design Block / Update Design Block from Selection does to the sheet (`SCH_EDIT_FRAME::SaveSelectionAsDesignBlock`,
+    /// `UpdateDesignBlockFromSelection`): `ids` -- the selection, a group included -- are linked to `block` (`Lib:Name`). A lone group with no link takes it ("Set Group Design
+    /// Block Link"); anything else goes in a new group named after the block and linked to it ("Group Items"; it may hold one item). See `sch_groups.rs`.
+    LinkDesignBlock { ids: Vec<String>, block: String },
 }
 
 impl SchCmd {
@@ -285,6 +296,7 @@ impl SchCmd {
             SchCmd::Group { ids } | SchCmd::Ungroup { ids } | SchCmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddToGroup { group_id, ids } => std::iter::once(group_id.as_str()).chain(ids.iter().map(String::as_str)).collect(),
             SchCmd::EditGroup { id, member_ids, .. } => std::iter::once(id.as_str()).chain(member_ids.iter().map(String::as_str)).collect(),
+            SchCmd::LinkDesignBlock { ids, .. } => ids.iter().map(String::as_str).collect(),
         }
     }
 
@@ -324,6 +336,7 @@ impl SchCmd {
             SchCmd::AddToGroup { group_id, ids } => format!("schematic group-add {group_id} {}", ids.join(" ")),
             SchCmd::RemoveFromGroup { ids } => format!("schematic group-remove {}", ids.join(" ")),
             SchCmd::EditGroup { id, name, .. } => format!("schematic group-properties {id} {name:?}"),
+            SchCmd::LinkDesignBlock { ids, block } => format!("schematic link-design-block {block} {}", ids.join(" ")),
         }
     }
 
@@ -340,7 +353,7 @@ impl SchCmd {
             SchCmd::EditSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
             SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } | SchCmd::PinHelper { .. } => "schematic-pins",
-            SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } => "schematic-group",
+            SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => "schematic-group",
         }
     }
 
@@ -350,7 +363,7 @@ impl SchCmd {
         match self {
             SchCmd::SetStroke { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => false,
             // a group is a set of names; it moves, joins and leaves nothing
-            SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } => false,
+            SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
             SchCmd::EditField { text, .. } => text.is_some(),
             _ => true,
@@ -410,7 +423,8 @@ impl<'a> Board<'a> {
             SchCmd::Ungroup { ids } => self.sch_ungroup_items(ids),
             SchCmd::AddToGroup { group_id, ids } => self.sch_add_to_group(group_id, ids),
             SchCmd::RemoveFromGroup { ids } => self.sch_remove_from_group(ids),
-            SchCmd::EditGroup { id, name, member_ids } => self.sch_edit_group(id, name, member_ids),
+            SchCmd::EditGroup { id, name, member_ids, design_block } => self.sch_edit_group(id, name, member_ids, design_block.as_deref()),
+            SchCmd::LinkDesignBlock { ids, block } => self.sch_link_design_block(ids, block),
         }
     }
 

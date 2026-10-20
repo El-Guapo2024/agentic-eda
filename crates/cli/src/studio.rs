@@ -797,6 +797,18 @@ fn handle(
         ("POST", "/api/import_graphics/read") => respond(stream, "200 OK", "application/json", crate::graphics_api::read(&body).to_string().as_bytes()),
         // Append Board: what a `.kicad_pcb` brings and the point it is held by (a read; the append is `Cmd::PasteClipboard` with the file's text).
         ("POST", "/api/append_board/read") => respond(stream, "200 OK", "application/json", crate::append_api::read(dir, &body).to_string().as_bytes()),
+        // The Design Blocks panels (`crate::design_block_api`): the libraries and their blocks, a block's board file, its preview (kicad-cli, off the loop), and the dialogs'
+        // reads and writes. Placing a block is `Cmd::ImportSheet` / `Cmd::PlaceDesignBlock`; the save also applies the link of a selection to the block (`LinkDesignBlock`).
+        ("GET", "/api/design_blocks") => respond(stream, "200 OK", "application/json", crate::design_block_api::list(dir).to_string().as_bytes()),
+        ("GET", "/api/design_blocks/file") => respond(stream, "200 OK", "application/json", crate::design_block_api::file(dir, &query_value(target, "lib"), &query_value(target, "name"), &query_value(target, "what")).to_string().as_bytes()),
+        ("GET", "/api/design_blocks/preview") => {
+            let (lib, name, what) = (query_value(target, "lib"), query_value(target, "name"), query_value(target, "what"));
+            offload(stream, lane, dir, job, &format!("{path} {lib} {name} {what}"), &[], move |dir, _| crate::design_block_api::preview(dir, &lib, &name, &what))
+        }
+        ("POST", "/api/design_blocks/prepare") => respond(stream, "200 OK", "application/json", crate::design_block_api::prepare(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/design_blocks/save") => respond(stream, "200 OK", "application/json", crate::design_block_api::save(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/design_blocks/properties") => respond(stream, "200 OK", "application/json", crate::design_block_api::properties(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/design_blocks/delete") => respond(stream, "200 OK", "application/json", crate::design_block_api::delete(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
@@ -1215,7 +1227,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             }))).collect::<Vec<_>>(),
             // Task item 5 -- see `eda_model::ir::Group`'s own doc. A tuning pattern (a `PCB_GENERATOR`, which is a `PCB_GROUP`) is listed with the groups so that it selects as one
             // (`generator` names what it is); `tuning_patterns` has the pattern itself.
-            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).chain(d.tuning_patterns.iter().map(|p| json!({ "id": p.id, "name": "Tuning Pattern", "member_ids": p.member_ids, "generator": "tuning_pattern" }))).collect::<Vec<_>>(),
+            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids, "design_block": g.design_block })).chain(d.tuning_patterns.iter().map(|p| json!({ "id": p.id, "name": "Tuning Pattern", "member_ids": p.member_ids, "generator": "tuning_pattern" }))).collect::<Vec<_>>(),
             "tuning_patterns": d.tuning_patterns.iter().map(|p| {
                 let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
                 v["handles"] = tune_api::handles_json(p);

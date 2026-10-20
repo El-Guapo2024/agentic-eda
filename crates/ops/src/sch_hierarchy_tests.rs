@@ -189,6 +189,9 @@ fn import(content: Option<SheetFile>, as_sheet: bool, keep: bool) -> Cmd {
         keep_annotations: keep,
         order: AnnotateOrder::XThenY,
         options: AnnotateOptions::default(),
+        as_group: false,
+        group_name: String::new(),
+        block: String::new(),
     }
 }
 
@@ -308,4 +311,128 @@ fn sheet_names_count_up_until_free() {
     assert_eq!(unique_sheet_name(&taken, "Amp 7"), "Amp 8");
     assert_eq!(unique_sheet_name(&taken, "Free"), "Free");
     assert_eq!(unique_sheet_name(&BTreeSet::from(["7".to_string()]), "7"), "8");
+}
+
+// ------------------------------------------------------------------------------------------------ design blocks (Import Sheet with a block)
+
+/// `a_file()` placed as the schematic of the design block `Power:Buck`: the file is the block's `Buck.kicad_sch`, grouped as the pane's "Place as group" says.
+fn block_import(content: Option<SheetFile>, as_sheet: bool, group_name: &str, as_group: bool) -> Cmd {
+    let mut c = import(content, as_sheet, false);
+    if let Cmd::ImportSheet { as_group: g, group_name: n, block, source, .. } = &mut c {
+        *g = as_group;
+        *n = group_name.to_string();
+        *block = "Power:Buck".to_string();
+        *source = "/lib/Power.kicad_blocks/Buck.kicad_block/Buck.kicad_sch".to_string();
+    }
+    c
+}
+
+fn groups_of(d: &Design, file: &str) -> Vec<eda_model::ir::Group> {
+    d.sheet_contents.as_ref().unwrap()[file].extras.groups.clone()
+}
+
+#[test]
+fn a_design_block_placed_as_contents_is_one_linked_group_whose_members_follow_the_numbering() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(power_design(), &m, 100, 300);
+    b.apply(&on("sp", block_import(Some(a_file()), false, "", true))).unwrap();
+    let d = b.design();
+    let groups = groups_of(d, "power.kicad_sch");
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    // named after the block (`designBlock->GetLibId().GetLibItemName()`) and linked to it
+    assert_eq!((groups[0].name.as_str(), groups[0].design_block.as_str()), ("Buck", "Power:Buck"));
+    // the members are the new symbols under the references the numbering gave them, and the sheet that came along; the design's own R1, R2 and C1 are not in it
+    let sec = &d.sheet_contents.as_ref().unwrap()["power.kicad_sch"];
+    let mut members = groups[0].member_ids.clone();
+    members.sort();
+    let mut want = vec!["C2".to_string(), "R4".to_string(), "R5".to_string()];
+    want.extend(sec.sheets.iter().filter(|s| s.name == "Sub").map(|s| s.id.clone()));
+    want.sort();
+    assert_eq!(members, want);
+    assert!(!members.contains(&"R1".to_string()));
+    // "Place repeated copies" numbers the group's name (the caller passes it)
+    b.apply(&on("sp", block_import(Some(a_file()), false, "Buck2", true))).unwrap();
+    let names: Vec<String> = groups_of(b.design(), "power.kicad_sch").iter().map(|g| g.name.clone()).collect();
+    assert_eq!(names, vec!["Buck", "Buck2"]);
+    assert!(groups_of(b.design(), "power.kicad_sch").iter().all(|g| g.design_block == "Power:Buck"));
+}
+
+#[test]
+fn a_file_placed_as_contents_is_grouped_only_when_asked_and_with_no_link() {
+    let m = ConstraintModel::default();
+    let mut plain = import(Some(a_file()), false, false);
+    if let Cmd::ImportSheet { as_group, source, .. } = &mut plain {
+        *as_group = true;
+        *source = "/tmp/amp.kicad_sch".to_string();
+    }
+    let mut b = Board::new(power_design(), &m, 100, 300);
+    b.apply(&on("sp", plain)).unwrap();
+    let groups = groups_of(b.design(), "power.kicad_sch");
+    assert_eq!(groups.len(), 1);
+    assert_eq!((groups[0].name.as_str(), groups[0].design_block.as_str()), ("amp", ""), "named after the file, linked to nothing");
+    // not asked: no group, however the block is linked
+    let mut b = Board::new(power_design(), &m, 100, 300);
+    b.apply(&on("sp", block_import(Some(a_file()), false, "", false))).unwrap();
+    assert!(groups_of(b.design(), "power.kicad_sch").is_empty());
+}
+
+#[test]
+fn a_design_block_placed_as_a_sheet_goes_in_a_linked_group_of_its_own_and_a_plain_file_does_not() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(power_design(), &m, 100, 300);
+    b.apply(&block_import(Some(a_file()), true, "", true)).unwrap();
+    let groups = b.design().schematic.as_ref().unwrap().extras.groups.clone();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    let amp = b.design().schematic.as_ref().unwrap().sheets.iter().find(|s| s.name == "Amp").unwrap();
+    assert_eq!((groups[0].name.as_str(), groups[0].design_block.as_str(), groups[0].member_ids.clone()), ("Buck", "Power:Buck", vec![amp.id.clone()]), "the sheet alone, in a group of one");
+    // a group of one that is linked survives the other edits of the groups
+    b.apply(&Cmd::SchEdit(SchCmd::Group { ids: vec!["sp".into(), "nothing".into()] })).unwrap_err();
+    assert_eq!(b.design().schematic.as_ref().unwrap().extras.groups.len(), 1);
+    // the same file as a plain sheet is not grouped (`DrawSheet` groups a design block's sheet only)
+    let mut plain = import(Some(a_file()), true, false);
+    if let Cmd::ImportSheet { as_group, .. } = &mut plain {
+        *as_group = true;
+    }
+    let mut b = Board::new(power_design(), &m, 100, 300);
+    b.apply(&plain).unwrap();
+    assert!(b.design().schematic.as_ref().unwrap().extras.groups.is_empty());
+    // a block id that is not a Lib:Name is refused, whole
+    let mut bad = block_import(Some(a_file()), true, "", true);
+    if let Cmd::ImportSheet { block, .. } = &mut bad {
+        *block = "nonsense".to_string();
+    }
+    let mut b = Board::new(power_design(), &m, 100, 300);
+    assert_eq!(b.apply(&bad).unwrap_err()[0].check, "ops_bad_design_block");
+    assert!(b.design().schematic.as_ref().unwrap().sheets.iter().all(|s| s.name != "Amp"), "nothing was placed");
+}
+
+#[test]
+fn linking_the_selection_to_a_block_groups_it_or_links_the_group_and_group_properties_edits_the_link() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(power_design(), &m, 100, 300);
+    let link = |ids: &[&str], block: &str| on("sp", Cmd::SchEdit(SchCmd::LinkDesignBlock { ids: ids.iter().map(|s| s.to_string()).collect(), block: block.into() }));
+    // a selection that is not a group: a group named after the block, linked, even for one item
+    b.apply(&link(&["R1"], "Mine:Divider")).unwrap();
+    let g = groups_of(b.design(), "power.kicad_sch");
+    assert_eq!((g[0].name.as_str(), g[0].design_block.as_str(), g[0].member_ids.clone()), ("Divider", "Mine:Divider", vec!["R1".to_string()]));
+    // a lone group with no link takes it and keeps its name
+    b.apply(&on("sp", Cmd::SchEdit(SchCmd::Group { ids: vec!["R2".into(), "C1".into()] }))).unwrap();
+    let plain = groups_of(b.design(), "power.kicad_sch").into_iter().find(|g| g.design_block.is_empty()).unwrap();
+    b.apply(&link(&[&plain.id], "Mine:Pair")).unwrap();
+    let g = groups_of(b.design(), "power.kicad_sch").into_iter().find(|g| g.id == plain.id).unwrap();
+    assert_eq!((g.name.as_str(), g.design_block.as_str()), ("", "Mine:Pair"));
+    // Group Properties' "Library link:" box: change, keep, clear, refuse
+    let edit = |design_block: Option<&str>| on("sp", Cmd::SchEdit(SchCmd::EditGroup { id: plain.id.clone(), name: "pair".into(), member_ids: g.member_ids.clone(), design_block: design_block.map(str::to_string) }));
+    b.apply(&edit(Some("Mine:Other"))).unwrap();
+    let link_now = |b: &Board<'_>| groups_of(b.design(), "power.kicad_sch").into_iter().find(|x| x.id == plain.id).unwrap().design_block;
+    assert_eq!(link_now(&b), "Mine:Other");
+    b.apply(&edit(None)).unwrap();
+    assert_eq!(link_now(&b), "Mine:Other");
+    let refused = b.apply(&edit(Some("broken"))).unwrap_err();
+    assert_eq!((refused[0].check.as_str(), refused[0].location.clone().unwrap_or_default()), ("ops_bad_group", plain.id.clone()));
+    b.apply(&edit(Some(""))).unwrap();
+    assert_eq!(link_now(&b), "");
+    // an id that is no item of the sheet, and a link that is no id
+    assert_eq!(b.apply(&link(&["R9"], "Mine:X")).unwrap_err()[0].check, "ops_unknown_item");
+    assert!(b.apply(&link(&["R1"], "no colon")).is_err());
 }

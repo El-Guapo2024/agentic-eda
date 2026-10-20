@@ -5,7 +5,7 @@ use super::pcb_transform_tests::{design, drawings, ids, model, p, pose, routing}
 use super::*;
 
 fn group(id: &str, members: &[&str]) -> Group {
-    Group { id: id.into(), name: String::new(), member_ids: ids(members) }
+    Group { id: id.into(), name: String::new(), member_ids: ids(members), design_block: String::new() }
 }
 
 /// The fixture board with `inner = {trk_a, via_a}` held by `outer = {inner, shp_seg}`; `U1`, `U2`, the zone and the rest stand outside.
