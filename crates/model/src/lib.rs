@@ -5,6 +5,7 @@
 pub mod annotate;
 pub mod bezier;
 pub mod board;
+pub mod board_text;
 mod drc_checks;
 pub mod erc_checks;
 pub mod floorplan;

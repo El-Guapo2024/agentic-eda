@@ -60,7 +60,7 @@
 
 use std::collections::BTreeMap;
 
-use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via, Zone};
+use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, Track, Via, Zone};
 use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::outline as edge;
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
@@ -149,7 +149,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
     let nets = build_nets(&net_names, &pin_nets);
     let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes, &mut refs);
-    let (mut shapes, texts) = import_drawings(root, &mut refs);
+    let (mut shapes, texts, text_extras) = import_drawings(root, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
     let (outline, outline_is_shapes) = import_outline(root, &mut shapes, &mut refs, &mut notes);
     let dimensions = import_items::import_dimensions(root, &mut refs);
@@ -222,6 +222,10 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // deterministic ids a fresh route or a hand-add would get, so an
     // imported board is addressable from the moment it lands.
     design.assign_missing_ids();
+    // The texts' looks beyond `Text`'s fields, named by the ids the texts have just been given.
+    if let Some(dr) = design.drawings.as_mut() {
+        dr.text_extras = dr.texts.iter().zip(text_extras).filter(|(_, x)| !x.is_default()).map(|(t, mut x)| { x.id = t.id.clone(); x }).collect();
+    }
     // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
     // uuid, and `locked` rides on each item (`BOARD_ITEM::IsLocked()`).
     let (groups, locked_ids) = refs.resolve(&design, &import_items::import_groups(root));
@@ -1788,7 +1792,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 /// Board-level graphics (`gr_line`/`gr_arc`/`gr_rect`/`gr_circle`/
 /// `gr_poly`/`gr_curve`) and text (`gr_text`), any layer. Those on Edge.Cuts are
 /// the board outline's items; [`import_outline`] decides what becomes of them.
-fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>) {
+fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>, Vec<eda_model::board_text::TextExtra>) {
     let mut shapes = Vec::new();
     for item in sexpr::find_all(root, "gr_line") {
         if let Some(shape) = graphic_shape(item, "gr_line", |p| p) {
@@ -1805,32 +1809,22 @@ fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>) {
         }
     }
 
+    // Each text's looks: `Text` holds the square size, the stroke width and the horizontal justification, and the rest of `(effects ..)` (a glyph width that is not the
+    // height, a vertical justification, bold, italic, a knockout, ..) goes to `extras`, one per text in the same order, for the caller to name once the texts have ids.
     let mut texts = Vec::new();
+    let mut extras = Vec::new();
     for item in sexpr::find_all(root, "gr_text") {
         let Some(content) = sexpr::txt(item, 1) else { continue };
         let Some(at) = sexpr::find(item, "at") else { continue };
         let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
         let angle = ((sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32;
-        let effects = sexpr::find(item, "effects");
-        let font = effects.and_then(|e| sexpr::find(e, "font"));
-        let size_um = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(mm_to_um).unwrap_or(1000);
-        let stroke_width = font.and_then(|f| sexpr::find(f, "thickness")).and_then(|t| sexpr::num(t, 1)).map(mm_to_um).unwrap_or(150);
-        let (mut justify, mut mirror) = (TextJustify::Center, false);
-        if let Some(j) = effects.and_then(|e| sexpr::find(e, "justify")) {
-            for tok in j.iter().skip(1).filter_map(Sexpr::text) {
-                match tok {
-                    "left" => justify = TextJustify::Left,
-                    "right" => justify = TextJustify::Right,
-                    "mirror" => mirror = true,
-                    _ => {}
-                }
-            }
-        }
-        texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_um(x), y: mm_to_um(y) }, angle, layer: layer_of(item), size_um, stroke_width, justify, mirror });
+        let style = crate::board_text_io::read_style(item);
+        texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_um(x), y: mm_to_um(y) }, angle, layer: layer_of(item), size_um: style.size_um, stroke_width: style.stroke_width, justify: style.justify, mirror: style.mirror });
+        extras.push(style.extra);
         refs.texts.push(ItemRef::of(item));
     }
 
-    (shapes, texts)
+    (shapes, texts, extras)
 }
 
 /// An item's `(stroke (width ..))`, or the `(width ..)` of the files before it (KiCad 6 and older), micrometres.
@@ -2184,6 +2178,7 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eda_model::ir::TextJustify;
 
     /// KiCad 6's `(gr_arc (start CENTRE) (end START) (angle A))`: the end is the start turned by A about the centre (`SetArcAngleAndEnd`), the
     /// middle by A/2, in the file's own axes, whichever way A goes.

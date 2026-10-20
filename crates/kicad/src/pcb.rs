@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
+use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, Track, Um, Via, Zone};
 use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, Part};
 
@@ -398,7 +398,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         let mut texts: Vec<&Text> = drawings.texts.iter().collect();
         texts.sort_by(|a, b| a.id.cmp(&b.id));
         for t in &texts {
-            let uuid = write_text(&mut out, t, is_locked(&t.id));
+            let uuid = write_text_with(&mut out, t, is_locked(&t.id), drawings.text_extra(&t.id));
             written.entry(t.id.clone()).or_default().push(uuid);
         }
         // `PCB_DIMENSION_BASE`: the geometry and the text are worked out in one place
@@ -1209,28 +1209,24 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool) -> Stri
 /// not centred/unmirrored (exactly KiCad's own rule, so a plain centred
 /// label round-trips without growing a token it never had).
 pub(crate) fn write_text(out: &mut String, text: &Text, locked: bool) -> String {
+    write_text_with(out, text, locked, None)
+}
+
+/// [`write_text`] with the looks `Text` has no fields for (`TextExtra`: a glyph width that is not the height, a vertical justification, bold, italic, a knockout, line
+/// spacing, a font face, an automatic stroke width).
+pub(crate) fn write_text_with(out: &mut String, text: &Text, locked: bool, extra: Option<&eda_model::board_text::TextExtra>) -> String {
     let uuid = crate::duid_for(&format!("text:{}", text.id), &text.id);
     let lock = if locked { " (locked yes)" } else { "" };
     let angle_deg = fmt_mm_f(text.angle as f64 / 1000.0);
-    let size_mm = mm(text.size_um);
-    let thickness_mm = mm(text.stroke_width);
-    let mut justify = String::new();
-    match text.justify {
-        TextJustify::Left => justify.push_str(" left"),
-        TextJustify::Right => justify.push_str(" right"),
-        TextJustify::Center => {}
-    }
-    if text.mirror {
-        justify.push_str(" mirror");
-    }
-    let justify_tok = if justify.is_empty() { String::new() } else { format!(" (justify{justify})") };
+    let knockout = if extra.is_some_and(|e| e.knockout) { " knockout" } else { "" };
     writeln!(
         out,
-        "\t(gr_text {}{lock} (at {} {} {angle_deg}) (layer {}) (uuid \"{uuid}\")\n\t\t(effects (font (size {size_mm} {size_mm}) (thickness {thickness_mm})){justify_tok})\n\t)",
+        "\t(gr_text {}{lock} (at {} {} {angle_deg}) (layer {}{knockout}) (uuid \"{uuid}\")\n\t\t{}\n\t)",
         sexpr_str(&text.content),
         mm(text.at.x),
         mm(text.at.y),
-        sexpr_str(&text.layer)
+        sexpr_str(&text.layer),
+        crate::board_text_io::effects(text, extra)
     )
     .unwrap();
     uuid
@@ -1239,7 +1235,7 @@ pub(crate) fn write_text(out: &mut String, text: &Text, locked: bool) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eda_model::ir::{PlacementSection, Point, Provenance, RoutingSection};
+    use eda_model::ir::{PlacementSection, Point, Provenance, RoutingSection, TextJustify};
     use eda_model::{Net, Pin, PinKind};
 
     fn pin(number: &str, kind: PinKind) -> Pin {
@@ -2717,5 +2713,75 @@ mod tests {
         let texts = &back.drawings.as_ref().expect("drawings").texts;
         assert_eq!(texts.len(), 1);
         assert_eq!(texts[0].content, content);
+    }
+
+    /// A board text keeps its whole `(effects ..)`: `(size HEIGHT WIDTH)` with a width that is not the height (`complex_hierarchy`'s "Actionneur" text is 2.032 high and 1.524
+    /// wide), `justify left bottom` (`connection_width_rules`' labels sit above their anchors), bold, italic, a knockout, the line spacing, a font face, and no
+    /// `(thickness ..)` when the file had none. kicad-cli measured those texts against their neighbours: written as square, centred, regular lines they overlapped tracks the
+    /// originals do not.
+    #[test]
+    fn a_board_texts_size_justification_weight_and_looks_are_written_back_as_they_were_read() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (gr_text "High_current netclass:" (at 106.147 73.939) (layer "F.Cu") (tstamp dd7b0757-fb61-40bd-84e1-598677c91625)
+    (effects (font (size 0.2 0.2) (thickness 0.04) bold) (justify left bottom))
+  )
+  (gr_text "Actionneur" (at 176.149 64.643 0) (layer "B.Cu" knockout) (tstamp ef157bdf-7633-496c-93fa-91119bb1ecd2)
+    (effects (font (face "Arial") (size 2.032 1.524) (line_spacing 1.5) (thickness 0.3048) italic) (justify right top mirror))
+  )
+  (gr_text "plain" (at 1 2 0) (layer "F.SilkS") (tstamp 00000000-0000-0000-0000-000000000001)
+    (effects (font (size 1 1) (thickness 0.15)))
+  )
+  (gr_text "auto" (at 3 4 0) (layer "F.SilkS") (tstamp 00000000-0000-0000-0000-000000000002)
+    (effects (font (size 1.2 1.6)) (justify bottom))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let dr = design.drawings.as_ref().expect("drawings");
+        let by_text = |content: &str| dr.texts.iter().find(|t| t.content == content).unwrap_or_else(|| panic!("{content}"));
+        let extra = |content: &str| dr.text_extra(&by_text(content).id).cloned();
+        // The square, centred, regular text with a stroke width is the model's own default and keeps no extras.
+        assert_eq!(extra("plain"), None);
+        assert_eq!((by_text("plain").size_um, by_text("plain").stroke_width), (1000, 150));
+
+        let labels = extra("High_current netclass:").expect("bold, bottom");
+        assert!(labels.bold && !labels.italic && labels.valign == eda_model::ir::TextVAlign::Bottom && labels.width_um.is_none() && !labels.auto_thickness, "{labels:?}");
+        assert_eq!((by_text("High_current netclass:").justify, by_text("High_current netclass:").stroke_width), (TextJustify::Left, 40));
+
+        let wide = extra("Actionneur").expect("italic, narrow");
+        assert_eq!((wide.width_um, wide.italic, wide.knockout, wide.line_spacing_permille, wide.face.as_deref(), wide.valign), (Some(1524), true, true, 1500, Some("Arial"), eda_model::ir::TextVAlign::Top));
+        assert_eq!((by_text("Actionneur").size_um, by_text("Actionneur").stroke_width, by_text("Actionneur").justify, by_text("Actionneur").mirror), (2032, 305, TextJustify::Right, true));
+
+        // No thickness in the file: KiCad's automatic stroke width (an eighth of the glyph width), and none is written back.
+        let auto = extra("auto").expect("auto thickness");
+        assert_eq!((auto.auto_thickness, auto.width_um, by_text("auto").size_um, by_text("auto").stroke_width), (true, Some(1600), 1200, 200));
+
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let block = |content: &str| -> String {
+            let start = out.find(&format!("(gr_text \"{content}\"")).unwrap_or_else(|| panic!("{content} in {out}"));
+            out[start..].lines().take(2).collect::<Vec<_>>().join("\n")
+        };
+        let labels = block("High_current netclass:");
+        assert!(labels.contains("(layer \"F.Cu\")") && labels.contains("(effects (font (size 0.2 0.2) (thickness 0.04) bold) (justify left bottom))"), "{labels}");
+        let wide = block("Actionneur");
+        assert!(wide.contains("(layer \"B.Cu\" knockout)"), "{wide}");
+        assert!(wide.contains("(effects (font (face \"Arial\") (size 2.032 1.524) (line_spacing 1.5) (thickness 0.305) italic) (justify right top mirror))"), "{wide}");
+        assert!(block("plain").contains("(effects (font (size 1 1) (thickness 0.15)))"), "{}", block("plain"));
+        let auto = block("auto");
+        assert!(auto.contains("(effects (font (size 1.2 1.6)) (justify bottom))"), "{auto}");
+
+        // Read again, the same extras and the same texts.
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let (a, b) = (design.drawings.as_ref().unwrap(), back.drawings.as_ref().unwrap());
+        assert_eq!(a.texts.len(), b.texts.len());
+        for t in &a.texts {
+            let u = b.texts.iter().find(|u| u.content == t.content).unwrap();
+            assert_eq!((t.size_um, t.stroke_width, t.justify, t.mirror, t.angle, &t.layer), (u.size_um, u.stroke_width, u.justify, u.mirror, u.angle, &u.layer));
+            assert_eq!(a.text_extra(&t.id).map(|x| (x.width_um, x.valign, x.bold, x.italic, x.knockout, x.auto_thickness)), b.text_extra(&u.id).map(|x| (x.width_um, x.valign, x.bold, x.italic, x.knockout, x.auto_thickness)));
+        }
     }
 }

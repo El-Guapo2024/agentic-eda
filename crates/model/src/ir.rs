@@ -2455,6 +2455,11 @@ pub struct DrawingsSection {
     /// an older `design.json` reads as `false`. Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub outline_is_shapes: bool,
+    /// What a board text has beyond [`Text`]'s fields (a glyph width that is not the height, a vertical justification, bold, italic, a knockout, the line spacing,
+    /// a font face, an automatic stroke width), one entry per text that has any, keyed by the text's id -- see [`crate::board_text`]. Additive: absent in an older
+    /// `design.json` reads as "every text is a square-sized, vertically centred, regular line". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_extras: Vec<crate::board_text::TextExtra>,
 }
 
 /// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part

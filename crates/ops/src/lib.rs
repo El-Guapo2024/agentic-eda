@@ -3827,6 +3827,9 @@ impl<'a> Board<'a> {
         self.layer_is_on(&layer, id)?;
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "the board has no drawings yet")])?;
         let t = dr.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
+        // A new size is a square one again (the glyph width an imported text kept is the width of its old size), and a stroke width given is not the automatic one.
+        let resized = t.size_um != size_um;
+        let stroked = t.stroke_width != stroke_width;
         t.content = content;
         t.angle = angle;
         t.layer = layer;
@@ -3834,6 +3837,14 @@ impl<'a> Board<'a> {
         t.stroke_width = stroke_width;
         t.justify = justify;
         t.mirror = mirror;
+        if let Some(x) = dr.text_extras.iter_mut().find(|x| x.id == id) {
+            if resized {
+                x.width_um = None;
+            }
+            if stroked {
+                x.auto_thickness = false;
+            }
+        }
         Ok(())
     }
 
@@ -3844,6 +3855,7 @@ impl<'a> Board<'a> {
         if dr.texts.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")]);
         }
+        dr.text_extras.retain(|x| x.id != id);
         Ok(())
     }
 
