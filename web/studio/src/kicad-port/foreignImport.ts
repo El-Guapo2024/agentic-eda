@@ -52,6 +52,8 @@ export interface ForeignReply {
   counts?: Record<string, number>;
   /** A board: the `.kicad_pcb`. */
   text?: string;
+  /** A board: the `.kicad_pro` kicad-cli made with it -- the design rules and the net classes the importer set, which the board file does not hold. `null` when it could not be made. */
+  project?: string | null;
   /** A schematic: the sheet file (`eda_model::sheet_file::SheetFile`). */
   content?: unknown;
   notes?: string[];
@@ -120,6 +122,11 @@ export function describeImport(reply: ForeignReply): string {
         ]);
   const format = reply.format ? ` (${reply.format})` : "";
   return `Imported ${reply.name ?? "the file"}${format}: ${what}.`;
+}
+
+/** What is said when the board came without its rules: kicad-cli could not make the project that holds the importer's design rules and net classes (a kicad-cli without the command, a file its project import does not take). */
+export function describeRules(reply: ForeignReply): string {
+  return reply.kind === "board" && reply.ok && !reply.project ? "The design rules and net classes of the file could not be read." : "";
 }
 
 /** "2 errors and 1 warning were reported." -- the counts of messages said, not of distinct ones; empty when kicad-cli said nothing. */

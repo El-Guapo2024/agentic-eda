@@ -5,7 +5,8 @@
 //! kicad-cli convert it (`eda_kicad_engine::foreign`; the route runs through `studio::offload`, the one kicad-cli lane), reads what kicad-cli made with our readers to check
 //! that it is a design, and answers with what the page needs to ask for the import:
 //!
-//! * a board: `text`, the `.kicad_pcb` -- which `Cmd::ReplaceBoard` carries;
+//! * a board: `text`, the `.kicad_pcb`, and `project`, the `.kicad_pro` kicad-cli made with it (the design rules and net classes of the application it came from; `null` when it
+//!   could not be made) -- which `Cmd::ReplaceBoard` carries;
 //! * a schematic: `content`, the file with its sheets and library symbols (`eda_model::sheet_file::SheetFile`) -- which `Cmd::ReplaceSchematic` carries;
 //! * both: `format` (the format kicad-cli recognised), `statistics` (what it converted), `findings` (its errors and warnings, each message once with how often it was said),
 //!   `layers` (a board's source layers and where each went: the `DIALOG_MAP_LAYERS` the page shows when `maps_layers` says the importer asks), `counts` (what our reader found).
@@ -41,7 +42,8 @@ pub(crate) fn convert(_dir: &Path, body: &[u8]) -> Value {
     if bytes.is_empty() {
         return refused(format!("'{name}' is empty"));
     }
-    let mut options = ForeignOptions { format: req.get("format").and_then(Value::as_str).map(str::to_string), ..Default::default() };
+    // A board is imported with the project kicad-cli makes of it: its design rules and net classes are in that file and in no other.
+    let mut options = ForeignOptions { format: req.get("format").and_then(Value::as_str).map(str::to_string), project: kind == Kind::Board, ..Default::default() };
     if let Some(map) = req.get("layer_map").and_then(Value::as_object) {
         for (from, to) in map {
             let Some(to) = to.as_str() else { return refused(format!("the layer map names '{from}' by something that is not a KiCad layer name")) };
@@ -93,6 +95,8 @@ fn reply(kind: Kind, name: &str, import: &ForeignImport) -> Result<Value, String
             let (tracks, vias, zones) = design.routing.as_ref().map_or((0, 0, 0), |r| (r.tracks.len(), r.vias.len(), r.zones.len()));
             out["counts"] = json!({ "footprints": design.placement.as_ref().map_or(0, |p| p.footprints.len()), "nets": model.nets.len(), "tracks": tracks, "vias": vias, "zones": zones });
             out["text"] = json!(import.text);
+            // `Cmd::ReplaceBoard` carries it too, and the server sets the board's rules and net classes from it.
+            out["project"] = json!(import.project);
         }
         Kind::Schematic => {
             let content = sheet_file_of(import).map_err(|e| format!("kicad-cli converted '{name}', but the schematic it made cannot be read: {}", board::reasons(&e)))?;
@@ -235,8 +239,10 @@ mod tests {
         assert_eq!(r["counts"], json!({ "footprints": 116, "nets": 78, "tracks": 1156, "vias": 247, "zones": r["counts"]["zones"].clone() }), "kicad-cli's own 116 footprints and 247 vias; our reader's 78 nets");
         assert_eq!(r["statistics"]["footprints"], 116);
         assert!(r["layers"].as_array().unwrap().iter().any(|l| l["kicad"] == "F.Cu"), "{}", r["layers"]);
-        // The command the page sends is a command this server's `Cmd` takes, at the size of a real board.
-        let cmd: eda_ops::Cmd = serde_json::from_value(json!({ "op": "replace_board", "text": r["text"], "name": "HiFive1.B01.PcbDoc" })).expect("a board command");
+        // The command the page sends is a command this server's `Cmd` takes, at the size of a real board, with the project kicad-cli made with it (the importer's rules).
+        let pro: Value = serde_json::from_str(r["project"].as_str().expect("the project kicad-cli made with the board")).expect("a project file");
+        assert!(pro["board"]["design_settings"]["rules"]["min_clearance"].as_f64().is_some_and(|c| c > 0.0), "Altium's clearance rule: {}", pro["board"]["design_settings"]["rules"]);
+        let cmd: eda_ops::Cmd = serde_json::from_value(json!({ "op": "replace_board", "text": r["text"], "name": "HiFive1.B01.PcbDoc", "project": r["project"] })).expect("a board command");
         assert!(cmd.replaces_board());
 
         let sch = qa("pcbnew/plugins/eagle/Adafruit-AHT20-PCB/Adafruit AHT20 Temperature & Humidity.sch").unwrap();

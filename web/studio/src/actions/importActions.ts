@@ -4,7 +4,7 @@
 import { openImportGraphics, type PickedFile } from "../state/importDialogs";
 import { graphicsFormatOf } from "../kicad-port/importGraphics";
 import { appendBoardCmd, describeAppended, isKicadBoardName } from "../kicad-port/appendBoard";
-import { acceptFor, asForeignParam, describeImport, describeIssues, issuesOf, type ForeignFile, type ForeignParam, type ImportKind } from "../kicad-port/foreignImport";
+import { acceptFor, asForeignParam, describeImport, describeIssues, describeRules, issuesOf, type ForeignFile, type ForeignParam, type ImportKind } from "../kicad-port/foreignImport";
 import { readAppendBoard } from "../api/importClient";
 import { pickBinaryFile, postImportForeign } from "../api/foreignImportClient";
 import { postCmd } from "../api/client";
@@ -94,7 +94,8 @@ async function importForeign(ctx: ImportActionContext, kind: ImportKind, given: 
         if (!reply.ok) return toast(reply.message ?? `The file '${file.name}' could not be imported.`, "error");
       }
     }
-    const cmd = kind === "board" ? ({ op: "replace_board", text: reply.text ?? "", name: file.name, keep_kicad_layer_names: keepNames } as const) : ({ op: "replace_schematic", content: reply.content, name: file.name } as const);
+    // The board comes with the project kicad-cli made of it: the design rules and the net classes the importer set are in that file and not in the board's.
+    const cmd = kind === "board" ? ({ op: "replace_board", text: reply.text ?? "", name: file.name, keep_kicad_layer_names: keepNames, ...(reply.project ? { project: reply.project } : {}) } as const) : ({ op: "replace_schematic", content: reply.content, name: file.name } as const);
     // An import is not a move the gates judge: Strict is off for it, as for a paste.
     const done = await postCmd(cmd, false);
     if (!done.ok) return toast(done.message, "error");
@@ -102,7 +103,8 @@ async function importForeign(ctx: ImportActionContext, kind: ImportKind, given: 
     if (kind === "schematic") await ctx.api.navigateToSheet([]);
     fitToImport(ctx, kind);
     const issues = describeIssues(reply.findings);
-    toast(`${describeImport(reply)}${issues ? ` ${issues}` : ""} Undo brings the ${kind === "board" ? "old board" : "old schematic"} back.`, "info");
+    const rules = describeRules(reply);
+    toast(`${describeImport(reply)}${issues ? ` ${issues}` : ""}${rules ? ` ${rules}` : ""} Undo brings the ${kind === "board" ? "old board" : "old schematic"} back.`, "info");
     if (issuesOf(reply.findings).length > 0 && !given?.skipReport && importShowIssues()) {
       showImportReport({ name: file.name, format: reply.format ?? "", summary: `${describeImport(reply)} ${issues}`.trim(), findings: issuesOf(reply.findings), notes: reply.notes ?? [] });
     }

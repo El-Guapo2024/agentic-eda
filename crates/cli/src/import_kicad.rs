@@ -74,7 +74,8 @@ fn parse(rest: &[String]) -> Result<Args, Vec<CheckResult>> {
         Some("schematic" | "sch") => Some(Kind::Schematic),
         Some(other) => return Err(fail("kicad_import_usage", "--kind", format!("--kind is board or schematic, not '{other}'"))),
     };
-    let mut options = ForeignOptions { format: flag(rest, "--format"), ..Default::default() };
+    // The project kicad-cli makes of a board has the design rules and net classes its importer set (Eagle's, Altium's); the board file alone has none.
+    let mut options = ForeignOptions { format: flag(rest, "--format"), project: true, ..Default::default() };
     if let Some(map) = flag(rest, "--layer-map") {
         let text = std::fs::read_to_string(&map).map_err(|e| fail("io", &map, format!("could not read the layer map {map}: {e}")))?;
         let parsed: Value = serde_json::from_str(&text).map_err(|e| fail("kicad_import_usage", &map, format!("the layer map is not JSON: {e}")))?;
@@ -91,6 +92,8 @@ fn parse(rest: &[String]) -> Result<Args, Vec<CheckResult>> {
 struct Sources {
     /// The board's file name (for the messages) and the `.kicad_pcb` text, and the folder a KiCad project's own files (`.kicad_pro`, `.kicad_dru`, library tables) are in.
     board: Option<(String, String, Option<PathBuf>)>,
+    /// The `.kicad_pro` kicad-cli wrote for a board it converted: its design rules and net classes.
+    project: Option<String>,
     /// A schematic's sheets: the name each is placed under and what it holds.
     sheets: Vec<(String, SheetFile)>,
     /// kicad-cli's runs, in the order they were made.
@@ -117,7 +120,7 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
 fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
     let input = PathBuf::from(&args.input);
     let ext = input.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    let mut s = Sources { board: None, sheets: Vec::new(), imports: Vec::new() };
+    let mut s = Sources { board: None, project: None, sheets: Vec::new(), imports: Vec::new() };
     let mut runs = 0;
     let mut convert_one = |s: &mut Sources, path: &Path, kind: Option<Kind>| -> Result<ForeignImport, Vec<CheckResult>> {
         runs += 1;
@@ -150,6 +153,7 @@ fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
             if let Some(board) = project.boards.first() {
                 let import = convert_one(&mut s, board, Some(Kind::Board))?;
                 s.board = Some((name_of(board), import.text.clone(), None));
+                s.project = import.project.clone();
             }
             let mut parts = Vec::new();
             for sheet in &project.sheets {
@@ -178,7 +182,10 @@ fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
 
 fn put(s: &mut Sources, kind: Kind, path: &Path, import: &ForeignImport) -> Result<(), Vec<CheckResult>> {
     match kind {
-        Kind::Board => s.board = Some((name_of(path), import.text.clone(), None)),
+        Kind::Board => {
+            s.board = Some((name_of(path), import.text.clone(), None));
+            s.project = import.project.clone();
+        }
         Kind::Schematic => s.sheets.push((stem_of(path), foreign::sheet_file_of(import)?)),
     }
     Ok(())
@@ -232,6 +239,13 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
                 }
                 // The project's own library tables and variables come along, so its libraries still resolve from the new folder (`library_table::import_project_setup`).
                 setup = project_dir.as_ref().map(|dir| eda_kicad::library_table::import_project_setup(dir, out, std::fs::read_to_string(&pro_path).ok().as_deref()));
+            }
+            // A board kicad-cli converted has no project beside it, but kicad-cli made one with it: the rules and the net classes of the application the board came from.
+            if let Some(pro) = &sources.project {
+                crate::import_foreign::merge_project(&mut model, pro);
+                if args.keep_names {
+                    model.board.layer_setup.names.clear();
+                }
             }
             let _ = name;
             (design, model, Some(notes), setup)
@@ -474,6 +488,9 @@ mod tests {
         assert!(design.nets.as_ref().is_some_and(|n| !n.is_empty()), "the drawing's nets are the netlist now");
         // The nets of the schematic reach the board's pads: the part U1 is on the board and on the sheet.
         assert!(model.part("U1").is_some() && model.nets.iter().any(|n| n.pins.iter().any(|p| p.starts_with("U1."))));
+        // The design rules and the net classes Eagle's board has are in the project kicad-cli makes of it, not in the board file: the board is judged by them.
+        assert!(model.board.net_classes.iter().any(|c| c.name == "highpower" && c.track_width == Some(305)), "{:?}", model.board.net_classes.iter().map(|c| &c.name).collect::<Vec<_>>());
+        assert_eq!(model.board.min_clearance_um, 203, "Eagle's 8 mil minimum clearance");
         assert!(out.join("fp-lib-table").is_file() && out.join("sym-lib-table").is_file(), "the tables that name the libraries");
         assert!(std::fs::read_dir(&out).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with("-import-fps.pretty")));
         assert!(std::fs::read_dir(&out).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with(".kicad_sym")));
@@ -507,8 +524,9 @@ mod tests {
         let Some(prj) = qa("pcbnew/plugins/altium/eDP_adapter_dvt1_source/eDP_adapter_dvt1.PrjPcb") else { return };
         let out = scratch("altium");
         import(&args(&prj, &out, &[]));
-        let (_, design, _) = crate::board::load(&out).expect("a board the studio opens");
+        let (_, design, model) = crate::board::load(&out).expect("a board the studio opens");
         assert_eq!(design.placement.as_ref().unwrap().footprints.len(), 115);
+        assert_eq!(model.board.min_clearance_um, 102, "Altium's clearance rule (4 mil), from the project kicad-cli made with the board");
         let root = design.schematic.as_ref().expect("a schematic");
         let names: Vec<(&str, &str)> = root.sheets.iter().map(|s| (s.name.as_str(), s.page.as_str())).collect();
         assert_eq!(names, vec![("it6251_core", "2"), ("power", "3")], "in the order the project lists them, from page 2");

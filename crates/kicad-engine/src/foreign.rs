@@ -69,6 +69,9 @@ pub struct ForeignOptions {
     pub format: Option<String>,
     /// `--layer-map`: source layer name -> KiCad layer name, for a board. Layers that are not named keep the importer's guess.
     pub layer_map: BTreeMap<String, String>,
+    /// Also have kicad-cli make the project of a board (`kicad-cli import`: a second run of the importer, a second or two): the design rules and the net classes the importer set
+    /// (Eagle's design rules and its net classes, Altium's rules ...) are in the `.kicad_pro` it writes, and in no other file -- `pcb import` writes the board alone.
+    pub project: bool,
 }
 
 /// One source layer of a board and where it went (`layer_mapping` of the report).
@@ -218,6 +221,8 @@ pub struct ForeignImport {
     pub log: Vec<LogLine>,
     /// The other files it wrote beside the output (the footprint or symbol library it made, the files of the sheets of a hierarchy, the library table), relative to the output's folder.
     pub files: Vec<String>,
+    /// The text of the `.kicad_pro` `kicad-cli import` wrote for the board ([`ForeignOptions::project`]): its design rules and net classes; `None` when it was not asked for or could not be made.
+    pub project: Option<String>,
 }
 
 impl ForeignImport {
@@ -253,6 +258,7 @@ impl ForeignImport {
             "findings": findings.iter().map(|f| json!({ "severity": f.severity.name(), "message": f.message, "count": f.count })).collect::<Vec<_>>(),
             "layers": self.report.layers.iter().map(|l| json!({ "source": l.source, "kicad": l.kicad, "explicit": l.explicit })).collect::<Vec<_>>(),
             "files": self.files,
+            "has_project": self.project.is_some(),
         })
     }
 }
@@ -356,7 +362,44 @@ fn import_foreign(kind: Kind, work: &Path, input: &Path, opts: &ForeignOptions) 
     collect_files(&out_dir, &out_dir, &mut files);
     files.retain(|f| Path::new(f) != output.strip_prefix(&out_dir).unwrap_or(&output));
     files.sort();
-    Ok(ForeignImport { engine: format!("kicad-cli {}", cli_version(&cli)), kind, output, text, report, log, files })
+    let mut log = log;
+    let project = if kind == Kind::Board && opts.project { make_project(&cli, work, input, opts, &mut log) } else { None };
+    Ok(ForeignImport { engine: format!("kicad-cli {}", cli_version(&cli)), kind, output, text, report, log, files, project })
+}
+
+/// The project kicad-cli makes of a board (`kicad-cli import -o <stem> [--layer-map F] INPUT`: "Import non-KiCad board and/or schematic files into a new KiCad project"): the importer runs
+/// again, and the `.kicad_pro` it writes beside the board has what the board file does not -- the design rules and the net classes the importer set in memory (`OpenProjectFiles` saves the
+/// project of a converted board for that reason). It does not pair files (given the `.brd` alone it imports the board alone), refuses a second schematic ("a board and a schematic
+/// have already been imported for this project") and writes no JSON report, which is why the board and its report come from `pcb import` and only this file from here. A run that
+/// fails (a kicad-cli without the command) leaves the board without its rules and says so in the log; it is not an error.
+fn make_project(cli: &Path, work: &Path, input: &Path, opts: &ForeignOptions, log: &mut Vec<LogLine>) -> Option<String> {
+    let dir = work.join("project");
+    let _ = std::fs::remove_dir_all(&dir);
+    work_dir(&dir).ok()?;
+    // The stem has no dot in it: kicad-cli takes what follows the last one for an extension and puts its own in its place (a board called `HiFive1.B01` would make `HiFive1.kicad_pro`).
+    let stem = "board";
+    let mut cmd = cli_command(cli, None);
+    cmd.arg("import").arg("-o").arg(dir.join(stem));
+    if !opts.layer_map.is_empty() {
+        cmd.arg("--layer-map").arg(work.join("layer-map.json"));
+    }
+    cmd.arg(input);
+    let note = |log: &mut Vec<LogLine>, why: String| log.push(LogLine { severity: Severity::Info, text: format!("the project kicad-cli makes of the board (its design rules and net classes) is not there: {why}") });
+    let out = match output_within(cmd, limit(EXPORT_TIMEOUT)) {
+        Ok(o) => o,
+        Err(e) => {
+            note(log, e.first().and_then(|c| c.hint.clone()).unwrap_or_default());
+            return None;
+        }
+    };
+    match std::fs::read_to_string(dir.join(format!("{stem}.kicad_pro"))) {
+        Ok(text) => Some(text),
+        Err(_) => {
+            let said = String::from_utf8_lossy(&out.stdout).lines().chain(String::from_utf8_lossy(&out.stderr).lines()).map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("kicad-cli wrote none").to_string();
+            note(log, said);
+            None
+        }
+    }
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) {

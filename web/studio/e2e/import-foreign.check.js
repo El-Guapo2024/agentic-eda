@@ -1,7 +1,8 @@
 // File > Import > Non-KiCad Board File... and Non-KiCad Schematic File... (GAPS.md item 28, package P22), driven through `window.__eda` and the page's own controls.
 // Run it in the page of a served board made from examples/mcu_board_30plus.yaml (`eda board new examples/mcu_board_30plus.yaml -o <dir>` then `eda board serve -C <dir> --ui <ui>`),
-// where <ui> is a copy of web/studio/dist with the QA files of KiCad's other formats in `<ui>/e2e-import-foreign/` (test_eagle.brd, minimal_route_offset_curved_track.cpa,
-// power.SchDoc: qa/data/pcbnew/plugins/{eagle/test_eagle_23016,cadstar/route_offset,altium/eDP_adapter_dvt1_source}) and this file; the board is replaced and every replacement taken back with
+// where <ui> is a copy of web/studio/dist with the QA files of KiCad's other formats in `<ui>/e2e-import-foreign/` (test_eagle.brd, adafruit_aht20.brd, minimal_route_offset_curved_track.cpa,
+// power.SchDoc: qa/data/pcbnew/plugins/{eagle/test_eagle_23016,eagle/Adafruit-AHT20-PCB ("Adafruit AHT20 Temperature & Humidity.brd"),cadstar/route_offset,altium/eDP_adapter_dvt1_source})
+// and this file; the board is replaced and every replacement taken back with
 // Undo, so the board is as it was. It needs the real kicad-cli (the server converts the files with it). Paste it into the Browser pane's javascript tool, or
 // `(0, eval)(await (await fetch("/e2e-import-foreign/import-foreign.check.js")).text())`.
 //
@@ -12,6 +13,8 @@
 //     off the guess is the layer map the second run gets, and its text is on the layer chosen; the board is replaced (the footprints, the nets, the outline of the file; the parts of the old
 //     board are gone) in ONE undo step, which Undo takes back whole and Redo brings again; the toast says what came in and that Undo takes it back;
 //   the issues: a CADSTAR file (no layer dialog asked for here) comes with kicad-cli's warnings, which open "Import Issues"; "Show import issues" off keeps the next import from opening it;
+//   the design rules and the net classes an importer set (an Eagle board's highpower, 12 mil) are the board's -- they are in the project kicad-cli makes with the board, and the same
+//     one step of history takes them away again (a class that no net uses, Eagle's lowpower, matches nothing and is not carried);
 //   a file no importer recognises is refused in kicad-cli's words and the board is untouched;
 //   the schematic, an Altium sheet: the schematic is replaced in one step of the schematic's history with its errors reported, and an Undo brings the old drawing back.
 //
@@ -171,6 +174,22 @@
     await waitFor(async () => (await refs()).length === 30);
     // leave the preference as it was found
     try { window.localStorage.removeItem("eda.studio.importShowIssues"); } catch (e) { /* storage blocked */ }
+
+    // ---- the design rules and the net classes: in the project kicad-cli makes with the board, and in no other file
+    const netClasses = async () => (await get("/api/state")).board_rules?.net_classes ?? [];
+    const classesBefore = (await netClasses()).map((c) => c.name).sort();
+    const adafruit = await b64("adafruit_aht20.brd");
+    await E.run("pcbnew.EditorControl.openNonKicadBoard", { name: adafruit.name, data: adafruit.data, skipLayerMapping: true });
+    applied++;
+    await waitFor(async () => (await refs()).length !== 30, 30000);
+    const classes = await netClasses();
+    check("an Eagle board's net class (highpower) is the board's, from the project kicad-cli made with it", classes.some((c) => c.name === "highpower") && !classesBefore.includes("highpower"), JSON.stringify({ classesBefore, now: classes.map((c) => c.name) }));
+    check("and highpower is 12 mil wide, as Eagle has it", classes.find((c) => c.name === "highpower")?.track_width === 305, JSON.stringify(classes.find((c) => c.name === "highpower")));
+    check("the toast does not say the rules were missed", !/design rules and net classes of the file could not be read/.test(toastText()), toastText());
+    await E.run("common.Interactive.undo");
+    applied--;
+    await waitFor(async () => (await refs()).length === 30);
+    check("one Undo takes the board and its net classes away together", (await netClasses()).map((c) => c.name).sort().join() === classesBefore.join(), JSON.stringify((await netClasses()).map((c) => c.name)));
 
     // ---- a file no importer recognises
     const junk = await E.run("pcbnew.EditorControl.openNonKicadBoard", { name: "notes.xyz", data: btoa("hello") });

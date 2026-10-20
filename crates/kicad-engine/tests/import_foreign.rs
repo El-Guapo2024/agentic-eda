@@ -63,6 +63,12 @@ for a in "$@"; do
 done
 echo "$* | config=$KICAD_CONFIG_HOME" >> "$FAKE_LOG"
 [ -n "$map" ] && cp "$map" "$FAKE_LOG.map"
+if [ "$scope" = import ]; then
+  # the project-level command: `import -o <stem> [--layer-map F] FILE` writes <stem>.kicad_pro (and the board beside it); it prints no JSON report
+  if [ -n "$FAKE_NO_PROJECT" ]; then echo "Failed to import: the project could not be made"; exit 3; fi
+  printf '{ "net_settings": { "classes": [ { "name": "Default", "track_width": 0.25 }, { "name": "highpower", "track_width": 0.3048 } ] } }\n' > "$out.kicad_pro"
+  exit 0
+fi
 case "$in" in *unknown*) echo "No PCB importer recognizes the file format of '$in'"; exit 3;; *broken*) echo "Importing '$in' using Eagle format..."; echo "12:50:13 AM: Error: XML parsing error: 'syntax error' at line 1" >&2; echo "Failed to load board: Unable to read file '$in'"; exit 3;; esac
 echo "Importing '$in' using Eagle format..."
 if [ "$scope" = pcb ]; then
@@ -178,6 +184,62 @@ fn a_format_and_a_layer_map_are_handed_to_kicad_cli_and_a_layer_it_names_is_expl
     let e = import_foreign_pcb(&dir.join("work"), &input, &ForeignOptions { format: Some("eagle; rm -rf".into()), ..Default::default() }).unwrap_err();
     assert_eq!(e[0].check, "kicad_cli_import_format_name");
     assert!(!log.exists(), "kicad-cli was not started");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_project_kicad_cli_makes_of_a_board_is_read_when_asked_for_and_its_absence_is_said_and_not_an_error() {
+    let mut env = Env::take();
+    let dir = scratch("project");
+    let log = dir.join("calls.log");
+    env.set("FAKE_LOG", &log);
+    env.set("EDA_KICAD_CLI", script(&dir, "importing.sh", IMPORTING_CLI));
+    env.set("EDA_KICAD_CONFIG_HOME", dir.join("settings"));
+    let work = dir.join("work");
+    let input = foreign::stage_upload(&work, "My Board.brd", b"x").unwrap();
+
+    // Not asked for: one launch, no project (`pcb import` writes the board alone).
+    let got = import_foreign_pcb(&work, &input, &ForeignOptions::default()).unwrap();
+    assert!(got.project.is_none() && got.to_json()["has_project"] == false);
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+
+    // Asked for: the importer runs again as the project-level command, in a folder of its own, and the `.kicad_pro` it wrote comes back as text.
+    let _ = std::fs::remove_file(&log);
+    let got = import_foreign_pcb(&work, &input, &ForeignOptions { project: true, ..Default::default() }).unwrap();
+    let calls = std::fs::read_to_string(&log).unwrap();
+    let lines: Vec<&str> = calls.lines().collect();
+    assert_eq!(lines.len(), 2, "the board, then its project: {calls}");
+    assert!(lines[0].starts_with("pcb import "), "{calls}");
+    assert!(lines[1].starts_with("import -o ") && lines[1].contains("project/board ") && lines[1].contains("My Board.brd") && !lines[1].contains("--layer-map"), "{calls}");
+    let pro: serde_json::Value = serde_json::from_str(got.project.as_deref().expect("the project")).unwrap();
+    assert_eq!(pro["net_settings"]["classes"][1]["name"], "highpower");
+    assert_eq!(got.to_json()["has_project"], true);
+    assert_eq!(got.text, "(kicad_pcb (version 20260901) (generator \"pcbnew\"))\n", "the board is the one `pcb import` made, with its report");
+    assert_eq!(got.report.source_format, "Eagle");
+    assert!(!got.files.iter().any(|f| f.contains("project")), "the project run's files are not the board's: {:?}", got.files);
+
+    // The layers the person moved are moved in the project's run as well, from the same map file.
+    let _ = std::fs::remove_file(&log);
+    let mut opts = ForeignOptions { project: true, ..Default::default() };
+    opts.layer_map.insert("tNames".into(), "F.Fab".into());
+    import_foreign_pcb(&work, &input, &opts).unwrap();
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(calls.lines().nth(1).unwrap().contains("--layer-map "), "{calls}");
+
+    // A schematic has no project of this kind: no second launch.
+    let _ = std::fs::remove_file(&log);
+    let sch = foreign::stage_upload(&work, "Power.SchDoc", b"x").unwrap();
+    let got = import_foreign_sch(&work, &sch, &ForeignOptions { project: true, ..Default::default() }).unwrap();
+    assert!(got.project.is_none());
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+
+    // A kicad-cli that cannot make the project (an older one, a file the project-level command does not take): the board is imported, and the log says what is missing.
+    env.set("FAKE_NO_PROJECT", "1");
+    let got = import_foreign_pcb(&work, &input, &ForeignOptions { project: true, ..Default::default() }).expect("the board still comes");
+    assert!(got.project.is_none());
+    let said = got.log.iter().find(|l| l.text.contains("design rules and net classes")).expect("said");
+    assert_eq!(said.severity, Severity::Info, "not an error of the import: the board is whole");
+    assert!(said.text.contains("could not be made"), "{}", said.text);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -258,6 +258,47 @@ fn a_layer_map_moves_a_layer_and_the_report_says_so() {
     });
 }
 
+/// The design rules and the net classes an importer sets are in the project kicad-cli makes of the board and in no other file: `pcb import` writes the board alone. The Adafruit
+/// AHT20 board has the Eagle net classes `highpower` (a 12 mil width) and `lowpower`, and a minimum clearance of 8 mil; `test_eagle.brd` has 6 mil: the rules are the file's own.
+#[test]
+fn an_eagle_boards_project_carries_the_net_classes_and_the_rules_the_board_file_does_not() {
+    if !slow_and_ready() {
+        return;
+    }
+    let input = plugins_dir().join("eagle/Adafruit-AHT20-PCB/Adafruit AHT20 Temperature & Humidity.brd");
+    let other = plugins_dir().join("eagle/test_eagle_23016/test_eagle.brd");
+    with_scratch(|work| {
+        let plain = import_foreign_pcb(work, &input, &ForeignOptions::default()).expect("the board alone");
+        assert!(plain.project.is_none());
+        assert!(!plain.text.contains("highpower"), "the board file has no net class in it");
+        let got = import_foreign_pcb(&work.join("with-project"), &input, &ForeignOptions { project: true, ..Default::default() }).expect("the board and its project");
+        let pro: serde_json::Value = serde_json::from_str(got.project.as_deref().expect("kicad-cli's import wrote a .kicad_pro")).expect("a JSON project");
+        let classes = pro["net_settings"]["classes"].as_array().expect("net classes");
+        let class = classes.iter().find(|c| c["name"] == "highpower").unwrap_or_else(|| panic!("the Eagle net class: {:?}", classes.iter().map(|c| &c["name"]).collect::<Vec<_>>()));
+        assert!((class["track_width"].as_f64().unwrap() - 0.3048).abs() < 1e-6, "{class}");
+        assert!(classes.iter().any(|c| c["name"] == "lowpower"));
+        // The board is the same board: its report is the one `pcb import` gave.
+        assert_eq!(got.report.source_format, "Eagle");
+        assert_eq!(got.report.statistics.get("footprints"), plain.report.statistics.get("footprints"));
+
+        // What our reader makes of the board and the project, as `Cmd::ReplaceBoard` does: the classes and the minimums are the importer's.
+        let (_, mut model, _) = import_kicad_pcb(&got.text).expect("the board reads");
+        assert!(model.board.net_classes.iter().all(|c| c.name != "highpower"), "not before the project is merged");
+        let default_clearance = model.board.min_clearance_um;
+        eda_kicad::merge_project_net_classes(&mut model, got.project.as_deref().unwrap());
+        eda_kicad::merge_project_design_rules(&mut model, got.project.as_deref().unwrap());
+        let merged = model.board.net_classes.iter().find(|c| c.name == "highpower").expect("the net class is in the model after the merge");
+        assert_eq!(merged.track_width, Some(305), "12 mil, in the micrometres the model uses: {merged:?}");
+        assert_eq!(model.board.min_clearance_um, 203, "Eagle's 8 mil minimum clearance (was {default_clearance})");
+
+        // Another Eagle board, another rule: it comes from the file and is not a default of ours.
+        let theirs = import_foreign_pcb(&work.join("other"), &other, &ForeignOptions { project: true, ..Default::default() }).expect("the other board");
+        let (_, mut model, _) = import_kicad_pcb(&theirs.text).expect("reads");
+        eda_kicad::merge_project_design_rules(&mut model, theirs.project.as_deref().expect("its project"));
+        assert_eq!(model.board.min_clearance_um, 152, "6 mil");
+    });
+}
+
 /// The placed symbols of a `.kicad_sch`: the `(symbol (lib_id ..))` forms of the screen (children of the root); the definitions inside `(lib_symbols ..)` are one level down.
 fn placed_symbols(text: &str) -> usize {
     scan(text).iter().filter(|f| f.depth == 2 && f.tag == "symbol").count()

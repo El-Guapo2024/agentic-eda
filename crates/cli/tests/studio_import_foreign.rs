@@ -28,8 +28,14 @@ const FOREIGN_BOARD: &str = r#"(kicad_pcb (version 20260901) (generator "pcbnew"
     (gr_line (start 0 40) (end 0 0) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts") (uuid "55555555-5555-5555-5555-555555555554"))
 )"#;
 
-/// What `kicad-cli pcb import` and `sch import` do, as far as the studio can tell: the output is written where `-o` says (the board from `$FAKE_BOARD`, the schematic and its
-/// sheets from the folder `$FAKE_SCH_DIR`, its root being `whole.kicad_sch`), the report where `--report-file` says, the importers' lines go to stderr, and a layer map is kept.
+/// A project as kicad-cli 10.99's `import` writes one beside the board: the design rules and the net classes the importer set.
+const FOREIGN_PROJECT: &str = r#"{ "board": { "design_settings": { "rules": { "min_clearance": 0.2032, "min_track_width": 0.2 } } },
+  "net_settings": { "classes": [ { "name": "Default", "clearance": 0.2, "track_width": 0.2 }, { "name": "highpower", "clearance": 0.2, "track_width": 0.3048 } ],
+                    "netclass_patterns": [ { "netclass": "highpower", "pattern": "VCC" } ] } }"#;
+
+/// What `kicad-cli pcb import`, `sch import` and the project-level `import` do, as far as the studio can tell: the output is written where `-o` says (the board from `$FAKE_BOARD`,
+/// the schematic and its sheets from the folder `$FAKE_SCH_DIR`, its root being `whole.kicad_sch`, the project from `$FAKE_PROJECT`), the report where `--report-file` says, the
+/// importers' lines go to stderr, and a layer map is kept.
 const IMPORTING_CLI: &str = r#"#!/bin/sh
 if [ "$1" = version ]; then echo 10.99.0-fake; exit 0; fi
 scope=$1; out=""; report=""; map=""; prev=""; in=""
@@ -39,6 +45,7 @@ for a in "$@"; do
 done
 echo "$*" >> "$FAKE_LOG"
 [ -n "$map" ] && cp "$map" "$FAKE_LOG.map"
+if [ "$scope" = import ]; then cp "$FAKE_PROJECT" "$out.kicad_pro"; exit 0; fi
 case "$in" in *.xyz) echo "No PCB importer recognizes the file format of '$in'"; exit 3;; esac
 echo "Importing '$in' using Eagle format..."
 if [ "$scope" = pcb ]; then
@@ -75,6 +82,7 @@ impl Studio {
         std::fs::create_dir_all(&root).unwrap();
         // The files the stand-in makes: the board, and the mcu30 example drawn as module sheets (a root that places three, a screen each).
         std::fs::write(root.join("foreign.kicad_pcb"), FOREIGN_BOARD).unwrap();
+        std::fs::write(root.join("foreign.kicad_pro"), FOREIGN_PROJECT).unwrap();
         let sheets = root.join("sheets");
         std::fs::create_dir_all(&sheets).unwrap();
         let model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/mcu_board_30plus.yaml")).unwrap()).unwrap();
@@ -106,6 +114,7 @@ impl Studio {
             .env("EDA_KICAD_CONFIG_HOME", root.join("settings"))
             .env("FAKE_LOG", root.join("kicad-cli.log"))
             .env("FAKE_BOARD", root.join("foreign.kicad_pcb"))
+            .env("FAKE_PROJECT", root.join("foreign.kicad_pro"))
             .env("FAKE_SCH_DIR", &sheets)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -222,11 +231,20 @@ fn a_board_file_comes_back_converted_and_the_import_is_one_undo_step_that_is_tak
     // The file kicad-cli was given is the file the page posted, under its name.
     assert!(studio.calls()[0].starts_with("pcb import --report-format json --report-file "), "{:?}", studio.calls());
     assert!(studio.calls()[0].contains("My Board.brd"), "{:?}", studio.calls());
+    // And a second run makes the project of the board, which has the design rules and the net classes the importer set and the board file has not.
+    assert_eq!(studio.calls().len(), 2, "{:?}", studio.calls());
+    assert!(studio.calls()[1].starts_with("import -o ") && studio.calls()[1].contains("My Board.brd"), "{:?}", studio.calls());
+    assert_eq!(r["project"].as_str().unwrap(), FOREIGN_PROJECT);
+    assert_eq!(r["has_project"], true);
+    assert!(studio.get("/api/state")["board_rules"]["net_classes"].as_array().unwrap().is_empty(), "nothing yet: importing is not a change");
 
     // The import: the command the page sends, with Strict on (the gates would refuse a move that makes a board worse; an import is not one).
-    let done = studio.cmd(json!({ "op": "replace_board", "text": r["text"], "name": "My Board.brd" }), true);
+    let done = studio.cmd(json!({ "op": "replace_board", "text": r["text"], "name": "My Board.brd", "project": r["project"] }), true);
     assert_eq!(done["ok"], true, "{done}");
     assert_eq!(studio.parts(), vec!["J7"], "the file's board is the board; the intent's R1, R2 and C1 are the old board's");
+    let rules = studio.get("/api/state")["board_rules"].clone();
+    assert_eq!(rules["net_classes"][0]["name"], "highpower", "the importer's net class, from the project: {rules}");
+    assert_eq!(rules["net_classes"][0]["track_width"], 305);
     let state = studio.get("/api/state");
     assert_eq!(state["outline"].as_array().map(|o| o.len()), Some(4), "the file's outline: {}", state["outline"]);
     assert_eq!(state["outline"][2], json!([40_000, 40_000]), "and it is the file's, not the old board's");
@@ -234,9 +252,11 @@ fn a_board_file_comes_back_converted_and_the_import_is_one_undo_step_that_is_tak
     // One Undo (from the PCB tab) brings the old board back with its parts and nets; a Redo, the imported one.
     assert_eq!(studio.undo("pcb")["ok"], true);
     assert_eq!(studio.parts(), vec!["C1", "R1", "R2"], "the old board whole, the model with it");
+    assert!(studio.get("/api/state")["board_rules"]["net_classes"].as_array().unwrap().is_empty(), "and the rules with it");
     // (The served board has the steps it was made with, placing R1, R2 and C1: this Undo is the import's, the next would be theirs.)
     assert_eq!(studio.redo("pcb")["ok"], true);
     assert_eq!(studio.parts(), vec!["J7"]);
+    assert_eq!(studio.get("/api/state")["board_rules"]["net_classes"][0]["name"], "highpower");
 
     // A layer map is passed to kicad-cli, and the layer the person moved is explicit in the answer.
     let again = studio.post("/api/import_foreign", json!({ "kind": "board", "name": "My Board.brd", "data": upload("board", "x")["data"], "layer_map": { "tNames": "F.Fab" } }));

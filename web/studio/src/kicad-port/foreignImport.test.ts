@@ -9,6 +9,7 @@ import {
   autoMatch,
   describeImport,
   describeIssues,
+  describeRules,
   initialMapping,
   isRequiredLayer,
   issuesOf,
@@ -67,6 +68,12 @@ test("what an import brought is said with the right plural, and what kicad-cli r
   assert.equal(describeIssues([]), "");
   assert.equal(describeIssues(undefined), "");
   assert.deepEqual(issuesOf(findings).map((f) => f.severity), ["error", "warning"], "an information line is not an issue");
+
+  // The project kicad-cli makes with a board holds the importer's design rules and net classes: when it is not there, the person is told what the board lacks.
+  assert.equal(describeRules({ ok: true, kind: "board", project: "{}" }), "");
+  assert.equal(describeRules({ ok: true, kind: "board", project: null }), "The design rules and net classes of the file could not be read.");
+  assert.equal(describeRules({ ok: true, kind: "board" }), "The design rules and net classes of the file could not be read.");
+  assert.equal(describeRules({ ok: true, kind: "schematic" }), "", "a schematic has none");
 });
 
 test("the KiCad Layers list is LSET::UIOrder: the copper the board has, then the technical and user layers", () => {
