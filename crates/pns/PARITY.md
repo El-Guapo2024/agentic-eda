@@ -668,7 +668,7 @@ What `docs/parity/GAPS.md` item 7 and `CODE-COMPARE-router.md` D18 listed as mis
    after an arc, here it does not; `MeanderedLine::AddArc` took `GetP1()` for the arc's start, which is its end). The clean-up of a walked path knows
    the arcs of its line (`Walker::arcs`, `shove_line_to_hull_set`): a fillet's first chord lies on the run before it, so the vertex the run ends and the arc
    starts at is collinear with its neighbours, and a `Simplify` that does not know the arc drops it and the arc with it. The commit of a shove writes the arcs
-   the shove left as arc tracks (`Shove::outcome` carries `Line::arcs`). Quirks kept: `onCollidingArc` answers `SH_OK` when it fails to shove. Tests: `tests/arc_tracks.rs` (21: the arc in the world, hull and collision, a route starting and
+   the shove left as arc tracks (`Shove::outcome` carries `Line::arcs`). A quirk not kept: KiCad's `onCollidingArc` answers `SH_OK` when it fails to shove (the main loop then runs into its iteration limit, which fails the shove all the same); here it answers `SH_INCOMPLETE` at once. Tests: `tests/arc_tracks.rs` (21: the arc in the world, hull and collision, a route starting and
    ending in one, a shove that keeps and a shove that cuts, a pushed run before a tangent arc, each `DM_ARC` mode, the commit), `tests/arc_boards.rs` (KiCad's own
    `issue12609` and `issue8407`: routes, shoves, segment, corner and arc drags leave the router's world no violation it did not have; short sweep,
    `EDA_SLOW_TESTS=1` for 40 tries a board and mode), units in `arcs.rs`, `arc_drag.rs`, `line.rs`, `node.rs`, `shove.rs`, and the slow kicad-cli proof
@@ -727,7 +727,7 @@ across an arc track in Shove mode, a route that ends in the middle of one (split
 or its counts wander with which violation of a track it reports first), and every arc the commit leaves is an `(arc ..)` of the board file (two routes across, two onto and two arcs
 dragged on each board; 34 s in a debug build).
 
-**Browser check** (`web/studio/e2e/router-leftovers.check.js` on a scratch board made with `eda board new examples/mcu_board_30plus.yaml`, port 8837): 93 checks in 10
+**Browser check** (`web/studio/e2e/router-leftovers.check.js` on a scratch board made with `eda board new examples/mcu_board_30plus.yaml`, port 8837): 95 checks in 10
 scenarios through `window.__eda` -- the two router-setting rows, the mouse path setting the posture, `D` on an arc, a shoved line keeping its arc, a route ending and starting in the middle of an arc,
 a locked track (refused, Drag Anyway, walked round), `V` shoving the track under a head's via, a tuning pattern on an arc track and a target in picoseconds -- and a Ctrl+E scenario in
 `diff-pairs.check.js`. It found two bugs the unit tests did not: Drag Anyway had no dialog host on the PCB tab, and the clean-up after a walk dropped the vertex a tangent arc starts at.
