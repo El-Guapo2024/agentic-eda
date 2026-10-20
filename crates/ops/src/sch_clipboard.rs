@@ -108,8 +108,9 @@ impl<'a> Board<'a> {
         LibMerge { lib_name, engine_of, publish }
     }
 
-    /// `Cmd::PasteSch` -- see the module doc.
-    pub(crate) fn paste_sch(&mut self, fragment: &SchFragment, dx: Um, dy: Um, mode: PasteMode) -> Result<(), Vec<CheckResult>> {
+    /// `Cmd::PasteSch` -- see the module doc. Returns what the paste put on the sheet at its top: the ids of the new items that are in no new group and of the new groups that
+    /// are in no other (what `SCH_SELECTION` then holds, and what Place as group groups).
+    pub(crate) fn paste_sch(&mut self, fragment: &SchFragment, dx: Um, dy: Um, mode: PasteMode) -> Result<Vec<String>, Vec<CheckResult>> {
         if fragment.is_empty() {
             return Err(vec![CheckResult::fail("ops_empty_paste", "paste", "there is nothing to paste")]);
         }
@@ -312,8 +313,15 @@ impl<'a> Board<'a> {
                 remap.insert(old.id.clone(), new);
             }
         }
-        self.paste_groups(fragment, &remap)?;
-        Ok(())
+        let new_groups = self.paste_groups(fragment, &remap)?;
+        let tree = self.schematic()?.extras.group_tree();
+        let mut top: Vec<String> = Vec::new();
+        for id in remap.values().chain(new_groups.iter()) {
+            if tree.parent_group(id).is_none() && !top.contains(id) {
+                top.push(id.clone());
+            }
+        }
+        Ok(top)
     }
 }
 
@@ -322,10 +330,10 @@ impl<'a> Board<'a> {
     /// having made them): each becomes a group of the pasted items -- `remap` says which item each id of the fragment became -- and a group in a group
     /// stays in it. A member that was not pasted (a junction the wires imply, one the sheet had) is left out; a group left with fewer than two dissolves. A
     /// lock is not carried (`schItem->SetLocked( false )`).
-    fn paste_groups(&mut self, fragment: &SchFragment, remap: &BTreeMap<String, String>) -> Result<(), Vec<CheckResult>> {
+    fn paste_groups(&mut self, fragment: &SchFragment, remap: &BTreeMap<String, String>) -> Result<Vec<String>, Vec<CheckResult>> {
         let tree = fragment.section.extras.group_tree();
         if fragment.section.extras.groups.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         // inner groups first, so the group that holds one names it by the id it got here
         fn make(tree: eda_model::groups::GroupTree<'_>, id: &str, remap: &mut BTreeMap<String, String>, out: &mut Vec<eda_model::ir::Group>, visiting: &mut Vec<String>) {
@@ -346,8 +354,9 @@ impl<'a> Board<'a> {
                 }
             }
             visiting.pop();
-            if members.len() >= 2 {
-                let mut group = eda_model::ir::Group { id: String::new(), name: g.name.clone(), member_ids: members };
+            // a group linked to a design block may hold one item (`SCH_DRAWING_TOOLS::DrawSheet` puts a placed sheet alone in its group)
+            if members.len() >= 2 || (members.len() == 1 && !g.design_block.is_empty()) {
+                let mut group = eda_model::ir::Group { id: String::new(), name: g.name.clone(), member_ids: members, design_block: g.design_block.clone() };
                 group.id = format!("pasted:{id}");
                 remap.insert(id.to_string(), group.id.clone());
                 out.push(group);
@@ -371,7 +380,7 @@ impl<'a> Board<'a> {
             let new_id = sch.extras.groups.last().map(|g| g.id.clone()).unwrap_or_default();
             names.insert(temp, new_id);
         }
-        Ok(())
+        Ok(made.iter().filter_map(|g| names.get(&g.id).cloned()).collect())
     }
 }
 

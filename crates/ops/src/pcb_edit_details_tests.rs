@@ -136,7 +136,7 @@ fn clear_nets_changes_nothing_for_a_footprint_copied_alone() {
 
 fn grouped() -> (ConstraintModel, Design) {
     let mut d = design();
-    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["shp_seg", "txt_a"]) });
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["shp_seg", "txt_a"]), design_block: String::new() });
     (model(&["F.Cu", "B.Cu"]), d)
 }
 
@@ -174,9 +174,9 @@ fn what_a_command_adds_while_a_group_is_entered_joins_it() {
 fn a_paste_made_while_a_group_is_entered_joins_it_with_a_pasted_group_as_one_member() {
     let (m, mut d) = grouped();
     let mut source = design();
-    source.drawings.as_mut().unwrap().groups.push(Group { id: "grp_src".into(), name: "src".into(), member_ids: ids(&["dim_a", "shp_rect"]) });
+    source.drawings.as_mut().unwrap().groups.push(Group { id: "grp_src".into(), name: "src".into(), member_ids: ids(&["dim_a", "shp_rect"]), design_block: String::new() });
     let text = eda_kicad::export_pcb_clipboard(&source, &m, &ids(&["grp_src", "trk_a"]), p(0, 0)).unwrap();
-    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_b".into(), name: "other".into(), member_ids: ids(&["shp_arc", "dim_a"]) });
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_b".into(), name: "other".into(), member_ids: ids(&["shp_arc", "dim_a"]), design_block: String::new() });
     let mut b = Board::new(d, &m, 100, 300);
     b.apply(&Cmd::InGroup { group: id("grp_a"), cmd: Box::new(Cmd::PasteClipboard { text, at: p(2_000, 2_000) }) }).unwrap();
 
@@ -193,7 +193,7 @@ fn a_paste_made_while_a_group_is_entered_joins_it_with_a_pasted_group_as_one_mem
 #[test]
 fn a_duplicate_of_a_member_of_an_inner_group_joins_that_group_not_the_entered_one() {
     let (m, mut d) = grouped();
-    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_in".into(), name: String::new(), member_ids: ids(&["shp_arc", "dim_a"]) });
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_in".into(), name: String::new(), member_ids: ids(&["shp_arc", "dim_a"]), design_block: String::new() });
     d.drawings.as_mut().unwrap().groups[0].member_ids.push(id("grp_in"));
     let mut b = Board::new(d, &m, 100, 300);
     b.apply(&Cmd::InGroup { group: id("grp_a"), cmd: Box::new(Cmd::Duplicate { ids: ids(&["shp_arc"]) }) }).unwrap();

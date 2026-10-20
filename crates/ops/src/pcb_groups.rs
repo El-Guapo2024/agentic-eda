@@ -97,8 +97,19 @@ impl Board<'_> {
     /// `Cmd::EditGroup` (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): rename the group and make its members exactly
     /// `member_ids`, each pulled out of the group it was in, the previous members not listed released. A member may be a group, but
     /// not this one or one that holds it.
-    pub(crate) fn edit_group(&mut self, id: &str, name: &str, member_ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        self.drawings_mut().set_group(id, name, member_ids).map_err(refused)
+    pub(crate) fn edit_group(&mut self, id: &str, name: &str, member_ids: &[String], design_block: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        self.drawings_mut().set_group(id, name, member_ids, design_block).map_err(refused)
+    }
+
+    /// `Cmd::LinkDesignBlock` (`PCB_EDIT_FRAME::SaveSelectionAsDesignBlock`, `UpdateDesignBlockFromSelection`): `ids` are linked to the block `block` (`Lib:Name`). A lone
+    /// group with no link takes it; anything else goes in a new group named after the block and linked to it, each item leaving the group it was in. The ids must be items of
+    /// the board (a footprint, a track, a via, a zone, a graphic, a text, a dimension) or groups.
+    pub(crate) fn link_design_block_items(&mut self, ids: &[String], block: &str) -> Result<(), Vec<CheckResult>> {
+        let known = universe(&self.design);
+        if let Some(bad) = ids.iter().find(|id| !known.contains(id.as_str())) {
+            return Err(vec![CheckResult::fail("ops_unknown_item", bad, "no item of the board has this id")]);
+        }
+        self.drawings_mut().link_design_block(ids, block).map(|_| ()).map_err(refused)
     }
 
     /// `Cmd::InGroup`: `cmd`, then every item it added that is in no group joins `group` -- the group the editor has entered

@@ -58,6 +58,9 @@ fn import_cmd(source: &str, as_sheet: bool, keep: bool) -> Cmd {
         keep_annotations: keep,
         order: eda_ops::AnnotateOrder::XThenY,
         options: Default::default(),
+        as_group: false,
+        group_name: String::new(),
+        block: String::new(),
     }
 }
 

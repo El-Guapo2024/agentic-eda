@@ -91,7 +91,7 @@ export function registerSchGroupActions(registry: ActionMap, ctx: SchEditContext
     const selected = [...state.selection];
     const id = typeof arg === "string" ? arg : selected.length === 1 ? selected[0]! : null;
     const group = groupsOf(state.schematic).find((g) => g.id === id);
-    if (group) openGroupDialog({ id: group.id, name: group.name, members: [...group.member_ids] });
+    if (group) openGroupDialog({ id: group.id, name: group.name, members: [...group.member_ids], designBlock: group.design_block ?? "" });
   });
 
   // ACTIONS::pickNewGroupMember -- SCH_GROUP_TOOL::PickNewMember: the dialog is hidden, "Click on new member..." shows, the first click on an item adds it to the dialog's list (not the

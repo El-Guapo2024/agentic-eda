@@ -2286,7 +2286,7 @@ mod tests {
         let rt = design.routing.as_ref().unwrap();
         let (via_id, long_track) = (rt.vias[0].id.clone(), rt.tracks.iter().find(|t| t.net == "GND").unwrap().id.clone());
         let mut dr = eda_model::ir::DrawingsSection::default();
-        dr.groups = vec![Group { id: String::new(), name: "decoupling".into(), member_ids: vec!["U1".into(), "C1".into(), via_id.clone(), long_track.clone(), "no such item".into()] }];
+        dr.groups = vec![Group { id: String::new(), name: "decoupling".into(), member_ids: vec!["U1".into(), "C1".into(), via_id.clone(), long_track.clone(), "no such item".into()], design_block: String::new() }];
         dr.assign_missing_ids();
         design.drawings = Some(dr);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -2319,7 +2319,7 @@ mod tests {
         design.assign_missing_ids();
         let rt = design.routing.as_ref().unwrap();
         let (track_id, via_a, via_b) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.vias[1].id.clone());
-        let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|m| m.to_string()).collect() };
+        let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|m| m.to_string()).collect(), design_block: String::new() };
         design.drawings = Some(DrawingsSection {
             groups: vec![
                 group("grp_a_outer", "outer", &["U1", "grp_b_middle"]),

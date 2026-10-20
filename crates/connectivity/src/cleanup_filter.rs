@@ -260,8 +260,8 @@ mod tests {
         assert_eq!(nulls_and_vias(&design, &model, &only(&[])), (vec![], vec![]), "nothing selected, nothing to clean");
         // a selected group stands for its members, a group inside a group too
         let dr = design.drawings.get_or_insert_with(DrawingsSection::default);
-        dr.groups.push(Group { id: "inner".into(), name: String::new(), member_ids: ids(&["z2", "v2"]) });
-        dr.groups.push(Group { id: "outer".into(), name: String::new(), member_ids: ids(&["inner"]) });
+        dr.groups.push(Group { id: "inner".into(), name: String::new(), member_ids: ids(&["z2", "v2"]), design_block: String::new() });
+        dr.groups.push(Group { id: "outer".into(), name: String::new(), member_ids: ids(&["inner"]), design_block: String::new() });
         assert_eq!(nulls_and_vias(&design, &model, &only(&["outer"])), (ids(&["z2"]), ids(&["v2"])));
         assert_eq!(nulls_and_vias(&design, &model, &only(&["inner"])), (ids(&["z2"]), ids(&["v2"])));
     }
@@ -281,7 +281,7 @@ mod tests {
         let (mut design, model) = two_of_everything();
         let dr = design.drawings.get_or_insert_with(DrawingsSection::default);
         dr.locked_ids.push("z1".into());
-        dr.groups.push(Group { id: "g".into(), name: String::new(), member_ids: ids(&["w2"]) });
+        dr.groups.push(Group { id: "g".into(), name: String::new(), member_ids: ids(&["w2"]), design_block: String::new() });
         dr.locked_ids.push("g".into());
         // z1 is locked; w2 is in a locked group, so w1 -- its twin -- is the one that goes
         assert_eq!(nulls_and_vias(&design, &model, &CleanupFilter::default()), (ids(&["z2"]), ids(&["v2", "w1"])));

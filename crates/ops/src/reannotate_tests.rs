@@ -71,7 +71,7 @@ fn fixture() -> (ConstraintModel, Design) {
         drawings: Some(DrawingsSection {
             footprint_edits: vec![edit],
             locked_ids: vec!["R1".into()],
-            groups: vec![Group { id: "grp_1".into(), name: "g".into(), member_ids: vec!["R1".into(), "trk_1".into()] }],
+            groups: vec![Group { id: "grp_1".into(), name: "g".into(), member_ids: vec!["R1".into(), "trk_1".into()], design_block: String::new() }],
             ..Default::default()
         }),
         footprint_library: None,

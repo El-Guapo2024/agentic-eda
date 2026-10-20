@@ -51,6 +51,8 @@ export interface SchSelectionSummary {
   inGroup: boolean;
   /** `GROUP_CONTEXT_MENU::update`: what the selection holds (see kicad-port/schGroups.ts `groupMenuFlags`). */
   group: { count: number; hasGroup: boolean; onlyOneGroup: boolean; hasUngroupedItems: boolean; hasMember: boolean };
+  /** `groupWithDesignBlockLink` (sch_edit_frame.cpp): the one selected item is a group linked to a design block. */
+  linkedGroup: boolean;
   /** The one selected polygon or rule area has its outline under the cursor (`SCH_POINT_EDITOR::addCornerCondition`). */
   canAddCorner: boolean;
   /** ... and a corner of it is under the cursor, leaving enough corners (`removeCornerCondition`). */
@@ -89,6 +91,7 @@ export function emptySummary(): SchSelectionSummary {
     groups: 0,
     inGroup: false,
     group: { count: 0, hasGroup: false, onlyOneGroup: false, hasUngroupedItems: false, hasMember: false },
+    linkedGroup: false,
     canAddCorner: false,
     canRemoveCorner: false,
   };
@@ -132,6 +135,11 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
 
   // `SCH_SELECTION_TOOL::Init` (priority 1): Enter Group for one selected group, Leave Group while one is entered
   add(single && s.groups === 1 && item("common.Interactive.groupEnter"), s.inGroup && item("common.Interactive.groupLeave"));
+  // ... then Place Linked Design Block and Save to Linked Design Block with `groupEnterCondition`; `ENABLE( groupWithDesignBlockLink )` greys them for a group with no link
+  add(
+    single && s.groups === 1 && { type: "item", action: "eeschema.InteractiveDrawing.placeLinkedDesignBlock", disabled: !s.linkedGroup },
+    single && s.groups === 1 && { type: "item", action: "eeschema.InteractiveDrawing.saveToLinkedDesignBlock", disabled: !s.linkedGroup }
+  );
   // `selToolMenu.AddMenu( makePinTricksMenu( m_selectionTool ), S_C::AllPinsOrSheetPins, 1 )`: Pin Helpers (`PIN_TRICKS_MENU`) for a selection of pins and sheet pins
   add(allPinsOrSheetPins(s) && { type: "submenu", label: "Pin Helpers", items: PIN_HELPERS.map((h) => ({ type: "item", action: h.action, label: h.label }) as MenuNode) });
   if (sheetSelection) add(item("eeschema.NavigateTool.enterSheet"), sep);

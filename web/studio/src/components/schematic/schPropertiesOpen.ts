@@ -13,7 +13,7 @@ export function openSchProperties(sch: Schematic, ids: readonly string[], dispat
   // a group has the dialog of the group tool (`SCH_EDIT_TOOL::Properties`: `case SCH_GROUP_T: RunAction( ACTIONS::groupProperties, group )`)
   const group = ids.length === 1 ? groupsOf(sch).find((g) => g.id === ids[0]) : undefined;
   if (group) {
-    openGroupDialog({ id: group.id, name: group.name, members: [...group.member_ids] });
+    openGroupDialog({ id: group.id, name: group.name, members: [...group.member_ids], designBlock: group.design_block ?? "" });
     return true;
   }
   // a field picked on its own has the dialog of the field (`SCH_EDIT_TOOL::Properties`: `case SCH_FIELD_T: EditProperties`)

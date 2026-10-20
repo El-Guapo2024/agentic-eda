@@ -1,14 +1,14 @@
-// The rules behind Manage Symbol Libraries, Manage Footprint Libraries and Configure Paths, as pure functions (the dialogs are components/libraryTables/*).
+// The rules behind Manage Symbol Libraries, Manage Footprint Libraries, Manage Design Block Libraries and Configure Paths, as pure functions (the dialogs are components/libraryTables/*).
 //
 // Ported from KiCad (commit 8303b2ad): the grid and what OK does with it -- `common/libraries/lib_table_grid_data_model.cpp` (the columns, `SetValue` giving a row
 // the format its path says), `common/lib_table_grid_tricks.cpp` (`VerifyTable`, Delete, Move Up / Down, Activate and Show of the selected rows),
-// `eeschema/dialogs/panel_sym_lib_table.cpp` and `pcbnew/dialogs/panel_fp_lib_table.cpp` (the nickname a file makes, the duplicate warning,
+// `eeschema/dialogs/panel_sym_lib_table.cpp`, `pcbnew/dialogs/panel_fp_lib_table.cpp` and `common/dialogs/panel_design_block_lib_table.cpp` (the nickname a file makes, the duplicate warning,
 // `populateEnvironReadOnlyTable`: the path substitutions), `common/lib_id.cpp` (the characters a nickname may not hold) -- and Configure Paths:
 // `common/dialogs/dialog_configure_paths.cpp` and `common/validators.cpp` (`ENV_VAR_NAME_VALIDATOR`). The server checks the same things again before it writes
 // anything (`crates/kicad/src/library_table.rs`, `crates/cli/src/library_tables.rs`); doing them here too lets the dialog put the cursor in the cell at fault.
 import { libraryNicknameIllegalChar } from "./libraryNames";
 
-export type TableKind = "symbol" | "footprint";
+export type TableKind = "symbol" | "footprint" | "design_block";
 export type TableScope = "global" | "project";
 
 /** One row of a library table, as the grid has it: `enabled` is the Enable box, `visible` the Show box (symbol libraries only). */
@@ -37,15 +37,15 @@ export const TABLE_TYPE = "Table";
 export const KICAD_TYPE = "KiCad";
 
 export function libraryExtension(kind: TableKind): string {
-  return kind === "symbol" ? ".kicad_sym" : ".pretty";
+  return kind === "symbol" ? ".kicad_sym" : kind === "footprint" ? ".pretty" : ".kicad_blocks";
 }
 
 export function tableFileName(kind: TableKind): string {
-  return kind === "symbol" ? "sym-lib-table" : "fp-lib-table";
+  return kind === "symbol" ? "sym-lib-table" : kind === "footprint" ? "fp-lib-table" : "design-block-lib-table";
 }
 
 export function tableTitle(kind: TableKind): string {
-  return kind === "symbol" ? "Manage Symbol Libraries" : "Manage Footprint Libraries";
+  return kind === "symbol" ? "Manage Symbol Libraries" : kind === "footprint" ? "Manage Footprint Libraries" : "Manage Design Block Libraries";
 }
 
 export function emptyRow(): TableRow {
@@ -60,14 +60,14 @@ export function fixNickname(name: string): string {
 }
 
 /**
- * The nickname a library file or folder makes (`browseLibrariesHandler`, `PCB_BASE_EDIT_FRAME::AddLibrary`): the file's name without its extension; for a
- * footprint library that is not a `.pretty` folder, the whole name.
+ * The nickname a library file or folder makes (`browseLibrariesHandler`, `PCB_BASE_EDIT_FRAME::AddLibrary`, `DESIGN_BLOCK_PANE::AddDesignBlockLibrary`): the file's name
+ * without its extension; for a footprint library that is not a `.pretty` folder, or a design block library that is not a `.kicad_blocks` folder, the whole name.
  */
 export function nicknameForFile(kind: TableKind, fileName: string): string {
   const dot = fileName.lastIndexOf(".");
   const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
   const ext = dot > 0 ? fileName.slice(dot) : "";
-  if (kind === "footprint" && ext !== ".pretty") return fixNickname(fileName);
+  if (kind !== "symbol" && ext !== libraryExtension(kind)) return fixNickname(fileName);
   return fixNickname(stem);
 }
 
@@ -88,9 +88,8 @@ export function uniqueLibraryName(taken: readonly string[]): string {
 /** `GuessPluginTypeFromLibPath` as far as the name goes: a library table file is a chained table, KiCad's own formats are told by their extension. */
 export function guessType(kind: TableKind, path: string): string | null {
   const name = baseName(path);
-  if (name === "sym-lib-table" || name === "fp-lib-table") return TABLE_TYPE;
-  if (kind === "symbol" && name.endsWith(".kicad_sym")) return KICAD_TYPE;
-  if (kind === "footprint" && name.endsWith(".pretty")) return KICAD_TYPE;
+  if (name === "sym-lib-table" || name === "fp-lib-table" || name === "design-block-lib-table") return TABLE_TYPE;
+  if (name.endsWith(libraryExtension(kind))) return KICAD_TYPE;
   return null;
 }
 
@@ -240,7 +239,8 @@ export interface VariableValue {
  * variable of the kind of library (`KICAD10_SYMBOL_DIR`), each with the value it has, sorted by name. `values` are the variables that have one.
  */
 export function pathSubstitutions(uris: readonly string[], kind: TableKind, major: number, values: readonly VariableValue[]): VariableValue[] {
-  const names = new Set<string>(["KIPRJMOD", `KICAD${major}_${kind === "symbol" ? "SYMBOL" : "FOOTPRINT"}_DIR`]);
+  const folder = kind === "symbol" ? "SYMBOL" : kind === "footprint" ? "FOOTPRINT" : "DESIGN_BLOCK";
+  const names = new Set<string>(["KIPRJMOD", `KICAD${major}_${folder}_DIR`]);
   for (const uri of uris) for (const n of variablesUsed(uri)) names.add(n);
   const byName = new Map(values.map((v) => [v.name, v.value]));
   return [...names].sort().map((name) => ({ name, value: byName.get(name) ?? "" }));

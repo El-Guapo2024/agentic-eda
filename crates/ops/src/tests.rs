@@ -1213,7 +1213,7 @@ fn edit_group_renames_it_and_replaces_its_members() {
     let first = b.design().drawings.as_ref().unwrap().groups.iter().find(|g| g.member_ids.contains(&"U1".to_string())).unwrap().id.clone();
 
     // rename it and take C2 from the other group: that group is left with C3 alone, so it dissolves
-    b.apply(&Cmd::EditGroup { id: first.clone(), name: "power".into(), member_ids: vec!["U1".into(), "C1".into(), "C2".into(), "C2".into()] }).unwrap();
+    b.apply(&Cmd::EditGroup { id: first.clone(), name: "power".into(), member_ids: vec!["U1".into(), "C1".into(), "C2".into(), "C2".into()], design_block: None }).unwrap();
     let groups = b.design().drawings.as_ref().unwrap().groups.clone();
     assert_eq!(groups.len(), 1, "{groups:?}");
     assert_eq!(groups[0].name, "power");
@@ -1223,7 +1223,7 @@ fn edit_group_renames_it_and_replaces_its_members() {
     assert_eq!(members, vec!["C1".to_string(), "C2".to_string(), "U1".to_string()], "a member listed twice is one member");
 
     // a group left with fewer than two members dissolves, as everywhere else
-    b.apply(&Cmd::EditGroup { id: first, name: "x".into(), member_ids: vec!["U1".into()] }).unwrap();
+    b.apply(&Cmd::EditGroup { id: first, name: "x".into(), member_ids: vec!["U1".into()], design_block: None }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().groups.is_empty());
 }
 
@@ -1234,15 +1234,15 @@ fn edit_group_refuses_an_unknown_group_and_a_group_that_would_hold_itself() {
     b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
     b.apply(&Cmd::Group { ids: vec!["C2".into(), "C3".into()] }).unwrap();
     let groups = b.design().drawings.as_ref().unwrap().groups.clone();
-    let e = b.apply(&Cmd::EditGroup { id: "grp_nope".into(), name: String::new(), member_ids: vec!["U1".into(), "C1".into()] }).unwrap_err();
+    let e = b.apply(&Cmd::EditGroup { id: "grp_nope".into(), name: String::new(), member_ids: vec!["U1".into(), "C1".into()], design_block: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_group");
-    let e = b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[0].id.clone(), "U1".into()] }).unwrap_err();
+    let e = b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[0].id.clone(), "U1".into()], design_block: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_group", "a group cannot hold itself");
     assert_eq!(b.design().drawings.as_ref().unwrap().groups.len(), 2, "a refused edit changes nothing");
 
     // another group is a fine member; its holder can then not be put into it
-    b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[1].id.clone(), "U1".into(), "C1".into()] }).unwrap();
-    let e = b.apply(&Cmd::EditGroup { id: groups[1].id.clone(), name: String::new(), member_ids: vec![groups[0].id.clone(), "C2".into()] }).unwrap_err();
+    b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[1].id.clone(), "U1".into(), "C1".into()], design_block: None }).unwrap();
+    let e = b.apply(&Cmd::EditGroup { id: groups[1].id.clone(), name: String::new(), member_ids: vec![groups[0].id.clone(), "C2".into()], design_block: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_group", "a group cannot hold a group that holds it");
 }
 

@@ -673,6 +673,16 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     Ok(CopyOutput { text: out, items, skipped, sheet_files })
 }
 
+/// A clipboard fragment ([`write_clipboard`]'s text) as the schematic file a design block keeps: `SCH_EDIT_FRAME::SaveSelectionAsDesignBlock` puts the selection on a
+/// screen of its own and saves that (`saveSchematicFile`), so the file is a whole schematic -- the header a file has, the fragment's `(lib_symbols ...)` and items, the page
+/// the screen is on and the fonts line. The symbols of a fragment name their sheet path as `""` (a paste puts them on the sheet it lands on); in a file of their own they are on the
+/// root, `/` and the file's uuid.
+pub fn fragment_as_sheet_file(fragment: &str) -> String {
+    let uuid = duid_plain("design-block:selection-file");
+    let body = fragment.replace("(path \"\"", &format!("(path \"/{uuid}\""));
+    format!("(kicad_sch\n\t(version 20250114)\n\t(generator \"eda-kicad\")\n\t(generator_version \"9.0\")\n\t(uuid \"{uuid}\")\n\t(paper \"A4\")\n{body}\n\t(sheet_instances\n\t\t(path \"/\" (page \"1\"))\n\t)\n\t(embedded_fonts no)\n)\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

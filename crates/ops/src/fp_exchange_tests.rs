@@ -84,7 +84,7 @@ fn fixture() -> (ConstraintModel, Design) {
             }],
             footprint_extras: vec![FootprintExtra { id: "R1".into(), solder_mask_margin: Some(40), clearance: Some(250), ..Default::default() }],
             locked_ids: vec!["R1".into()],
-            groups: vec![Group { id: "grp_1".into(), name: "g".into(), member_ids: vec!["R1".into(), "R2".into()] }],
+            groups: vec![Group { id: "grp_1".into(), name: "g".into(), member_ids: vec!["R1".into(), "R2".into()], design_block: String::new() }],
             ..Default::default()
         }),
         footprint_library: None,

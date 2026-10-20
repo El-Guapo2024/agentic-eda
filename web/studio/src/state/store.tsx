@@ -1750,9 +1750,10 @@ export interface StudioApi {
    * A command that puts NEW items on the board (Import Graphics, Append Board, a dropped file), carried the way a Paste is: `build` makes the command for where the cursor is (the grid point, else the
    * middle of the board), the items it added are selected, and with `carry` the step is held open (`carry: "begin"`, crates/cli/src/carry.rs) and the Move tool is armed on them -- the drop joins the step
    * (one undo step for the new items and where they were dropped), Escape leaves nothing behind (`revertCarriedPlacement`), as for a Paste. `carry` off only selects them (a "Place at" import is where it
-   * was told). False when the command was refused or added nothing.
+   * was told). False when the command was refused or added nothing. `afterDrop` runs once the carried items are dropped (not when Escape takes them back): Place Design Block's
+   * "Place repeated copies" starts the next copy from it.
    */
-  placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
+  placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean, afterDrop?: () => void) => Promise<boolean>;
   /**
    * The same for the sheet in view of the Schematic tab (Import Graphics): `build` makes the command for where the cursor is (its 1.27 mm grid point); with `carry` the step is held open the same way
    * (`carry.rs` keeps whole-design snapshots, so it holds a schematic step as well as a board one) and the drop of the held selection (`commitSchHeld`) joins it.
@@ -1808,10 +1809,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
    * `cancel`. This notes that a step is being held while the new items are carried.
    */
   const carriedPlacementRef = useRef(false);
+  /** What to do once the carried items are dropped (`placeNewItems`' `afterDrop`). */
+  const afterDropRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     // The Move tool was left some other way than by a drop or Escape: the held step stands as a step of its own (any other command would settle it too).
     if (state.activeTool !== "move" && state.activeTool !== "drag" && carriedPlacementRef.current) {
       carriedPlacementRef.current = false;
+      afterDropRef.current = null;
       void postCarry("commit");
     }
   }, [state.activeTool]);
@@ -2268,6 +2272,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         const ok = plan ? await runPlan(plan, carry) : false;
         await settle(plan !== null && plan.cmds.length > 0, ok);
         advanceMoveQueue();
+        // a placement that asked to go on after its drop (Place Design Block with repeated copies) goes on
+        const next = afterDropRef.current;
+        afterDropRef.current = null;
+        if (carrying && next) next();
         return;
       }
       const cmds: Cmd[] = [];
@@ -2350,6 +2358,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     revertCarriedPlacement: async () => {
       if (!carriedPlacementRef.current) return false;
       carriedPlacementRef.current = false;
+      afterDropRef.current = null;
       // `commit.Revert()`: the carried items are gone and the history is as it was (crates/cli/src/carry.rs).
       const reply = await postCarry("cancel");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
@@ -2498,7 +2507,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     // Import Graphics (interactive placement), Append Board and the drops: the same hand-off as `pasteClipboard` above for any command that adds items -- the step is held open
     // (`carry: "begin"`) while the new items are carried, so they and their drop are one undo step and Escape leaves nothing behind.
-    placeNewItems: async (build, carry) => {
+    placeNewItems: async (build, carry, afterDrop) => {
       const board = stateRef.current.board;
       if (!board) return false;
       const at = pasteAt();
@@ -2514,6 +2523,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_SELECTION", refs: newIds });
       if (carry) {
         carriedPlacementRef.current = true;
+        afterDropRef.current = afterDrop ?? null;
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at });
       }

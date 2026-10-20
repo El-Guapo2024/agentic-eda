@@ -1,12 +1,13 @@
-// Manage Symbol Libraries and Manage Footprint Libraries: `DIALOG_EDIT_LIBRARY_TABLES` holding `PANEL_SYM_LIB_TABLE` / `PANEL_FP_LIB_TABLE`
-// (eeschema/dialogs/panel_sym_lib_table.cpp, pcbnew/dialogs/panel_fp_lib_table.cpp, common/libraries/lib_table_grid_data_model.cpp,
-// common/lib_table_grid_tricks.cpp).
+// Manage Symbol Libraries, Manage Footprint Libraries and Manage Design Block Libraries: `DIALOG_EDIT_LIBRARY_TABLES` holding `PANEL_SYM_LIB_TABLE` /
+// `PANEL_FP_LIB_TABLE` / `PANEL_DESIGN_BLOCK_LIB_TABLE` (eeschema/dialogs/panel_sym_lib_table.cpp, pcbnew/dialogs/panel_fp_lib_table.cpp,
+// common/dialogs/panel_design_block_lib_table.cpp, common/libraries/lib_table_grid_data_model.cpp, common/lib_table_grid_tricks.cpp).
 //
 // A Global Libraries tab and a Project Specific Libraries tab over the same grid -- status, Enable, Show (symbol libraries only), Nickname, Library Path, Library
 // Format, Options, Description -- the buttons under it (add an empty row, Add Existing, move up, move down, delete), the "Available path substitutions" list under
 // those, and OK / Cancel. A row of type `Table` opens the table it chains in a tab of its own. What differs from KiCad is the global table: it is KiCad's own file, and
 // the studio only reads it (Reset Libraries and Migrate Libraries are not here either), so that tab, and the tabs of the tables it chains, are read only; OK writes the
-// board's own `sym-lib-table` / `fp-lib-table` alone, after KiCad's `VerifyTable` checks (the server makes them again).
+// board's own `sym-lib-table` / `fp-lib-table` / `design-block-lib-table` alone, after KiCad's `VerifyTable` checks (the server makes them again). The design block table
+// has no Show column (`DESIGN_BLOCK_GRID_TRICKS::SupportsVisibilityColumn` is false).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { checkLibraryRows, fetchLibraryTables, normalizeLibraryPath, saveLibraryTable, type KindView, type LibraryTablesView } from "../../api/libraryTablesClient";
 import {
@@ -327,10 +328,15 @@ function TablesBody({ kind }: { kind: TableKind }) {
           { what: "symbol", label: "KiCad (.kicad_sym)" },
           { what: "table", label: "Table (nested library table)" },
         ]
-      : [
-          { what: "footprint", label: "KiCad (folder with .kicad_mod files)" },
-          { what: "table", label: "Table (nested library table)" },
-        ];
+      : kind === "footprint"
+        ? [
+            { what: "footprint", label: "KiCad (folder with .kicad_mod files)" },
+            { what: "table", label: "Table (nested library table)" },
+          ]
+        : [
+            { what: "design_block", label: "KiCad (folder with .kicad_block folders)" },
+            { what: "table", label: "Table (nested library table)" },
+          ];
 
   /** A text cell of the grid. */
   const cell = (r: TableRow, i: number, column: Column) => (

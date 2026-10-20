@@ -92,6 +92,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 | 23 | The 3D viewer: KiCad's models, layer tree, stackup colours | **Done** | `89ff669` (10-10) |
 | 25, 2 | Footprint graphics: silkscreen, fab and assembly drawings and texts are the footprint's own (IR, `.kicad_mod` and `.kicad_pcb`, canvas, 3D, in-house checks) | **Done** (limits in item 25) | `task-fp-graphics` (10-10, not merged) |
 | 30 | The 3D models of a footprint: the 3D Models tab in both Footprint Properties dialogs, the list's verbs and file entries, the Footprint Chooser's 3D view, Migrate 3D Models | **Done** (limits in item 30) | `task-fp-3d` (10-13, not merged) |
+| 32 | Design blocks: `.kicad_blocks` libraries and their table, the Design Blocks panes of the schematic and the board editor, Place (flat, as a sheet, linked), Save Sheet / Board / Selection, Update, Properties, Delete, a group's library link | **Done** (limits in item 32) | `task-design-blocks` (10-20, not merged) |
 
 Not moved: items 15, 19, 20, 24.
 
@@ -119,7 +120,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 15 | P15 Review workflow leftovers | 11 | ERC exclusions never reach kicad-cli; no Delete Marker / Save report | done 2026-10-14 on `task-review` (not merged); item 11 lists what is left | S-M |
 | 16 | P16 PCB item kinds the IR lacks | 24 | text box, tables (stackup table), barcode, point, reference image, hatch fill | deferred | L |
 | 17 | P17 Library editor leftovers | 14, 19, 22 | snap to anchors in the editors, the pad array numbering, derived symbols, a fields grid in Footprint Properties, symbol fields on the canvas, alternate pin functions, the symbol text box, a shape properties dialog | **done 2026-10-16 on `task-lib-editors` (not merged)**; items 19 and 22 list what is left | L |
-| 18 | P18 Design blocks | 32 | 23 actions; reusable blocks | after P3, P4 | L |
+| 18 | P18 Design blocks | 32 | 23 actions; reusable blocks | **done 2026-10-20 on `task-design-blocks` (not merged)**; item 32 lists what is left | L |
 | 19 | P19 Microwave tools and Specctra | 9, 27 | the five microwave tools; DSN export and SES import | open | S-M |
 | 20 | P20 Browser checks for the older areas | 33 | most earlier work was never clicked | standing | M each |
 | 21 | P21 Simulator | 34 | `eeschema.Simulation.*`, `Simulator.*` | last | XL |
@@ -643,15 +644,23 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/pad.cpp`, `pcbnew/tools/pad_tool.cpp` (`EditPad`), `pcbnew/dialogs/dialog_pad_properties.cpp`, `pcbnew/zone_filler.cpp` (`addKnockout`, custom pad parts), `pcbnew/microwave/microwave_polygon.cpp`.
 
 ### 32. Design blocks
-**New, open; after item 5 (tables) and Import Sheet (item 28).** Hit: reuse of sub-circuits. Blocks: no. Package P18, size L.
-- 23 rows: the PCB and schematic panels, place (schematic: the same function as Import Sheet), place linked, save selection, sheet or board as a block, update, properties, delete, the block library table.
-  No code names a design block. The schematic half's "no copy and paste" reason is stale.
+**Done 2026-10-20 on `task-design-blocks` (not merged); 22 of the 23 rows are wired and what is left is below.** Package P18, size L. Hit: reuse of sub-circuits.
+- What works: a design block is a `.kicad_blocks` library folder (a folder per block with its `.kicad_sch`, an optional `.kicad_pcb` and a `.json` of description, keywords and default fields) listed by `design-block-lib-table`, the third table beside the symbol and footprint ones (Manage
+  Design Block Libraries; New Library). The Design Blocks pane of the schematic and of the board editor (View > Design Blocks) has the search box and the library tree (Recently Used, pinned libraries), kicad-cli's preview of the selected block and its details, and KiCad's four check boxes.
+  Place Design Block (Shift+B, or a double click) is Import Sheet's tool with the block (contents or a sheet, grouped and linked to the block, renumbered) and, on the board, Append Board carried by the Move tool (grouped and linked, one undo step per copy, repeated copies until Escape);
+  Place Linked and Save to Linked Design Block from a linked group; Save Current Sheet / Board and Save Selection as Design Block, Update from Sheet / Board / Selection, Properties and Delete, with KiCad's questions and refusals. A group keeps its block (`Group.design_block`,
+  `(lib_id "Lib:Name")` in the `.kicad_sch` and `.kicad_pcb`) and Group Properties has the "Library link:" box. The studio writes only the library the user names.
+- Left: **Apply Design Block Layout** (`pcbnew.InteractiveDrawing.applyDesignBlockLayout`, the one row still in `ui-parity-missing.json`: it repeats the block's layout on a group's footprints with `MULTICHANNEL_TOOL::RepeatLayout`, which the studio does not have);
+  a placed sheet does not get the block's default fields as hidden fields, and a saved sheet's default fields start empty (the IR has no sheet user fields); a block name with a '.' is refused (KiCad lists a block by the part of its folder's name before the first dot, so it would be hidden from KiCad);
+  KiCad's Append Board groups what it appends by default (`place_as_group`, named after the file) and the studio's still does not (the design block placement does); Import Sheet's chooser and the pane keep check boxes of their own (KiCad shares them); the pane's pinned libraries, recents and
+  check boxes are the browser's (localStorage), not the project's or a settings file; the pane is a docked column, not a floating window; the preview is kicad-cli's drawing and not the canvas'; New Library writes the board's project table (KiCad's global table is read only here, and the template
+  table the user's global one chains is not installed on this machine: the pane lists it as a note).
 - Port from: `eeschema/tools/sch_design_block_control.cpp`, `pcbnew/tools/pcb_design_block_control.cpp`, `common/tool/design_block_control.cpp`, `common/design_block{,_info,_io,_library_adapter,_tree_model_adapter}.cpp`,
   `common/widgets/{design_block_pane,panel_design_block_chooser}.cpp`, `common/dialogs/{dialog_design_block_properties,panel_design_block_lib_table}.cpp`, `eeschema/sch_design_block_utils.cpp`, `pcbnew/pcb_design_block_utils.cpp`.
 
 ### 33. Browser-check coverage
 **New, standing.** Package P20.
-- `web/studio/e2e/*.check.js` exist for the Appearance panel, the DRC and ERC review, footprint edit and arrays, the Properties panel, snap and grid, the 3D viewer, and the router (`diff-pairs.check.js`, `length-tuning.check.js`, `router-leftovers.check.js`: pairs, tuning, arcs, locks, the posture, a head's via, the time domain). `sch-details.check.js` (P10, 2026-10-12) covers the schematic's pins and Swap Pins, sheet pins, auto-rotating labels and
+- `web/studio/e2e/*.check.js` exist for the Appearance panel, the DRC and ERC review, footprint edit and arrays, the Properties panel, snap and grid, the 3D viewer, and the router (`diff-pairs.check.js`, `length-tuning.check.js`, `router-leftovers.check.js`: pairs, tuning, arcs, locks, the posture, a head's via, the time domain). `design-blocks.check.js` (P18, 2026-10-20) covers the Design Blocks panes of both editors: the library, the tree and its menu, placing, saving, updating, Properties, Delete and a group's library link. `sch-details.check.js` (P10, 2026-10-12) covers the schematic's pins and Swap Pins, sheet pins, auto-rotating labels and
   justified text, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text and the pan buttons and auto-pan. Not covered: the rest of schematic editing and the clipboard
   (items 1, 6, 12), the hierarchy (4), Board Setup (3), the library choosers (5), PCB move, rotate, flip and clipboard (8), zones (13), groups (17), Find (21), the context menu (16). The rule in
   force: a fix counts when the C++ function is named in the code, the logic has a `kicad-port/*.test.ts`, one user action is one undo step, and a browser check ran.
@@ -713,7 +722,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - **Python scripting and plugins**: `common.API.pluginsReload`, `pcbnew.ScriptingTool.*`, the footprint wizards (`pcbnew.FpWizard.*`, `ModuleEditor.createFootprint`) (6 rows).
 - **Project management and the application shell**: New, Open, Revert, Quit, the project manager, Rescue, Open Directory, Open with Text Editor, the calculators (9 rows). A web page has none of these. (Open Non-KiCad Board was one: it replaces the board that is open and needs no project of its own, so it is wired, with Import Non-KiCad Schematic File, since 2026-10-15: item 28.)
 - **Simulator, in scope and last**: 29 rows, now item 34 and package P21.
-- **Deferred until the IR has the item** (reasons in `ui-parity-missing.json`, re-checked in `STALE-REASONS.md`): design blocks (23 rows, item 32), generators (9), tables (18), PCB text boxes, barcodes, points,
+- **Deferred until the IR has the item** (reasons in `ui-parity-missing.json`, re-checked in `STALE-REASONS.md`): design blocks (1 row left, item 32: Apply Design Block Layout needs the multichannel tool), generators (9), tables (18), PCB text boxes, barcodes, points,
   reference images and hatch fills, schematic images, the symbol text box (item 24), derived symbols, alternate pin functions, design variants (3), padstacks (Remove Unused Pads),
   embedded files (4: zstd, and no new dependency), custom pads (item 31: Explode, Recombine and the microwave shapes are left). The autoplacer (2) is declined: placement runs through `eda board` behind the placement gates. The Footprint and Symbol
   Viewer windows (5) are not planned; the editors' library trees browse.
@@ -1016,7 +1025,11 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `eeschema/symbol_editor/*`, `eeschema/lib_symbol.cpp`, `pcbnew/tools/array_tool.cpp`, `pcbnew/array_pad_number_provider.cpp`, `pcbnew/dialogs/dialog_create_array.cpp`.
 - Conflicts: P7 (pad dialogs), P3 and P14 (`libs`, `fpui`), P1.
 
-### P18. Design blocks (item 32; SR5). Size L. Rank 18. After P3 and P4.
+### P18. Design blocks (item 32; SR5). Size L. Rank 18. **Done 2026-10-20 on `task-design-blocks`, waiting for its merge; item 32 lists what is left.**
+- Done there, in the order of the plan: the library (`crates/kicad/src/design_block.rs`: read, write, enumerate, delete; the metadata as nlohmann dumps it) and its table (`design-block-lib-table` as the third `TableKind`, Manage Design Block Libraries, New Library); the schematic's pane (tree, search, preview, place through Import Sheet, flat or as a sheet, grouped and linked);
+  saving and editing (Save Sheet / Selection, Update, Properties, Delete, the group's library link); the board's half (the pane, Place Design Block through Append Board's carry, Save Board / Selection). Every edit is one undoable verb (`import_sheet` with a block, `place_design_block`, `link_design_block`, `edit_group`'s link). Rust tests in `crates/{kicad,ops,cli}` and `node --test` cases (`kicad-port/designBlocks.test.ts`, `svgPreview.test.ts`, `schImportSheet.test.ts`); the kicad-cli proofs
+  (`EDA_SLOW_TESTS=1`, `crates/cli/src/design_block_tests.rs`): a schematic block and a board block this studio writes load in kicad-cli (`sch export`, `pcb drc`), and a block made from one of KiCad's own templates places with its parts and nets; `web/studio/e2e/design-blocks.check.js` (10 scenarios, 106 steps through `window.__eda`). `PARITY-sch.md` section 34, `PARITY-pcb.md` section 36.
+- The plan was:
 - A block library (the table of P3, `.kicad_blocks` folders with a `.kicad_sch`, a `.kicad_pcb` and metadata), the panels, place (schematic: Import Sheet; board: Append Board), place linked, save selection, sheet or board as a block, update, properties, delete.
 - Files: new `crates/kicad/src/design_block.rs`, `crates/ops` (new file), `crates/cli` (a new `design_block_api.rs`), `components/panels/DesignBlockPanel.tsx`, dialogs.
 - KiCad: `eeschema/tools/sch_design_block_control.cpp`, `pcbnew/tools/pcb_design_block_control.cpp`, `common/tool/design_block_control.cpp`, `common/design_block{,_info,_io,_library_adapter}.cpp`,

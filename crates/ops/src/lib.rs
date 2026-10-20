@@ -81,6 +81,7 @@ mod pcb_groups;
 mod sch_groups;
 mod pcb_paste;
 mod pcb_paste_special;
+mod design_blocks;
 mod pcb_props;
 mod pcb_transform;
 mod tuning;
@@ -94,6 +95,7 @@ mod sheet_units;
 mod sheets;
 pub use sch_annotate::{AnnotateMessage, AnnotateOptions, AnnotateReport, AnnotateScope};
 pub use sch_sheets::{unique_sheet_name, SheetFileFinding};
+pub use sch_groups::groupable_ids;
 pub use pcb_paste_special::PasteMode;
 pub use pcb_transform::{flip_layer, FlipDirection};
 
@@ -488,9 +490,34 @@ pub enum Cmd {
     /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow` (`ACTIONS::groupProperties`, Group Properties...): rename the group `id` and
     /// make its members exactly `member_ids` -- each one pulled out of whatever other group it was in (an item is in one group at a
     /// time), the group's own previous members that are not listed released. A group left with fewer than 2 members dissolves, as
-    /// everywhere else. The name is `PCB_GROUP::SetName`; the dialog's other two fields (locked, design-block link) have no
-    /// counterpart in this model. A member may be a group, but not this group or one that holds it.
-    EditGroup { id: String, name: String, member_ids: Vec<String> },
+    /// everywhere else. The name is `PCB_GROUP::SetName`; the dialog's "Library link:" box is `design_block` (`Some("")` clears the design block link, `Some("Lib:Name")` sets it,
+    /// refused as "Invalid library link" when it is not an id of that shape, `None` leaves it); its lock box has no counterpart in this model. A member may be a group, but not
+    /// this group or one that holds it.
+    EditGroup {
+        id: String,
+        name: String,
+        member_ids: Vec<String>,
+        #[serde(default)]
+        design_block: Option<String>,
+    },
+    /// What a successful Save Selection as Design Block / Update Design Block from Selection does to the board (`PCB_EDIT_FRAME::SaveSelectionAsDesignBlock`,
+    /// `UpdateDesignBlockFromSelection`): `ids` -- the selection, a group included -- are linked to `block` (`Lib:Name`). A lone group with no link takes it ("Set Group Design
+    /// Block Link"); anything else goes in a new group named after the block and linked to it ("Group Items"; it may hold one item), each item leaving the group it was in.
+    LinkDesignBlock { ids: Vec<String>, block: String },
+    /// Place Design Block (`pcbnew.InteractiveDrawing.placeDesignBlock`, `PCB_CONTROL::AppendDesignBlock` -> `AppendBoard`): the block's board file -- `text`, a board file's
+    /// text, the same text Append Board reads -- put on the board with the file's origin (the point Append Board holds it by, the studio's server finds it) at `at`. The
+    /// references the file has are kept (`AppendBoard` never renumbers: "Don't reannotate dupes on Append Board"). With `as_group` and at least two items at its top, what
+    /// came in is put in one group named `group_name` (the block's name when that is empty) and linked to `block` (`Lib:Name`): `placeAsGroup`, `SetDesignBlockLibId`. One undo
+    /// step. See `design_blocks.rs`.
+    PlaceDesignBlock {
+        text: String,
+        at: Point,
+        block: String,
+        #[serde(default)]
+        as_group: bool,
+        #[serde(default)]
+        group_name: String,
+    },
 
     // ------------------------------------------------------------ arrays
     //
@@ -1155,6 +1182,16 @@ pub enum Cmd {
         order: AnnotateOrder,
         #[serde(default)]
         options: AnnotateOptions,
+        /// Place as group (`placeAsGroup`): what comes in -- the file's items, or with `block` the sheet -- is put in a group of its own, named `group_name` (the file's name,
+        /// or the block's, when that is left empty) and, for a block, linked to it. A sheet placed from a file alone is not grouped (`DrawSheet` groups only a design block's).
+        #[serde(default)]
+        as_group: bool,
+        #[serde(default)]
+        group_name: String,
+        /// The design block (`Lib:Name`) the file is the schematic of: placing a block is `SCH_DRAWING_TOOLS::ImportSheet` with `placingDesignBlock`, so the group it makes is
+        /// linked to the block (`SetDesignBlockLibId`) and the power symbols are numbered anew too. Empty for a plain file.
+        #[serde(default)]
+        block: String,
     },
     /// Alt+S (`eeschema.InteractiveEdit.swap`, `SCH_EDIT_TOOL::Swap`): exchange the positions of two schematic
     /// items -- symbols (placed or power), labels and free texts, found by id -- and, for two symbols of the
@@ -2066,6 +2103,8 @@ impl Cmd {
             Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::AddToGroup { group_id, ids } => std::iter::once(group_id.as_str()).chain(ids.iter().map(String::as_str)).collect(),
             Cmd::EditGroup { id, member_ids, .. } => std::iter::once(id.as_str()).chain(member_ids.iter().map(String::as_str)).collect(),
+            Cmd::LinkDesignBlock { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::PlaceDesignBlock { block, .. } => vec![block.as_str()],
             Cmd::CreateArray { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::AddDimension { .. } => vec!["dimension"],
             Cmd::DeleteDimension { id } | Cmd::MoveDimension { id, .. } | Cmd::EditDimension { id, .. } => vec![id.as_str()],
@@ -2525,7 +2564,9 @@ impl<'a> Board<'a> {
             Cmd::Ungroup { ids } => self.ungroup_items(ids),
             Cmd::AddToGroup { group_id, ids } => self.add_to_group(group_id, ids),
             Cmd::RemoveFromGroup { ids } => self.remove_from_group(ids),
-            Cmd::EditGroup { id, name, member_ids } => self.edit_group(id, name, member_ids),
+            Cmd::EditGroup { id, name, member_ids, design_block } => self.edit_group(id, name, member_ids, design_block.as_deref()),
+            Cmd::LinkDesignBlock { ids, block } => self.link_design_block_items(ids, block),
+            Cmd::PlaceDesignBlock { text, at, block, as_group, group_name } => self.place_design_block(text, *at, block, *as_group, group_name),
             Cmd::CreateArray { ids, geometry, arrange, reannotate } => self.create_array(ids, geometry, *arrange, *reannotate),
             Cmd::AddDimension { dimension } => self.add_dimension(dimension.clone()),
             Cmd::DeleteDimension { id } => self.delete_dimension(id),
@@ -2705,14 +2746,14 @@ impl<'a> Board<'a> {
             Cmd::AddSchLine { pts, width_um } => self.add_sch_line(pts.clone(), *width_um),
             Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
-            Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options } => match content {
-                Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options),
+            Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options, as_group, group_name, block } => match content {
+                Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options, &design_blocks::Placement { source, as_group: *as_group, group_name, block }),
                 None => Err(vec![CheckResult::fail("ops_sheet_file_not_read", source, format!("the file '{source}' was not read, so there is nothing to import"))]),
             },
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),
             Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project } => self.replace_board(text, name, *keep_kicad_layer_names, project.as_deref()),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
-            Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode),
+            Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode).map(|_| ()),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
@@ -5727,6 +5768,8 @@ mod fp_models_tests;
 mod pcb_props_tests;
 #[cfg(test)]
 mod pcb_paste_tests;
+#[cfg(test)]
+mod design_blocks_tests;
 #[cfg(test)]
 mod import_graphics_tests;
 #[cfg(test)]

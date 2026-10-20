@@ -75,11 +75,12 @@ pub struct ClipFootprint {
     pub zone_overrides: Option<FootprintZoneOverrides>,
 }
 
-/// A group on the clipboard: its name and its members.
+/// A group on the clipboard: its name, its members and the design block it is linked to (`(lib_id ..)`, empty for none).
 #[derive(Debug, Clone)]
 pub struct ClipGroup {
     pub name: String,
     pub members: Vec<ClipRef>,
+    pub design_block: String,
 }
 
 /// One member of a [`ClipGroup`]: the position of an item in the matching list of the [`Clipboard`].
@@ -382,7 +383,7 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
                 })
                 .collect();
             group_index.insert(g.id.as_str(), clip.groups.len());
-            clip.groups.push(ClipGroup { name: g.name.clone(), members });
+            clip.groups.push(ClipGroup { name: g.name.clone(), members, design_block: g.design_block.clone() });
         }
     }
     if clip.is_empty() {
@@ -469,7 +470,7 @@ mod tests {
                 shapes: vec![Shape::Segment { id: "shp_a".into(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: p(100_000, 130_000), end: p(110_000, 130_000) }],
                 texts: vec![Text { id: "txt_a".into(), content: "hello".into(), at: p(100_000, 140_000), angle: 90_000, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: TextJustify::Left, mirror: false }],
                 dimensions: vec![dimension],
-                groups: vec![Group { id: "grp_a".into(), name: "block".into(), member_ids: vec!["shp_a".into(), "txt_a".into(), "zone_a".into()] }],
+                groups: vec![Group { id: "grp_a".into(), name: "block".into(), member_ids: vec!["shp_a".into(), "txt_a".into(), "zone_a".into()], design_block: String::new() }],
                 locked_ids: vec!["trk_a".into()],
                 ..Default::default()
             }),
@@ -577,8 +578,8 @@ mod tests {
         let (mut design, model) = fixture();
         let dr = design.drawings.as_mut().unwrap();
         dr.groups = vec![
-            Group { id: "grp_outer".into(), name: "outer".into(), member_ids: vec!["grp_inner".into(), "txt_a".into()] },
-            Group { id: "grp_inner".into(), name: "inner".into(), member_ids: vec!["shp_a".into(), "zone_a".into()] },
+            Group { id: "grp_outer".into(), name: "outer".into(), member_ids: vec!["grp_inner".into(), "txt_a".into()], design_block: String::new() },
+            Group { id: "grp_inner".into(), name: "inner".into(), member_ids: vec!["shp_a".into(), "zone_a".into()], design_block: String::new() },
         ];
         // Copying the outer group takes the inner group and what is in it along (`PCB_GROUP::DeepClone`).
         let text = export_pcb_clipboard(&design, &model, &ids(&["grp_outer"]), p(100_000, 100_000)).unwrap();

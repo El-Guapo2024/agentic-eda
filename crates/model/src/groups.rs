@@ -241,9 +241,12 @@ impl GroupRefusal {
 
 /// A group with fewer than two members is meaningless and dissolves (`GROUP_TOOL::RemoveFromGroup`'s `if( group->GetItems().size() < 2 )`); the
 /// group above it loses it as a member, and may fall under two in turn.
+///
+/// A group that is linked to a design block (`EDA_GROUP::HasDesignBlockLink`) and holds one item stays: placing a block as a sheet puts the sheet alone in its linked
+/// group, and saving a single symbol as a block groups that symbol, both in KiCad (`SCH_DRAWING_TOOLS::DrawSheet`, `SCH_EDIT_FRAME::SaveSelectionAsDesignBlock`).
 pub fn prune_groups(groups: &mut Vec<Group>) {
     loop {
-        let doomed: Vec<String> = groups.iter().filter(|g| g.member_ids.len() < 2).map(|g| g.id.clone()).collect();
+        let doomed: Vec<String> = groups.iter().filter(|g| g.member_ids.len() < 2 && !(g.member_ids.len() == 1 && !g.design_block.is_empty())).map(|g| g.id.clone()).collect();
         if doomed.is_empty() {
             return;
         }
@@ -280,7 +283,7 @@ pub trait GroupHost {
         for g in groups.iter_mut() {
             g.member_ids.retain(|m| !members.contains(m));
         }
-        groups.push(Group { id: String::new(), name: String::new(), member_ids: members });
+        groups.push(Group { id: String::new(), name: String::new(), member_ids: members, design_block: String::new() });
         self.assign_group_ids();
         let groups = self.group_list_mut();
         let new_id = groups.last().map(|g| g.id.clone()).unwrap_or_default();
@@ -338,8 +341,14 @@ pub trait GroupHost {
     }
 
     /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`: rename the group and make its members exactly `member_ids`, each pulled out of the group it
-    /// was in, the previous members not listed released. A member may be a group, but not this one or one that holds it.
-    fn set_group(&mut self, id: &str, name: &str, member_ids: &[String]) -> Result<(), GroupRefusal> {
+    /// was in, the previous members not listed released. A member may be a group, but not this one or one that holds it. `design_block` is the dialog's
+    /// "Library link:" box: `Some("")` clears the link, `Some("Lib:Name")` sets it (it must be an id of that shape, `LIB_ID::Parse`: "Invalid library link"), `None`
+    /// leaves it as it is.
+    fn set_group(&mut self, id: &str, name: &str, member_ids: &[String], design_block: Option<&str>) -> Result<(), GroupRefusal> {
+        let link = match design_block.map(str::trim) {
+            Some("") | None => design_block.map(|_| String::new()),
+            Some(text) => Some(check_design_block_id(text).map_err(|why| GroupRefusal::bad_group(id, &why))?),
+        };
         let tree = GroupTree(self.group_list());
         if !tree.is_group(id) {
             return Err(GroupRefusal::unknown_group(id));
@@ -360,10 +369,63 @@ pub trait GroupHost {
         if let Some(g) = groups.iter_mut().find(|g| g.id == id) {
             g.name = name.to_string();
             g.member_ids = members;
+            if let Some(link) = link {
+                g.design_block = link;
+            }
         }
         prune_groups(groups);
         Ok(())
     }
+
+    /// What follows a successful Save Selection as Design Block or Update Design Block from Selection (`SCH_EDIT_FRAME::SaveSelectionAsDesignBlock`,
+    /// `PCB_EDIT_FRAME::SaveSelectionAsDesignBlock`): the selection is linked to the block `block` (`Lib:Name`). A lone group with no link takes the link ("Set Group Design
+    /// Block Link"; a group that has one keeps it and its name stays); any other selection is put in a new group named after the block and linked to it ("Group Items"),
+    /// each item leaving the group it was in. The group may hold one item. Returns the id of the group that carries the link.
+    fn link_design_block(&mut self, ids: &[String], block: &str) -> Result<String, GroupRefusal> {
+        let block = check_design_block_id(block).map_err(|why| GroupRefusal::bad_group("design block", &why))?;
+        let mut members: Vec<String> = Vec::new();
+        for id in ids {
+            if !members.contains(id) {
+                members.push(id.clone());
+            }
+        }
+        if members.is_empty() {
+            return Err(GroupRefusal::bad_group("design block", "there is nothing to link to the design block"));
+        }
+        if members.len() == 1 && GroupTree(self.group_list()).is_group(&members[0]) {
+            let id = members[0].clone();
+            if let Some(g) = self.group_list_mut().iter_mut().find(|g| g.id == id) {
+                if g.design_block.is_empty() {
+                    g.design_block = block;
+                }
+            }
+            return Ok(id);
+        }
+        let name = block.split_once(':').map_or(block.as_str(), |(_, n)| n).to_string();
+        let groups = self.group_list_mut();
+        for g in groups.iter_mut() {
+            g.member_ids.retain(|m| !members.contains(m));
+        }
+        groups.push(Group { id: String::new(), name, member_ids: members, design_block: block });
+        self.assign_group_ids();
+        let groups = self.group_list_mut();
+        let new_id = groups.last().map(|g| g.id.clone()).unwrap_or_default();
+        prune_groups(groups);
+        Ok(new_id)
+    }
+}
+
+/// `LIB_ID::Parse( text, true )` as the Group Properties dialog and the file reader take a design block link: a nickname and a name, split by the first colon, neither empty
+/// and neither holding a character a library name may not (a control character, a backslash). Returns the id as `LIB_ID::Format` writes it, or why not.
+pub fn check_design_block_id(text: &str) -> Result<String, String> {
+    let text = text.trim();
+    let invalid = || format!("Invalid library link: '{text}'");
+    let Some((nickname, name)) = text.split_once(':') else { return Err(invalid()) };
+    let illegal = |s: &str| s.chars().any(|c| (c as u32) < 0x20 || c == '\\' || c == ':');
+    if nickname.is_empty() || name.is_empty() || illegal(nickname) || illegal(name) {
+        return Err(invalid());
+    }
+    Ok(format!("{nickname}:{name}"))
 }
 
 impl GroupHost for DrawingsSection {
@@ -395,7 +457,7 @@ mod tests {
     use super::*;
 
     fn g(id: &str, members: &[&str]) -> Group {
-        Group { id: id.into(), name: String::new(), member_ids: members.iter().map(|m| m.to_string()).collect() }
+        Group { id: id.into(), name: String::new(), member_ids: members.iter().map(|m| m.to_string()).collect(), design_block: String::new() }
     }
 
     fn drawings(groups: Vec<Group>) -> DrawingsSection {
@@ -475,7 +537,7 @@ mod tests {
         // a group cannot hold the group that holds it
         assert!(e.add_members(&b, &[top.clone()]).is_err());
         // properties: a name and a member list
-        e.set_group(&b, "caps", &strs(&["C1", "C2", "C3"])).unwrap();
+        e.set_group(&b, "caps", &strs(&["C1", "C2", "C3"]), None).unwrap();
         assert_eq!(e.group(&b).map(|g| (g.name.as_str(), g.member_ids.len())), Some(("caps", 3)));
         // ungrouping the outer group frees the inner one
         e.dissolve_groups(&[top]);
@@ -492,5 +554,57 @@ mod tests {
         assert!(ids[0].starts_with("grp_") && ids[1].starts_with("grp_") && ids[0] != ids[1]);
         e.assign_missing_group_ids();
         assert_eq!(e.groups.iter().map(|g| g.id.clone()).collect::<Vec<_>>(), ids, "ids that are set stay");
+    }
+
+    #[test]
+    fn a_design_block_link_is_a_lib_id_a_lone_group_takes_it_and_other_items_get_a_group_of_their_own() {
+        assert_eq!(check_design_block_id(" Power:Buck "), Ok("Power:Buck".to_string()));
+        for bad in ["", "Power", ":Buck", "Power:", "Po\\wer:Buck", "a\tb:c"] {
+            assert_eq!(check_design_block_id(bad), Err(format!("Invalid library link: '{}'", bad.trim())), "{bad:?}");
+        }
+        let mut e = SchExtras::default();
+        e.make_group(&strs(&["R1", "R2"])).unwrap();
+        let lone = e.groups[0].id.clone();
+        // a lone group with no link takes it and keeps its name; one with a link keeps that one
+        e.set_group(&lone, "regulator", &strs(&["R1", "R2"]), None).unwrap();
+        assert_eq!(e.link_design_block(&[lone.clone()], "Power:Buck").unwrap(), lone);
+        assert_eq!((e.groups[0].name.as_str(), e.groups[0].design_block.as_str()), ("regulator", "Power:Buck"));
+        e.link_design_block(&[lone.clone()], "Power:Other").unwrap();
+        assert_eq!(e.groups[0].design_block, "Power:Buck", "a link already there stays");
+        // any other selection is put in a new group named after the block, leaving the group it was in; one item is enough
+        let id = e.link_design_block(&strs(&["C1"]), "Power:Boost").unwrap();
+        let g = e.group(&id).unwrap();
+        assert_eq!((g.name.as_str(), g.design_block.as_str(), g.member_ids.clone()), ("Boost", "Power:Boost", strs(&["C1"])));
+        // a group of one item that is linked survives the pruning every group edit does; one that is not does not
+        prune_groups(&mut e.groups);
+        assert!(e.is_group(&id));
+        e.groups.push(g_named("loose", &["Q1"]));
+        prune_groups(&mut e.groups);
+        assert!(!e.is_group("loose"));
+        // an item taken into the new group leaves its old one, which dissolves when it is left with one -- unless that one is linked to a block too
+        e.make_group(&strs(&["Q2", "Q3"])).unwrap();
+        let pair = e.groups.last().unwrap().id.clone();
+        let id2 = e.link_design_block(&strs(&["Q2"]), "Power:Third").unwrap();
+        assert!(!e.is_group(&pair), "the group Q2 left had two members and is left with one: it is not a group");
+        assert_eq!(e.group(&id2).unwrap().member_ids, strs(&["Q2"]));
+        let id3 = e.link_design_block(&strs(&["R1"]), "Power:Fourth").unwrap();
+        assert!(e.is_group(&lone) && e.group(&lone).unwrap().member_ids == strs(&["R2"]), "a linked group left with one item stays, as KiCad's does");
+        assert_eq!(e.group(&id3).unwrap().member_ids, strs(&["R1"]));
+        assert!(e.link_design_block(&[], "Power:Buck").is_err());
+        assert!(e.link_design_block(&strs(&["C9"]), "nonsense").is_err());
+        // Group Properties' "Library link:" box sets, clears and checks the link
+        e.set_group(&id, "Boost", &strs(&["C1"]), Some("Mine:Boost2")).unwrap();
+        assert_eq!(e.group(&id).unwrap().design_block, "Mine:Boost2");
+        e.set_group(&id, "Boost", &strs(&["C1"]), None).unwrap();
+        assert_eq!(e.group(&id).unwrap().design_block, "Mine:Boost2", "no answer leaves the link");
+        assert!(e.set_group(&id, "Boost", &strs(&["C1"]), Some("bogus")).is_err());
+        e.make_group(&strs(&["D1", "D2"])).unwrap();
+        let plain = e.groups.last().unwrap().id.clone();
+        e.set_group(&plain, "diodes", &strs(&["D1", "D2"]), Some("")).unwrap();
+        assert!(e.group(&plain).unwrap().design_block.is_empty());
+    }
+
+    fn g_named(id: &str, members: &[&str]) -> Group {
+        Group { id: id.into(), name: id.into(), member_ids: members.iter().map(|m| m.to_string()).collect(), design_block: String::new() }
     }
 }

@@ -339,7 +339,12 @@ impl<'a> Board<'a> {
 
     /// `Cmd::ImportSheet`: see the module doc.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn import_sheet(&mut self, content: &SheetFile, as_sheet: bool, name: &str, file: &str, at: Point, size: (Um, Um), keep_annotations: bool, order: AnnotateOrder, options: &AnnotateOptions) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn import_sheet(&mut self, content: &SheetFile, as_sheet: bool, name: &str, file: &str, at: Point, size: (Um, Um), keep_annotations: bool, order: AnnotateOrder, options: &AnnotateOptions, how: &crate::design_blocks::Placement<'_>) -> Result<(), Vec<CheckResult>> {
+        if !how.block.is_empty() {
+            if let Err(why) = eda_model::groups::check_design_block_id(how.block) {
+                return Err(vec![CheckResult::fail("ops_bad_design_block", how.block, why)]);
+            }
+        }
         let name = name.trim();
         if let Some(e) = self.check_sheet_file(content, name, keep_annotations).into_iter().find(|f| f.severity == "error") {
             return Err(vec![CheckResult::fail("ops_sheet_file", name, e.text)]);
@@ -364,6 +369,13 @@ impl<'a> Board<'a> {
             let numbering = if keep_annotations { Numbering::Paste(PasteMode::Keep) } else { Numbering::Annotate { order, options: options.clone() } };
             let hint = (!file.is_empty()).then_some(file);
             self.add_sheet_tree(Incoming { placement, screens: &screens, lib_symbols: &content.lib_symbols }, (0, 0), name, hint, &numbering)?;
+            // `DrawSheet`: `if( isDrawSheetFromDesignBlock && place_as_group )` the sheet alone goes in a group named and linked as the block
+            if !how.block.is_empty() {
+                let new_sheet = self.schematic_mut()?.sheets.last().map(|s| s.id.clone());
+                if let Some(id) = new_sheet {
+                    self.group_placed(&[id], how)?;
+                }
+            }
             return Ok(());
         }
         // the contents of the file go on the sheet in view, as a paste of the file's screen carried to `at`
@@ -375,7 +387,9 @@ impl<'a> Board<'a> {
         let (dx, dy) = (at.x - anchor.x, at.y - anchor.y);
         let units_here = |b: &Self| -> BTreeSet<(String, u32)> { b.schematic().map(|s| s.symbols.iter().map(|x| (x.id.clone(), x.unit)).collect()).unwrap_or_default() };
         let before = units_here(self);
-        self.paste_sch(&fragment, dx, dy, if keep_annotations { PasteMode::Keep } else { PasteMode::Unique })?;
+        let top = self.paste_sch(&fragment, dx, dy, if keep_annotations { PasteMode::Keep } else { PasteMode::Unique })?;
+        // `placeSheetContents`: `if( placeAsGroup )` a group of what came in (before the numbering, which renames the members it lists)
+        self.group_placed(&top, how)?;
         if !keep_annotations {
             // `placeSheetContents`: `AnnotateSymbols( ANNOTATE_SELECTION, order, algo, recursive, start, reset = true, ... SYMBOL_FILTER_NON_POWER )` over the items that came in
             let new_refs: Vec<String> = units_here(self).difference(&before).map(|(id, _)| id.clone()).collect::<BTreeSet<_>>().into_iter().collect();

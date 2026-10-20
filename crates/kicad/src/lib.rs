@@ -62,14 +62,17 @@ pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
 mod symbol_lib;
 pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, find_symbol_library_file, list_symbol_libraries, list_symbols_in_file, list_symbols_in_library, resolve_library_symbols, resolve_library_symbols_with, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
-// KiCad's library tables (`sym-lib-table`, `fp-lib-table`): the file format, the path variables, how global and project tables are put together.
+// KiCad's library tables (`sym-lib-table`, `fp-lib-table`, `design-block-lib-table`): the file format, the path variables, how global and project tables are put together.
 pub mod library_table;
+
+// Design blocks: the `.kicad_blocks` library folders (a `.kicad_sch`, a `.kicad_pcb` and a `.json` of metadata per block), read and written.
+pub mod design_block;
 
 mod bus;
 pub use bus::expand_bus_members;
 
 mod sch_clipboard;
-pub use sch_clipboard::{parse_clipboard, write_clipboard, CopyInput, CopyOutput};
+pub use sch_clipboard::{fragment_as_sheet_file, parse_clipboard, write_clipboard, CopyInput, CopyOutput};
 mod sch_extras_io;
 pub mod sch_overlap;
 mod sch_import;
