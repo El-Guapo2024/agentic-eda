@@ -2469,6 +2469,11 @@ pub struct DrawingsSection {
     /// for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub barcodes: Vec<crate::barcode::Barcode>,
+    /// What a via says beyond `Via`'s fields (its type, the unconnected-layer mode, `free`, the zone layer connections, tenting, capping, covering, plugging, filling, its padstack
+    /// and teardrop settings, ..), one entry per via that has any, keyed by the via's id -- see [`crate::via_extra`]. Additive: absent in an older `design.json` reads as
+    /// "every via is a through via with KiCad's defaults". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via_extras: Vec<crate::via_extra::ViaExtra>,
 }
 
 /// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part
@@ -2521,6 +2526,27 @@ pub struct PadMaskInfo {
     /// `(pintype "..")`, e.g. `"free"` (see `PAD::IsFreePad`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_type: String,
+    /// The pad's other tokens as the file wrote them, in file order: `(remove_unused_layers ..)`, `(keep_end_layers ..)`, `(zone_layer_connections ..)`, `(teardrops ..)`, `(tenting ..)`,
+    /// `(property pad_prop_heatsink)`, `(die_length ..)`, `(padstack ..)`, whatever a newer KiCad adds. What the pad's fields stand for (position, size, shape, drill, layers, net, margins,
+    /// clearance, thermal settings, custom primitives, pin function and type) is not in the list. The model does not read them; the writer gives them back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<String>,
+    /// `(pinfunction "..")`: the name of the symbol pin the pad is wired to (`PAD::GetPinFunction`), which a netlist update writes on every netted pad of a board made
+    /// from a schematic and a rule reads as `A.Pin_Name`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pin_function: String,
+    /// An SMD pad whose `(layers ..)` has no paste layer (a fiducial, a test point, a thermal pad covered by its own paste pads): the writer leaves the paste layer out, as the
+    /// pad had it, where an SMD pad otherwise gets its side's paste layer (a stencil aperture of its own).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_paste: bool,
+    /// The pad is an edge connector pad (`(pad "1" connect ..)`, `PAD_ATTRIB::CONN`): copper on one side, solder mask on both, no paste. The model holds it as an SMD pad; the writer
+    /// gives it back its type and its layers, which kicad-cli's padstack check and the mask plot tell from an SMD pad's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub connector: bool,
+    /// A pad whose `(layers ..)` has no solder mask layer (copper under the mask, a pad the mask covers): the writer leaves the mask layer out, where a pad otherwise gets its
+    /// side's (a through-hole pad both sides').
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_mask: bool,
     /// `(clearance C)` (`PAD::GetLocalClearance`): the pad's own copper clearance, which replaces the net class's and the
     /// zone's for this pad (`DRC_ENGINE::EvalRules`: a local override wins over everything but the board minimum). `None`
     /// inherits the footprint's, then the rules'. Pre-9.0 files: 0 meant "inherit".

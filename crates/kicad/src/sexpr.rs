@@ -13,12 +13,20 @@
 
 /// One node of the tree. A bare atom and a quoted string both become
 /// [`Sexpr::Atom`] -- callers never need to know which one the file used,
-/// only the text.
+/// only the text ([`Sexpr::text`]). The one thing the tree keeps of the quotes is
+/// [`QUOTED`], on the quoted strings, for [`to_text`] to quote them again.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sexpr {
     List(Vec<Sexpr>),
     Atom(String),
 }
+
+/// The first character of the text of an atom the file quoted. KiCad's lexer takes `1` and `"1"` for two different tokens (`DSN_NUMBER`, `DSN_STRING`), and `yes` and `"yes"`
+/// for a keyword and a string, and the places that want one refuse the other: the pad names of a `(jumper_pad_groups ("1" "2"))` are strings and a number there is an error,
+/// `(autoplace_cost180 10)` is a keyword and a string there is an error. A token kept as text ([`to_text`]) comes back as the file had it: quoted if it was, bare if it was.
+/// [`Sexpr::text`] and everything built on it leave the mark out; only code that matches `Sexpr::Atom(a)` itself sees it (and `a == "hide"` is then false for a text that says
+/// `"hide"`, which is right).
+const QUOTED: char = '\u{1}';
 
 impl Sexpr {
     pub fn as_list(&self) -> Option<&[Sexpr]> {
@@ -30,7 +38,7 @@ impl Sexpr {
 
     pub fn text(&self) -> Option<&str> {
         match self {
-            Sexpr::Atom(s) => Some(s),
+            Sexpr::Atom(s) => Some(s.strip_prefix(QUOTED).unwrap_or(s)),
             Sexpr::List(_) => None,
         }
     }
@@ -75,7 +83,8 @@ fn parse_items(input: &str, bytes: &[u8], pos: &mut usize) -> Result<Vec<Sexpr>,
             }
             b'"' => {
                 *pos += 1;
-                items.push(Sexpr::Atom(parse_quoted(input, bytes, pos)?));
+                let text = parse_quoted(input, bytes, pos)?;
+                items.push(Sexpr::Atom(format!("{QUOTED}{text}")));
             }
             _ => items.push(Sexpr::Atom(parse_atom(input, bytes, pos))),
         }
@@ -160,6 +169,24 @@ fn parse_quoted(input: &str, bytes: &[u8], pos: &mut usize) -> Result<String, St
     }
 }
 
+/// An atom as the file had it: quoted if the file quoted it ([`QUOTED`]), bare if it was bare (a number, a keyword, an old file's layer name). An atom the parser did not make
+/// and that cannot be bare (empty, or with a space, a parenthesis or a quote in it) is quoted.
+pub(crate) fn atom_text(a: &str) -> String {
+    match a.strip_prefix(QUOTED) {
+        Some(quoted) => crate::sexpr_str(quoted),
+        None if a.is_empty() || a.chars().any(|c| c.is_whitespace() || matches!(c, '(' | ')' | '"')) => crate::sexpr_str(a),
+        None => a.to_string(),
+    }
+}
+
+/// A node back to text, on one line: the tokens an importer keeps as the file had them (`ViaExtra::tokens`, `PadMaskInfo::tokens`).
+pub(crate) fn to_text(n: &Sexpr) -> String {
+    match n {
+        Sexpr::Atom(a) => atom_text(a),
+        Sexpr::List(items) => format!("({})", items.iter().map(to_text).collect::<Vec<_>>().join(" ")),
+    }
+}
+
 /// The first element's text, if this list starts with an atom (its "tag").
 pub fn tag(list: &[Sexpr]) -> Option<&str> {
     list.first().and_then(Sexpr::text)
@@ -228,6 +255,32 @@ mod tests {
         assert_eq!(one(r"\xE2\x82\xAC"), "\u{20ac}");
         assert_eq!(one(r"\q\xg\8"), "\\qxg\\8");
         assert_eq!(one("caf\u{e9} \u{20ac}"), "caf\u{e9} \u{20ac}");
+    }
+
+    /// A token comes back as the file had it: a string the file quoted stays a string even when it reads like a number or a keyword bare (the pad names of a
+    /// `(jumper_pad_groups ("1" "2"))` are strings to KiCad's parser and a number there is an error; the text `"123"` of a text box is one too), and a keyword or a number the file
+    /// wrote bare stays bare (`(autoplace_cost180 10)` with a quoted tag is an error), whatever characters it has.
+    #[test]
+    fn a_token_is_written_back_quoted_where_the_file_quoted_it_and_bare_where_it_did_not() {
+        let tree = parse(r#"(t (jumper_pad_groups ("1" "2" "a" "A1")) (x yes 3 -0.5 front_inner_back "yes" "3.5" "F.Cu" "" F.Cu a1) (gr_text_box "123" (justify left top)) (autoplace_cost180 10))"#).unwrap();
+        let root = tree.as_list().unwrap();
+        let one_line = |tag_name: &str| to_text(&Sexpr::List(find(root, tag_name).unwrap().to_vec()));
+        assert_eq!(one_line("jumper_pad_groups"), r#"(jumper_pad_groups ("1" "2" "a" "A1"))"#);
+        assert_eq!(one_line("x"), r#"(x yes 3 -0.5 front_inner_back "yes" "3.5" "F.Cu" "" F.Cu a1)"#);
+        assert_eq!(one_line("gr_text_box"), r#"(gr_text_box "123" (justify left top))"#);
+        assert_eq!(one_line("autoplace_cost180"), "(autoplace_cost180 10)");
+        // What reads the tree sees the text, not the mark, and finds a quoted tag as it finds a bare one.
+        let groups = find(root, "jumper_pad_groups").unwrap();
+        assert_eq!(txt(groups[1].as_list().unwrap(), 0), Some("1"));
+        assert_eq!(num(groups[1].as_list().unwrap(), 1), Some(2.0));
+        assert_eq!(txt(find(root, "x").unwrap(), 5), Some("yes"));
+        assert!(find(root, "x").unwrap().iter().any(|c| c.text() == Some("yes")));
+        let quoted_tag = parse(r#"(t ("pad" 1))"#).unwrap();
+        assert_eq!(find(quoted_tag.as_list().unwrap(), "pad").and_then(|p| num(p, 1)), Some(1.0));
+        // An atom the parser did not make is bare unless it cannot be.
+        assert_eq!(atom_text("0.5"), "0.5");
+        assert_eq!(atom_text("a b"), "\"a b\"");
+        assert_eq!(atom_text(""), "\"\"");
     }
 
     #[test]

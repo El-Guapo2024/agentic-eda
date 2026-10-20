@@ -367,9 +367,11 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
             let lock = if is_locked(&v.id) { " (locked yes)" } else { "" };
             let uuid = crate::duid_for(&format!("via:{}:{}:{}", v.net, v.at.x, v.at.y), &v.id);
             written.entry(v.id.clone()).or_default().push(uuid.clone());
+            // The via's type and the tokens after its layers (`remove_unused_layers`, `tenting`, `padstack`, ..) as the file had them.
+            let (kind, tokens) = crate::via_io::words(design.drawings.as_ref().and_then(|d| d.via_extra(&v.id)));
             writeln!(
                 out,
-                "\t(via (at {x} {y}) (size {dia}) (drill {drill}) (layers {} {}){lock} (net {n}) (uuid \"{uuid}\"))",
+                "\t(via{kind} (at {x} {y}) (size {dia}) (drill {drill}) (layers {} {}){tokens}{lock} (net {n}) (uuid \"{uuid}\"))",
                 sexpr_str(&v.from_layer),
                 sexpr_str(&v.to_layer)
             )
@@ -998,6 +1000,7 @@ pub(crate) fn write_footprint(
     let mut pad_seeds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for &(pad_idx, pad) in &pads {
         let art_layers: &[String] = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.art_layers.as_slice()).unwrap_or_default();
+        let (no_paste, no_mask, connector) = pad_infos.and_then(|p| p.get(pad_idx)).map_or((false, false, false), |i| (i.no_paste, i.no_mask, i.connector));
         let nth = {
             let n = seen.entry(pad.number.as_str()).or_insert(0);
             *n += 1;
@@ -1018,6 +1021,7 @@ pub(crate) fn write_footprint(
         let wmm = mm(w);
         let hmm = mm(h);
         let kind = match pad.kind {
+            PadKind::Smd if connector => "connect",
             PadKind::Smd => "smd",
             PadKind::ThroughHole => "thru_hole",
             PadKind::NonPlatedHole => "np_thru_hole",
@@ -1059,8 +1063,12 @@ pub(crate) fn write_footprint(
                     // A pad of a board's file that says no drill (the Allegro importer makes them): `format( PAD )` writes the token for a hole of some size only.
                     (None, None) => {}
                 }
-                if art_layers.is_empty() {
+                if art_layers.is_empty() && !no_mask {
                     write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
+                } else if art_layers.is_empty() {
+                    write!(out, " (layers \"*.Cu\")").unwrap();
+                } else if no_mask {
+                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu"], art_layers, fp.side)).unwrap();
                 } else {
                     write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu", "F.Mask", "B.Mask"], art_layers, fp.side)).unwrap();
                 }
@@ -1074,10 +1082,16 @@ pub(crate) fn write_footprint(
                 } else {
                     ("F.Cu", "F.Paste", "F.Mask")
                 };
-                if art_layers.is_empty() {
-                    write!(out, " (layers {} {} {})", sexpr_str(cu), sexpr_str(paste), sexpr_str(mask)).unwrap();
+                // The layers the pad had: its side's copper, and its paste and mask unless the file's pad had none; an edge connector pad has mask on both sides and no paste.
+                let base: Vec<&str> = if connector {
+                    std::iter::once(cu).chain((!no_mask).then_some(["F.Mask", "B.Mask"]).into_iter().flatten()).collect()
                 } else {
-                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&[cu, paste, mask], art_layers, fp.side)).unwrap();
+                    std::iter::once(cu).chain((!no_paste).then_some(paste)).chain((!no_mask).then_some(mask)).collect()
+                };
+                if art_layers.is_empty() {
+                    write!(out, " (layers {})", base.iter().map(|l| sexpr_str(l)).collect::<Vec<_>>().join(" ")).unwrap();
+                } else {
+                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&base, art_layers, fp.side)).unwrap();
                 }
             }
         }
@@ -1091,8 +1105,15 @@ pub(crate) fn write_footprint(
         }
         // `(pintype "free")` and the other pin types a pad was given (`PAD::SetPinType`): a free pad takes part in no net, and the copper clearance, solder mask and
         // connectivity checks leave it be (`PAD::IsFreePad`). Written after the net, as `format( const PAD* )` does.
+        if let Some(function) = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_function.as_str()).filter(|t| !t.is_empty()) {
+            write!(out, " (pinfunction {})", sexpr_str(function)).unwrap();
+        }
         if let Some(pin_type) = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_type.as_str()).filter(|t| !t.is_empty()) {
             write!(out, " (pintype {})", sexpr_str(pin_type)).unwrap();
+        }
+        // The pad's other tokens as the file had them (`remove_unused_layers`, `teardrops`, `tenting`, `property pad_prop_heatsink`, `die_length`, ..).
+        for token in pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.tokens.as_slice()).unwrap_or_default() {
+            write!(out, " {token}").unwrap();
         }
         // The margins of a pad edit (`solder_mask_margin`, `solder_paste_margin`, `solder_paste_margin_ratio`), then the zone facts: KiCad's order.
         out.push_str(&pad_extra.margins);
@@ -3083,7 +3104,7 @@ mod tests {
     (property "Value" "R" (at 0 0 0) (layer "F.Fab"))
     (attr smd)
     (fp_rect (start -1.5 -0.7) (end 1.5 0.7) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
-    (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 1 "GND") (pintype "passive"))
+    (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 1 "GND") (pinfunction "A") (pintype "passive"))
     (pad "2" smd circle (at 0.8 0) (size 0.8 0.8) (layers "F.Cu" "F.Mask") (pintype "free"))
     (pad "3" smd circle (at 0 1) (size 0.8 0.8) (layers "F.Cu" "F.Mask"))
   )
@@ -3091,12 +3112,169 @@ mod tests {
         let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\""))).unwrap_or_else(|| panic!("pad {number} in {out}")).to_string();
-        assert!(pad("1").contains("(net 1 \"GND\") (pintype \"passive\")"), "{}", pad("1"));
+        assert!(pad("1").contains("(net 1 \"GND\") (pinfunction \"A\") (pintype \"passive\")"), "{}", pad("1"));
         assert!(pad("2").contains("(pintype \"free\")") && !pad("2").contains("(net "), "{}", pad("2"));
         assert!(!pad("3").contains("pintype"), "{}", pad("3"));
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let types: Vec<String> = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "R1").unwrap().pads.iter().map(|p| p.pin_type.clone()).collect();
         assert_eq!(types, ["passive", "free", ""]);
+        let functions: Vec<String> = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "R1").unwrap().pads.iter().map(|p| p.pin_function.clone()).collect();
+        assert_eq!(functions, ["A", "", ""]);
+    }
+
+    /// The layers a pad was on are the layers it is written on: an SMD pad with no paste layer (a fiducial) gets none, a pad with no mask layer gets none, and the pads that have
+    /// both (nearly all) are written as they always were. Written with the paste of every SMD pad, a fiducial had a stencil aperture the original does not.
+    #[test]
+    fn the_layers_of_a_pad_are_written_as_they_were_read_with_or_without_paste_and_mask() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "Test:Pads" (layer "F.Cu") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -5 -5) (end 5 5) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd rect (at -3 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "2" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask"))
+    (pad "3" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste"))
+    (pad "4" smd rect (at 3 0) (size 1 1) (layers "F.Cu"))
+    (pad "5" thru_hole circle (at -3 2) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask"))
+    (pad "6" thru_hole circle (at -1 2) (size 1.6 1.6) (drill 0.8) (layers "*.Cu"))
+    (pad "7" thru_hole circle (at 1 2) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask" "F.SilkS"))
+    (pad "8" thru_hole circle (at 3 2) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "F.SilkS"))
+    (pad "9" connect roundrect (at -3 4) (size 2.5 8) (layers "*.Mask" "F.Cu") (roundrect_rratio 0.098))
+    (pad "10" connect roundrect (at -1 4) (size 2.5 8) (layers "*.Mask" "B.Cu") (roundrect_rratio 0.098))
+  )
+  (footprint "Test:Bottom" (layer "B.Cu") (at 30 10)
+    (property "Reference" "U2" (at 0 0 0) (layer "B.SilkS"))
+    (property "Value" "U" (at 0 0 0) (layer "B.Fab"))
+    (attr smd)
+    (fp_rect (start -5 -5) (end 5 5) (stroke (width 0.05) (type solid)) (fill none) (layer "B.CrtYd"))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "B.Cu" "B.Paste" "B.Mask"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "B.Cu" "B.Mask"))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let layers_of = |reference: &str, number: &str| -> String {
+            let start = out.find(&format!("(property \"Reference\" \"{reference}\"")).unwrap_or_else(|| panic!("{reference}"));
+            let end = out[start..].find("\n\t(footprint ").map_or(out.len(), |i| start + i);
+            let pad = out[start..end].lines().find(|l| l.contains(&format!("(pad \"{number}\""))).unwrap_or_else(|| panic!("pad {number} of {reference}")).to_string();
+            pad[pad.find("(layers").expect("layers")..].split(')').next().unwrap().to_string() + ")"
+        };
+        assert_eq!(layers_of("U1", "1"), "(layers \"F.Cu\" \"F.Paste\" \"F.Mask\")");
+        assert_eq!(layers_of("U1", "2"), "(layers \"F.Cu\" \"F.Mask\")");
+        assert_eq!(layers_of("U1", "3"), "(layers \"F.Cu\" \"F.Paste\")");
+        assert_eq!(layers_of("U1", "4"), "(layers \"F.Cu\")");
+        assert_eq!(layers_of("U1", "5"), "(layers \"*.Cu\" \"*.Mask\")");
+        assert_eq!(layers_of("U1", "6"), "(layers \"*.Cu\")");
+        assert_eq!(layers_of("U1", "7"), "(layers \"*.Cu\" \"*.Mask\" \"F.SilkS\")");
+        assert_eq!(layers_of("U1", "8"), "(layers \"*.Cu\" \"F.SilkS\")");
+        // An edge connector pad stays a connector pad: copper on its side, mask on both, no paste.
+        assert_eq!(layers_of("U1", "9"), "(layers \"F.Cu\" \"F.Mask\" \"B.Mask\")");
+        assert_eq!(layers_of("U1", "10"), "(layers \"B.Cu\" \"F.Mask\" \"B.Mask\")");
+        let kind_of = |number: &str| -> String { let l = out.lines().find(|l| l.contains(&format!("(pad \"{number}\" "))).unwrap(); l.split_whitespace().nth(2).unwrap().to_string() };
+        assert_eq!((kind_of("9"), kind_of("10"), kind_of("1")), ("connect".to_string(), "connect".to_string(), "smd".to_string()));
+        // A back-side footprint's pads are on its side.
+        assert_eq!(layers_of("U2", "1"), "(layers \"B.Cu\" \"B.Paste\" \"B.Mask\")");
+        assert_eq!(layers_of("U2", "2"), "(layers \"B.Cu\" \"B.Mask\")");
+        // Read again, the same flags; and the pads of a footprint built here keep the paste and mask they always had.
+        let (back, back_model, _) = crate::import_kicad_pcb(&out).unwrap();
+        // (The writer lists the pads by number, so the pads are compared by number.)
+        let flags = |d: &Design, m: &ConstraintModel, reference: &str| -> BTreeMap<String, (bool, bool)> {
+            let part = m.parts.iter().find(|p| p.reference == reference).unwrap();
+            let footprint = m.footprint_of(part).unwrap();
+            let infos = &d.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == reference).unwrap().pads;
+            footprint.pads.iter().zip(infos).map(|(pad, i)| (pad.number.clone(), (i.no_paste, i.no_mask))).collect()
+        };
+        assert_eq!(flags(&design, &model, "U1"), flags(&back, &back_model, "U1"));
+        let expected: BTreeMap<String, (bool, bool)> = [("1", (false, false)), ("2", (true, false)), ("3", (false, true)), ("4", (true, true)), ("5", (false, false)), ("6", (false, true)), ("7", (false, false)), ("8", (false, true)), ("9", (true, false)), ("10", (true, false))]
+            .into_iter()
+            .map(|(n, f)| (n.to_string(), f))
+            .collect();
+        assert_eq!(flags(&design, &model, "U1"), expected);
+        let (made, made_model) = fixture();
+        let plain = export_kicad_pcb(&made, &made_model, &meta()).unwrap();
+        assert!(plain.contains("(layers \"F.Cu\" \"F.Paste\" \"F.Mask\")") && plain.contains("(layers \"B.Cu\" \"B.Paste\" \"B.Mask\")"), "{plain}");
+    }
+
+    /// A via keeps what its tokens say beyond its position, size, drill, layers and net: its type, the mode of the layers it does not connect, `free`, the zone layer
+    /// connections, its tenting, capping and covering, its own padstack and teardrop settings, whatever a newer KiCad adds. The file had them on 10370 of the QA corpus's vias
+    /// for the tenting alone, and the writer dropped every one: `api_kitchen_sink`'s two untented vias came back tented, with no opening in the solder mask plot.
+    #[test]
+    fn a_vias_type_and_tokens_are_written_back_as_the_file_had_them() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (via blind (at 10 10) (size 0.6) (drill 0.3) (layers "F.Cu" "In2.Cu") (remove_unused_layers yes) (keep_end_layers yes) (free yes) (zone_layer_connections "F.Cu" "In1.Cu") (tenting (front no) (back no)) (capping yes) (covering (front no) (back yes)) (net "A") (uuid "00000000-0000-0000-0000-000000000001"))
+  (via micro (at 20 10) (size 0.3) (drill 0.1) (layers "F.Cu" "In1.Cu") (padstack (mode front_inner_back) (layer "Inner" (size 0.35)) (layer "B.Cu" (size 0.4))) (teardrops (best_length_ratio 0.5) (max_length 1) (curved_edges no)) (net "B") (uuid "00000000-0000-0000-0000-000000000002"))
+  (via (at 30 10) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net "C") (uuid "00000000-0000-0000-0000-000000000003"))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let extras = &design.drawings.as_ref().expect("drawings").via_extras;
+        assert_eq!(extras.len(), 2, "the plain via keeps no entry: {extras:?}");
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        // The nets are numbered by name: A is 1, B is 2, C is 3.
+        let line = |net: usize| out.lines().find(|l| l.contains("(via") && l.contains(&format!("(net {net}) "))).unwrap_or_else(|| panic!("via on net {net} in {out}")).trim().to_string();
+        let blind = line(1);
+        assert!(blind.starts_with("(via blind (at 10 10) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"In2.Cu\") (remove_unused_layers yes) (keep_end_layers yes) (free yes) (zone_layer_connections \"F.Cu\" \"In1.Cu\") (tenting (front no) (back no)) (capping yes) (covering (front no) (back yes)) (net "), "{blind}");
+        let micro = line(2);
+        assert!(micro.starts_with("(via micro (at 20 10) (size 0.3) (drill 0.1) (layers \"F.Cu\" \"In1.Cu\") (padstack (mode front_inner_back) (layer \"Inner\" (size 0.35)) (layer \"B.Cu\" (size 0.4))) (teardrops (best_length_ratio 0.5) (max_length 1) (curved_edges no)) (net "), "{micro}");
+        let plain = line(3);
+        assert!(plain.starts_with("(via (at 30 10) (size 0.8) (drill 0.4) (layers \"F.Cu\" \"B.Cu\") (net "), "{plain}");
+        // Read again, the same.
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let strip = |d: &Design| -> Vec<(eda_model::via_extra::ViaKind, Vec<String>)> { d.drawings.as_ref().unwrap().via_extras.iter().map(|e| (e.kind, e.tokens.clone())).collect() };
+        assert_eq!(strip(&design), strip(&back));
+        // The tenting is still what the in-house checks read.
+        assert!(design.drawings.as_ref().unwrap().via_tenting.iter().any(|t| (t.front, t.back) == (Some(false), Some(false))));
+    }
+
+    /// A pad keeps the tokens its fields do not stand for: the unconnected-layer mode (`remove_unused_layers`, `keep_end_layers`), `zone_layer_connections`, its teardrop
+    /// settings, its tenting, a `(property pad_prop_heatsink)` (a heatsink pad, a castellated one ..), `die_length` (the pad-to-die length a length check adds), whatever a newer
+    /// KiCad adds. The writer dropped all of them: the corpus has them on thousands of pads of two dozen boards.
+    #[test]
+    fn a_pads_other_tokens_are_written_back_as_the_file_had_them() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (footprint "Test:Heatsink" (layer "F.Cu") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -5 -5) (end 5 5) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" thru_hole circle (at -2 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask") (remove_unused_layers yes) (keep_end_layers no) (zone_layer_connections "F.Cu") (tenting (front no) (back yes)) (teardrops (best_length_ratio 0.5) (curved_edges no)) (die_length 0.25) (property pad_prop_heatsink))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (clearance 0.2) (locked yes))
+    (pad "3" smd rect (at 4 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let tokens: Vec<Vec<String>> = design.drawings.as_ref().unwrap().footprint_extras[0].pads.iter().map(|p| p.tokens.clone()).collect();
+        assert_eq!(
+            tokens,
+            vec![
+                vec!["(remove_unused_layers yes)", "(keep_end_layers no)", "(zone_layer_connections \"F.Cu\")", "(tenting (front no) (back yes))", "(teardrops (best_length_ratio 0.5) (curved_edges no))", "(die_length 0.25)", "(property pad_prop_heatsink)"],
+                vec!["(locked yes)"],
+                vec![],
+            ]
+        );
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\" "))).unwrap_or_else(|| panic!("pad {number}")).trim().to_string();
+        assert!(pad("1").contains("(layers \"*.Cu\" \"*.Mask\") (remove_unused_layers yes) (keep_end_layers no) (zone_layer_connections \"F.Cu\") (tenting (front no) (back yes)) (teardrops (best_length_ratio 0.5) (curved_edges no)) (die_length 0.25) (property pad_prop_heatsink)"), "{}", pad("1"));
+        assert!(pad("2").contains("(locked yes)") && pad("2").contains("(clearance 0.2)"), "{}", pad("2"));
+        assert!(pad("3").ends_with("))") && !pad("3").contains("locked"), "{}", pad("3"));
+        // Written once: the fields the pad stands for are not among the tokens.
+        assert_eq!(pad("1").matches("(layers").count(), 1);
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let again: Vec<Vec<String>> = back.drawings.as_ref().unwrap().footprint_extras[0].pads.iter().map(|p| p.tokens.clone()).collect();
+        assert_eq!(again.iter().map(|t| t.len()).collect::<Vec<_>>(), tokens.iter().map(|t| t.len()).collect::<Vec<_>>());
     }
 
     /// A through-hole pad the board's file gave no drill (KiCad's Allegro importer makes them: 155 on one of the QA boards) is written with none, as `format( PAD )` does for a

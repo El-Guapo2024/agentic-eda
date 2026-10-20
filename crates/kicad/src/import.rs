@@ -150,7 +150,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let mut refs = Refs::default();
     let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
     let mut nets = build_nets(&net_names, &pin_nets);
-    let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes, &mut refs);
+    let (tracks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts, text_extras) = import_drawings(root, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
     let (outline, outline_is_shapes, outline_width_um) = import_outline(root, &mut shapes, &mut refs, &mut notes);
@@ -233,6 +233,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // deterministic ids a fresh route or a hand-add would get, so an
     // imported board is addressable from the moment it lands.
     design.assign_missing_ids();
+    // The vias' tokens beyond `Via`'s fields, named by the ids the vias have just been given.
+    let via_extras: Vec<eda_model::via_extra::ViaExtra> = design.routing.iter().flat_map(|r| r.vias.iter()).zip(via_extras).filter(|(_, x)| !x.is_default()).map(|(v, mut x)| { x.id = v.id.clone(); x }).collect();
+    if !via_extras.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).via_extras = via_extras;
+    }
     // The texts' looks beyond `Text`'s fields, named by the ids the texts have just been given.
     if let Some(dr) = design.drawings.as_mut() {
         dr.text_extras = dr.texts.iter().zip(text_extras).filter(|(_, x)| !x.is_default()).map(|(t, mut x)| { x.id = t.id.clone(); x }).collect();
@@ -1593,6 +1598,12 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
         // The layers beyond copper, paste and mask, as for a top-side footprint (see `PadMaskInfo::art_layers`).
         info.art_layers = info.layers.iter().filter(|l| !(l.ends_with(".Cu") || l.ends_with(".Mask") || l.ends_with(".Paste"))).map(|l| eda_model::fp_art::layer_on_side(l, side)).collect();
         info.art_layers.sort();
+        // What the pad lacks of the layers its kind has: an SMD pad's paste (every SMD pad written here has its side's), a pad's mask. An edge connector pad is an SMD pad
+        // with mask on both sides (`connector`).
+        info.connector = sexpr::txt(pad, 2) == Some("connect");
+        let smd = matches!(sexpr::txt(pad, 2), Some("smd") | Some("connect"));
+        info.no_paste = smd && !info.layers.iter().any(|l| l.ends_with(".Paste"));
+        info.no_mask = !info.layers.iter().any(|l| l.ends_with(".Mask"));
     }
     if let Some(m) = sexpr::find(pad, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
         let m = mm_to_um(m);
@@ -1606,6 +1617,15 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
     if let Some(t) = sexpr::find(pad, "pintype").and_then(|f| sexpr::txt(f, 1)) {
         info.pin_type = t.to_string();
     }
+    if let Some(f) = sexpr::find(pad, "pinfunction").and_then(|f| sexpr::txt(f, 1)) {
+        info.pin_function = f.to_string();
+    }
+    // Every other token of the pad, as the file had it (see `PadMaskInfo::tokens`): the ones the pad's fields and the shape reader stand for are not among them.
+    const OWN: &[&str] = &[
+        "at", "size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "drill", "layers", "net", "pinfunction", "pintype", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio",
+        "clearance", "zone_connect", "thermal_bridge_width", "thermal_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "uuid", "tstamp",
+    ];
+    info.tokens = pad.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| OWN.contains(&t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
     // `parsePAD`: `(zone_connect N)`, `(thermal_bridge_width ..)` (legacy `(thermal_width ..)`), `(thermal_bridge_angle ..)`, `(thermal_gap ..)`.
     if let Some(c) = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)) {
         let c = mm_to_um(c);
@@ -1794,7 +1814,7 @@ fn parse_text_on(item: &[Sexpr], text: &str, tf: &dyn Fn(Point) -> Point, keep_u
 
 // ---------------------------------------------------------------- routing
 
-fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>) {
+fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>, Vec<eda_model::via_extra::ViaExtra>) {
 
     let mut tracks = Vec::new();
     for seg in sexpr::find_all(root, "segment") {
@@ -1824,6 +1844,8 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 
     let mut vias = Vec::new();
     let mut via_tenting = Vec::new();
+    // What each via says beyond `Via`'s fields, one per via in the same order, for the caller to name once the vias have ids.
+    let mut via_extras = Vec::new();
     for via in sexpr::find_all(root, "via") {
         let Some(at) = sexpr::find(via, "at").and_then(xy_point) else { continue };
         let net = net_ref(sexpr::find(via, "net"), net_names);
@@ -1841,10 +1863,11 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
             }
         }
         vias.push(Via { id: String::new(), net, at, drill, diameter: dia, from_layer, to_layer });
+        via_extras.push(crate::via_io::read(via));
         refs.vias.push(ItemRef::of(via));
     }
 
-    (tracks, vias, via_tenting)
+    (tracks, vias, via_tenting, via_extras)
 }
 
 // Track arcs go through `Track::new_arc` (eda_model), which keeps the true
