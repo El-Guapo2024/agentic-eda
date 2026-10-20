@@ -64,6 +64,8 @@ mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
 mod fp_models;
+mod import_foreign;
+pub use import_foreign::imported_intent_file;
 mod import_graphics;
 pub use import_graphics::{board_items as graphics_board_items, GraphicsFormat, ImportGraphics};
 mod import_graphics_sch;
@@ -746,6 +748,29 @@ pub enum Cmd {
         value: String,
         #[serde(default)]
         definition: Option<LibraryFootprint>,
+    },
+    /// File > Import > Non-KiCad Board File... (`pcbnew.EditorControl.openNonKicadBoard`, `BOARD_EDITOR_CONTROL::OpenNonKicadBoard`): the open board is replaced by the one
+    /// kicad-cli made of another EDA format's file -- `text`, the `.kicad_pcb` it wrote; `name`, the file it came from, is for messages. Placement, routing and drawings are the
+    /// file's, and so are its parts, nets and rules (the server writes them as the model `DrawingsSection::intent_file` names); the schematic stays. One undo step, and an
+    /// undo brings the old board back whole. See [`import_foreign`].
+    ReplaceBoard {
+        text: String,
+        #[serde(default)]
+        name: String,
+        /// The dialog's "Keep KiCad layer names" (`m_ImportKeepKiCadLayerNames`): the layers show their standard names, not the names the other application gave them.
+        #[serde(default)]
+        keep_kicad_layer_names: bool,
+        /// The `.kicad_pro` `kicad-cli import` wrote for the board: the design rules and the net classes the importer set, which the server puts in the board's model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+    },
+    /// File > Import > Non-KiCad Schematic File... (`eeschema.EditorControl.importNonKicadSchematic`, `SCH_EDIT_FRAME::OnImportProject`): the schematic -- the root sheet and every
+    /// sheet under it -- is replaced by the one kicad-cli made of another EDA format's file (`content`, read by `eda_kicad::load_sheet_file`; `name` is the file it came from).
+    /// The board stays. One undo step. See [`import_foreign`].
+    ReplaceSchematic {
+        content: eda_model::sheet_file::SheetFile,
+        #[serde(default)]
+        name: String,
     },
     /// `DRAWING_TOOL::PlaceImportedGraphics` (File > Import > Graphics..., `pcbnew.InteractiveDrawing.placeImportedGraphics`): a DXF or SVG file as
     /// the board's own lines, arcs, circles, polygons, curves and text on one layer, in one undo step -- see [`import_graphics`] for what is mapped
@@ -1829,6 +1854,7 @@ impl Cmd {
             | Cmd::DeleteSchLine { .. }
             | Cmd::AddSheet { .. }
             | Cmd::ImportSheet { .. }
+            | Cmd::ReplaceSchematic { .. }
             | Cmd::SwapSchItems { .. }
             | Cmd::PasteSch { .. }
             | Cmd::SchEdit(_)
@@ -1939,6 +1965,18 @@ impl Cmd {
 }
 
 impl Cmd {
+    /// Is this File > Import > Non-KiCad Board / Schematic (`ReplaceBoard`, `ReplaceSchematic`)? An import is judged by nobody: the file is what it is, so the gates
+    /// that refuse a move that makes the board worse do not refuse it, and what it replaces is not traced against -- the server reads the new drawing on its own.
+    pub fn replaces_board(&self) -> bool {
+        matches!(self, Cmd::ReplaceBoard { .. })
+    }
+
+    pub fn replaces_schematic(&self) -> bool {
+        matches!(self, Cmd::ReplaceSchematic { .. })
+    }
+}
+
+impl Cmd {
     /// Does this command change both editors' halves of the design in one step? A reference rename moves the schematic's symbol and the board's part together
     /// (`Board::rename_part`), so one Ctrl+Z, from either tab, has to take both back: the history keeps such a step as a whole-design step
     /// (`crates/cli/src/board.rs`, the `both` tag), where an edit of one editor is undone from that editor's tab alone (`Cmd::domain`).
@@ -1951,6 +1989,8 @@ impl Cmd {
             Cmd::ExchangeFootprints { .. } => true,
             // the footprints' references and the symbols' go together
             Cmd::ReannotateBoard { .. } => true,
+            // a board that comes in has its own nets: the netlist the schematic's drawing had set goes (`design.nets`)
+            Cmd::ReplaceBoard { .. } => true,
             // Replace All renames a reference when it is asked to look at them
             Cmd::ReplaceText { search, .. } => search.replace_references,
             // Field Properties of a Reference field renames the symbol
@@ -2080,6 +2120,7 @@ impl Cmd {
             Cmd::AddSchLine { .. } => vec!["sch_line"],
             Cmd::AddSheet { name, .. } => vec![name.as_str()],
             Cmd::ImportSheet { source, .. } => vec![source.as_str()],
+            Cmd::ReplaceBoard { name, .. } | Cmd::ReplaceSchematic { name, .. } => vec![name.as_str()],
             Cmd::SwapSchItems { a, b } => vec![a, b],
             Cmd::PasteSch { .. } => vec!["paste"],
             Cmd::SchEdit(c) => c.ids(),
@@ -2664,6 +2705,8 @@ impl<'a> Board<'a> {
                 Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options),
                 None => Err(vec![CheckResult::fail("ops_sheet_file_not_read", source, format!("the file '{source}' was not read, so there is nothing to import"))]),
             },
+            Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),
+            Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project } => self.replace_board(text, name, *keep_kicad_layer_names, project.as_deref()),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
             Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),

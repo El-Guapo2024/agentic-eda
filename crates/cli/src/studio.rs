@@ -795,6 +795,9 @@ fn handle(
         ("POST", "/api/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::clipboard_api::copy(dir, &body).to_string().as_bytes()),
         // Import Graphics (DXF, SVG): what a file holds, for the dialog (a read; the import is `Cmd::ImportGraphics`).
         ("POST", "/api/import_graphics/read") => respond(stream, "200 OK", "application/json", crate::graphics_api::read(&body).to_string().as_bytes()),
+        // File > Import > Non-KiCad Board / Schematic: the file the page posts converted by kicad-cli (so through `offload`) and read; the import itself is
+        // `Cmd::ReplaceBoard` / `Cmd::ReplaceSchematic` with what this answers.
+        ("POST", "/api/import_foreign") => offload(stream, lane, dir, job, path, &body, crate::foreign_api::convert),
         // Append Board: what a `.kicad_pcb` brings and the point it is held by (a read; the append is `Cmd::PasteClipboard` with the file's text).
         ("POST", "/api/append_board/read") => respond(stream, "200 OK", "application/json", crate::append_api::read(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cmd") => {
@@ -1494,7 +1497,7 @@ fn schematic_svg(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String
     if design.schematic.is_some() {
         return eda::render_schematic(&design, &model);
     }
-    let when = std::fs::metadata(&meta.intent).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+    let when = std::fs::metadata(board::intent_path(dir, &meta, &design)).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
     if let Ok(c) = cache.lock() {
         if let Some((t, svg)) = c.as_ref() {
             if *t == when {
