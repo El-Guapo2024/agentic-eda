@@ -1105,7 +1105,9 @@ pub(crate) fn write_footprint(
     // `Footprint::courtyard_half` derives -- the same one the placer keeps
     // clear.
     let crtyd_layer = if fp.side == Side::Bottom { "B.CrtYd" } else { "F.CrtYd" };
-    if footprint.courtyard_outlines.is_empty() {
+    if footprint.courtyard_outlines.is_empty() && own_extra.is_some_and(|e| e.no_courtyard) {
+        // The footprint the file had has no courtyard: none is made up for it.
+    } else if footprint.courtyard_outlines.is_empty() {
         let (hw, hh) = footprint.courtyard_half();
         let uuid = crate::duid_for(&format!("footprint:{}:crtyd", fp.id), &fp.id);
         writeln!(
@@ -2835,5 +2837,26 @@ mod tests {
         swapped_model.parts.iter_mut().find(|p| p.reference == "D1").unwrap().footprint = Some("SOT-23".into());
         let out = export_kicad_pcb(&swapped, &swapped_model, &meta()).unwrap();
         assert!(out.contains("(footprint \"eda:SOT-23\""), "{out}");
+    }
+
+    /// A footprint with nothing on its courtyard layers gets none in the file; before, it got the box its pads derive, and two such boxes overlapped
+    /// (`courtyards_overlap` on `complex_hierarchy`'s R20 and Q8, which the original does not report).
+    #[test]
+    fn a_footprint_that_had_no_courtyard_is_written_without_one() {
+        let (design, model, _) = crate::import_kicad_pcb(FOOTPRINT_BOARD).unwrap();
+        let extras = &design.drawings.as_ref().unwrap().footprint_extras;
+        assert_eq!((extras.iter().find(|e| e.id == "D1").unwrap().no_courtyard, extras.iter().find(|e| e.id == "R1").unwrap().no_courtyard), (true, false));
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let block = |reference: &str| -> String {
+            let start = out.find(&format!("(property \"Reference\" \"{reference}\"")).expect("footprint");
+            let begin = out[..start].rfind("\t(footprint ").unwrap();
+            let end = out[start..].find("\n\t(footprint ").map_or(out.len(), |i| start + i);
+            out[begin..end].to_string()
+        };
+        assert!(!block("D1").contains("CrtYd"), "{}", block("D1"));
+        assert!(block("R1").contains("(layer \"F.CrtYd\")"), "{}", block("R1"));
+        // The footprints built here keep the box the placer keeps clear.
+        let (made, made_model) = fixture();
+        assert!(export_kicad_pcb(&made, &made_model, &meta()).unwrap().contains("CrtYd"));
     }
 }

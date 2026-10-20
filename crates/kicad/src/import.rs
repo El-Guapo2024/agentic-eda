@@ -1481,6 +1481,8 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     if !name.contains(':') {
         e.unlinked_name = Some(name.to_string());
     }
+    // A footprint with nothing on its courtyard layers has no courtyard (`BuildCourtyardCaches` finds none, and kicad-cli says `missing_courtyard` or nothing).
+    e.no_courtyard = !["fp_line", "fp_arc", "fp_rect", "fp_circle", "fp_poly", "fp_curve"].iter().any(|tag| sexpr::find_all(fp, tag).any(|it| matches!(sexpr::find(it, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd"))));
     if let Some(m) = sexpr::find(fp, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
         let m = mm_to_um(m);
         e.solder_mask_margin = if file_version <= 20240201 && m == 0 { None } else { Some(m) };
