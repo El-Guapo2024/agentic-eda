@@ -8,9 +8,8 @@
 // Edits `state.routerSettings` (kicad-port/routerSettings.ts), which `X`/`D` send with a new session and, on OK, this dialog
 // sends to the session that is running (`routeSetSettings`), so a change applies from the next move as upstream's does.
 //
-// Two rows of KiCad's have nothing behind them in this router -- "Optimize entire track being dragged" and "Use mouse path to
-// set track posture" -- and are shown disabled, unchecked, with the reason in their tool tip
-// (kicad-port/routerSettings.ts `UNSUPPORTED_ROUTER_OPTIONS`), not left out and not shown doing nothing. The optimizer effort
+// "Optimize entire track being dragged" (`DRAGGER::optimizeAndUpdateDraggedLine`: the optimizer's KEEP_TOPOLOGY and PRESERVE_VERTEX) and
+// "Use mouse path to set track posture" (`MOUSE_TRAIL_TRACER`) are live rows like the others. The optimizer effort
 // is the one row this dialog has that KiCad's does not: KiCad keeps `OptimizerEffort` in the settings file only
 // (`tools.pns.effort`).
 import { useEffect, useState } from "react";
@@ -18,7 +17,7 @@ import { routeMove, routeSetSettings } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import type { RouteMode } from "../api/types";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
-import { modeOptionEnabled, UNSUPPORTED_ROUTER_OPTIONS, type OptimizerEffort, type RouterSettings } from "../kicad-port/routerSettings";
+import { modeOptionEnabled, type OptimizerEffort, type RouterSettings } from "../kicad-port/routerSettings";
 
 const EFFORT_OPTIONS: { value: OptimizerEffort; label: string }[] = [
   { value: "low", label: "Low" },
@@ -125,11 +124,16 @@ export function RouterSettingsDialog() {
               />
               <Check
                 label="Optimize entire track being dragged"
-                checked={false}
-                disabled
-                title={`When enabled, the entire portion of the track that is visible on the screen will be optimized and re-routed when a segment is dragged.  When disabled, only the area near the segment being dragged will be optimized.\n${UNSUPPORTED_ROUTER_OPTIONS.optimizeEntireDraggedTrack}`}
+                checked={s.optimizeEntireDragged}
+                onChange={(v) => set({ optimizeEntireDragged: v })}
+                title="When enabled, the entire portion of the track that is visible on the screen will be optimized and re-routed when a segment is dragged.  When disabled, only the area near the segment being dragged will be optimized."
               />
-              <Check label="Use mouse path to set track posture" checked={false} disabled title={`When enabled, the posture of tracks will be guided by how the mouse is moved from the starting location\n${UNSUPPORTED_ROUTER_OPTIONS.autoPosture}`} />
+              <Check
+                label="Use mouse path to set track posture"
+                checked={s.autoPosture}
+                onChange={(v) => set({ autoPosture: v })}
+                title="When enabled, the posture of tracks will be guided by how the mouse is moved from the starting location"
+              />
               <Check
                 label="Fix all segments on click"
                 checked={s.fixAllSegments}

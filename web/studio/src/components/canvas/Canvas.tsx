@@ -584,7 +584,9 @@ export function Canvas() {
       const [x, y] = draw.pts[draw.pts.length - 1] ?? [draw.pts[0]?.[0] ?? 0, draw.pts[0]?.[1] ?? 0];
       void finishInteractiveRoute(x, y, dispatch, api);
     } else if (draw.kind === "diffpair") {
-      const [x, y] = draw.ptsA[draw.ptsA.length - 1] ?? [draw.ptsA[0]?.[0] ?? 0, draw.ptsA[0]?.[1] ?? 0];
+      // a pair that cannot be walked has no head (`tryWalkDp` empties it): finish where the cursor is
+      const cursor = state.cursorUm;
+      const [x, y] = draw.ptsA[draw.ptsA.length - 1] ?? (cursor ? [cursor.x, cursor.y] : [0, 0]);
       void finishDiffPairRoute(x, y, dispatch, api);
     } else if (draw.kind === "zone") {
       if (draw.pts.length >= 3) {

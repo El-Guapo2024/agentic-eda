@@ -12,7 +12,8 @@
 //! router routes straight through/over a zone's fill area, which gets
 //! recomputed afterward, exactly like real KiCad.
 
-use crate::item::{net_of, Item, Segment, Solid, Via};
+use crate::arcs::ArcPts;
+use crate::item::{net_of, Arc, Item, Segment, Solid, Via};
 use crate::layer::LayerMap;
 use crate::node::Node;
 use eda_drc::kimath::Shape;
@@ -30,9 +31,21 @@ fn split_track_seg_id(flat_id: &str) -> Option<(String, usize)> {
 /// against (callers need the map to translate back to layer names when
 /// emitting `Cmd`s).
 pub fn build_node(design: &Design, model: &ConstraintModel) -> (Node, LayerMap) {
+    build_node_with(design, model, false)
+}
+
+/// [`build_node`] for the length tuner, whose patterns are all in edit (`IN_EDIT`): the tracks of a tuning pattern are not locked in its world, since the
+/// tuner is what replaces them (KiCad marks only the pattern being edited that way; every other pattern's members stay locked solids for its meanders --
+/// here the tuner treats all of them alike, as it did before locks existed).
+pub fn build_node_for_tuning(design: &Design, model: &ConstraintModel) -> (Node, LayerMap) {
+    build_node_with(design, model, true)
+}
+
+fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: bool) -> (Node, LayerMap) {
     let layers = LayerMap::new(&model.board.layers);
     let drc_board = eda_drc::board::build(design, model);
     let mut node = Node::new();
+    let locked = locked_ids_with(design, !patterns_in_edit);
 
     for pad in &drc_board.pads {
         let layer_range = pad.layers.iter().filter_map(|n| layers.index_of(n)).fold(None, |acc: Option<crate::layer::LayerRange>, i| {
@@ -49,33 +62,55 @@ pub fn build_node(design: &Design, model: &ConstraintModel) -> (Node, LayerMap) 
         node.add(Item::Solid(Solid { net: pad.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false }));
     }
 
-    // An arc track (`PCB_ARC`) is the chords of its polyline here: the world has no arcs yet, and one chord from end to end is neither the obstacle it is (the arc
-    // bulges out of it) nor its length (a quarter circle is 11 % longer). The chords are the ones `Track::pts` has, 32 to the arc, so a segment's index in the track
-    // is the index the commit logic expects.
-    let arc_tracks: std::collections::HashMap<&str, &eda_model::ir::Track> = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| t.arc().is_some()).map(|t| (t.id.as_str(), t)).collect();
+    // An arc track (`PCB_ARC`) is an `ARC` (`PNS_KICAD_IFACE_BASE::syncArc`): one item with the arc's three points, linked at its two ends. (A
+    // full circle, whose ends are one point, has no arc to hold; it stays the chords of its polyline.)
+    let circle_tracks: std::collections::HashMap<&str, &eda_model::ir::Track> = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| t.arc().is_some_and(|(s, _, e)| s == e)).map(|t| (t.id.as_str(), t)).collect();
     for t in &drc_board.tracks {
         let layer = layers.index_of(&t.layer).unwrap_or(0);
         let source_track = split_track_seg_id(&t.id);
         let net = t.net.as_deref().map(net_of).unwrap_or(None);
-        if t.arc_mid.is_some() {
-            if let Some(track) = source_track.as_ref().and_then(|(id, _)| arc_tracks.get(id.as_str())) {
-                for (i, w) in track.pts.windows(2).enumerate() {
-                    node.add(Item::Segment(Segment { net: net.clone(), layer, a: w[0], b: w[1], width: t.width, source_track: Some((track.id.clone(), i)), locked: false }));
+        if let Some(mid) = t.arc_mid {
+            match source_track.as_ref() {
+                Some((id, _)) if circle_tracks.contains_key(id.as_str()) => {
+                    let track = circle_tracks[id.as_str()];
+                    for (i, w) in track.pts.windows(2).enumerate() {
+                        node.add(Item::Segment(Segment { net: net.clone(), layer, a: w[0], b: w[1], width: t.width, source_track: Some((track.id.clone(), i)), locked: locked.contains(track.id.as_str()) }));
+                    }
                 }
-                continue;
+                _ => {
+                    let is_locked = source_track.as_ref().is_some_and(|(id, _)| locked.contains(id.as_str()));
+                    node.add(Item::Arc(Arc::new(net, layer, t.width, ArcPts::new(t.a, mid, t.b), source_track.map(|(id, _)| id), is_locked)));
+                }
             }
+            continue;
         }
-        node.add(Item::Segment(Segment { net, layer, a: t.a, b: t.b, width: t.width, source_track, locked: false }));
+        let is_locked = source_track.as_ref().is_some_and(|(id, _)| locked.contains(id.as_str()));
+        node.add(Item::Segment(Segment { net, layer, a: t.a, b: t.b, width: t.width, source_track, locked: is_locked }));
     }
 
     for v in &drc_board.vias {
         let layer_range = layers.range_of(&v.from_layer, &v.to_layer);
-        node.add(Item::Via(Via { net: v.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: Some(v.id.clone()), locked: false }));
+        node.add(Item::Via(Via { net: v.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: Some(v.id.clone()), locked: locked.contains(v.id.as_str()) }));
     }
 
     add_board_outline(&mut node, &drc_board, &layers);
 
     (node, layers)
+}
+
+/// The ids of the tracks, arcs and vias the router treats as locked (`ITEM::IsLocked`, `MK_LOCKED`: `PNS_KICAD_IFACE_BASE::syncTrack`, `syncArc`, `syncVia`): the
+/// ones the board has locked (`BOARD_ITEM::IsLocked`, [`eda_model::ir::DrawingsSection::locked_ids`]), and the tracks of a tuning pattern, which the router leaves
+/// alone as long as the pattern is not being edited (`PCB_GENERATOR` members: "`!generator->HasFlag( IN_EDIT )`" marks them locked). A locked item is
+/// neither shoved nor dragged -- the router goes round it as it does round a pad.
+pub fn locked_ids(design: &Design) -> std::collections::HashSet<&str> {
+    locked_ids_with(design, true)
+}
+
+/// [`locked_ids`], with or without the members of the tuning patterns (`!generator->HasFlag( IN_EDIT )`).
+pub fn locked_ids_with(design: &Design, lock_pattern_members: bool) -> std::collections::HashSet<&str> {
+    let Some(d) = design.drawings.as_ref() else { return std::collections::HashSet::new() };
+    let members = d.tuning_patterns.iter().flat_map(|p| p.member_ids.iter().map(String::as_str)).filter(|_| lock_pattern_members);
+    d.locked_ids.iter().map(String::as_str).chain(members).collect()
 }
 
 /// The board outline as router obstacles: `PNS_KICAD_IFACE_BASE::syncGraphicalItem` for each graphic on Edge.Cuts. Every

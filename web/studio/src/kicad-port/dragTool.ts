@@ -39,7 +39,7 @@ export interface DragDrawState {
    * slid sideways and its neighbours turned or stretched to follow (`DM_SEGMENT`).
    * `"via"`: `pts` is just the via's own live position (one point) -- its attached
    * tracks' live shape is `fanout`, not `pts`. */
-  dragKind: "corner" | "segment" | "via";
+  dragKind: "corner" | "segment" | "via" | "arc";
   /** Not echoed by `DragPreview` -- captured once from the board at
    * `drag_start` and kept across every subsequent preview, same as
    * `RouteDrawState.net`. */

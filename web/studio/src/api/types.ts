@@ -1460,6 +1460,10 @@ export type Cmd =
   | ImportGraphicsCmd
   | ImportSchGraphicsCmd
   | ImportSymbolGraphicsCmd
+  /** File > Import > Non-KiCad Board File... (`BOARD_EDITOR_CONTROL::OpenNonKicadBoard`): the open board replaced by `text`, the `.kicad_pcb` kicad-cli made of another EDA format's file (`POST /api/import_foreign`). One undo step; see crates/ops/src/import_foreign.rs. `keep_kicad_layer_names` is the dialog's "Keep KiCad layer names"; `project` is the `.kicad_pro` kicad-cli made with the board, which holds the design rules and net classes the importer set. */
+  | { op: "replace_board"; text: string; name?: string; keep_kicad_layer_names?: boolean; project?: string }
+  /** File > Import > Non-KiCad Schematic File... (`SCH_EDIT_FRAME::OnImportProject`): the schematic replaced by `content`, the sheet file `POST /api/import_foreign` answered. One undo step. */
+  | { op: "replace_schematic"; content: unknown; name?: string }
   /** Paste Special... (`DIALOG_PASTE_SPECIAL`, crates/ops/src/pcb_paste_special.rs): a paste with the dialog's two answers -- what happens to the reference designators of the pasted footprints (`PASTE_MODE`; "keep" is what a plain paste does) and "Clear net assignments". */
   | { op: "paste_special"; text: string; at: PointXY; mode?: PcbPasteMode; clear_nets?: boolean }
   /** Run `cmd` with the board editor in the group `group` (the entered one): what it adds joins the group (`BOARD_COMMIT::Push`; crates/ops/src/pcb_groups.rs `Cmd::InGroup`). */
@@ -1827,11 +1831,13 @@ export interface RouteFixReply {
 export interface DragPreview {
   ok: boolean;
   message?: string;
+  /** `drag_start` refused because the item taken hold of is locked (`ROUTER_TOOL::performDragging`: "The selected item is locked."): ask "Drag Anyway" and start again with `drag_locked`. */
+  locked?: boolean;
   /** `drag_start` only: the board ids of the tracks of the line being dragged, which the cursor must not snap onto (`TOOL_BASE::checkSnap`). */
   line_tracks?: string[];
   /** What `DRAGGER::Start` grabbed: the whole segment (`DM_SEGMENT`, it slides sideways, its neighbours following at 45 degrees), one
-   * vertex (`DM_CORNER`) or a via (`DM_VIA`). */
-  drag?: "segment" | "corner" | "via";
+   * vertex (`DM_CORNER`), a via (`DM_VIA`) or an arc track (`DM_ARC`: its curvature follows the cursor, tangent to the tracks next to it). */
+  drag?: "segment" | "corner" | "via" | "arc";
   colliding: boolean;
   /** The cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last
    * solution"), and letting go commits that one. */
@@ -1907,6 +1913,10 @@ export interface DiffPairPreview {
   /** `shove` mode: the tracks and vias the head would push aside. */
   displaced?: RouteDisplacedLine[];
   displaced_vias?: RouteDisplacedVia[];
+  /** `POST /api/route/dp_continue_from_end` only (Route From Other End): the pair fixed so far was committed, so the board changed. */
+  committed?: boolean;
+  /** `POST /api/route/dp_continue_from_end` only: the far end of the connection, where the new pair starts. */
+  from?: [Um, Um];
 }
 
 export interface DpFixReply {

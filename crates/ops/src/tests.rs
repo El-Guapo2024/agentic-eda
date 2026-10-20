@@ -1420,6 +1420,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
             Track { id: "ignored2".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2500, y: -2000 }, Point { x: 2200, y: 0 }, Point { x: 2500, y: 2000 }], arc_mid_offset: None },
         ],
         vias: vec![],
+        lock_tracks: vec![],
     })
     .unwrap();
 
@@ -1435,7 +1436,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
 fn commit_route_tolerates_an_already_gone_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![] }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![] }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 1);
 }
 
@@ -1443,7 +1444,7 @@ fn commit_route_tolerates_an_already_gone_id() {
 fn commit_route_rejects_an_unknown_net() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![] }).unwrap_err();
+    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![] }).unwrap_err();
     assert!(!e.is_empty());
     assert!(b.design().routing.is_none(), "a refused commit must not partially apply");
 }

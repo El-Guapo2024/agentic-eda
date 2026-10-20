@@ -266,7 +266,7 @@ export type DrawState =
    * manually kept in sync, same convention as the "route" variant above). */
   | {
       kind: "drag";
-      dragKind: "corner" | "segment" | "via";
+      dragKind: "corner" | "segment" | "via" | "arc";
       net: string | null;
       layer: string;
       width: Um;

@@ -7,13 +7,14 @@
 //   the tool (Ctrl+L, armed)  the settings the next patterns start from -- and the pattern being placed, if one is -- over the board's Length-tuning Patterns page.
 //
 // A design rule that gives the net a length (or skew) target sets the target field and disables it, with "(from <rule>)", until "Override custom rules" is on. The
-// time-domain delay KiCad also offers (a target in picoseconds, from a tuning profile) is not modelled: its radio button is not shown.
+// time domain is there too: the "Delay" radio button makes the target a delay in picoseconds, tuned to through the tuning profile of the net's class (Board Setup >
+// Design Rules > Tuning Profiles); a net whose class names a profile with the time domain on starts that way.
 import { useEffect, useState } from "react";
 import { tunePattern, tuneSettings, tuneUpdate } from "../api/tuneClient";
-import { LENGTH_UNCONSTRAINED_UM, type PatternSide, type TuneKind, type TuneSettings, type TuningPattern } from "../api/tuneTypes";
+import { DELAY_UNCONSTRAINED_AS, LENGTH_UNCONSTRAINED_UM, type PatternSide, type TuneKind, type TuneSettings, type TuningPattern } from "../api/tuneTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { DialogShell, lengthText, parseLength } from "./pcbDialogKit";
-import { kindOfMode, pageSettings, settingsOfPattern, tuneStateFromReply } from "../kicad-port/tuneTool";
+import { fmtPs, kindOfMode, pageSettings, settingsOfPattern, tuneStateFromReply } from "../kicad-port/tuneTool";
 
 const TITLES: Record<TuneKind, string> = {
   single: "Tuning Pattern Properties: single track",
@@ -23,6 +24,9 @@ const TITLES: Record<TuneKind, string> = {
 
 interface Draft {
   target: string;
+  /** The Delay radio button, and the target delay (picoseconds, as typed). */
+  timeDomain: boolean;
+  targetDelay: string;
   override: boolean;
   min: string;
   max: string;
@@ -36,8 +40,12 @@ interface Draft {
 function draftOf(s: Required<Pick<TuneSettings, "min_amplitude" | "max_amplitude" | "spacing" | "corner_radius_percent" | "rounded" | "single_sided">> & TuneSettings, kind: TuneKind, units: "mm" | "mil" | "in"): Draft {
   const t = kind === "skew" ? s.target_skew : s.target_length;
   const opt = typeof t === "number" ? t : t && typeof t === "object" ? t.opt : undefined;
+  const dt = kind === "skew" ? s.target_skew_delay : s.target_delay;
+  const dopt = typeof dt === "number" ? dt : dt && typeof dt === "object" ? dt.opt : undefined;
   return {
     target: opt == null || (kind !== "skew" && opt >= LENGTH_UNCONSTRAINED_UM) ? "" : lengthText(opt, units),
+    timeDomain: !!s.time_domain,
+    targetDelay: dopt == null || (kind !== "skew" && dopt * 1_000_000 >= DELAY_UNCONSTRAINED_AS) ? "" : fmtPs(dopt).replace(" ps", ""),
     override: !!s.override_custom_rules,
     min: lengthText(s.min_amplitude, units),
     max: lengthText(s.max_amplitude, units),
@@ -128,6 +136,12 @@ export function TuningPatternDialog() {
       if (t == null) return setError("The target must be a length.");
       target = t;
     }
+    let targetDelay: number | null = null;
+    if (d.targetDelay.trim() !== "") {
+      const t = Number(d.targetDelay.trim().replace(/\s*ps$/i, ""));
+      if (!Number.isFinite(t)) return setError("The target delay must be a time in picoseconds.");
+      targetDelay = t;
+    }
     const settings: TuneSettings = {
       min_amplitude: min,
       max_amplitude: max,
@@ -137,11 +151,17 @@ export function TuningPatternDialog() {
       single_sided: d.singleSided,
       initial_side: d.side,
       override_custom_rules: d.override,
+      time_domain: d.timeDomain,
     };
     // a target the dialog shows as a rule's is the rule's again unless the pattern overrides the rules (`TransferDataFromWindow`)
     if (!fromRule) {
-      if (kind === "skew") settings.target_skew = target ?? 0;
-      else settings.target_length = target;
+      if (kind === "skew") {
+        settings.target_skew = target ?? 0;
+        settings.target_skew_delay = targetDelay ?? 0;
+      } else {
+        settings.target_length = target;
+        settings.target_delay = targetDelay;
+      }
     }
     if (patternId) {
       const r = await tuneUpdate(patternId, settings);
@@ -166,9 +186,18 @@ export function TuningPatternDialog() {
   return (
     <DialogShell title={TITLES[kind]} width={400} onCancel={close} onOk={() => void submit()}>
       <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr 40px", alignItems: "center", gap: "6px 8px" }}>
+        <label className="filter-row" style={{ gridColumn: "1 / span 3" }} title="Tune to a length, or to a delay through the tuning profile of the net's class">
+          <input type="radio" name="tune-domain" checked={!d.timeDomain} disabled={fromRule} onChange={() => set({ timeDomain: false })} />
+          Length
+          <input type="radio" name="tune-domain" checked={d.timeDomain} disabled={fromRule} onChange={() => set({ timeDomain: true })} style={{ marginLeft: 16 }} />
+          Delay
+        </label>
         {label(kind === "skew" ? "Target skew:" : "Target length:")}
-        <input autoFocus type="text" value={d.target} disabled={targetDisabled} placeholder={kind === "skew" ? "0" : "none"} onChange={(e) => set({ target: e.target.value })} />
+        <input autoFocus type="text" value={d.target} disabled={targetDisabled || d.timeDomain} placeholder={kind === "skew" ? "0" : "none"} onChange={(e) => set({ target: e.target.value })} />
         <span>{unitLabel}</span>
+        {label(kind === "skew" ? "Target skew delay:" : "Target delay:")}
+        <input type="text" value={d.targetDelay} disabled={targetDisabled || !d.timeDomain} placeholder={kind === "skew" ? "0" : "none"} onChange={(e) => set({ targetDelay: e.target.value })} />
+        <span>ps</span>
         <span />
         <label className="filter-row" style={{ gridColumn: "2 / span 2" }}>
           <input type="checkbox" checked={d.override} onChange={(e) => set({ override: e.target.checked })} />

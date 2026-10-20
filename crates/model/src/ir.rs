@@ -2462,6 +2462,12 @@ pub struct DrawingsSection {
     /// an older `design.json` reads as `false`. Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub outline_is_shapes: bool,
+    /// The intent (a `ConstraintModel` as YAML) the board's parts, nets, footprints and rules come from when it is not the one `board.json` names: a path relative to the
+    /// board's folder. File > Import > Non-KiCad Board File replaces the open board with another one, whose parts are not the intent's (`Cmd::ReplaceBoard`); the other
+    /// board's model is a file of its own under `imports/`, named here, so the step is a change of this design and an undo takes the old board back whole. `board::build_model`
+    /// starts from it instead of `board.json`'s intent. Additive: absent in an older `design.json` reads as "the intent of `board.json`". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent_file: Option<String>,
 }
 
 /// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part

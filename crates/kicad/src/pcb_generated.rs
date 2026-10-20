@@ -13,7 +13,7 @@
 use crate::sexpr::{self, Sexpr};
 use crate::{mm, mm_to_um, sexpr_str};
 use eda_model::ir::{Design, Point, Um};
-use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern, LENGTH_UNCONSTRAINED_UM};
+use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern, DELAY_UNCONSTRAINED_AS, LENGTH_UNCONSTRAINED_UM};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -67,6 +67,18 @@ fn range_props(out: &mut String, key: &str, r: &TargetRange) {
     writeln!(out, "\t\t({key}_min {})", mm(r.min)).unwrap();
 }
 
+/// A time as the file keeps it: `set_iu` writes the internal unit (an attosecond) over a million, as a length is written over a million nanometres -- picoseconds.
+fn ps(attoseconds: i64) -> String {
+    fmt_g10(attoseconds as f64 / 1_000_000.0)
+}
+
+/// `target_delay`, `target_delay_max`, `target_delay_min`: a delay target in picoseconds.
+fn delay_props(out: &mut String, key: &str, r: &TargetRange) {
+    writeln!(out, "\t\t({key} {})", ps(r.opt)).unwrap();
+    writeln!(out, "\t\t({key}_max {})", ps(r.max)).unwrap();
+    writeln!(out, "\t\t({key}_min {})", ps(r.min)).unwrap();
+}
+
 /// The `(generated ..)` blocks of the board's tuning patterns: `written` says which uuids each track of the design was written as, `uuid_of` names a
 /// pattern, `locked` says whether it is.
 pub(crate) fn write_generated(out: &mut String, patterns: &[TuningPattern], written: &BTreeMap<String, Vec<String>>, uuid_of: &dyn Fn(&TuningPattern) -> String, locked: &dyn Fn(&str) -> bool) {
@@ -92,7 +104,7 @@ pub(crate) fn write_generated(out: &mut String, patterns: &[TuningPattern], writ
         writeln!(out, "\t\t(corner_radius_percent {})", p.corner_radius_percent).unwrap();
         point_prop(out, "end", p.end);
         writeln!(out, "\t\t(initial_side {})", sexpr_str(p.initial_side.token())).unwrap();
-        writeln!(out, "\t\t(is_time_domain no)").unwrap();
+        writeln!(out, "\t\t(is_time_domain {})", yes_no(p.is_time_domain)).unwrap();
         writeln!(out, "\t\t(last_diff_pair_gap {})", mm(p.last_diff_pair_gap)).unwrap();
         writeln!(out, "\t\t(last_netname {})", sexpr_str(&p.last_netname)).unwrap();
         writeln!(out, "\t\t(last_status {})", sexpr_str(if p.last_status.is_empty() { "tuned" } else { &p.last_status })).unwrap();
@@ -105,8 +117,8 @@ pub(crate) fn write_generated(out: &mut String, patterns: &[TuningPattern], writ
         writeln!(out, "\t\t(override_custom_rules {})", yes_no(p.override_custom_rules)).unwrap();
         writeln!(out, "\t\t(rounded {})", yes_no(p.rounded)).unwrap();
         writeln!(out, "\t\t(single_sided {})", yes_no(p.single_sided)).unwrap();
-        // the delay target of the time domain, which the model has no use for: KiCad's "unconstrained" (`DELAY_UNCONSTRAINED`, a million picoseconds)
-        writeln!(out, "\t\t(target_delay 1000000)\n\t\t(target_delay_max 1000000)\n\t\t(target_delay_min 0)").unwrap();
+        // the delay target of the time domain, in picoseconds (KiCad's "unconstrained" is `DELAY_UNCONSTRAINED`, a million of them)
+        delay_props(out, "target_delay", &p.target_delay);
         range_props(out, "target_length", &p.target_length);
         range_props(out, "target_skew", &p.target_skew);
         writeln!(out, "\t\t(tuning_mode {})", sexpr_str(p.mode.token())).unwrap();
@@ -183,6 +195,24 @@ fn prop_range(list: &[Sexpr], key: &str, default: TargetRange) -> TargetRange {
     r
 }
 
+/// A time in the file, picoseconds, as attoseconds.
+fn prop_delay(list: &[Sexpr], key: &str) -> Option<i64> {
+    prop_num(list, key).map(|v| (v * 1_000_000.0).round() as i64)
+}
+
+/// `SetTargetLengthDelay( val )` and then the file's own minimum and maximum, as for a length.
+fn prop_delay_range(list: &[Sexpr], key: &str) -> TargetRange {
+    let opt = prop_delay(list, key).unwrap_or(DELAY_UNCONSTRAINED_AS);
+    let mut r = if opt == DELAY_UNCONSTRAINED_AS { TargetRange::delay_unconstrained() } else { TargetRange::delay_around(opt) };
+    if let Some(min) = prop_delay(list, &format!("{key}_min")) {
+        r.min = min;
+    }
+    if let Some(max) = prop_delay(list, &format!("{key}_max")) {
+        r.max = max;
+    }
+    r
+}
+
 /// The tuning patterns of the board file `root`, their members named by the file's uuid: `track_ids` maps the uuid of a track the importer made to
 /// its id in the design. A generator of another kind, and a pattern none of whose members is a track of the board, is left out.
 pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, String>) -> Vec<TuningPattern> {
@@ -218,11 +248,16 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
             override_custom_rules: prop_bool(g, "override_custom_rules").unwrap_or(false),
             target_length: prop_range(g, "target_length", TargetRange::unconstrained()),
             target_skew: skew,
+            is_time_domain: prop_bool(g, "is_time_domain").unwrap_or(false),
+            target_delay: prop_delay_range(g, "target_delay"),
+            // (the board file keeps no skew delay)
+            target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             base_line: prop_line(g, "base_line"),
             base_line_coupled: prop_line(g, "base_line_coupled"),
             last_track_width: prop_um(g, "last_track_width").unwrap_or(0),
             last_diff_pair_gap: prop_um(g, "last_diff_pair_gap").unwrap_or(0),
             last_tuning_length: prop_num(g, "last_tuning_length").map(|mm| (mm * 1_000_000.0).round() as i64).unwrap_or(0),
+            last_tuning_delay: 0,
             last_netname: prop_str(g, "last_netname").unwrap_or("").to_string(),
             last_status: prop_str(g, "last_status").unwrap_or("tuned").to_string(),
             member_ids: members,
@@ -269,11 +304,15 @@ mod tests {
             override_custom_rules: true,
             target_length: TargetRange { min: 99_900, opt: 100_000, max: 100_100 },
             target_skew: TargetRange { min: -100, opt: 0, max: 100 },
+            is_time_domain: false,
+            target_delay: TargetRange::delay_unconstrained(),
+            target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             base_line: vec![p(115_571, 50_140), p(123_137, 50_140)],
             base_line_coupled: vec![p(115_571, 50_540), p(123_137, 50_540)],
             last_track_width: 200,
             last_diff_pair_gap: 180,
             last_tuning_length: 99_987_654,
+            last_tuning_delay: 0,
             last_netname: "USB_P".into(),
             last_status: "too_short".into(),
             member_ids: vec!["trk_a".into(), "trk_b".into()],

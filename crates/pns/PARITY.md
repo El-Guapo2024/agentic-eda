@@ -30,16 +30,26 @@ exists rather than letting you rediscover it.
    Reusing `eda_drc`'s geometry/constraint-resolution keeps the router's
    idea of clearance the rules the exported board carries (kicad-cli's
    DRC, the only DRC engine, judges the result).
-3. **No `ARC_T`.** This project's IR represents every track as a
-   polyline (`eda_model::ir::Track::pts`), an arc track (`PCB_ARC`) as the
-   32 chords of its tessellation (`Track::arc`). The router's world has no arc
-   item: `from_ir.rs` puts an arc track's chords in the world (since P5c, one
-   chord from end to end made the world's length of a rounded meander 10 % short
-   and left the arc's bulge unseen as an obstacle), and every KiCad pass that
-   branches on "does this line contain an arc" takes the non-arc path
-   unconditionally here. The length tuner (Stage 8) is the one place that
-   *makes* arcs: `chain.rs` is a `SHAPE_LINE_CHAIN` that holds them, and
-   `tuning_commit.rs` hands them to the IR as arc tracks.
+3. **Arcs are `ARC_T` items (P5d, 2026-10-20; before it, no arc was in the world).**
+   The IR keeps an arc track (`PCB_ARC`) as a polyline of the 32 chords of its
+   tessellation plus the mid point (`Track::arc`, `arc_mid_offset`), so every
+   consumer that only knows polylines keeps working. `from_ir.rs` makes such a
+   track one `Item::Arc` (`ArcPts`: start, mid, end; the shape is its 1 um
+   polygonisation, the hull is `ArcHull`, `pns_utils.cpp:68`), with its collisions,
+   its hull, `NODE::AssembleLine` / `followLine` through it and `NODE::Add( LINE )`
+   making an `ARC` of an arc of the line (`arcs.rs`, `item.rs`, `node.rs`). A `Line`
+   holds its arcs as `Line::arcs` and finds them again **by their points** (`arc_runs`):
+   whatever cuts into an arc (a corner dragged inside it, a route that starts or ends
+   in the middle of it, a walk that hugs it) turns that arc into segments, and whatever
+   leaves it alone keeps it -- an arc is an arc when it is committed (`line_to_tracks`
+   writes polyline runs and `Track::new_arc` arcs), which is what the board file gets as
+   `(arc ..)`. KiCad's `SHAPE_LINE_CHAIN` carries arcs in `m_shapes` and loses them at the
+   first `Append( vertex )` of `LINE::Walkaround`; here a walked line keeps the arcs it did not
+   touch. Where a
+   KiCad pass branches on "does this line contain an arc" (the optimizer skips such a
+   line, `Simplify` keeps an arc's points) the same branch is taken. Not ported: the
+   rounded corners of `CORNER_MODE` (`SwitchRounding*`, `BuildInitialTrace( ROUNDED_45 )`:
+   the router makes no arc of its own; the tuner's meanders do, Stage 8).
 4. **No component dragger, no multi-selection drag.** Single-item
    (segment/via) drag only. Diff pairs (Stage 7) and length tuning
    (Stage 8: single track, pair and skew, KiCad's placers and tool) are
@@ -73,7 +83,7 @@ exists rather than letting you rediscover it.
 | KiCad file | Port | Status |
 |---|---|---|
 | `pns_walkaround.{h,cpp}` | `src/walkaround.rs` | `Walker` is the faithful `WALKAROUND`: a whole `AssembleCluster` hugged per step, `WP_CW`/`WP_CCW`/`WP_SHORTEST` (with the check-back against the clusters already hugged), `SetItemMask`, `RestrictToCluster`, the length-expansion cut-off and the per-cluster iteration limit. `walk_base` is `LINE_PLACER::rhWalkBase` on it (Walk around mode and the solids-only pre-pass of the shove). Not ported: `m_PNSProcessClusterTimeout` (the wall-clock bound; the iteration limit is the only one). |
-| `pns_line_placer.{h,cpp}`, `pns_mouse_trail_tracer.{h,cpp}` | `src/line_placer.rs` | See that file's own doc comment for the detailed list; headline simplification is posture: this port keeps the explicit direction state and the `/` toggle (`Direction45::right()`) and continues from the last fixed segment's direction, but does not implement `MOUSE_TRAIL_TRACER`'s continuous mouse-trail-area heuristic (automatic posture guessing from how the cursor swept toward the target) -- not meaningful without a continuous mouse-move stream to measure. |
+| `pns_line_placer.{h,cpp}`, `pns_mouse_trail_tracer.{h,cpp}` | `src/line_placer.rs`, `src/mouse_trail.rs` | See `line_placer.rs`'s own doc comment for the detailed list. Posture is KiCad's since P5d (2026-10-20): `mouse_trail.rs` is `MOUSE_TRAIL_TRACER` (`AddTrailPoint`, `GetPosture`: the areas of the straight-first and the diagonal-first traces against the trail with its locks and the correction against the last segment, `FlipPosture`, tolerance, `SetMouseDisabled`), and `LinePlacer` builds the head's elbow from it (`buildInitialLine`: `GetPosture( aP )`; `Move` adds the cursor to the trail afterwards; `FixRoute`, a via and `UnfixRoute` restart it; `/` flips from the shown head's first direction; a posture forced by hand leaves Smart Pads off). The setting is "Use mouse path to set track posture" (`RoutingSettings.auto_posture`, default on); off, the posture is the explicit direction state and `/`. It is checked against KiCad's own tracer and `DIRECTION_45` compiled over `libs/kimath` (`oracle/build.sh`, `tests/mouse_trail_oracle.rs`: 100 000 random walks of the cursor, with flips, restarts and the mouse switched off, agree to the nanometre and the octant; 60 of them baked into the always-on test). Not ported: `reduceTail`, `handlePullback`, `handleSelfIntersections`, `mergeHead`, `optimizeTailHeadTransition` (the stateless request model). |
 
 **Status (2026-10-08):** `walkaround::Walker` is the faithful `WALKAROUND`
 (`pns_walkaround.cpp`): policies `WP_CW`/`WP_CCW`/`WP_SHORTEST` (with the
@@ -147,9 +157,9 @@ Where it differs, on purpose:
 - **A via exactly on the pusher's centreline.** KiCad's MTV is zero there,
   the via is not moved, and the loop runs into its iteration limit. Here it is
   pushed along the normal of the nearest pusher segment.
-- Not modelled: `SHP_REVERSED` (drag by the first vertex), `SHP_IGNORE`,
-  `LockJoint`, arcs, holes, a head that ends in a via (`placing_via` places
-  the via after the shove, with `place_via`).
+- Not modelled: `SHP_IGNORE`, `LockJoint` (the head's end points pinned; nothing
+  here shoves a line of the head's own net), holes. (`SHP_REVERSED` is: Stage 5.
+  Arcs, locked items and a head that ends in a via are, since P5d: Stage 9.)
 
 Verified against KiCad's own router regressions
 (`qa/data/pcbnew/pns_regressions`, replayed in `tests/qa_regressions.rs`,
@@ -261,8 +271,9 @@ The shove takes the dragged line out of its world first (`Shove::dragged_away`) 
 direction test for vertex 0. Replays of KiCad's `walk_drag_seg_against_board_edge` (the three
 segments it recorded) and `simple-drag-shove-singlelayer` (116 of 134, the same 139 tracks) are in
 `tests/qa_regressions.rs`. What the original scoping list below says about "corner drag only" and
-"free-angle" is superseded; what stays out: `OptimizeEntireDraggedTrack`, springback, arcs,
-virtual vias, locked tracks.
+"free-angle" is superseded; what stayed out then and is ported now (P5d, Stage 9):
+`OptimizeEntireDraggedTrack`, arcs (`DM_ARC`), locked tracks; what still stays out: springback,
+virtual vias.
 
 Scoped down further than `shove`/`walkaround` already are (see
 `dragger.rs`'s own doc comment for the full reasoning):
@@ -295,7 +306,12 @@ in, in the same `Cmd::CommitRoute`), and nothing is committed or cut if the rout
 setting `snap_to_tracks`, the magnetic setting `checkSnap` hands the router, default on) that the
 cursor is exactly on, cut where it ends, and a head that runs along that track ends where it first
 meets it (`Move`: `Collinear` and `Overlaps`). The track a route started on is never where it ends.
-`SplitAdjacentArcs` is not ported: a track that is an arc (`arc_mid_offset`) is not split.
+**2026-10-20 (P5d):** a track that is an arc is split too: `SplitAdjacentArcs` is `Node::split_arc` /
+`arc_to_split` over `arcs::ArcPts::split` (the arc cut at the point into two arcs of the same circle), used where `SplitAdjacentSegments` is
+(KiCad itself calls it only from Break Track, `ROUTER::BreakSegmentOrArc`; `LINE_PLACER::initPlacement`
+and `Move` call `SplitAdjacentSegments`, which returns false for `ARC_T` -- a route starting or ending in
+the middle of an arc is an adaptation the P5d brief asked for), and the commit gives the IR the two
+`(arc ..)` tracks. See Stage 9.
 
 `Router::continue_from_end` is `ROUTER::ContinueFromEnd` + `GetNearestRatnestAnchor`:
 `Node::nearest_unconnected_item` / `connected_joints` are `TOPOLOGY::NearestUnconnectedItem` /
@@ -512,18 +528,17 @@ row of section D. The short version:
   and what the shove moves.
 - **Differences from KiCad, on purpose** (the module header of `dp_placer.rs`
   has them, with the reasoning): no springback (every move resolves from the
-  world the last fix left); a walk that fails keeps the pair as drawn and flags
-  it, where KiCad's `tryWalkDp` ends with `if( bestScore > 0.0 )`, which is
-  always true, and so empties the pair; two walk attempts where KiCad makes
+  world the last fix left); two walk attempts where KiCad makes
   four (`attempt & 2` is a winding `attemptWalk` never reads, so 2 and 3 repeat
   0 and 1); Backspace; the gap and via gap raised to the clearance. Not
   ported because KiCad never calls it: `DP_GATEWAYS::BuildOrthoProjections` and
-  the pair's ortho mode.
-- **Not done**: Route From Other End for a pair (`ROUTER::ContinueFromEnd`
-  restarts the placer of the same mode; here only `Router::continue_from_end`,
-  for a single track), a drag of a pair (KiCad's `DRAGGER` has no pair mode:
+  the pair's ortho mode. (A walk that fails used to keep the pair as drawn and
+  flag it, where KiCad's `tryWalkDp` ends with `if( bestScore > 0.0 )`, which is
+  always true, and so empties the pair: it empties the pair now, Stage 9 step 5.)
+- **Not done**: a drag of a pair (KiCad's `DRAGGER` has no pair mode:
   `m_draggedLine` is one `LINE`). Length and skew tuning of a pair is
-  Stage 8's.
+  Stage 8's. (Route From Other End for a pair -- `ROUTER::ContinueFromEnd`
+  restarts the placer of the same mode -- is done: Stage 9 step 5.)
 - **Tests**: unit tests in `diff_pair.rs` (the gateways, the pair, the
   coupled length), `dp_placer.rs` (start, a pad pair at 45 degrees, tracks,
   walk, shove, vias, Backspace, the posture, the gap), `optimizer.rs`
@@ -611,15 +626,15 @@ page (93 checks).
 
 **Differences from upstream** (each listed in `docs/parity/GAPS.md` item 7 where it is not final):
 
-- the world has no arc item (decision 3): an arc track is its chords, a track that
-  is an arc cannot be picked to start a pattern on, and a line through an arc is
-  tuned along its chords;
+- (arcs and the time domain were here; both are KiCad's since P5d: Stage 9 steps 1 and 6 -- a track
+  that is an arc is picked to start a pattern on and a line through an arc is tuned along the arc;
+  a target is a delay in picoseconds through the tuning profile of the net's class)
 - the world is cloned once at `Start` (the line taken out of it), not branched at every
   `Move`: nothing in `Move` writes to it;
 - the line a placer works on stops where the track width changes (KiCad rewrites the
   whole of it at the first segment's width);
-- no time domain (a target in picoseconds, tuning profiles' delays) and no pad-to-die length:
-  the model has neither;
+- no pad-to-die length or delay: the model has neither; a time-domain rule of a `.kicad_dru` file
+  (`(constraint length (min 149.5ps) ..)`) is not read as the target (the length and skew rules are);
 - the status box is a box at the cursor in the canvas, not a `ROUTER_PREVIEW_ITEM` list; the
   tuned path is drawn as the new tracks over the board with the replaced ones hidden;
 - a pattern's outline is the baseline offset round (a capsule); KiCad's merged polygon for a pair
@@ -628,6 +643,94 @@ page (93 checks).
   length the placer reports; the proof above is at 10 um);
 - a pattern is moved, turned and flipped as locked (it and its tracks): KiCad lets them move
   and leaves the baseline behind.
+
+## Stage 9 -- the router's leftovers (P5d, 2026-10-20)
+
+What `docs/parity/GAPS.md` item 7 and `CODE-COMPARE-router.md` D18 listed as missing after Stages 5 to 8, in six steps
+(branch `task-router-rest`, one commit each).
+
+1. **Arcs (`ARC_T`).** Decision 3 above is the design. `arcs.rs` is `ArcPts`, the 1 um polygonisation of `SHAPE_ARC::ConvertToPolyline`,
+   `ArcHull` (`pns_utils.cpp:68`), `SplitAdjacentArcs` and `CalcArcMid`; `Item::Arc` has the shape, the hull and the collision of `ARC`; the
+   node assembles a line through arcs (`AssembleLine`, `followLine` with the arc reversed where the line walks it backwards) and `Node::add_line`
+   makes an `ARC` of an arc of the line (`NODE::Add( LINE )`; `findRedundantSegment` / `findRedundantArc` when the line may not be redundant).
+   A route starts and ends in the middle of an arc track (`Node::split_arc`; KiCad's `SplitAdjacentArcs` is reached only from Break Track, the
+   placer's `SplitAdjacentSegments` returns false for `ARC_T`: **adapted**, as the brief asked). The shove treats an arc as an obstacle
+   (`onCollidingArc` is `ShoveObstacleLine` on the line the arc is part of; the arcs of a shoved line it does not reach are kept; for the arcs of
+   a line the clearance grows by `ARC_HIGH_DEF`, `pns_shove.cpp:588`); KiCad's main loop looks for `SEGMENT_T` obstacles only, so there
+   `onCollidingArc` is never reached and here arcs are searched with the segments. `DM_ARC` (`arc_drag.rs`, `DragKind::Arc`) is
+   `EDIT_TOOL::DragArcTrack` (`edit_tool.cpp:1040`) as a drag of the router: the cursor is a point the arc has to go through, the arc stays
+   tangent to the two tracks next to it and its ends slide along them (the tangent lines and circles, `tan_tan_pt`, the triangle the cursor is held
+   in); KiCad's PNS has no case for `DM_ARC` (`dragMarkObstacles`, `dragWalkaround` and `dragShove` do nothing) and `ROUTER_TOOL::performDragging`
+   hands an arc to `DragArcTrack`, which checks nothing against the board -- here the three modes judge the result. `DragArcTrack` refuses an arc of
+   179 degrees and more, and so does the dragger. A drag or a shove keeps the arcs it does not cut into (`shove_dragged_line`, `Line::arcs`,
+   `DragPreview::arcs`), `Router::build_commit` writes a line as polylines and `(arc ..)` tracks (`line_to_tracks`). The length tuner starts on an
+   arc track (`MEANDER_PLACER::Start`: `getSnappedStartPoint`) and goes through the arc (`AddArc` in `doMove`: KiCad's loop steps over the segment
+   after an arc, here it does not; `MeanderedLine::AddArc` took `GetP1()` for the arc's start, which is its end). The clean-up of a walked path knows
+   the arcs of its line (`Walker::arcs`, `shove_line_to_hull_set`): a fillet's first chord lies on the run before it, so the vertex the run ends and the arc
+   starts at is collinear with its neighbours, and a `Simplify` that does not know the arc drops it and the arc with it. The commit of a shove writes the arcs
+   the shove left as arc tracks (`Shove::outcome` carries `Line::arcs`). A quirk not kept: KiCad's `onCollidingArc` answers `SH_OK` when it fails to shove (the main loop then runs into its iteration limit, which fails the shove all the same); here it answers `SH_INCOMPLETE` at once. Tests: `tests/arc_tracks.rs` (21: the arc in the world, hull and collision, a route starting and
+   ending in one, a shove that keeps and a shove that cuts, a pushed run before a tangent arc, each `DM_ARC` mode, the commit), `tests/arc_boards.rs` (KiCad's own
+   `issue12609` and `issue8407`: routes, shoves, segment, corner and arc drags leave the router's world no violation it did not have; short sweep,
+   `EDA_SLOW_TESTS=1` for 40 tries a board and mode), units in `arcs.rs`, `arc_drag.rs`, `line.rs`, `node.rs`, `shove.rs`, and the slow kicad-cli proof
+   in `crates/cli/src/gate_vs_kicad.rs` (below), `tune_api.rs` (a track that is an arc picked and tuned along).
+2. **Locked tracks.** `from_ir` sets `Segment.locked`, `Arc.locked` and `Via.locked` from `DrawingsSection::locked_ids` and from the members of a
+   tuning pattern that is not being edited (`PNS_KICAD_IFACE_BASE::syncTrack` / `syncArc` / `syncVia`: `MK_LOCKED`, and `generator && !IsBeingEdited`;
+   the length tuner's world has its patterns in edit: `build_node_for_tuning`). A locked item is a solid for the shove
+   (`onCollidingSegment` / `onCollidingArc`: `HasLockedSegments` -> `SH_TRY_WALK`; `pushOrShoveVia`), `AssembleLine` does not follow it
+   (`aStopAtLockedJoints`, `NextSegment`), the dragger refuses it with "The selected item is locked." (`ROUTER_TOOL::performDragging`) and
+   `drag_locked` is Drag Anyway (`DRAGGER::Start` unmarks the item). The halves of a locked track a route cuts stay locked
+   (`RouteCommit::lock_tracks` -> `Cmd::CommitRoute::lock_tracks`; `PNS_KICAD_IFACE::AddItem`), and a commit does not leave a redundant copy of a track
+   (`findRedundantSegment` / `findRedundantArc` in `NODE::Add( LINE )`). Tests: `tests/locked_tracks.rs` (7: the shove, the dragger's refusal and Drag Anyway,
+   the halves a route cuts, the commit), `tune_api.rs` (a pattern's members are locked in a route's world and not in the tuner's) and the browser check (`D` on a locked run asks, Drag Anyway drags it).
+3. **A head that ends in a via is shoved together with it** (`LINE_PLACER::rhShoveOnly`: `newHead.AppendVia( makeVia( newHead.CLastPoint() ) )`, then
+   `m_shove->AddHeads( newHead )`; `SHOVE::Run` adds the head's via to the node with the head's rank). `LinePlacer::build_head` in Shove mode pushes
+   the pending via off the pads under it (`buildInitialLine`: `PushoutForce` with `SOLID_T`), walks the head round the pads, makes the via at its end
+   (`makeVia`, spanning the layer the route is on to the one it goes on to: `via_to_layer`, set by `Router::toggle_via`) and runs `Shove::run_heads` with
+   the head and its via, as a pair's heads already were: what the via sits on, on every layer it spans, is pushed aside instead of being reported
+   as a collision. The other modes place the via on the finished head and test its collision on the whole span. Tests: `tests/head_via.rs` (2), three
+   in `line_placer.rs`.
+4. **Mouse-trail posture and "Optimize entire track being dragged".** `mouse_trail.rs`: Stage 2's row. The optimizer has KiCad's constraint
+   system: `PRESERVE_VERTEX` (a shortcut over the stretch the preserved point is on must pass through it), `KEEP_TOPOLOGY` (no pad of another net
+   inside the polygon the shortcut and the stretch enclose, `pointInside2`; `Node::solid_joints_in` is `QueryJoints` for pads) beside `RESTRICT_AREA`.
+   `DRAGGER::optimizeAndUpdateDraggedLine` (`Dragger::optimize_and_update_dragged_line`): with `optimize_entire_dragged_track` (default off, as
+   KiCad's) the walked or shoved line, and a via's walked fan-out, is run through `MERGE_SEGMENTS | KEEP_TOPOLOGY | RESTRICT_AREA` (and
+   `MERGE_COLINEAR` with Smooth dragged segments), in the area the drag changed, the point nearest the cursor preserved. Both rows of Interactive
+   Router Settings are live (`auto_posture`, `optimize_entire_dragged_track`). Tests: `tests/mouse_trail_oracle.rs`; units in `mouse_trail.rs`,
+   `optimizer.rs`, `dragger.rs`, `line_placer.rs`.
+5. **A pair: Route From Other End and a walk that fails.** `ROUTER::ContinueFromEnd` restarts the placer of the same mode, so KiCad does it for
+   a pair: `Router::continue_diff_pair_from_end` commits the legs the pair has fixed (one `Cmd::CommitRoute`, nothing if none) and starts a new pair
+   at the far end of the P net's connection (`GetNearestRatnestAnchor`: `NearestUnconnectedAnchorPoint` of the P line, the fixed legs counting as
+   connected) with the pair's width, gap and via gap, heading for where the old head ended; a far end a pair cannot start on ends the routing with
+   KiCad's message after the commit. `tryWalkDp`'s `if( bestScore > 0.0 )` is true all the same (the score starts at 1e14), so when neither
+   attempt works `aPair.SetShape( best )` takes the default, empty `DIFF_PAIR` and the function answers true: a pair that cannot be walked has no head
+   (Walk around: a fit that places nothing; Shove: a shove with two empty heads, which fails) instead of showing the pair as drawn, flagged.
+   `POST /api/route/dp_continue_from_end`; Ctrl+E for a pair in the studio. Tests: `tests/dp_boards.rs` (KiCad's `dp_test.kicad_pcb`: the
+   pair continued from the stubs' end with and without a fixed leg), a unit test of the emptied pair (`dp_placer.rs`), an HTTP test (`route_api.rs`: the two commits are
+   one undo step) and Ctrl+E in `web/studio/e2e/diff-pairs.check.js`.
+6. **The tuner's time domain.** `delay.rs`: `DelayParams` from the net class's tuning profile (`TUNING_PROFILE`: per copper layer
+   `delay_as_per_mm`, only with "Enable time-domain tuning"; a via has the override of its layer pair or the profile's delay per millimetre
+   over the stackup height between the signal layers), `TuningPath::delay` (`CalculateDelay` of the pad-clipped lines and the vias between
+   lines on different layers), `GetTrackLengthForPropagationDelay`. `MeanderSettings` has the delay targets (`DELAY_UNCONSTRAINED`,
+   `DEFAULT_DELAY_TOLERANCE` 0.1 ps, `SetTargetLengthDelay`, `SetTargetSkewDelay`); `MeanderPlacer` / `DpMeanderPlacer` turn the delay
+   still to add into a length (`calculateTimeDomainTargets`: the signed difference of the target and the current delay over the delay per
+   millimetre of the layer) and report the delay (`TuningDelayResult`). Attoseconds inside (`IU_PER_PS` 1e6), picoseconds on the wire and in the
+   board file (`is_time_domain`, `target_delay{,_min,_max}` of the `(generated ..)` record). The Tuning Pattern dialog has the Delay radio button
+   and the status box reads picoseconds. Not modelled: the pad-to-die delay (the model has none), a time-domain rule of a `.kicad_dru` file as the target
+   (the length and skew rules are read). Tests: `delay.rs` (4), `tune_api.rs` (2), the slow kicad-cli test
+   `kicad_cli_measures_the_delay_of_a_track_tuned_in_picoseconds_through_its_tuning_profile` (a `length` rule of 149.5 to 150.5 ps flags the
+   untuned track and passes the tuned one, to 0.1 ps).
+
+**Proof against kicad-cli** (`crates/cli/src/gate_vs_kicad.rs`, `EDA_SLOW_TESTS=1`):
+`routes_across_and_onto_an_arc_track_and_a_dragged_arc_add_no_violation_to_kicad_clis_drc` -- on KiCad's `issue12609` and `issue8407`, a route
+across an arc track in Shove mode, a route that ends in the middle of one (splitting it), and an arc dragged add no `clearance`, `shorting_items`,
+`tracks_crossing`, `hole_clearance`, `copper_edge_clearance` or `track_width` violation to kicad-cli's report (run with `--all-track-errors`,
+or its counts wander with which violation of a track it reports first), and every arc the commit leaves is an `(arc ..)` of the board file (two routes across, two onto and two arcs
+dragged on each board; 34 s in a debug build).
+
+**Browser check** (`web/studio/e2e/router-leftovers.check.js` on a scratch board made with `eda board new examples/mcu_board_30plus.yaml`, port 8837): 95 checks in 10
+scenarios through `window.__eda` -- the two router-setting rows, the mouse path setting the posture, `D` on an arc, a shoved line keeping its arc, a route ending and starting in the middle of an arc,
+a locked track (refused, Drag Anyway, walked round), `V` shoving the track under a head's via, a tuning pattern on an arc track and a target in picoseconds -- and a Ctrl+E scenario in
+`diff-pairs.check.js`. It found two bugs the unit tests did not: Drag Anyway had no dialog host on the PCB tab, and the clean-up after a walk dropped the vertex a tangent arc starts at.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
@@ -670,18 +773,21 @@ page (93 checks).
   shove may not grow past 2 x `WalkaroundHugLengthThreshold` of the line's own
   length (KiCad has no bound; with no room left the shortest clear walk is the long
   way round the whole outline).
-- `KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints
-  (every candidate is still collision-checked, which is the one
-  constraint that must never be skipped; the others are refinements).
-- Rounded (arc-filleted) corners and arcs as router items -- no arc geometry
-  in this port's `Item` (decision #3): the tuner makes arcs (Stage 8) and the router
-  sees them as chords.
+- ~~`KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints~~
+  **Ported 2026-10-20** (Stage 9 step 4: `optimizer.rs`'s constraints, used by
+  "Optimize entire track being dragged").
+- ~~Arcs as router items~~ **Ported 2026-10-20** (Stage 9 step 1). Still missing: rounded (arc-filleted)
+  corners made by the router itself (`CORNER_MODE`: `SwitchRounding*`,
+  `BuildInitialTrace( ROUNDED_45 / ROUNDED_90 )`): the tuner is the only maker of arcs.
 - ~~`VIA::PushoutForce`~~ is ported (2026-10-08, `shove::via_pushout_force`); the
   second lead KiCad tries (`m_last_p_end`) is not kept.
-- `MOUSE_TRAIL_TRACER` (posture guessed from the swept mouse trail) and
-  springback (an incremental undo stack so backing the cursor up reverts
+- ~~`MOUSE_TRAIL_TRACER`~~ **Ported 2026-10-20** (Stage 9 step 4). Springback
+  (an incremental undo stack so backing the cursor up reverts
   shove/walkaround decisions instead of recomputing from scratch) --
   still not implemented; see `line_placer.rs`'s own module doc comment
   (point 1) and `shove.rs`'s Stage 3 doc comment above for why, and
-  `docs/parity/GAPS.md` for this task's own priority ranking of what's
-  left in gap #7.
+  `docs/parity/GAPS.md` item 7 for what is left in gap #7: springback, `LockJoint`, virtual vias,
+  the walkaround cluster timeout, the pad-to-die length and delay, time-domain rules as the tuner's
+  target, the rounding of corners, the merged outline of a pair's pattern, a pattern moved, turned
+  or flipped, the tuner's world branched at every move, two walk attempts of a pair where KiCad makes
+  four, and the tracer's `reduceTail` / `handlePullback` family.

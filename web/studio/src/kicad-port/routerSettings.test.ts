@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_ROUTER_SETTINGS, modeOptionEnabled, routerSettingsToWire, UNSUPPORTED_ROUTER_OPTIONS, withTrackSnapping, type RouterSettings } from "./routerSettings";
+import { DEFAULT_ROUTER_SETTINGS, modeOptionEnabled, routerSettingsToWire, withTrackSnapping, type RouterSettings } from "./routerSettings";
 
 test("the defaults are ROUTING_SETTINGS' constructor", () => {
   // pns_routing_settings.cpp: m_routingMode = RM_Walkaround, m_optimizerEffort = OE_MEDIUM, m_removeLoops = true,
   // m_smartPads = true, m_shoveVias = true, m_jumpOverObstacles = false, m_allowDRCViolations = false,
-  // m_freeAngleMode = false, m_fixAllSegments = true.
+  // m_freeAngleMode = false, m_fixAllSegments = true, m_autoPosture = true, m_optimizeEntireDraggedTrack = false.
   assert.deepEqual(DEFAULT_ROUTER_SETTINGS, {
     mode: "walkaround",
     optimizerEffort: "medium",
@@ -17,11 +17,13 @@ test("the defaults are ROUTING_SETTINGS' constructor", () => {
     freeAngleMode: false,
     fixAllSegments: true,
     smoothDragged: true,
+    optimizeEntireDragged: false,
+    autoPosture: true,
   });
 });
 
 test("every setting goes to the backend under the name crates/cli/src/route_api.rs reads", () => {
-  const s: RouterSettings = { mode: "shove", optimizerEffort: "full", shoveVias: false, jumpOverObstacles: true, removeLoops: false, smartPads: false, allowDrcViolations: true, freeAngleMode: true, fixAllSegments: false, smoothDragged: false };
+  const s: RouterSettings = { mode: "shove", optimizerEffort: "full", shoveVias: false, jumpOverObstacles: true, removeLoops: false, smartPads: false, allowDrcViolations: true, freeAngleMode: true, fixAllSegments: false, smoothDragged: false, optimizeEntireDragged: true, autoPosture: false };
   assert.deepEqual(routerSettingsToWire(s), {
     mode: "shove",
     optimizer_effort: "full",
@@ -33,6 +35,8 @@ test("every setting goes to the backend under the name crates/cli/src/route_api.
     free_angle_mode: true,
     fix_all_segments: false,
     smooth_dragged_segments: false,
+    optimize_entire_dragged_track: true,
+    auto_posture: false,
   });
   // The default settings are the backend's defaults, so a start request with nothing changed behaves as it always did.
   assert.deepEqual(routerSettingsToWire(DEFAULT_ROUTER_SETTINGS), {
@@ -46,6 +50,8 @@ test("every setting goes to the backend under the name crates/cli/src/route_api.
     free_angle_mode: false,
     fix_all_segments: true,
     smooth_dragged_segments: true,
+    optimize_entire_dragged_track: false,
+    auto_posture: true,
   });
 });
 
@@ -60,10 +66,6 @@ test("onModeChange: free angle and DRC violations belong to Highlight collisions
     assert.equal(modeOptionEnabled(option, "mark_obstacles"), false, option);
     assert.equal(modeOptionEnabled(option, "walkaround"), false, option);
   }
-});
-
-test("the rows the router cannot honour say why", () => {
-  for (const reason of Object.values(UNSUPPORTED_ROUTER_OPTIONS)) assert.match(reason, /^Not implemented: /);
 });
 
 test("the magnetic setting for tracks goes to the router as snap_to_tracks, and only when it was given", () => {

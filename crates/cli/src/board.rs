@@ -114,14 +114,24 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     Ok((meta, design, model))
 }
 
+/// The file the design's model starts from: the intent `board.json` names, or the one a board imported from another EDA format brought (`DrawingsSection::intent_file`, a
+/// file under the board's folder that File > Import > Non-KiCad Board File wrote: `Cmd::ReplaceBoard`).
+pub(crate) fn intent_path(dir: &Path, meta: &Meta, design: &eda_model::ir::Design) -> String {
+    match design.drawings.as_ref().and_then(|d| d.intent_file.as_deref()).filter(|f| !f.is_empty()) {
+        Some(file) => dir.join(file).display().to_string(),
+        None => meta.intent.clone(),
+    }
+}
+
 /// The model a design is judged against: the intent the board came from, with the design's overlays laid over it ("design.json wins over the frozen
 /// intent"). [`load`] builds it; a command that changes what the overlays say (a rename, a footprint exchange) builds it again for the design that results.
 pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Design) -> Result<ConstraintModel, Vec<CheckResult>> {
+    let intent = intent_path(dir, meta, design);
     let mut model: ConstraintModel = serde_yaml::from_str(
-        &std::fs::read_to_string(&meta.intent)
-            .map_err(|e| fail("board_no_intent", &meta.intent, format!("the intent this board came from is gone: {e}")))?,
+        &std::fs::read_to_string(&intent)
+            .map_err(|e| fail("board_no_intent", &intent, format!("the intent this board came from is gone: {e}")))?,
     )
-    .map_err(|e| fail("board_bad_intent", &meta.intent, format!("the intent does not parse: {e}")))?;
+    .map_err(|e| fail("board_bad_intent", &intent, format!("the intent does not parse: {e}")))?;
     // The intent's parts that were renamed here (Edit Reference, Annotate, Reannotate) have their new reference before anything is keyed by one: the
     // nets below, the libraries, the instance footprints and the art.
     eda_model::fp_assign::apply_part_renames(design, &mut model);
@@ -1004,6 +1014,8 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // A schematic file imported as a sheet is read here, into the command (`crate::sheet_import`).
     let with_file = crate::sheet_import::with_loaded_file(cmd, dir)?;
     let cmd = with_file.as_ref().unwrap_or(cmd);
+    // A board imported from another EDA format brings a model of its own: the file the command names is written before it runs (`crate::import_foreign`).
+    crate::import_foreign::prepare_board(cmd, dir)?;
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so
     // editing what is on screen works (an undo goes back to "none stored").
@@ -1015,7 +1027,15 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
         design.sheet_contents = derived.sheet_contents;
     }
     // What the nets were drawn as before the command, for a command that can change what is connected (`reconcile_schematic`).
-    let drawn_before = (cmd.domain() == Domain::Schematic && cmd.edits_connectivity()).then(|| design.clone());
+    let drawn_before = (cmd.domain() == Domain::Schematic && cmd.edits_connectivity()).then(|| {
+        let mut before = design.clone();
+        // A schematic that replaces the drawing is traced against nothing: every net of the new drawing is a net the command made.
+        if cmd.replaces_schematic() {
+            before.schematic = None;
+            before.sheet_contents = None;
+        }
+        before
+    });
     let mut board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
     // Reorganizing into sheets draws the design's nets anew: let it give a net back the name the intent declared for it.
     if matches!(cmd, Cmd::ReorganizeSheets) {
@@ -1043,7 +1063,8 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // A rename moves the intent's part under a new reference and an exchange puts a part on another footprint: the model is built again for the design that
     // results, as the next load will build it.
     let renames = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| (dr.renamed_parts.clone(), dr.footprint_assignments.clone())).unwrap_or_default();
-    let refolded: Option<ConstraintModel> = if renames(board.design()) != renames(was.design()) {
+    let intent_file = |d: &eda_model::ir::Design| d.drawings.as_ref().and_then(|dr| dr.intent_file.clone());
+    let refolded: Option<ConstraintModel> = if renames(board.design()) != renames(was.design()) || intent_file(board.design()) != intent_file(was.design()) {
         build_model(dir, &meta, board.design()).ok()
     } else {
         (board_parts(board.design()) != board_parts(was.design()) || pad_edits(board.design()) != pad_edits(was.design())).then(|| {
@@ -1059,7 +1080,8 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     let after = all_failures(&board, judged);
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
-    if strictness != Strictness::Off && after > before {
+    // An import (File > Import > Non-KiCad ...) is not a move: the file is what it is, and the gates do not refuse it.
+    if strictness != Strictness::Off && after > before && !cmd.replaces_board() && !cmd.replaces_schematic() {
         let new: Vec<String> = all_checks(&board, judged)
             .iter()
             .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
@@ -1072,7 +1094,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
             format!("that move takes the board from {before} failure(s) to {after} ({}); refused because --strict", new.join("; ")),
         ));
     }
-    if strictness == Strictness::Judged {
+    if strictness == Strictness::Judged && !cmd.replaces_board() && !cmd.replaces_schematic() {
         // `--strict` from the CLI also judges with KiCad's own gates: one
         // kicad-cli run on each side of the move.
         if eda_kicad_engine::find_cli().is_none() {
@@ -1343,6 +1365,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddSchLine { pts, .. } => format!("schematic line --points {}", pts.len()),
         Cmd::DeleteSchLine { id } => format!("schematic delete-line {id}"),
         Cmd::AddSheet { name, file, at, .. } => format!("schematic sheet {name:?} --file {file:?} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::ReplaceBoard { name, text, .. } => format!("import-board {name:?} ({} bytes of .kicad_pcb)", text.len()),
+        Cmd::ReplaceSchematic { name, content } => format!("import-schematic {name:?} ({} sheet(s))", 1 + content.screens.len()),
         Cmd::ImportSheet { source, as_sheet, name, file, at, keep_annotations, as_group, group_name, block, .. } => format!(
             "schematic import-sheet {source:?} {} --name {name:?} --file {file:?} --at {},{}{}{}{}{}",
             if *as_sheet { "--as-sheet" } else { "--contents" },
@@ -1406,7 +1430,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetSchItemText { id, text } => format!("schematic item-text {id} {text:?}"),
         Cmd::SetSymbolLibIds { changes, .. } => format!("schematic lib-ids {}", changes.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(",")),
         Cmd::IncrementAnnotations { start, increment } => format!("schematic increment-annotations {start} {increment}"),
-        Cmd::CommitRoute { tracks, vias, remove_track_ids, remove_via_ids } => {
+        Cmd::CommitRoute { tracks, vias, remove_track_ids, remove_via_ids, .. } => {
             format!("route: +{} track(s) +{} via(s), -{} track(s) -{} via(s)", tracks.len(), vias.len(), remove_track_ids.len(), remove_via_ids.len())
         }
         Cmd::CommitTuning { pattern, remove_pattern, tracks, remove_track_ids, .. } => {
@@ -1615,6 +1639,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSchLine { .. } | Cmd::DeleteSchLine { .. } => "schematic-line",
         Cmd::AddSheet { .. } => "schematic-sheet",
         Cmd::ImportSheet { .. } => "schematic-import-sheet",
+        Cmd::ReplaceBoard { .. } => "import-board",
+        Cmd::ReplaceSchematic { .. } => "import-schematic",
         Cmd::SwapSchItems { .. } => "schematic-swap",
         Cmd::PasteSch { .. } => "schematic-paste",
         Cmd::SchEdit(c) => c.kind(),

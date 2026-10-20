@@ -101,7 +101,7 @@ impl MeanderSide {
     }
 }
 
-/// `MEANDER_SETTINGS` (the net class it carries and the time-domain targets are not modelled).
+/// `MEANDER_SETTINGS` (the net class it carries is the tuner's to look up: [`crate::tuning_path::LengthEnv::delay_params`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeanderSettings {
     pub min_amplitude: i64,
@@ -111,7 +111,13 @@ pub struct MeanderSettings {
     pub step: i64,
     pub len_pad_to_die: i64,
     pub target_length: MinOptMax,
+    /// `m_targetLengthDelay`: the delay of the tuned line or pair, attoseconds ([`crate::delay`]), when the tuning is in the time domain.
+    pub target_length_delay: MinOptMax,
     pub target_skew: MinOptMax,
+    /// `m_targetSkewDelay`: the skew as a delay, attoseconds.
+    pub target_skew_delay: MinOptMax,
+    /// `m_isTimeDomain`: "Calculate tuning in the time domain".
+    pub is_time_domain: bool,
     pub override_custom_rules: bool,
     pub corner_style: MeanderStyle,
     pub corner_radius_percentage: i64,
@@ -131,7 +137,10 @@ impl Default for MeanderSettings {
             step: 50_000,
             len_pad_to_die: 0,
             target_length: MinOptMax::default(),
+            target_length_delay: MinOptMax::default(),
             target_skew: MinOptMax::default(),
+            target_skew_delay: MinOptMax::default(),
+            is_time_domain: false,
             override_custom_rules: false,
             corner_style: MeanderStyle::Round,
             corner_radius_percentage: 80,
@@ -141,7 +150,9 @@ impl Default for MeanderSettings {
             keep_endpoints: false,
         };
         s.set_target_length(LENGTH_UNCONSTRAINED);
+        s.set_target_length_delay(crate::delay::DELAY_UNCONSTRAINED);
         s.set_target_skew(0);
+        s.set_target_skew_delay(0);
         s
     }
 }
@@ -167,6 +178,53 @@ impl MeanderSettings {
         }
         if c.has_max() {
             self.target_length.set_max(c.max());
+        }
+    }
+
+    /// `SetTargetLengthDelay( long long )`: the delay, with the default tolerance (0.1 ps) round it (none for "unconstrained").
+    pub fn set_target_length_delay(&mut self, opt: i64) {
+        self.target_length_delay.set_opt(opt);
+        if opt == crate::delay::DELAY_UNCONSTRAINED {
+            self.target_length_delay.set_min(0);
+            self.target_length_delay.set_max(opt);
+        } else {
+            self.target_length_delay.set_min(opt - crate::delay::DEFAULT_DELAY_TOLERANCE);
+            self.target_length_delay.set_max(opt + crate::delay::DEFAULT_DELAY_TOLERANCE);
+        }
+    }
+
+    /// `SetTargetLengthDelay( const MINOPTMAX<int>& )`: a constraint's value; its own minimum and maximum win over the default tolerance.
+    pub fn set_target_length_delay_constraint(&mut self, c: &MinOptMax) {
+        self.set_target_length_delay(c.opt());
+        if c.has_min() {
+            self.target_length_delay.set_min(c.min());
+        }
+        if c.has_max() {
+            self.target_length_delay.set_max(c.max());
+        }
+    }
+
+    /// `SetTargetSkewDelay( int )`: the skew as a delay, with a tolerance of `DEFAULT_LENGTH_TOLERANCE` either side of it (KiCad uses that constant here; it
+    /// is the same 100 000 as the delay tolerance in attoseconds).
+    pub fn set_target_skew_delay(&mut self, opt: i64) {
+        self.target_skew_delay.set_opt(opt);
+        if opt == SKEW_UNCONSTRAINED {
+            self.target_skew_delay.set_min(0);
+            self.target_skew_delay.set_max(opt);
+        } else {
+            self.target_skew_delay.set_min(opt - DEFAULT_LENGTH_TOLERANCE);
+            self.target_skew_delay.set_max(opt + DEFAULT_LENGTH_TOLERANCE);
+        }
+    }
+
+    /// `SetTargetSkewDelay( const MINOPTMAX<int>& )`.
+    pub fn set_target_skew_delay_constraint(&mut self, c: &MinOptMax) {
+        self.set_target_skew_delay(c.opt());
+        if c.has_min() {
+            self.target_skew_delay.set_min(c.min());
+        }
+        if c.has_max() {
+            self.target_skew_delay.set_max(c.max());
         }
     }
 
@@ -362,7 +420,7 @@ impl MeanderShape {
         self.shapes[1].clear();
         self.shapes[0].append_arc(a1);
         self.shapes[1].append_arc(a2);
-        self.clipped_base_seg = Seg::new(a1.start, a1.start);
+        self.clipped_base_seg = Seg::new(a1.end, a1.end); // `m_clippedBaseSeg.A = m_clippedBaseSeg.B = aArc1.GetP1()`
     }
 
     // ----------------------------------------------------------------------------------------------- sizes
@@ -772,7 +830,7 @@ impl MeanderedLine {
     pub fn add_arc(&mut self, env: &dyn MeanderEnv, a1: &ShapeArc, a2: &ShapeArc) {
         let mut m = MeanderShape::new(env, self.width, self.dual);
         m.make_arc(a1, a2);
-        self.last = a1.start;
+        self.last = a1.end; // `m_last = aArc1.GetP1()`
         self.meanders.push(m);
     }
 
