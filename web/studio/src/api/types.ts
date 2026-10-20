@@ -1820,11 +1820,13 @@ export interface RouteFixReply {
 export interface DragPreview {
   ok: boolean;
   message?: string;
+  /** `drag_start` refused because the item taken hold of is locked (`ROUTER_TOOL::performDragging`: "The selected item is locked."): ask "Drag Anyway" and start again with `drag_locked`. */
+  locked?: boolean;
   /** `drag_start` only: the board ids of the tracks of the line being dragged, which the cursor must not snap onto (`TOOL_BASE::checkSnap`). */
   line_tracks?: string[];
   /** What `DRAGGER::Start` grabbed: the whole segment (`DM_SEGMENT`, it slides sideways, its neighbours following at 45 degrees), one
-   * vertex (`DM_CORNER`) or a via (`DM_VIA`). */
-  drag?: "segment" | "corner" | "via";
+   * vertex (`DM_CORNER`), a via (`DM_VIA`) or an arc track (`DM_ARC`: its curvature follows the cursor, tangent to the tracks next to it). */
+  drag?: "segment" | "corner" | "via" | "arc";
   colliding: boolean;
   /** The cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last
    * solution"), and letting go commits that one. */

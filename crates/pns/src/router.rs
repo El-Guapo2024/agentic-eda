@@ -76,6 +76,8 @@ pub struct RouteCommit {
     pub vias: Vec<eda_model::ir::Via>,
     pub remove_track_ids: Vec<String>,
     pub remove_via_ids: Vec<String>,
+    /// The indices into `tracks` of the ones that are locked: the halves of a locked track a route started or ended in the middle of.
+    pub lock_tracks: Vec<usize>,
 }
 
 /// Where "Route From Other End" restarts and what it commits on the way (`ROUTER::ContinueFromEnd`): see
@@ -345,6 +347,7 @@ impl Router {
             let splits = self.session_splits(false);
             self.apply_splits(&splits, &mut commit);
         }
+        self.drop_redundant(&mut commit);
         Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width: placer.width, from, to: current_end })
     }
 
@@ -382,6 +385,7 @@ impl Router {
             let splits = self.session_splits(true);
             self.apply_splits(&splits, &mut commit);
         }
+        self.drop_redundant(&mut commit);
         self.session = None;
         Some(commit)
     }
@@ -434,6 +438,10 @@ impl Router {
                     commit.remove_track_ids.push(track.to_string());
                     let (net, layer) = (arc.net.as_deref().unwrap_or("").to_string(), self.layer_name(arc.layer).to_string());
                     for a in pieces {
+                        // the halves of a locked arc are locked too
+                        if arc.locked {
+                            commit.lock_tracks.push(commit.tracks.len());
+                        }
                         commit.tracks.push(eda_model::ir::Track::new_arc(net.clone(), layer.clone(), arc.width, a.start, a.mid, a.end));
                     }
                 }
@@ -453,7 +461,72 @@ impl Router {
                 continue;
             }
             commit.remove_track_ids.push(track.to_string());
+            // a locked track cut in two is two locked tracks (`Clone( *s_old )` keeps `MK_LOCKED`; `AddItem` locks the board item)
+            if self.world.iter().any(|(_, it)| it.source_track_id() == Some(track) && it.is_locked()) {
+                commit.lock_tracks.push(commit.tracks.len());
+            }
             commit.tracks.push(eda_model::ir::Track { id: String::new(), net: self.net_name_of(&line), pins: Vec::new(), layer: self.layer_name(line.layer).to_string(), width: line.width, pts, arc_mid_offset: None });
+        }
+    }
+
+    /// `NODE::Add( .., aAllowRedundant = false )`, which `LINE_PLACER::FixRoute`, `SHOVE::replaceLine` and the draggers all use: a segment of a new track that a
+    /// segment of the board already is -- the same two ends on the same layer and net (`findRedundantSegment`) -- is not added again, nor is an arc the board already
+    /// has (`findRedundantArc`). The IR keeps tracks as polylines, so a track is cut where it runs over one and the stretches left are the tracks; one that
+    /// is all redundant is no track. An item the commit removes does not count: it is gone.
+    fn drop_redundant(&self, commit: &mut RouteCommit) {
+        let removed: std::collections::HashSet<&str> = commit.remove_track_ids.iter().map(String::as_str).collect();
+        let stays = |id: ItemId| self.world.get(id).and_then(|it| it.source_track_id()).is_none_or(|t| !removed.contains(t));
+        let mut out: Vec<eda_model::ir::Track> = Vec::with_capacity(commit.tracks.len());
+        let mut locks: Vec<usize> = Vec::new();
+        let mut changed = false;
+        for (index, t) in commit.tracks.iter().enumerate() {
+            let (Some(layer), net) = (self.layer_index(&t.layer), net_of(&t.net)) else {
+                out.push(t.clone());
+                continue;
+            };
+            let locked = commit.lock_tracks.contains(&index);
+            let mut keep = |track: eda_model::ir::Track, out: &mut Vec<eda_model::ir::Track>| {
+                if locked {
+                    locks.push(out.len());
+                }
+                out.push(track);
+            };
+            if let Some((s, _, e)) = t.arc() {
+                if self.world.find_redundant_arc(s, e, layer, &net).is_some_and(stays) {
+                    changed = true;
+                } else {
+                    keep(t.clone(), &mut out);
+                }
+                continue;
+            }
+            // the runs of its segments the board does not have
+            let redundant = |a: Point, b: Point| a != b && self.world.find_redundant_segment(a, b, layer, &net).is_some_and(stays);
+            if !t.pts.windows(2).any(|w| redundant(w[0], w[1])) {
+                keep(t.clone(), &mut out);
+                continue;
+            }
+            changed = true;
+            let mut run: Vec<Point> = Vec::new();
+            for w in t.pts.windows(2) {
+                if redundant(w[0], w[1]) {
+                    if run.len() >= 2 {
+                        keep(eda_model::ir::Track { pts: std::mem::take(&mut run), ..t.clone() }, &mut out);
+                    }
+                    run.clear();
+                } else {
+                    if run.is_empty() {
+                        run.push(w[0]);
+                    }
+                    run.push(w[1]);
+                }
+            }
+            if run.len() >= 2 {
+                keep(eda_model::ir::Track { pts: run, ..t.clone() }, &mut out);
+            }
+        }
+        if changed {
+            commit.tracks = out;
+            commit.lock_tracks = locks;
         }
     }
 
@@ -542,9 +615,19 @@ impl Router {
     /// `pcbnew.InteractiveRouter.DragFreeAngle`): see `crate::dragger`'s
     /// "Free-angle mode" doc.
     pub fn drag_start_with(&mut self, at: Point, layer_name: &str, free_angle: bool) -> Result<(), String> {
+        self.drag_start_locked(at, layer_name, free_angle, false)
+    }
+
+    /// [`Self::drag_start_with`] for a person who has said "Drag Anyway" to a locked item (`ROUTER_TOOL::performDragging`'s dialog; `DRAGGER::Start`:
+    /// `startItem->Unmark( MK_LOCKED )`): the item taken hold of is unlocked in the router's world, the ones next to it still are not (the dragged line stops in front
+    /// of them). Without `drag_locked` a locked item is refused with [`crate::dragger::LOCKED_MESSAGE`].
+    pub fn drag_start_locked(&mut self, at: Point, layer_name: &str, free_angle: bool, drag_locked: bool) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
         let item_id = self.world.item_at(at, LayerRange::single(layer), START_SNAP_UM).ok_or("nothing to drag there")?;
-        let dragger = crate::dragger::Dragger::start_with(&self.world, at, item_id, free_angle).ok_or("that item can't be dragged (only track segments/corners and vias can)")?;
+        if drag_locked {
+            self.world.set_locked(item_id, false);
+        }
+        let dragger = crate::dragger::Dragger::start_checked(&self.world, at, item_id, free_angle)?;
         self.session = None;
         self.diff = None;
         self.drag = Some(dragger);
@@ -615,6 +698,7 @@ impl Router {
                 .unwrap_or_else(|| ("".to_string(), self.layer_name(0).to_string(), self.layer_name(self.layers.count() as i32 - 1).to_string(), *diameter, *drill));
             commit.vias.push(eda_model::ir::Via { id: String::new(), net, at: *pos, drill: resolved_drill, diameter: resolved_diameter, from_layer, to_layer });
         }
+        self.drop_redundant(&mut commit);
         self.drag = None;
         Some(commit)
     }
@@ -701,7 +785,8 @@ impl Router {
     /// `Cmd::CommitRoute` undo step) a single-track finish produces. `None` if the head does not fit; the session stays open then.
     pub fn finish_diff_pair(&mut self, at: Point) -> Option<RouteCommit> {
         let commit = self.diff.as_mut()?.finish(&self.rules, &self.settings, at)?;
-        let route_commit = self.build_dp_commit(&commit);
+        let mut route_commit = self.build_dp_commit(&commit);
+        self.drop_redundant(&mut route_commit);
         self.diff = None;
         Some(route_commit)
     }

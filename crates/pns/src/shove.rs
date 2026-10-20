@@ -945,7 +945,20 @@ impl<'a> Shove<'a> {
         for attempt in 0..3 {
             // the hulls grow by `cHullFailureExpansionFactor` after each failed attempt
             let extra = attempt * HULL_FAILURE_EXPANSION;
-            let mut hulls: Vec<Vec<Point>> = cur.line.segs().map(|(a, b)| crate::hull::segment_hull(a, b, cur.line.width, clearance + extra + crate::hull::HULL_ROUNDING_GUARD, obstacle_width)).filter(|h| h.len() >= 3).collect();
+            // "Arcs need additional clearance to ensure the hulls are always bigger than the arc" (`SHAPE_ARC::DefaultAccuracyForPCB()`, 5 um); in KiCad the
+            // addition is made to the variable the loop carries, so it piles up segment after segment, and attempt after attempt
+            let arc_runs = cur.line.arc_runs();
+            let arc_pad = crate::arcs::ARC_HIGH_DEF_NM / 1000;
+            let mut hulls: Vec<Vec<Point>> = cur
+                .line
+                .segs()
+                .enumerate()
+                .map(|(i, (a, b))| {
+                    let pad = if arc_runs.iter().any(|r| i >= r.first && i < r.last) { arc_pad } else { 0 };
+                    crate::hull::segment_hull(a, b, cur.line.width, clearance + extra + pad + crate::hull::HULL_ROUNDING_GUARD, obstacle_width)
+                })
+                .filter(|h| h.len() >= 3)
+                .collect();
             if let Some(lv) = &cur.via {
                 let via_clearance = self.get_clearance(&lv.data.net, &obstacle_line.line.net);
                 hulls.push(Item::Via(lv.data.clone()).hull(via_clearance, obstacle_width, obstacle_line.line.layer));
@@ -1706,7 +1719,7 @@ impl<'a> Shove<'a> {
 /// not push, or the limit) -- the caller should fall back to walkaround,
 /// same as upstream's `rhShoveOnly`.
 pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
-    shove_head(node, &[], raw, net, layer, width, rules, settings, false)
+    shove_head(node, &[], raw, &[], net, layer, width, rules, settings, false)
 }
 
 /// `DRAGGER::dragShove` for a track: [`shove_line`] with a dragged head. `dragged` are the segments of the line being dragged, which
@@ -1714,16 +1727,17 @@ pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, 
 /// of its own. `reversed` is `SHP_REVERSED`, set when the head is dragged by its first vertex: the *last* point of the head is then
 /// the pusher `checkShoveDirection` tests the shoved lines against.
 #[allow(clippy::too_many_arguments)] // `shove_line`'s query context plus the dragged line and the one flag
-pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
-    shove_head(node, dragged, raw, net, layer, width, rules, settings, reversed)
+pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
+    shove_head(node, dragged, raw, arcs, net, layer, width, rules, settings, reversed)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
+fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
     if raw.len() < 2 {
         return Some(ShoveOutcome { head: raw.to_vec(), heads: vec![raw.to_vec()], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone() });
     }
-    let head = Line::from_points(net.clone(), layer, width, raw.to_vec());
+    let mut head = Line::from_points(net.clone(), layer, width, raw.to_vec());
+    head.arcs = arcs.to_vec();
     let mut shove = Shove::new(node, rules, settings);
     shove.reversed_head = reversed;
     for &id in dragged {

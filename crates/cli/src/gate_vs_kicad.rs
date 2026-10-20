@@ -325,7 +325,7 @@ mod tests {
                 continue;
             };
             pushed += commit.remove_track_ids.len().min(1);
-            let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
+            let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks };
             board::step(&dir, cmd, false, "test").expect("the commit applies");
             let after = edge_and_copper_counts(&dir);
             eprintln!("tip {tip_y}: {} copper_edge_clearance, {} copper clearance violations after", after.0, after.1);

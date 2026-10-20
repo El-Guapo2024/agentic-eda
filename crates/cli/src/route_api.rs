@@ -236,7 +236,7 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let Some(commit) = router.finish(at) else {
         return json!({ "ok": false, "message": "final segment still collides; route left uncommitted" });
     };
-    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
+    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => {
             // a route restarted from the other end is one undo with the part that was committed when it restarted
@@ -268,7 +268,7 @@ pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let committed = !continuation.commit.tracks.is_empty() || !continuation.commit.vias.is_empty() || !continuation.commit.remove_track_ids.is_empty();
     if committed {
         let c = continuation.commit;
-        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: c.remove_track_ids, remove_via_ids: c.remove_via_ids, tracks: c.tracks, vias: c.vias };
+        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: c.remove_track_ids, remove_via_ids: c.remove_via_ids, tracks: c.tracks, vias: c.vias, lock_tracks: c.lock_tracks };
         if let Err(e) = board::step(dir, cmd, true, "ui") {
             return err(board::reasons(&e));
         }
@@ -345,6 +345,7 @@ fn drag_kind_name(kind: Option<eda_pns::dragger::DragKind>) -> &'static str {
     match kind {
         Some(eda_pns::dragger::DragKind::Segment) => "segment",
         Some(eda_pns::dragger::DragKind::Via) => "via",
+        Some(eda_pns::dragger::DragKind::Arc) => "arc",
         _ => "corner",
     }
 }
@@ -352,7 +353,7 @@ fn drag_kind_name(kind: Option<eda_pns::dragger::DragKind>) -> &'static str {
 fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -> Value {
     json!({
         "ok": true,
-        // `DM_SEGMENT` (the whole segment slides), `DM_CORNER` (a vertex follows the cursor) or `DM_VIA`
+        // `DM_SEGMENT` (the whole segment slides), `DM_CORNER` (a vertex follows the cursor), `DM_VIA` or `DM_ARC` (the arc's curvature follows it)
         "drag": drag_kind_name(router.drag_kind()),
         "colliding": preview.colliding,
         // the cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last solution")
@@ -371,7 +372,8 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
     })
 }
 
-/// `POST /api/route/drag_start`: `{x, y, layer, settings?}` (`mode` at the top level still works). Builds a fresh
+/// `POST /api/route/drag_start`: `{x, y, layer, settings?, free_angle?, drag_locked?}` (`mode` at the top level still works). A locked item is refused
+/// (`{ok: false, locked: true}`) unless `drag_locked`. Builds a fresh
 /// `Router` from the board as it stands right now, same as `start` -- a
 /// drag reads the live board just as much as a route does. `settings` are the same
 /// `ROUTING_SETTINGS` a route session takes ([`settings_of`]) --
@@ -392,7 +394,8 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     let free_angle = req.get("free_angle").and_then(Value::as_bool).unwrap_or(false);
-    match router.drag_start_with(at, layer, free_angle) {
+    let drag_locked = req.get("drag_locked").and_then(Value::as_bool).unwrap_or(false);
+    match router.drag_start_locked(at, layer, free_angle, drag_locked) {
         Ok(()) => {
             let mut reply = router.drag_preview(at).map(|p| drag_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
             // the tracks of the line being dragged: the cursor must not snap onto them (`TOOL_BASE::checkSnap`)
@@ -400,6 +403,14 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
                 obj.insert("line_tracks".into(), json!(router.drag_line_tracks()));
             }
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
+            reply
+        }
+        // a locked item is refused unless the person has said "Drag Anyway" (`drag_locked`): the studio asks, and asks again with it
+        Err(message) if message == eda_pns::dragger::LOCKED_MESSAGE => {
+            let mut reply = err(message);
+            if let Some(obj) = reply.as_object_mut() {
+                obj.insert("locked".into(), json!(true));
+            }
             reply
         }
         Err(message) => err(message),
@@ -431,7 +442,7 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         let message = if marking { "Track violates DRC. Ctrl+click to commit anyway." } else { "drag target still collides; left uncommitted" };
         return json!({ "ok": false, "message": message });
     };
-    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
+    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary }),
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
@@ -579,7 +590,7 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let Some(commit) = router.finish_diff_pair(at) else {
         return json!({ "ok": false, "message": "the pair still collides; left uncommitted" });
     };
-    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
+    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary }),
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),

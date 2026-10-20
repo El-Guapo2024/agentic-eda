@@ -297,9 +297,9 @@ fn dragged(node: &Node, d: &Dragger, pv: &DragPreview, to: Point) -> Node {
         }
     }
     match d.kind {
-        DragKind::Corner | DragKind::Segment => {
+        DragKind::Corner | DragKind::Segment | DragKind::Arc => {
             w.remove_line_segments(&d.original);
-            w.add_line(&Line::from_points(d.net.clone(), d.layer, d.width, pv.pts.clone()), None, false);
+            w.add_line(&Line { arcs: pv.arcs.clone(), ..Line::from_points(d.net.clone(), d.layer, d.width, pv.pts.clone()) }, None, false);
         }
         DragKind::Via => {
             if let Some(id) = d.via_id {
@@ -579,7 +579,7 @@ fn random_segment_and_corner_drags_never_leave_a_new_violation() {
                 match d.kind {
                     DragKind::Segment => segment_drags += 1,
                     DragKind::Corner => corner_drags += 1,
-                    DragKind::Via => continue,
+                    DragKind::Via | DragKind::Arc => continue,
                 }
                 // the priming move at the grab point, then a few cursor positions
                 let mut shown = d.drag(&node, &model.board, &settings, at);

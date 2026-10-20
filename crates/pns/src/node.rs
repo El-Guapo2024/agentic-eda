@@ -174,6 +174,17 @@ impl Node {
         self.items.len()
     }
 
+    /// `ITEM::Mark( MK_LOCKED )` / `Unmark( MK_LOCKED )` of a track, arc or via: what a drag the person has agreed to (`DRAGGER::Start`:
+    /// `startItem->Unmark( MK_LOCKED )`) does to the item it takes hold of.
+    pub fn set_locked(&mut self, id: ItemId, locked: bool) {
+        match self.items.get_mut(&id) {
+            Some(Item::Segment(s)) => s.locked = locked,
+            Some(Item::Arc(a)) => a.locked = locked,
+            Some(Item::Via(v)) => v.locked = locked,
+            _ => {}
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }

@@ -22,7 +22,7 @@ use eda_model::{BoardRules, ConstraintModel};
 use eda_ops::{Board, Cmd};
 use eda_pns::chain::ShapeLineChain;
 use eda_pns::dp_meander_placer::{assemble_diff_pair, skew_setup, DpMeanderPlacer, NO_PAIR, NO_PAIR_FOR_SKEW};
-use eda_pns::from_ir::build_node;
+use eda_pns::from_ir::build_node_for_tuning as build_node;
 use eda_pns::item::{Item, ItemId};
 use eda_pns::kigeom::{to_nm, to_um, Seg};
 use eda_pns::layer::LayerMap;

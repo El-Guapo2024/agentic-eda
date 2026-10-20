@@ -16,9 +16,10 @@ use eda_model::ir::{Point, Um};
 /// hull of each arc segment of the pushing line.
 pub const ARC_HIGH_DEF_NM: i64 = 5_000;
 
-/// How far an arc's collision shape is fattened (um) past the track's half width: the polyline it is made of is held to a micrometre of the curve
-/// (`getArcPolygonizationMaxError`), the chord midpoints inside it, so the stroke of the polyline can be that much inside the stroke of the arc.
-pub const ARC_SHAPE_PAD_UM: Um = 1;
+/// How far an arc's collision shape is fattened (um) past the track's half width. None: the polyline it is made of is held to half a micrometre of the
+/// curve (vertices a little outside it, chord midpoints a little inside, `ConvertToPolyline`), inside the 1 um the router's clearance epsilon allows, and
+/// the segments of a line that goes through the arc are the very same chords -- so an arc as an item and as part of a line are judged alike.
+pub const ARC_SHAPE_PAD_UM: Um = 0;
 
 /// An arc by three of its points, micrometres: where it starts, a point on it, where it ends (`PCB_ARC`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

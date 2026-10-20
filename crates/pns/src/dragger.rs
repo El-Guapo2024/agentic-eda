@@ -12,6 +12,9 @@
 //!   had (the 45-degree heading it quantizes to), its neighbours stretching or turning to follow (`LINE::DragSegment`,
 //!   `dragSegment45`: [`crate::line::Line::drag_segment45`]).
 //! - Grab a via and the via moves with every track attached to it dragged along.
+//! - Grab an **arc** track (`DM_ARC`) and the arc's curvature follows the cursor, tangent to the tracks next to it ([`crate::arc_drag`]).
+//!   Elsewhere a drag of a segment or a corner of a line that has an arc in it leaves the arc as it is (`dragSegment45` and `dragCorner45` keep an
+//!   arc's points apart from the ones they move).
 //! - `G` (free-angle, `DM_FREE_ANGLE`): a grab in the middle of a segment is a corner drag too (the nearer vertex), the vertex goes
 //!   to the cursor at any angle (`dragCornerFree`), and the drag only marks obstacles.
 //!
@@ -63,6 +66,8 @@ pub enum DragKind {
     /// `DM_SEGMENT`: a whole segment of the assembled track slides sideways; `grabbed_index` is which segment of `original`.
     Segment,
     Via,
+    /// `DM_ARC`: the arc of an assembled track changes its curvature; `grabbed_index` is the first chord of it in `original`.
+    Arc,
 }
 
 pub struct Dragger {
@@ -87,6 +92,8 @@ pub struct Dragger {
     /// `m_freeAngleMode` (`DM_FREE_ANGLE`, the `G` hotkey): see the module
     /// doc -- never shoves, only marks obstacles.
     pub free_angle: bool,
+    /// `DragKind::Arc` only: what `DragArcTrack` works out before its loop.
+    arc: Option<crate::arc_drag::ArcDrag>,
     /// Where the drag started (`m_lastValidPoint = aP` in `Start`).
     start_point: Point,
     /// What `Drag` remembers from one cursor position to the next.
@@ -111,6 +118,8 @@ struct DragState {
 #[derive(Debug, Clone, Default)]
 pub struct DragPreview {
     pub pts: Vec<Point>,
+    /// The arcs `pts` still has as arcs (the dragged line's [`Line::arcs`]).
+    pub arcs: Vec<crate::arcs::ArcPts>,
     pub colliding: bool,
     pub displaced_lines: Vec<DisplacedLine>,
     pub displaced_vias: Vec<DisplacedVia>,
@@ -146,6 +155,15 @@ pub struct DragCommit {
     pub vias: Vec<(Point, Um, Um, Option<String>)>,
 }
 
+/// What a drag may not take hold of (`DRAGGER::Start`, `ROUTER_TOOL::performDragging`).
+pub const LOCKED_MESSAGE: &str = "The selected item is locked.";
+
+/// `m_world->AssembleLine( aSeg, &m_draggedSegmentIndex )`: the defaults of `NODE::AssembleLine` -- the line stops in front of a locked segment (`aFollowLockedSegments`
+/// false), so a locked track next to the dragged line stays where it is -- and goes on through a change of track width.
+fn assemble(node: &Node, id: ItemId) -> Option<Line> {
+    node.assemble_line_with(id, crate::node::AssembleOpts { follow_locked_segments: false, allow_width_mismatch: true })
+}
+
 fn dist(a: Point, b: Point) -> f64 {
     let (dx, dy) = ((a.x - b.x) as f64, (a.y - b.y) as f64);
     dx.hypot(dy)
@@ -163,13 +181,38 @@ impl Dragger {
     /// [`Self::start`] with `DM_FREE_ANGLE` (`free_angle`) -- `DRAGGER::Start`
     /// reads it from the drag mode: `m_freeAngleMode = (m_mode & DM_FREE_ANGLE)`.
     pub fn start_with(node: &Node, at: Point, item_id: ItemId, free_angle: bool) -> Option<Dragger> {
+        Self::start_checked(node, at, item_id, free_angle).ok()
+    }
+
+    /// [`Self::start_with`] with the reason when there is nothing to drag (`EDIT_TOOL::DragArcTrack`'s message for an arc that is too wide).
+    pub fn start_checked(node: &Node, at: Point, item_id: ItemId, free_angle: bool) -> Result<Dragger, String> {
+        const CANT: &str = "that item can't be dragged (only track segments/corners, arcs and vias can)";
+        let item = node.get(item_id).ok_or(CANT)?;
+        // `ROUTER_TOOL::performDragging`: "The selected item is locked." -- "Drag Anyway" is [`crate::router::Router::drag_start_unlocking`]
+        if item.is_locked() {
+            return Err(LOCKED_MESSAGE.to_string());
+        }
+        match item {
+            Item::Arc(_) => {
+                // `startDragArc`: the line the arc is part of, `DM_ARC`
+                let line = assemble(node, item_id).ok_or(CANT)?;
+                let index = line.segment_ids.iter().position(|&id| id == item_id).ok_or(CANT)?.min(line.segment_count().saturating_sub(1));
+                let run = line.arc_runs().into_iter().find(|r| index >= r.first && index < r.last).ok_or(CANT)?;
+                let drag = crate::arc_drag::ArcDrag::new(&line, run)?.ok_or("The arc has no corner to round: its tangents do not meet.")?;
+                Ok(Dragger { kind: DragKind::Arc, net: line.net.clone(), layer: line.layer, width: line.width, original: line.clone(), grabbed_index: run.first, via_id: None, via_pos: Point { x: 0, y: 0 }, via_diameter: 0, via_drill: 0, source_via: None, via_layers: LayerRange::single(line.layer), free_angle, arc: Some(drag), start_point: at, state: DragState::default() })
+            }
+            _ => Self::start_plain(node, at, item_id, free_angle).ok_or_else(|| CANT.to_string()),
+        }
+    }
+
+    fn start_plain(node: &Node, at: Point, item_id: ItemId, free_angle: bool) -> Option<Dragger> {
         let item = node.get(item_id)?;
         match item {
-            Item::Via(v) => Some(Dragger { kind: DragKind::Via, net: v.net.clone(), layer: v.layers.start(), width: 0, original: Line::new(v.net.clone(), v.layers.start(), 0), grabbed_index: 0, via_id: Some(item_id), via_pos: v.pos, via_diameter: v.diameter, via_drill: v.drill, via_layers: v.layers, source_via: v.source_via.clone(), free_angle, start_point: at, state: DragState::default() }),
+            Item::Via(v) => Some(Dragger { kind: DragKind::Via, net: v.net.clone(), layer: v.layers.start(), width: 0, original: Line::new(v.net.clone(), v.layers.start(), 0), grabbed_index: 0, via_id: Some(item_id), via_pos: v.pos, via_diameter: v.diameter, via_drill: v.drill, via_layers: v.layers, source_via: v.source_via.clone(), free_angle, arc: None, start_point: at, state: DragState::default() }),
             Item::Segment(seg) => {
                 // `startDragSegment`
                 let (seg_a, seg_b, w2) = (seg.a, seg.b, seg.width / 2);
-                let line = node.assemble_line(item_id)?;
+                let line = assemble(node, item_id)?;
                 let layer_of_line = line.layer;
                 // `m_world->AssembleLine( aSeg, &m_draggedSegmentIndex )`: which segment of the line the grabbed one is
                 let mut index = line.segment_ids.iter().position(|&id| id == item_id)?.min(line.segment_count().saturating_sub(1));
@@ -190,7 +233,7 @@ impl Dragger {
                 } else {
                     kind = DragKind::Segment;
                 }
-                Some(Dragger { kind, net: line.net.clone(), layer: line.layer, width: line.width, original: line, grabbed_index: index, via_id: None, via_pos: Point { x: 0, y: 0 }, via_diameter: 0, via_drill: 0, via_layers: LayerRange::single(layer_of_line), source_via: None, free_angle, start_point: at, state: DragState::default() })
+                Some(Dragger { kind, net: line.net.clone(), layer: line.layer, width: line.width, original: line, grabbed_index: index, via_id: None, via_pos: Point { x: 0, y: 0 }, via_diameter: 0, via_drill: 0, via_layers: LayerRange::single(layer_of_line), source_via: None, free_angle, arc: None, start_point: at, state: DragState::default() })
             }
             _ => None,
         }
@@ -201,8 +244,8 @@ impl Dragger {
         let mut out: Vec<Line> = Vec::new();
         let Some(joint) = node.joint_at(self.via_pos, &self.net) else { return out };
         for &id in &joint.links {
-            if let Some(Item::Segment(_)) = node.get(id) {
-                if let Some(l) = node.assemble_line(id) {
+            if node.get(id).is_some_and(Item::is_track) {
+                if let Some(l) = assemble(node, id) {
                     if !out.iter().any(|o| o.segment_ids == l.segment_ids) {
                         out.push(l);
                     }
@@ -249,13 +292,19 @@ impl Dragger {
 
     /// The dragged line's points with the cursor at `to`: `LINE::DragSegment` for a segment drag, `LINE::DragCorner` for a corner drag
     /// (in `free_angle` mode `dragCornerFree`).
-    fn dragged_pts(&self, to: Point, snap: Um, free_angle: bool) -> Vec<Point> {
+    fn dragged_line(&self, to: Point, snap: Um, free_angle: bool) -> Line {
         let mut line = self.original.clone();
         match self.kind {
             DragKind::Segment => line.drag_segment45(to, self.grabbed_index, snap),
+            // `DragArcTrack`: the arc through the cursor, tangent to the tracks next to it
+            DragKind::Arc => {
+                if let Some((_, dragged)) = self.arc.as_ref().and_then(|a| a.at(&self.original, to)) {
+                    line = dragged;
+                }
+            }
             _ => line.drag_corner(to, self.grabbed_index, free_angle, snap),
         }
-        line.pts
+        line
     }
 
     /// `DRAGGER::dragMarkObstacles`: put the dragged shape where the cursor is and say whether it collides. Always "works".
@@ -273,13 +322,13 @@ impl Dragger {
             }
             return DragPreview { pts: vec![to], colliding, fanout, ..DragPreview::default() };
         }
-        let pts = self.dragged_pts(to, self.snap_threshold(settings, false), self.free_angle);
+        let line = self.dragged_line(to, self.snap_threshold(settings, false), self.free_angle);
         let layers = LayerRange::single(self.layer);
-        let colliding = pts.windows(2).any(|w| {
+        let colliding = line.pts.windows(2).any(|w| {
             let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width.max(1) / 2 };
             node.first_colliding(&shape, &self.net, layers, rules, &exclude).is_some()
         });
-        DragPreview { pts, colliding, ..DragPreview::default() }
+        DragPreview { pts: line.pts, arcs: line.arcs, colliding, ..DragPreview::default() }
     }
 
     /// `DRAGGER::dragWalkaround`: the dragged line (or via and its tracks) is walked around what it would land on. `None` when it
@@ -290,13 +339,21 @@ impl Dragger {
             return (!pv.colliding).then_some(pv);
         }
         let exclude = self.exclude();
-        let pts = self.dragged_pts(to, self.snap_threshold(settings, false), false);
+        let dragged = self.dragged_line(to, self.snap_threshold(settings, false), false);
+        let pts = dragged.pts.clone();
         let colliding = path_collides(node, rules, &self.net, self.layer, self.width.max(1), &pts, &exclude);
-        let walked = if colliding { try_walkaround(node, rules, settings, &self.net, self.layer, self.width.max(1), &pts) } else { Some(pts) };
+        // an arc is not walked round anything: the arc drag either fits where the cursor puts it or is refused
+        let walked = if !colliding {
+            Some(pts)
+        } else if self.kind == DragKind::Arc {
+            None
+        } else {
+            try_walkaround(node, rules, settings, &self.net, self.layer, self.width.max(1), &pts)
+        };
         let walked = walked.filter(|w| w.len() >= 2)?;
         // `optimizeAndUpdateDraggedLine`: with "Optimize entire track being dragged" off -- KiCad's default, and all this port has --
         // the walked line is kept as it is
-        Some(DragPreview { pts: walked, ..DragPreview::default() })
+        Some(DragPreview { pts: walked, arcs: dragged.arcs, ..DragPreview::default() })
     }
 
     /// `DRAGGER::dragShove`: whatever the dragged shape runs into is pushed aside, a pad walked around. `None` when it cannot be
@@ -306,11 +363,11 @@ impl Dragger {
             let pv = self.drag_via_shove(node, rules, settings, to);
             return (!pv.colliding).then_some(pv);
         }
-        let pts = self.dragged_pts(to, self.snap_threshold(settings, true), false);
+        let dragged = self.dragged_line(to, self.snap_threshold(settings, true), false);
         // `m_mode == DM_CORNER && m_draggedSegmentIndex == 0`: the head is dragged by its first vertex, so its last point is the pusher
         let reversed = self.kind == DragKind::Corner && self.grabbed_index == 0;
-        let outcome = shove::shove_dragged_line(node, &self.original.segment_ids, &pts, &self.net, self.layer, self.width.max(1), rules, settings, reversed)?;
-        Some(DragPreview { pts: outcome.head, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias, ..DragPreview::default() })
+        let outcome = shove::shove_dragged_line(node, &self.original.segment_ids, &dragged.pts, &dragged.arcs, &self.net, self.layer, self.width.max(1), rules, settings, reversed)?;
+        Some(DragPreview { pts: outcome.head, arcs: dragged.arcs, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias, ..DragPreview::default() })
     }
 
     /// One cursor position: what `dragMarkObstacles` / `dragWalkaround` / `dragShove` make of it, and whether it `ok`s -- their return
@@ -381,7 +438,7 @@ impl Dragger {
         }
         // "Restore last solution": m_dragStatus stays false, the line goes back to where the last good position put it
         self.state.drag_status = false;
-        let mut restored = self.state.last_solution.clone().unwrap_or_else(|| DragPreview { pts: self.original.pts.clone(), ..DragPreview::default() });
+        let mut restored = self.state.last_solution.clone().unwrap_or_else(|| DragPreview { pts: self.original.pts.clone(), arcs: self.original.arcs.clone(), ..DragPreview::default() });
         restored.restored = true;
         restored.forced_mark_obstacles = self.state.force_mark_obstacles;
         restored
@@ -405,14 +462,7 @@ impl Dragger {
 
     /// The IR tracks `line` stands on.
     fn source_tracks(node: &Node, line: &Line) -> Vec<String> {
-        let mut out: Vec<String> = line
-            .segment_ids
-            .iter()
-            .filter_map(|id| match node.get(*id) {
-                Some(Item::Segment(s)) => s.source_track.as_ref().map(|(t, _)| t.clone()),
-                _ => None,
-            })
-            .collect();
+        let mut out: Vec<String> = line.segment_ids.iter().filter_map(|id| node.get(*id).and_then(|it| it.source_track_id()).map(str::to_string)).collect();
         out.sort_unstable();
         out.dedup();
         out
@@ -496,10 +546,10 @@ impl Dragger {
     fn commit_of(&self, node: &Node, preview: &DragPreview) -> DragCommit {
         let mut commit = DragCommit::default();
         match self.kind {
-            DragKind::Corner | DragKind::Segment => {
+            DragKind::Corner | DragKind::Segment | DragKind::Arc => {
                 let tracks = Self::source_tracks(node, &self.original);
                 commit.remove_track_ids.extend(tracks.iter().cloned());
-                commit.tracks.push(Line { pts: preview.pts.clone(), ..self.original.clone() });
+                commit.tracks.push(Line { pts: preview.pts.clone(), arcs: preview.arcs.clone(), ..self.original.clone() });
                 // an IR track the dragged line stood on only in part keeps the rest (a junction cuts a track into lines); a track the
                 // shove moved too has been handed back by the shove
                 let covered: HashSet<ItemId> = self.original.segment_ids.iter().copied().collect();

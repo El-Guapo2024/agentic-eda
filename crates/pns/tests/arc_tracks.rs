@@ -395,3 +395,133 @@ fn a_line_that_is_cut_across_an_arc_is_written_back_as_segments_and_one_that_is_
     assert_eq!(tracks.len(), 1);
     assert_eq!(tracks[0].pts, cut.pts);
 }
+
+// ------------------------------------------------------------------------------------------------------------------------------
+// dragging
+// ------------------------------------------------------------------------------------------------------------------------------
+
+/// A GND line that turns a corner with a fillet: along y = 0 to (6000, 0), the quarter arc about (6000, 4000) to (10000, 4000), down x = 10000.
+fn fillet_tracks() -> (Vec<Track>, ArcPts) {
+    let arc = ArcPts::from_start_end_center(p(6000, 0), p(10000, 4000), p(6000, 4000));
+    (vec![straight("t_in", "GND", &[p(0, 0), arc.start]), arc_track("t_arc", "GND", arc), straight("t_out", "GND", &[arc.end, p(10000, 12000)])], arc)
+}
+
+#[test]
+fn grabbing_an_arc_drags_its_curvature_with_the_tracks_next_to_it_following() {
+    let (tracks, arc) = fillet_tracks();
+    let (design, model) = board_with_pads_at(tracks, 30_000);
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::MarkObstacles;
+    router.drag_start(arc.mid, "F.Cu").expect("an arc track can be grabbed");
+    assert_eq!(router.drag_kind(), Some(eda_pns::dragger::DragKind::Arc));
+    // toward the corner (10000, 0): a tighter arc
+    let preview = router.drag_preview(p(9700, 300)).expect("a drag in progress");
+    assert!(!preview.colliding);
+    assert_eq!(preview.arcs.len(), 1, "the line still has its arc: {:?}", preview.arcs);
+    let tight = preview.arcs[0];
+    assert!(tight.radius() < 4000.0, "{}", tight.radius());
+    assert_eq!((preview.pts.first(), preview.pts.last()), (Some(&p(0, 0)), Some(&p(10000, 12000))), "the far ends of the tracks stay");
+    // tangent to the tracks: its ends are on them
+    assert_eq!((tight.start.y, tight.end.x), (0, 10000));
+    // away from the corner: a larger one
+    let wide = router.drag_preview(p(7500, 2500)).unwrap().arcs[0];
+    assert!(wide.radius() > 4000.0, "{}", wide.radius());
+    let commit = router.drag_finish(p(7500, 2500)).expect("the drag commits");
+    for t in ["t_in", "t_arc", "t_out"] {
+        assert!(commit.remove_track_ids.contains(&t.to_string()), "{t}: {:?}", commit.remove_track_ids);
+    }
+    let arcs: Vec<_> = commit.tracks.iter().filter_map(|t| t.arc()).collect();
+    assert_eq!(arcs.len(), 1, "one arc track, written back as an arc: {:?}", commit.tracks.iter().map(|t| (t.pts.len(), t.arc().is_some())).collect::<Vec<_>>());
+    assert!(ArcPts::new(arcs[0].0, arcs[0].1, arcs[0].2).radius() > 4000.0);
+    assert_eq!(collisions_after(&design, &model, &commit), 0);
+}
+
+#[test]
+fn an_arc_dragged_onto_a_track_of_another_net_is_refused_in_walk_around_mode_and_flagged_in_highlight_mode() {
+    let (mut tracks, arc) = fillet_tracks();
+    // a SIG track across the place a wider fillet would take
+    tracks.push(straight("t_sig", "SIG", &[p(7000, 1000), p(9000, 3000)]));
+    // the arc as it is clears it: (8828, 1172) is the middle of the arc, 1657 from the corner; this track passes inside the arc's bend, 1 mm from it
+    let (design, model) = board_with_pads_at(tracks, 30_000);
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::MarkObstacles;
+    router.drag_start(arc.mid, "F.Cu").unwrap();
+    let flagged = router.drag_preview(p(8000, 2000)).unwrap();
+    assert!(flagged.colliding, "the arc drawn through the cursor runs into the SIG track");
+    // walk around mode: an arc is not walked round anything, the position is not one the drag can take, so the last good one is shown
+    router.settings.mode = Mode::Walkaround;
+    router.drag_start(arc.mid, "F.Cu").unwrap();
+    let first = router.drag_preview(arc.mid).unwrap();
+    assert!(!first.colliding);
+    let refused = router.drag_preview(p(8000, 2000)).unwrap();
+    assert!(refused.restored, "the cursor is where the drag cannot be resolved");
+    assert_eq!(refused.pts, first.pts, "the last position that worked is shown again");
+}
+
+#[test]
+fn a_drag_of_a_segment_next_to_an_arc_leaves_the_arc_as_it_is() {
+    let (mut tracks, arc) = fillet_tracks();
+    // a longer way in: the first track is two segments, so that the one next to the arc can slide
+    tracks[0] = straight("t_in", "GND", &[p(0, 0), p(3000, 0), arc.start]);
+    let (design, model) = board_with_pads_at(tracks, 30_000);
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::MarkObstacles;
+    // the middle of the segment (3000, 0)..(6000, 0), which ends where the arc begins
+    router.drag_start(p(4500, 0), "F.Cu").expect("the segment is grabbed");
+    assert_eq!(router.drag_kind(), Some(eda_pns::dragger::DragKind::Segment));
+    let preview = router.drag_preview(p(4500, -1500)).unwrap();
+    assert!(!preview.colliding);
+    assert_eq!(preview.arcs, vec![arc], "the arc is the arc it was");
+    let commit = router.drag_finish(p(4500, -1500)).expect("commits");
+    let arcs: Vec<_> = commit.tracks.iter().filter_map(|t| t.arc()).collect();
+    assert_eq!(arcs, vec![(arc.start, arc.mid, arc.end)]);
+    assert_eq!(collisions_after(&design, &model, &commit), 0);
+}
+
+#[test]
+fn an_arc_of_179_degrees_or_more_cannot_be_dragged() {
+    let half = ArcPts::new(p(0, 0), p(4000, -4000), p(8000, 0));
+    let (design, model) = board_with_pads_at(vec![arc_track("t_half", "GND", half)], 30_000);
+    let mut router = Router::new(&design, &model);
+    let err = router.drag_start(p(4000, -4000), "F.Cu").unwrap_err();
+    assert_eq!(err, eda_pns::arc_drag::TOO_WIDE);
+}
+
+#[test]
+fn a_dragged_arc_shoves_a_via_it_runs_into_aside() {
+    let (tracks, arc) = fillet_tracks();
+    let (mut design, model) = board_with_pads_at(tracks, 30_000);
+    design.routing.as_mut().unwrap().vias.push(eda_model::ir::Via { id: "via_sig".into(), net: "SIG".into(), at: p(8000, 2000), drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Shove;
+    router.drag_start(arc.mid, "F.Cu").expect("grabbed");
+    // the arc is dragged through the via
+    let preview = router.drag_preview(p(8000, 2000)).unwrap();
+    assert!(!preview.colliding && !preview.restored, "the via is shoved, not a collision");
+    assert_eq!(preview.displaced_vias.len(), 1, "the via is pushed off the arc");
+    assert_eq!(preview.arcs.len(), 1);
+    let commit = router.drag_finish(p(8000, 2000)).expect("commits");
+    assert!(commit.remove_via_ids.contains(&"via_sig".to_string()));
+    let moved = commit.vias.iter().find(|v| v.net == "SIG").expect("the via is put back");
+    assert_ne!(moved.at, p(8000, 2000));
+    assert_eq!(collisions_after_with_vias(&design, &model, &commit), 0);
+}
+
+/// [`collisions_after`] with the commit's vias applied as well.
+fn collisions_after_with_vias(design: &Design, model: &ConstraintModel, commit: &RouteCommit) -> usize {
+    let mut after = design.clone();
+    let rt = after.routing.as_mut().unwrap();
+    rt.tracks.retain(|t| !commit.remove_track_ids.contains(&t.id));
+    rt.tracks.extend(commit.tracks.iter().cloned());
+    rt.vias.retain(|v| !commit.remove_via_ids.contains(&v.id));
+    rt.vias.extend(commit.vias.iter().cloned());
+    let (world, _) = eda_pns::from_ir::build_node(&after, model);
+    let mut bad = 0;
+    for (id, item) in world.iter() {
+        if matches!(item, Item::Solid(_)) {
+            continue;
+        }
+        bad += world.all_colliding(&item.shape(item.layers().start()), item.net(), item.layers(), &model.board, &[id]).iter().filter(|o| !matches!(world.get(o.id), Some(Item::Solid(_)))).count();
+    }
+    bad
+}
