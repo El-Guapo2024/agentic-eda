@@ -6,6 +6,7 @@ pub mod annotate;
 pub mod bezier;
 pub mod board;
 pub mod board_text;
+pub mod component_classes;
 mod drc_checks;
 pub mod erc_checks;
 pub mod floorplan;
@@ -363,6 +364,10 @@ pub struct BoardRules {
     /// Design Rules > Tuning Profiles: the profiles and the profile each net class names.
     #[serde(default, skip_serializing_if = "setup_pages::TuningProfiles::is_empty")]
     pub tuning_profiles: setup_pages::TuningProfiles,
+    /// Component Classes (`COMPONENT_CLASS_SETTINGS`): the project's rules that give footprints a class, and whether sheets do. The classes a board file gives its own
+    /// footprints are `FootprintExtra::component_classes`. Read from and written to the project; the Board Setup page that edits it is not built.
+    #[serde(default, skip_serializing_if = "component_classes::ComponentClassSettings::is_default")]
+    pub component_classes: component_classes::ComponentClassSettings,
 }
 
 fn is_zero_um(v: &ir::Um) -> bool {
@@ -857,6 +862,7 @@ impl Default for BoardRules {
             constraints_explicit: false, board_thickness_um: d_board_thickness(), text_graphics: rules::TextGraphicsDefaults::default(), default_class: None,
             layer_setup: layers::LayerSetup::default(),
             formatting: setup_pages::FormattingSettings::default(), hatch_offsets: Default::default(), tuning_patterns: setup_pages::TuningPatterns::default(), tuning_profiles: Default::default(),
+            component_classes: Default::default(),
         }
     }
 }

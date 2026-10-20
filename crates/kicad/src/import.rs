@@ -599,6 +599,10 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
             b.tuning_profiles.profiles = profiles.into_iter().filter(|p| eda_model::setup_pages::TuningProfiles { profiles: vec![p.clone()], class_profiles: Default::default() }.validate(&copper).is_ok()).collect();
         }
     }
+    // Component Classes: the project's assignment rules and the sheet classes switch.
+    if let Some(settings) = root.get("component_class_settings").filter(|s| s.is_object()) {
+        b.component_classes = eda_model::component_classes::ComponentClassSettings::from_project_json(settings);
+    }
     if let Some(classes) = root.get("net_settings").and_then(|n| n.get("classes")).and_then(|v| v.as_array()) {
         for class in classes {
             let (Some(name), Some(profile)) = (class.get("name").and_then(|v| v.as_str()), class.get("tuning_profile").and_then(|v| v.as_str())) else { continue };
@@ -1491,6 +1495,17 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     if !name.contains(':') {
         e.unlinked_name = Some(name.to_string());
     }
+    // `(component_classes (class "A") (class "B"))`: the classes the file gives the footprint (`parseFOOTPRINT_unchecked`'s `T_component_classes`), without repeats.
+    if let Some(classes) = sexpr::find(fp, "component_classes") {
+        for name in sexpr::find_all(classes, "class").filter_map(|c| sexpr::txt(c, 1)) {
+            if !e.component_classes.iter().any(|known| known == name) {
+                e.component_classes.push(name.to_string());
+            }
+        }
+    }
+    // The sheet the footprint's symbol is on.
+    e.sheetname = sexpr::find(fp, "sheetname").and_then(|s| sexpr::txt(s, 1)).map(str::to_string);
+    e.sheetfile = sexpr::find(fp, "sheetfile").and_then(|s| sexpr::txt(s, 1)).map(str::to_string);
     // A footprint with nothing on its courtyard layers has no courtyard (`BuildCourtyardCaches` finds none, and kicad-cli says `missing_courtyard` or nothing).
     e.no_courtyard = !["fp_line", "fp_arc", "fp_rect", "fp_circle", "fp_poly", "fp_curve"].iter().any(|tag| sexpr::find_all(fp, tag).any(|it| matches!(sexpr::find(it, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd"))));
     if let Some(m) = sexpr::find(fp, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {

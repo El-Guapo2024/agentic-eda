@@ -2763,6 +2763,16 @@ pub struct FootprintExtra {
     /// footprints that had none overlap (`courtyards_overlap`), and `missing_courtyard` could not be reported.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_courtyard: bool,
+    /// `(component_classes (class "A") (class "B"))`: the classes the file gives the footprint itself (`FOOTPRINT::GetStaticComponentClass`). A DRC rule reads them as
+    /// `A.Component_Class` and `A.hasComponentClass('A')`, together with the classes the project's assignment rules give (`BoardRules::component_classes`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub component_classes: Vec<String>,
+    /// `(sheetname ..)` and `(sheetfile ..)`: the schematic sheet the footprint's symbol is on, which a project that makes a class of every sheet reads
+    /// (`FOOTPRINT::GetSheetname`). The footprint's `(path ..)`, the link to its symbol, is not kept: the derived schematic has symbols of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheetname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheetfile: Option<String>,
     /// The pads with a mask layer and no copper, as mask apertures in board space (`FootprintGraphic::pad_number` is set). A
     /// design imported before footprints had graphics of their own holds the footprint's silk and mask graphics here as well
     /// (`pad_number` is `None`); the importer no longer writes those, they are [`crate::Footprint::art`], and the DRC reads them

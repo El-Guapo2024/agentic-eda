@@ -684,6 +684,10 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     if net_classes_in_project(model) {
         project["net_settings"] = project_net_settings(model);
     }
+    // Component Classes: the project's assignment rules (`COMPONENT_CLASS_SETTINGS`), which a DRC rule reads as `A.Component_Class`.
+    if !b.component_classes.is_default() {
+        project["component_class_settings"] = b.component_classes.to_project_json();
+    }
     let mut text = serde_json::to_string_pretty(&project).unwrap_or_else(|_| "{}".into());
     text.push('\n');
     text
@@ -912,6 +916,22 @@ pub(crate) fn write_footprint(
     // The Reference, the Value and the user fields (`format( PCB_FIELD )`), then the footprint's attributes. A footprint nothing was
     // edited on gets the Reference beside its courtyard and the Value below its origin, as it always has (`eda_model::fp_edit`).
     write_fields(out, fp, part, footprint, extra);
+    // The classes the file gave the footprint, and the sheet its symbol is on (`format( FOOTPRINT )` writes them after the properties).
+    if let Some(e) = own_extra {
+        if !e.component_classes.is_empty() {
+            write!(out, "\t\t(component_classes").unwrap();
+            for class in &e.component_classes {
+                write!(out, " (class {})", sexpr_str(class)).unwrap();
+            }
+            writeln!(out, ")").unwrap();
+        }
+        if let Some(name) = e.sheetname.as_deref().filter(|n| !n.is_empty()) {
+            writeln!(out, "\t\t(sheetname {})", sexpr_str(name)).unwrap();
+        }
+        if let Some(file) = e.sheetfile.as_deref().filter(|n| !n.is_empty()) {
+            writeln!(out, "\t\t(sheetfile {})", sexpr_str(file)).unwrap();
+        }
+    }
     write_attr(out, &extra.attrs);
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
@@ -2900,6 +2920,64 @@ mod tests {
         assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_um), None);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(out.matches("(stroke (width 0.2)").count(), 2, "{out}");
+    }
+
+    /// The classes a board file gives its footprints (`(component_classes (class "CLASS2") (class "CLASS3"))`) and the project's assignment rules are written back, so a DRC rule
+    /// that reads `A.Component_Class` judges the re-export as it judged the original (`component_classes_drc`: two assertion failures became four, because no footprint
+    /// had a class). The sheet a footprint is on comes with them, for a project that makes a class of every sheet.
+    #[test]
+    fn component_classes_and_the_sheet_of_a_footprint_are_written_back_and_the_projects_rules_with_them() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 10 10)
+    (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "R" (at 0 0 0) (layer "F.Fab"))
+    (component_classes (class "CLASS2") (class "CLASS3") (class "CLASS2"))
+    (path "/0acad4a2-8e97-4c0c-9dc3-627d0a5dadd5")
+    (sheetname "/sub/")
+    (sheetfile "sub.kicad_sch")
+    (attr smd)
+    (fp_rect (start -1.5 -0.7) (end 1.5 0.7) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))
+  )
+  (footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 20 10)
+    (property "Reference" "R2" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "R" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -1.5 -0.7) (end 1.5 0.7) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))
+  )
+)"#;
+        let (design, mut model, _) = crate::import_kicad_pcb(board).unwrap();
+        let extras = &design.drawings.as_ref().unwrap().footprint_extras;
+        let r1 = extras.iter().find(|e| e.id == "R1").unwrap();
+        assert_eq!(r1.component_classes, vec!["CLASS2".to_string(), "CLASS3".to_string()], "each class once, in the file's order");
+        assert_eq!((r1.sheetname.as_deref(), r1.sheetfile.as_deref()), (Some("/sub/"), Some("sub.kicad_sch")));
+        assert!(extras.iter().find(|e| e.id == "R2").unwrap().component_classes.is_empty());
+
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let r1_block = &out[out.find("(property \"Reference\" \"R1\"").unwrap()..out.find("(property \"Reference\" \"R2\"").unwrap()];
+        assert!(r1_block.contains("(component_classes (class \"CLASS2\") (class \"CLASS3\"))"), "{r1_block}");
+        assert!(r1_block.contains("(sheetname \"/sub/\")") && r1_block.contains("(sheetfile \"sub.kicad_sch\")"), "{r1_block}");
+        assert!(!r1_block.contains("(path "), "the link to the symbol is not written: the derived schematic's symbols have uuids of their own");
+        let r2_block = &out[out.find("(property \"Reference\" \"R2\"").unwrap()..];
+        assert!(!r2_block.contains("component_classes") && !r2_block.contains("sheetname"), "{r2_block}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let back_r1 = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "R1").unwrap().clone();
+        assert_eq!((back_r1.component_classes, back_r1.sheetname), (r1.component_classes.clone(), r1.sheetname.clone()));
+
+        // The project's rules reach the derived project, and a project without any has no `component_class_settings` at all.
+        assert!(serde_json::from_str::<serde_json::Value>(&export_kicad_pro(&model)).unwrap().get("component_class_settings").is_none());
+        let pro = serde_json::json!({ "component_class_settings": { "assignments": [{ "component_class": "RES", "conditions": { "REFERENCE": { "primary": "R*" } }, "conditions_operator": "ALL" }], "meta": { "version": 0 }, "sheet_component_classes": { "enabled": true } } });
+        crate::merge_project_setup_pages(&mut model, &pro.to_string());
+        assert!(model.board.component_classes.sheet_classes && model.board.component_classes.assignments.len() == 1);
+        let derived: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).unwrap();
+        assert_eq!(derived["component_class_settings"]["assignments"][0]["conditions"]["REFERENCE"]["primary"], "R*");
+        assert_eq!(derived["component_class_settings"]["sheet_component_classes"]["enabled"], true);
     }
 
     /// KiCad 10's files carry no table of the nets and name a net on every item that is on one (`(net "net_1")`): a net that only a track, a via or a zone is on is one of the
