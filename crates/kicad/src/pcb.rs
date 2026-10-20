@@ -1075,6 +1075,11 @@ pub(crate) fn write_footprint(
                 }
             }
         }
+        // `(pintype "free")` and the other pin types a pad was given (`PAD::SetPinType`): a free pad takes part in no net, and the copper clearance, solder mask and
+        // connectivity checks leave it be (`PAD::IsFreePad`). Written after the net, as `format( const PAD* )` does.
+        if let Some(pin_type) = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_type.as_str()).filter(|t| !t.is_empty()) {
+            write!(out, " (pintype {})", sexpr_str(pin_type)).unwrap();
+        }
         // The margins of a pad edit (`solder_mask_margin`, `solder_paste_margin`, `solder_paste_margin_ratio`), then the zone facts: KiCad's order.
         out.push_str(&pad_extra.margins);
         // The pad's own clearance, zone connection and thermal relief (`PCB_IO_KICAD_SEXPR::format( const PAD* )`): the angle
@@ -3046,5 +3051,37 @@ mod tests {
         assert_eq!(model.nets.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["net_1", "net_HC", "net_via"]);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(net 1 \"net_1\")") && out.contains("(net 2 \"net_HC\")") && out.contains("(net 3 \"net_via\")"), "{out}");
+    }
+
+    /// A pad's pin type is written back (`(pintype "free")`): KiCad's copper clearance and solder mask checks and its connectivity leave a free pad out
+    /// (`PAD::IsFreePad`), so a re-export that dropped the type judged the pad as the copper it is not.
+    #[test]
+    fn a_pads_pin_type_is_written_back() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (net 1 "GND")
+  (footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 10 10)
+    (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "R" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -1.5 -0.7) (end 1.5 0.7) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 1 "GND") (pintype "passive"))
+    (pad "2" smd circle (at 0.8 0) (size 0.8 0.8) (layers "F.Cu" "F.Mask") (pintype "free"))
+    (pad "3" smd circle (at 0 1) (size 0.8 0.8) (layers "F.Cu" "F.Mask"))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\""))).unwrap_or_else(|| panic!("pad {number} in {out}")).to_string();
+        assert!(pad("1").contains("(net 1 \"GND\") (pintype \"passive\")"), "{}", pad("1"));
+        assert!(pad("2").contains("(pintype \"free\")") && !pad("2").contains("(net "), "{}", pad("2"));
+        assert!(!pad("3").contains("pintype"), "{}", pad("3"));
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let types: Vec<String> = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "R1").unwrap().pads.iter().map(|p| p.pin_type.clone()).collect();
+        assert_eq!(types, ["passive", "free", ""]);
     }
 }
