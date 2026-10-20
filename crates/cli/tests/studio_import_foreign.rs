@@ -116,20 +116,42 @@ impl Studio {
             .env("FAKE_BOARD", root.join("foreign.kicad_pcb"))
             .env("FAKE_PROJECT", root.join("foreign.kicad_pro"))
             .env("FAKE_SCH_DIR", &sheets)
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .expect("start eda board serve");
-        let stderr = server.stderr.take().unwrap();
+        // Everything the server says on either stream, kept for the message when it never says where it listens.
+        let said = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let (tx, rx) = std::sync::mpsc::channel();
+        let (stderr, heard) = (server.stderr.take().unwrap(), said.clone());
         std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if let Some(port) = line.split("http://127.0.0.1:").nth(1).and_then(|r| r.split('/').next()).and_then(|p| p.parse::<u16>().ok()) {
+            // Bytes, not `lines()`: a line that is not UTF-8 must not end the reading, and with it the channel.
+            let (mut reader, mut line) = (BufReader::new(stderr), Vec::new());
+            while reader.read_until(b'\n', &mut line).is_ok_and(|n| n > 0) {
+                let text = String::from_utf8_lossy(&line).trim_end().to_string();
+                line.clear();
+                if let Some(port) = text.split("http://127.0.0.1:").nth(1).and_then(|r| r.split('/').next()).and_then(|p| p.parse::<u16>().ok()) {
                     let _ = tx.send(port);
                 }
+                heard.lock().unwrap().push(text);
             }
         });
-        let port = rx.recv_timeout(Duration::from_secs(60)).expect("the server says where it listens");
+        let (stdout, heard) = (server.stdout.take().unwrap(), said.clone());
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).split(b'\n').map_while(Result::ok) {
+                heard.lock().unwrap().push(format!("(stdout) {}", String::from_utf8_lossy(&line).trim_end()));
+            }
+        });
+        let port = match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(port) => port,
+            Err(e) => {
+                // Gone (Disconnected) or silent (Timeout): how it ended, and what it said first.
+                let _ = server.kill();
+                let status = server.wait();
+                std::thread::sleep(Duration::from_millis(200));
+                panic!("the server never said where it listens ({e:?}, exit {status:?}); it said:\n{}", said.lock().unwrap().join("\n"));
+            }
+        };
         Studio { root, port, server }
     }
 
