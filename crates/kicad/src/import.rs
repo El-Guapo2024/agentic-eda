@@ -132,6 +132,8 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         .map_err(|e| vec![CheckResult::fail("kicad_import.parse", "file", format!("not a valid s-expression file: {e}"))])?;
     // KiCad 10's footprint `(transform ...)` and library-frame footprint zones, rewritten into the layout the readers below take (`fp_transform`).
     let footprints_scaled = crate::fp_transform::normalize(&mut tree);
+    // KiCad 10's bold text, whose thickness is the width before the bold factor, in the older meaning every reader here has (`bold_text`).
+    crate::bold_text::normalize(&mut tree);
     let root = tree
         .as_list()
         .filter(|l| sexpr::tag(l) == Some("kicad_pcb"))

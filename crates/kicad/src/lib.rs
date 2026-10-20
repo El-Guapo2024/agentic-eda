@@ -22,6 +22,7 @@ use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod board_text_io;
+mod bold_text;
 mod fp_art_io;
 mod fp_fields;
 mod pad_shape;
