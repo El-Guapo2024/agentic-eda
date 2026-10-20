@@ -52,7 +52,7 @@ where it does something -- an action an editor does not offer stays dimmed there
 
 | Behaviour | Status | KiCad file:function |
 |---|---|---|
-| Group Properties | partial | `DIALOG_GROUP_PROPERTIES`: name and member list, the plus button hides the dialog and asks for a click on a new member (`PCB_GROUP_TOOL::PickNewMember`), the trash button drops a row, a click on a row shows the item. OK is one undo step (`Cmd::EditGroup`: rename, replace the members, an item leaves any other group, under two members dissolves it; a member may be another group, but not this one or one that holds it). Not ported: the Locked box and the design-block library link |
+| Group Properties | partial | `DIALOG_GROUP_PROPERTIES`: name and member list, the plus button hides the dialog and asks for a click on a new member (`PCB_GROUP_TOOL::PickNewMember`), the trash button drops a row, a click on a row shows the item. OK is one undo step (`Cmd::EditGroup`: rename, replace the members, an item leaves any other group, under two members dissolves it; a member may be another group, but not this one or one that holds it). The "Library link:" box is the group's design block (`edit_group`'s `design_block`, refused as "Invalid library link: '...'" when it is no `Lib:Name`: `PARITY-sch.md` section 33). Not ported: the Locked box |
 | Add Items to Group, Remove Items from Group | identical | `GROUP_TOOL::AddToGroup` / `RemoveFromGroup` under `GROUP_CONTEXT_MENU`'s conditions, listed in the board's context menu where they apply (it lists them since 2026-10-08: `PARITY-pcb.md` section 7) |
 | Group, Ungroup | identical in effect, nested (2026-10-08) | `GROUP_TOOL::Group` / `Ungroup`, `PCB_GROUP_TOOL::Group`: grouping a selection that holds groups makes them members of the new one, ungrouping frees the members of the group above too, a group under two members dissolves up the tree (`PARITY-pcb.md` section 16) |
 | Enter Group, Leave Group | identical (2026-10-08) | `PCB_SELECTION_TOOL::EnterGroup` / `ExitGroup`: Enter Group (the menu, or a double click) selects the group's members and only they can be picked; Leave Group (the menu, which selects the group), Escape, a click outside the group and selecting something outside it leave it. The rest of the board is drawn dimmed meanwhile (`PARITY-pcb.md` section 16) |
@@ -120,7 +120,7 @@ All in `tools/ui-parity-missing.json`; each is a subsystem the studio does not h
 |---|---|
 | New, Open, Quit, Revert, Show Project Manager | one project directory chosen at launch, no project manager; a web page has no application to quit; every edit is already in design.json, so there is nothing to revert |
 | Add Library by drop | a browser drop carries a file's contents, not its path, so there is no path for the library table (Add Library takes a typed path or one chosen in the server's folders: section 14) |
-| Design Block Library Table | the studio has no design-block library (`docs/parity/GAPS.md` item 24) |
+| Design Block Library Table | wired 2026-10-20 (`task-design-blocks`): Manage Design Block Libraries is section 14's dialog on the third table kind, and the Design Blocks panes use it (`PARITY-sch.md` section 33) |
 | Open Directory, Open with Text Editor | a browser cannot open the operating system's file manager or editor |
 | Plugins Reload | no Python scripting or API plugins |
 | Calculator Tools | a separate program in KiCad |
