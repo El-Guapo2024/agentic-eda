@@ -24,6 +24,21 @@ export function parseCellItemId(id: string): { table: string; row: number; col: 
   return m ? { table: m[1]!, row: Number(m[2]), col: Number(m[3]) } : null;
 }
 
+/**
+ * A selected table cell stands for its table in the tools that ask for it (`SCH_SELECTION_TOOL::RequestSelection( .., aPromoteCellSelections )`: Move, Rotate; Lock, which is the
+ * table's in the file): the ids with each cell id of a table in `tables` replaced by its table's id, each once.
+ */
+export function promoteCells(ids: readonly string[], tables: readonly { id: string }[] | undefined): string[] {
+  const known = new Set((tables ?? []).map((t) => t.id));
+  const out: string[] = [];
+  for (const id of ids) {
+    const p = parseCellItemId(id);
+    const folded = p && !known.has(id) && known.has(p.table) ? p.table : id;
+    if (!out.includes(folded)) out.push(folded);
+  }
+  return out;
+}
+
 /** Anything that holds tables the way the board's state does (and the sheet's: `drawings.tables`). */
 export interface HasTables {
   drawings?: { tables?: readonly BoardTable[] } | null;
@@ -54,6 +69,11 @@ export function cellById(board: HasTables | null | undefined, id: string): { tab
 /** `PCB_TABLECELL::GetAddr`: `B3` for the second column, third row. */
 export function cellAddress(row: number, col: number): string {
   return `${String.fromCharCode(65 + (col % 26))}${row + 1}`;
+}
+
+/** `SCH_TABLECELL::GetAddr`: the column's letter and the row from 0 (`A0`). */
+export function schCellAddress(row: number, col: number): string {
+  return `${String.fromCharCode(65 + (col % 26))}${row}`;
 }
 
 /** A cell another one covers is not an item (`Selectable`: `GetRowSpan() == 0 || GetColSpan() == 0`). */
@@ -257,6 +277,22 @@ export function drawTableGrid(origin: readonly [number, number], cursor: readonl
   const gy = Math.max(gridSize[1], 1);
   cellW = kiround(cellW / gx) * gx;
   cellH = kiround(cellH / gy) * gy;
+  return { cols, rows, cellW, cellH };
+}
+
+/**
+ * `SCH_DRAWING_TOOLS::DrawTable`'s motion handler: from the first click `origin` to the `cursor`, as many columns as hold 15 glyph widths of the sheet's default text and as many rows as
+ * hold 2 glyph heights (at least one of each), cells at least 5 grid cells wide and 2 high, each cell's size rounded to the grid (`GRID_GRAPHICS`). `fontUm` is the sheet's default text
+ * size (50 mil).
+ */
+export function schDrawTableGrid(origin: readonly [number, number], cursor: readonly [number, number], fontUm: number, gridUm: number): DrawTableGrid {
+  const requestedX = cursor[0] - origin[0];
+  const requestedY = cursor[1] - origin[1];
+  const cols = Math.max(1, idiv(requestedX, fontUm * 15));
+  const rows = Math.max(1, idiv(requestedY, fontUm * 2));
+  const g = Math.max(gridUm, 1);
+  const cellW = kiround(Math.max(g * 5, idiv(requestedX, cols)) / g) * g;
+  const cellH = kiround(Math.max(g * 2, idiv(requestedY, rows)) / g) * g;
   return { cols, rows, cellW, cellH };
 }
 

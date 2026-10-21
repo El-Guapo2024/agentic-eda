@@ -30,6 +30,7 @@ import { registerTextActions } from "./commonTextActions";
 import { registerGridActions } from "./commonGridActions";
 import { registerGridListActions } from "./commonGridListActions";
 import { registerPcbTableActions } from "./pcbTableActions";
+import { registerSchTableActions } from "./schTableActions";
 import { replaceAll, replaceAndFindNext, updateFind } from "../components/schematic/findReplaceOps";
 
 export type ActionHandler = (arg?: unknown) => void;
@@ -224,4 +225,5 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   registerGridListActions(m, ctx);
   // The board's tables (tableActions.ts): Draw Table, the structure edits, Edit Table, Export Table to CSV, Select Row(s) / Column(s) / Table.
   registerPcbTableActions(m, ctx);
+  registerSchTableActions(m, ctx);
 }

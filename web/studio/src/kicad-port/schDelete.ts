@@ -18,6 +18,8 @@ export interface SchIds {
   junctions?: ReadonlyArray<{ id: string }>;
   lines?: ReadonlyArray<{ id: string }>;
   graphics?: ReadonlyArray<{ id: string }>;
+  /** The tables, with the address of each cell (a cell id is `TABLE:ROW:COL`). */
+  tables?: ReadonlyArray<{ id: string; cells: ReadonlyArray<{ id: string; row: number; col: number }> }>;
   sheets: ReadonlyArray<{ id: string; pins?: ReadonlyArray<{ id: string }> }>;
   /** The groups of the sheet: a deleted group takes everything below it with it. */
   groups?: ReadonlyArray<{ id: string; member_ids: readonly string[] }>;
@@ -30,6 +32,18 @@ export function deleteCmds(sch: SchIds, ids: readonly string[], locked: Readonly
   const kept = withoutLocked(openGroups(sch.groups ?? [], ids, locked), locked);
   // the reference an owner key names (`R1#2` is a unit of `R1`)
   const refOf = (owner: string) => /^(.*)#(\d+)$/.exec(owner)?.[1] ?? owner;
+  // `DoDelete`: a table is removed, but a table cell only has its text cleared; a locked table keeps both (a cell is as locked as its table), and a cell goes with its table when that is deleted too.
+  const tables = sch.tables ?? [];
+  const wanted = new Set(kept);
+  const cleared = new Map<string, [number, number][]>();
+  for (const id of kept) {
+    if (tables.some((t) => t.id === id)) continue;
+    const owner = tables.find((t) => t.cells.some((c) => c.id === id));
+    const cell = owner?.cells.find((c) => c.id === id);
+    if (!owner || !cell || wanted.has(owner.id) || locked.has(owner.id)) continue;
+    cleared.set(owner.id, [...(cleared.get(owner.id) ?? []), [cell.row, cell.col]]);
+  }
+  for (const [tid, cells] of cleared) cmds.push({ op: "sch_table", verb: "edit_cells", id: tid, cells, edit: { text: "" } });
   for (const id of kept) {
     // `DoDelete` on a field hides it (`SetVisible( false )`) -- unless the item that has it goes too
     const field = parseFieldId(id);
@@ -48,6 +62,7 @@ export function deleteCmds(sch: SchIds, ids: readonly string[], locked: Readonly
     else if (has(sch.junctions, id)) cmds.push({ op: "delete_junction", id });
     else if (has(sch.lines, id)) cmds.push({ op: "delete_sch_line", id });
     else if (has(sch.graphics, id)) cmds.push({ op: "sch_edit", verb: "delete_graphic", id });
+    else if (has(tables, id)) cmds.push({ op: "sch_table", verb: "delete", id });
     else if (has(sch.sheets, id)) cmds.push({ op: "sch_edit", verb: "delete_sheet", id });
     else {
       // a pin of a sheet (`DoDelete` on `SCH_SHEET_PIN_T`: `sheet->RemovePin`): it goes with its sheet when that is deleted too, and a locked sheet keeps its pins

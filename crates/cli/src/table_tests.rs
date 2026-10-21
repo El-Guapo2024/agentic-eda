@@ -131,3 +131,29 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
     assert!(chars.borders().is_empty(), "the characteristics table has no lines");
     assert!(plotted_lines(&svg).is_empty(), "kicad-cli draws none: {:?}", plotted_lines(&svg));
 }
+
+/// The move preview of a held sheet table (`POST /api/sch/move_preview`) carries the table where the drop would put it, every cell's corners and text lines worked out
+/// by the server, and a selected cell holds its table (`aPromoteCellSelections`).
+#[test]
+fn the_move_preview_carries_a_held_sheet_table_where_it_would_be() {
+    let dir = scratch("sch_table_preview");
+    setup(&dir);
+    let mut t = Table::new_sch_grid(Point { x: 20_000, y: 30_000 }, 2, 2, 20_000, 5_000, 1_270);
+    t.cells[0].text = "TITLE ${ROW}".into();
+    step(&dir, Cmd::SchTable(TableCmd::Add { table: t }), false, "test").unwrap();
+    let (_, design, _) = load(&dir).expect("the board loads");
+    let id = design.schematic.as_ref().unwrap().extras.tables[0].id.clone();
+    let cell = eda_model::table::cell_item_id(&id, 1, 1);
+    let preview = |cmd: serde_json::Value| crate::sch_move_api::move_preview(&dir, serde_json::json!({ "sheet": "", "cmds": [cmd] }).to_string().as_bytes());
+    let before = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": [cell], "dx": 0, "dy": 0 }));
+    let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": [cell], "dx": 2_540, "dy": 1_270 }));
+    assert_eq!(v["ok"], serde_json::json!(true), "{v}");
+    let corner = |v: &serde_json::Value| v["tables"][0]["cells"][0]["corners"][0].clone();
+    assert_eq!(v["tables"][0]["id"], serde_json::json!(id), "{v}");
+    assert_eq!((corner(&before), corner(&v)), (serde_json::json!([20_000, 30_000]), serde_json::json!([22_540, 31_270])), "the cell held the table: it moved by the offset");
+    // the text lines go with it, and what a variable stands for in the cell is shown, not the variable
+    let line = |v: &serde_json::Value| (v["tables"][0]["cells"][0]["lines"][0]["x"].as_f64().unwrap(), v["tables"][0]["cells"][0]["lines"][0]["text"].clone());
+    assert!((line(&v).0 - line(&before).0 - 2_540.0).abs() < 1.0, "{}", v["tables"][0]["cells"][0]);
+    assert_eq!(line(&v).1, serde_json::json!("TITLE 0"), "${{ROW}} of the first row of a sheet table is 0");
+    let _ = std::fs::remove_dir_all(&dir);
+}

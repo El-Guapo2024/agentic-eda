@@ -14,11 +14,13 @@ import type { ActionHandler } from "./commonActions";
 import type { BoardTable, BoardTableCell } from "../api/types";
 import type { TableCellAddr, TableCmdWire } from "../api/tableTypes";
 import { saveTextFile } from "../api/libraryClient";
-import { openTableCellDialog, openTableDialog } from "../state/tableDialogs";
+import { openTableCellDialog, openTableDialog, type TableScope } from "../state/tableDialogs";
 import { canMerge, colsOf, csvFileName, extremeCell, rowsOf, selectColumns, selectRows, selectTables, selectedCells, shiftColsAfterInsert, shiftRowsAfterInsert, tableCsv } from "../kicad-port/tables";
 
 /** What an editor gives the table actions. */
 export interface TableEditor {
+  /** The editor's tables: the board's or the sheet's (which the dialogs it opens are for). */
+  readonly scope: TableScope;
   tables(): readonly BoardTable[];
   selection(): readonly string[];
   setSelection(ids: string[]): void;
@@ -120,7 +122,7 @@ export function registerTableEditorActions(m: Map<string, ActionHandler>, ed: Ta
   m.set("pcbnew.TableEditor.editTable", () => {
     const groups = cellSelection(ed);
     if (groups.length !== 1) return;
-    openTableDialog(groups[0]!.table.id);
+    openTableDialog(groups[0]!.table.id, ed.scope);
   });
 
   // `ExportTableToCSV`: the shown text of every cell, to a file.
@@ -141,18 +143,18 @@ export function registerTableEditorActions(m: Map<string, ActionHandler>, ed: Ta
  * `EDIT_TOOL::Properties` for what the selection holds: table cells only (`OnlyTypes( { PCB_TABLECELL_T } )`) open Table Cell Properties on all of them -- those of the clicked cell's
  * table -- and a table, Table Properties (`OnEditItemRequest`). Returns whether `id` was one of them.
  */
-export function openTablePropertiesFor(tables: readonly BoardTable[], selection: readonly string[], id: string): boolean {
+export function openTablePropertiesFor(tables: readonly BoardTable[], selection: readonly string[], id: string, scope: TableScope = "pcb"): boolean {
   const host = { drawings: { tables } };
   const table = tables.find((t) => t.id === id);
   if (table) {
-    openTableDialog(table.id);
+    openTableDialog(table.id, scope);
     return true;
   }
   const own = selectedCells(host, [id])[0];
   if (!own) return false;
   const same = selectedCells(host, selection).find((g) => g.table.id === own.table.id);
   const cells = same && selection.includes(id) ? same.cells : own.cells;
-  openTableCellDialog(own.table.id, cells.map(addr));
+  openTableCellDialog(own.table.id, cells.map(addr), scope);
   return true;
 }
 

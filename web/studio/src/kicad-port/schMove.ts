@@ -125,6 +125,8 @@ export function applyPatch(sch: Schematic, p: SchMovePatch): Schematic {
       return q ? { ...l, pts: q.pts } : l;
     }),
     graphics: p.graphics ?? sch.graphics,
+    // a held table is shown with the cells and text lines the server worked out for where it would be
+    ...(p.tables ? { tables: (sch.tables ?? []).map((t) => p.tables!.find((q) => q.id === t.id) ?? t) } : {}),
     sheets: sch.sheets.map((s) => {
       const q = sheets.get(s.id);
       if (!q) return s;

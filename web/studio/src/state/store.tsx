@@ -156,6 +156,8 @@ export type ToolId =
   | "sch_arc"
   | "sch_bezier"
   | "sch_textbox"
+  /** `eeschema.InteractiveDrawing.drawTable` (`SCH_DRAWING_TOOLS::DrawTable`): the first click is the table's first corner, the cursor sizes the grid (`DrawState`'s `"table"` kind), the second opens Table Properties. */
+  | "sch_table"
   | "sch_rule_area"
   | "sch_directive"
   /** Break / Slice (`SCH_MOVE_TOOL`'s `BREAK` / `SLICE` modes): the cut wire's new end follows the cursor until the click that drops it -- kicad-port/schBreak.ts. */
@@ -207,6 +209,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_arc: "Arc: click the start, then the end. Esc to cancel",
   sch_bezier: "Bezier curve: click the start, the end, then control points 1 and 2. Esc to cancel",
   sch_textbox: "Text Box: click one corner, then the opposite one, then enter the text. Esc to cancel",
+  sch_table: "Table: click the first corner, move to size the grid, click again to set its text and borders. Esc to cancel",
   sch_rule_area: "Rule Area: click the corners, double-click or press End to close it, Backspace to remove the last corner. Esc to cancel",
   sch_directive: "Directive Label: click where to place it",
   sch_break: "Break / Slice: move the new end of the wire, click to drop it, Esc to cancel",

@@ -24,7 +24,7 @@ import { boardDeleteCmds, tuningPatternIds } from "../kicad-port/deleteCmds";
 import { removeTuningPatterns } from "../components/canvas/tuneRouting";
 import { topLevelGroup } from "../kicad-port/groupTree";
 import { pickFootprintItem, pickSymbolItem } from "../kicad-port/libEditorHit";
-import { cellAddress, cellById } from "../kicad-port/tables";
+import { cellAddress, cellById, schCellAddress } from "../kicad-port/tables";
 
 /** The four editors that have a canvas (the 3D viewer has its own camera and none of these tools). */
 export type CanvasTab = "pcb" | "schematic" | "footprint" | "symbol";
@@ -151,6 +151,11 @@ export function describeSchematicItem(sch: Schematic | null, item: PickedItem): 
   if (power) return `Power symbol ${power.net}`;
   const wire = sch.wires.find((w) => w.id === item.id);
   if (wire) return `${wire.bus ? "Bus" : "Wire"} ${wire.net}`;
+  // `SCH_TABLE::GetItemDescription` ("N Column Table") and `SCH_TABLECELL::GetItemDescription` ("Table Cell A0")
+  const table = (sch.tables ?? []).find((t) => t.id === item.id);
+  if (table) return `${table.cols} Column Table`;
+  const cell = (sch.tables ?? []).flatMap((t) => t.cells).find((c) => c.id === item.id);
+  if (cell) return `Table Cell ${schCellAddress(cell.row, cell.col)}`;
   return item.kind.replace(/_/g, " ");
 }
 

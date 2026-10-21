@@ -16,11 +16,15 @@ export interface DrawnTable {
   lineWidth: number;
 }
 
-export type TableDialog = { mode: "edit"; tableId: string } | { mode: "draw"; drawn: DrawnTable };
+/** Whose table the dialog is about: the board's or the sheet's (the same dialogs, the sheet's without a layer and a lock). */
+export type TableScope = "pcb" | "sch";
+
+export type TableDialog = { mode: "edit"; tableId: string; scope: TableScope } | { mode: "draw"; drawn: DrawnTable; scope: TableScope };
 
 export interface TableCellDialog {
   tableId: string;
   cells: TableCellAddr[];
+  scope: TableScope;
 }
 
 export interface TableDialogsState {
@@ -52,13 +56,13 @@ export function useTableDialogs(): TableDialogsState {
 }
 
 /** `DIALOG_TABLE_PROPERTIES` on a table of the board. */
-export function openTableDialog(tableId: string): void {
-  set({ ...current, table: { mode: "edit", tableId } });
+export function openTableDialog(tableId: string, scope: TableScope = "pcb"): void {
+  set({ ...current, table: { mode: "edit", tableId, scope } });
 }
 
 /** Draw Table's second click: the dialog on the table that is not on the board yet. */
-export function openDrawnTableDialog(drawn: DrawnTable): void {
-  set({ ...current, table: { mode: "draw", drawn } });
+export function openDrawnTableDialog(drawn: DrawnTable, scope: TableScope = "pcb"): void {
+  set({ ...current, table: { mode: "draw", drawn, scope } });
 }
 
 export function closeTableDialog(): void {
@@ -66,8 +70,8 @@ export function closeTableDialog(): void {
 }
 
 /** `DIALOG_TABLECELL_PROPERTIES` on `cells` of the table. */
-export function openTableCellDialog(tableId: string, cells: TableCellAddr[]): void {
-  set({ ...current, cells: { tableId, cells } });
+export function openTableCellDialog(tableId: string, cells: TableCellAddr[], scope: TableScope = "pcb"): void {
+  set({ ...current, cells: { tableId, cells, scope } });
 }
 
 export function closeTableCellDialog(): void {

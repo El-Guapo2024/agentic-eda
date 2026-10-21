@@ -1,6 +1,6 @@
 // The schematic editor's tool verbs and drawn items -- mirrors crates/model/src/sch_extras.rs (SchGraphic) and
 // crates/ops/src/sch_edit.rs (SchCmd, sent as `{ op: "sch_edit", verb: ..., ... }`).
-import type { CmdLabelKind, LabelShape, PointXY, SchField, Um } from "./types";
+import type { BoardTable, CmdLabelKind, LabelShape, PointXY, SchField, Um } from "./types";
 
 /** Stroke style of a graphic (`LINE_STYLE`); `default` follows the sheet's own default. */
 export type SchLineStyle = "default" | "solid" | "dash" | "dot" | "dash_dot" | "dash_dot_dot";
@@ -243,6 +243,8 @@ export interface SchMovePatch {
   lines: Array<{ id: string; pts: Array<[number, number]> }>;
   graphics: SchGraphic[];
   sheets: Array<{ id: string; at: [number, number]; size: [number, number]; pins: Array<{ id: string; at: [number, number] }>; fields?: SchField[] }>;
+  /** The sheet's tables where the held ones would be, each as `GET /api/schematic` reports it (absent when the sheet has none). */
+  tables?: BoardTable[];
   /** The overlay of a Move or a Drag (absent from a backend built before it existed, and for a turn or a mirror). */
   net_collision?: SchNetCollision;
 }

@@ -554,6 +554,10 @@ export interface BoardTableCell {
   line_spacing: number;
   color: [number, number, number, number] | null;
   lines: TablePlacedLine[];
+  /** A sheet's cell only: its background (`none`, `outline`, `background` or `color` with `fill_color`) and whether it is left out of simulation. */
+  fill?: "none" | "outline" | "background" | "color";
+  fill_color?: [number, number, number, number] | null;
+  exclude_from_sim?: boolean;
 }
 
 /** `PCB_TABLE` (`crates/cli/src/table_json.rs`). */
@@ -1658,6 +1662,7 @@ export type Cmd =
   | ({ op: "sch_move" } & SchMoveCmd)
   /** The board's tables (crates/ops/src/pcb_tables.rs): Draw Table, the Table Properties and Table Cell Properties dialogs, rows, columns, merged cells -- see api/tableTypes.ts. */
   | ({ op: "table" } & TableCmdWire)
+  | ({ op: "sch_table" } & TableCmdWire)
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
@@ -2511,6 +2516,8 @@ export interface Schematic {
   lines?: SchLine[];
   /** Drawn shapes, text boxes, rule areas and directive labels -- see `SchGraphic` (api/schEditTypes.ts). Absent from a backend built before they existed. */
   graphics?: SchGraphic[];
+  /** The tables of this sheet (`SCH_TABLE`, `crates/cli/src/table_json.rs` `sch_table_json`): the board's `BoardTable` shape with an empty layer. Absent from a backend built before sheet tables. */
+  tables?: BoardTable[];
   /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
   locked?: string[];
   /** The groups of this sheet (`SCH_GROUP`): a named set of item ids and of other groups' ids. Absent from a backend built before schematic groups. */

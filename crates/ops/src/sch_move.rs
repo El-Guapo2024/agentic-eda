@@ -233,10 +233,28 @@ fn grid_of(g: Um) -> Um {
 /// group hands it on). Those items are held as the group holds them ([`Scene::rigid`]), and a selection that is one group alone is turned on itself
 /// ([`Scene::lone_group`]). A group with a locked item anywhere below it is no selection at all (`FilterSelectionForLockedItems`:
 /// `lockedDescendant`).
+/// A selected table cell stands for its table: `SCH_SELECTION_TOOL::RequestSelection( .., aPromoteCellSelections = true )`, which `SCH_MOVE_TOOL::Main` and
+/// `SCH_EDIT_TOOL::Rotate` ask for ("will be promoted to parent table(s)"). The ids with each cell id replaced by its table's, once each.
+fn promote_cells(sch: &SchematicSection, ids: &[String]) -> Vec<String> {
+    let is_table = |id: &str| sch.extras.tables.iter().any(|t| t.id == id);
+    let mut out: Vec<String> = Vec::with_capacity(ids.len());
+    for id in ids {
+        let id = match eda_model::table::parse_cell_item_id(id) {
+            Some((table, _, _)) if !is_table(id) && is_table(table) => table.to_string(),
+            _ => id.clone(),
+        };
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
 pub(crate) fn select(scene: &mut Scene, ids: &[String], vertices: &BTreeMap<String, Vec<usize>>) -> Result<(), Vec<CheckResult>> {
     if ids.is_empty() {
         return Err(fail("ops_nothing_selected", "selection", "nothing is selected"));
     }
+    let ids = &promote_cells(&scene.sch, ids);
     let mut locked_skipped = 0usize;
     // what is asked for, and whether it comes through a group
     let mut wanted: Vec<(String, bool)> = Vec::new();

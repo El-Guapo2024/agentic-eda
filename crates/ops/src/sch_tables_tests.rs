@@ -120,6 +120,22 @@ fn a_table_moves_with_the_sheets_move_verb_and_turns_between_its_two_attitudes()
 }
 
 #[test]
+fn a_selected_cell_stands_for_its_table_in_move_and_rotate() {
+    // `RequestSelection( .., aPromoteCellSelections = true )` in `SCH_MOVE_TOOL::Main` and `SCH_EDIT_TOOL::Rotate`: two cells of one table move the table once
+    let m = ConstraintModel::default();
+    let mut b = Board::new(design(), &m, 100, 300);
+    let id = add(&mut b, table(2, 2));
+    let cells = vec![eda_model::table::cell_item_id(&id, 0, 1), eda_model::table::cell_item_id(&id, 1, 1)];
+    b.apply(&Cmd::SchMove(SchMoveCmd::Move { ids: cells.clone(), dx: 2_540, dy: 0, turns: vec![], about: None })).unwrap();
+    assert_eq!(on_sheet(&b, |s| s.extras.tables[0].at), p(22_540, 30_000), "moved once, not once per cell");
+    b.apply(&Cmd::SchMove(SchMoveCmd::Rotate { ids: cells, vertices: Default::default(), ccw: true, about: None, grid: 0 })).unwrap();
+    assert_eq!(on_sheet(&b, |s| s.extras.tables[0].angle), 90_000, "a quarter turn, not two");
+    // a cell id of a table the sheet does not have is no item
+    let missing = eda_model::table::cell_item_id("tbl_zz", 0, 0);
+    assert!(b.apply(&Cmd::SchMove(SchMoveCmd::Move { ids: vec![missing], dx: 1_270, dy: 0, turns: vec![], about: None })).is_err());
+}
+
+#[test]
 fn a_locked_table_does_not_move_and_a_table_can_be_locked_and_grouped_like_any_item() {
     let m = ConstraintModel::default();
     let mut b = Board::new(design(), &m, 100, 300);

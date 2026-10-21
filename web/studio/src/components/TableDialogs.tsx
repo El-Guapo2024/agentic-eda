@@ -8,13 +8,13 @@
 // Not ported: the syntax help window and the text-variable autocomplete of the cell editors (a plain text area is the cell's editor, and `${ROW}`, `${COL}`, `${ADDR}`, `${LAYER}`
 // and the board's variables are resolved as they are anywhere else).
 import { useEffect, useState, type CSSProperties } from "react";
-import { fetchState } from "../api/client";
+import { fetchSchematic, fetchState } from "../api/client";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { closeTableCellDialog, closeTableDialog, openTableDialog, useTableDialogs } from "../state/tableDialogs";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { lineThicknessUm } from "../kicad-port/layerDefaults";
-import { autoPenFor, cellById, cellDialogValues, cellEditOf, gridColumn, isSelectableCell, TABLE_LINE_STYLES, tableById, tableDialogValues, tablePatchOf, tablesOf, widthAfterToggle, type CellDialogValues, type TableDialogValues } from "../kicad-port/tables";
-import type { TableCellAddr, TableLineStyleName } from "../api/tableTypes";
+import { autoPenFor, cellById, cellDialogValues, cellEditOf, gridColumn, isSelectableCell, schCellAddress, TABLE_LINE_STYLES, tableById, tableDialogValues, tablePatchOf, tablesOf, widthAfterToggle, type CellDialogValues, type TableDialogValues } from "../kicad-port/tables";
+import type { TableCellAddr, TableCmdWire, TableLineStyleName } from "../api/tableTypes";
 import { umFrom, umTo, type LengthUnit } from "../state/units";
 
 const GRID: CSSProperties = { gridTemplateColumns: "150px 1fr", rowGap: 6 };
@@ -60,7 +60,11 @@ export function TablePropertiesDialog() {
   const api = useStudioApi();
   const unit: LengthUnit = state.units;
   const board = state.board;
-  const table = open?.mode === "edit" ? tableById(board, open.tableId) : undefined;
+  // The board's table or the sheet's: the sheet's has no layer and no lock, and its border and separators start at the default width (0).
+  const sch = open?.scope === "sch";
+  const host = sch ? { drawings: { tables: state.schematic?.tables ?? [] } } : board;
+  const send = (verb: TableCmdWire): Promise<boolean> => api.cmd(sch ? { op: "sch_table", ...verb } : { op: "table", ...verb });
+  const table = open?.mode === "edit" ? tableById(host, open.tableId) : undefined;
   const drawn = open?.mode === "draw" ? open.drawn : undefined;
   const [v, setV] = useState<TableDialogValues | null>(null);
   const [busy, setBusy] = useState(false);
@@ -74,9 +78,9 @@ export function TablePropertiesDialog() {
       return;
     }
     if (open.mode === "edit") {
-      const t = tableById(board, open.tableId);
+      const t = tableById(host, open.tableId);
       if (!t) return;
-      setV(tableDialogValues(t, (board?.locked ?? []).includes(t.id), lineThicknessUm(textGraphics, t.layer)));
+      setV(tableDialogValues(t, ((sch ? state.schematic?.locked : board?.locked) ?? []).includes(t.id), sch ? 0 : lineThicknessUm(textGraphics, t.layer)));
     } else {
       const d = open.drawn;
       setV({
@@ -102,7 +106,7 @@ export function TablePropertiesDialog() {
   const rows = table?.rows ?? drawn!.rows;
   const layerSetup = board?.board_rules?.layer_setup;
   const layers = boardLayerList(board?.layers ?? [], layerSetup);
-  const defaultLine = lineThicknessUm(textGraphics, v.layer);
+  const defaultLine = sch ? 0 : lineThicknessUm(textGraphics, v.layer);
   const set = (patch: Partial<TableDialogValues>) => setV((cur) => (cur ? { ...cur, ...patch } : cur));
   const borderOn = v.borderExternal || v.borderHeader;
   const separatorsOn = v.rowSeparators || v.colSeparators;
@@ -127,12 +131,11 @@ export function TablePropertiesDialog() {
     try {
       if (open.mode === "draw") {
         const d = open.drawn;
-        const before = new Set(tablesOf(api.getState().board).map((t) => t.id));
+        const before = new Set(tablesOf(host).map((t) => t.id));
         const patch = tablePatchOf({ cols: d.cols, layer: d.layer }, v);
-        const ok = await api.cmd({
-          op: "table",
+        const ok = await send({
           verb: "draw",
-          layer: v.layer,
+          layer: sch ? "" : v.layer,
           at: { x: Math.round(d.at[0]), y: Math.round(d.at[1]) },
           cols: d.cols,
           rows: d.rows,
@@ -145,17 +148,16 @@ export function TablePropertiesDialog() {
         if (ok) {
           closeTableDialog();
           // `selectItem( table )`: the table just made. The board as the backend has it now: `stateRef` only catches up on the next render, so it is not in `getState()` yet.
-          const after = await fetchState().catch(() => null);
+          const after = sch ? await fetchSchematic(state.currentSheetPath).then((s) => ({ drawings: { tables: s.tables ?? [] } })).catch(() => null) : await fetchState().catch(() => null);
           const made = after ? tablesOf(after).find((t) => !before.has(t.id)) : undefined;
           if (made) dispatch({ type: "SET_SELECTION", refs: [made.id] });
         }
       } else if (table) {
-        const ok = await api.cmd({
-          op: "table",
+        const ok = await send({
           verb: "set",
           id: table.id,
-          layer: v.layer !== table.layer ? v.layer : undefined,
-          locked: v.locked !== (board?.locked ?? []).includes(table.id) ? v.locked : undefined,
+          layer: !sch && v.layer !== table.layer ? v.layer : undefined,
+          locked: !sch && v.locked !== (board?.locked ?? []).includes(table.id) ? v.locked : undefined,
           patch: tablePatchOf(table, v),
         });
         if (ok) closeTableDialog();
@@ -199,24 +201,29 @@ export function TablePropertiesDialog() {
             </table>
           </div>
           <div style={{ fontSize: 11, opacity: 0.75, marginBottom: 8 }}>
-            {rows} x {cols} cells. {"${ROW}"}, {"${COL}"}, {"${ADDR}"} and {"${LAYER}"} stand for the cell's place and layer; a cell another one covers has no text.
-            {table && isBackSide(table.layer) ? " The table is on a back layer: its columns are shown from the other side." : ""}
+            {rows} x {cols} cells.{" "}
+            {sch
+              ? 'A sheet counts rows and columns from 0: ${ROW}, ${COL} and ${ADDR} stand for the cell\'s place, ${CELL("A0")} for another cell\'s text; a cell another one covers has no text.'
+              : "${ROW}, ${COL}, ${ADDR} and ${LAYER} stand for the cell's place and layer; a cell another one covers has no text."}
+            {table && !sch && isBackSide(table.layer) ? " The table is on a back layer: its columns are shown from the other side." : ""}
           </div>
-          <div className="kv-grid" style={GRID}>
-            <span>Layer</span>
-            <select value={v.layer} data-testid="table-layer" onChange={(e) => set({ layer: e.target.value })}>
-              {!layers.includes(v.layer) && <option value={v.layer}>{v.layer}</option>}
-              {layers.map((l) => (
-                <option key={l} value={l}>
-                  {layerDisplayName(layerSetup, l)}
-                </option>
-              ))}
-            </select>
-            <span />
-            <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <input type="checkbox" data-testid="table-locked" checked={v.locked} onChange={(e) => set({ locked: e.target.checked })} /> Locked
-            </label>
-          </div>
+          {!sch && (
+            <div className="kv-grid" style={GRID}>
+              <span>Layer</span>
+              <select value={v.layer} data-testid="table-layer" onChange={(e) => set({ layer: e.target.value })}>
+                {!layers.includes(v.layer) && <option value={v.layer}>{v.layer}</option>}
+                {layers.map((l) => (
+                  <option key={l} value={l}>
+                    {layerDisplayName(layerSetup, l)}
+                  </option>
+                ))}
+              </select>
+              <span />
+              <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <input type="checkbox" data-testid="table-locked" checked={v.locked} onChange={(e) => set({ locked: e.target.checked })} /> Locked
+              </label>
+            </div>
+          )}
           <div style={{ fontWeight: 600, fontSize: 11, marginTop: 10, marginBottom: 4 }}>Border</div>
           <div className="kv-grid" style={GRID}>
             <span />
@@ -271,8 +278,9 @@ export function TableCellPropertiesDialog() {
   const state = useStudioState();
   const api = useStudioApi();
   const unit: LengthUnit = state.units;
-  const board = state.board;
-  const table = open ? tableById(board, open.tableId) : undefined;
+  const sch = open?.scope === "sch";
+  const host = sch ? { drawings: { tables: state.schematic?.tables ?? [] } } : state.board;
+  const table = open ? tableById(host, open.tableId) : undefined;
   const cells = open && table ? open.cells.flatMap(([r, c]) => (table.cells[r * table.cols + c] ? [table.cells[r * table.cols + c]!] : [])) : [];
   const [v, setV] = useState<CellDialogValues | null>(null);
   const [busy, setBusy] = useState(false);
@@ -300,7 +308,8 @@ export function TableCellPropertiesDialog() {
   const apply = async (): Promise<boolean> => {
     setBusy(true);
     try {
-      return await api.cmd({ op: "table", verb: "edit_cells", id: table.id, cells: open.cells, edit: cellEditOf(v) });
+      const verb: TableCmdWire = { verb: "edit_cells", id: table.id, cells: open.cells, edit: cellEditOf(v) };
+      return await api.cmd(sch ? { op: "sch_table", ...verb } : { op: "table", ...verb });
     } finally {
       setBusy(false);
     }
@@ -311,10 +320,10 @@ export function TableCellPropertiesDialog() {
   const editTable = async () => {
     if (await apply()) {
       closeTableCellDialog();
-      openTableDialog(table.id);
+      openTableDialog(table.id, sch ? "sch" : "pcb");
     }
   };
-  const cellNames = open.cells.map(([r, c]) => `${String.fromCharCode(65 + (c % 26))}${r + 1}`).join(", ");
+  const cellNames = open.cells.map(([r, c]) => (sch ? schCellAddress(r, c) : `${String.fromCharCode(65 + (c % 26))}${r + 1}`)).join(", ");
 
   return (
     <div className="dialog-backdrop" onClick={closeTableCellDialog}>
@@ -334,17 +343,27 @@ export function TableCellPropertiesDialog() {
           <div className="kv-grid" style={GRID}>
             <span>Font</span>
             <input type="text" data-testid="cell-face" value={v.face ?? ""} placeholder={v.face === null ? "<...>" : "Default Font"} onChange={(e) => set({ face: e.target.value })} />
-            <span>Text width ({unit})</span>
-            <LengthField value={v.width} unit={unit} testId="cell-width" onChange={(um) => update({ width: um })} />
-            <span>Text height ({unit})</span>
-            <LengthField value={v.height} unit={unit} testId="cell-height" onChange={(um) => update({ height: um })} />
-            <span>Text thickness ({unit})</span>
-            <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <LengthField value={v.thickness} unit={unit} disabled={v.autoThickness} testId="cell-thickness" onChange={(um) => set({ thickness: um })} />
-              <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
-                <input type="checkbox" data-testid="cell-auto-thickness" checked={v.autoThickness} onChange={(e) => update({ autoThickness: e.target.checked })} /> Auto
-              </label>
-            </span>
+            {sch ? (
+              // `DIALOG_TABLECELL_PROPERTIES` of a sheet has one size for the glyphs, and no thickness
+              <>
+                <span>Text size ({unit})</span>
+                <LengthField value={v.height} unit={unit} testId="cell-size" onChange={(um) => update({ width: um, height: um })} />
+              </>
+            ) : (
+              <>
+                <span>Text width ({unit})</span>
+                <LengthField value={v.width} unit={unit} testId="cell-width" onChange={(um) => update({ width: um })} />
+                <span>Text height ({unit})</span>
+                <LengthField value={v.height} unit={unit} testId="cell-height" onChange={(um) => update({ height: um })} />
+                <span>Text thickness ({unit})</span>
+                <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <LengthField value={v.thickness} unit={unit} disabled={v.autoThickness} testId="cell-thickness" onChange={(um) => set({ thickness: um })} />
+                  <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+                    <input type="checkbox" data-testid="cell-auto-thickness" checked={v.autoThickness} onChange={(e) => update({ autoThickness: e.target.checked })} /> Auto
+                  </label>
+                </span>
+              </>
+            )}
             <span>Style</span>
             <span style={{ display: "flex", gap: 12 }}>
               <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -370,9 +389,10 @@ export function TableCellPropertiesDialog() {
                 </label>
               ))}
             </span>
-            {(["Left", "Top", "Right", "Bottom"] as const).map((side, i) => (
-              <MarginRow key={side} label={`${side} margin (${unit})`} value={v.margins[i]!} unit={unit} testId={`cell-margin-${side.toLowerCase()}`} onChange={(um) => set({ margins: v.margins.map((m, j) => (j === i ? um : m)) as CellDialogValues["margins"] })} />
-            ))}
+            {!sch &&
+              (["Left", "Top", "Right", "Bottom"] as const).map((side, i) => (
+                <MarginRow key={side} label={`${side} margin (${unit})`} value={v.margins[i]!} unit={unit} testId={`cell-margin-${side.toLowerCase()}`} onChange={(um) => set({ margins: v.margins.map((m, j) => (j === i ? um : m)) as CellDialogValues["margins"] })} />
+              ))}
           </div>
         </div>
         <div className="dialog-footer">

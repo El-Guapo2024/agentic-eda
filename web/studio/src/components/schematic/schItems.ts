@@ -13,8 +13,9 @@ import { fieldBox, fieldItems, isShownField, type FieldItem } from "../../kicad-
 import { hitPin, pinBox, pinById, pinItems } from "../../kicad-port/schPins";
 import { sheetPinBox, sheetPinById, sheetPinItems } from "../../kicad-port/schSheetPinItems";
 import { schTextBox } from "../../kicad-port/schTextItem";
+import { cellHitDistance, isSelectableCell } from "../../kicad-port/tables";
 
-export type SchItemKind = "symbol" | "power" | "wire" | "label" | "text" | "no_connect" | "bus_entry" | "junction" | "line" | "sheet" | "sheet_pin" | "graphic" | "field" | "pin";
+export type SchItemKind = "symbol" | "power" | "wire" | "label" | "text" | "no_connect" | "bus_entry" | "junction" | "line" | "sheet" | "sheet_pin" | "graphic" | "table" | "tablecell" | "field" | "pin";
 
 export interface SchItemRef {
   id: string;
@@ -86,6 +87,12 @@ export function allItems(sch: Schematic): SchItemRef[] {
   for (const j of sch.junctions ?? []) if (j.id) out.push({ id: j.id, kind: "junction" });
   for (const l of sch.lines ?? []) if (l.id) out.push({ id: l.id, kind: "line" });
   for (const g of sch.graphics ?? []) if (g.id) out.push({ id: g.id, kind: "graphic" });
+  // A table (`SCH_TABLE`) and, above it, its cells (`SCH_TABLECELL`): a click picks a cell, a window the table.
+  for (const t of sch.tables ?? []) {
+    if (!t.id) continue;
+    out.push({ id: t.id, kind: "table" });
+    for (const c of t.cells) if (isSelectableCell(c)) out.push({ id: c.id, kind: "tablecell" });
+  }
   for (const s of sch.sheets) if (s.id) out.push({ id: s.id, kind: "sheet" });
   // The pins of those sheets (`SCH_SHEET_PIN_T`), above their sheet: each is selected, moved along the border, edited and deleted on its own.
   for (const p of sheetPinItems(sch)) out.push({ id: p.id, kind: "sheet_pin" });
@@ -162,6 +169,14 @@ export function itemBounds(sch: Schematic, ref: SchItemRef): Box | null {
       const g = (sch.graphics ?? []).find((x) => x.id === ref.id);
       return g ? graphicBounds(g) : null;
     }
+    case "table": {
+      const t = (sch.tables ?? []).find((x) => x.id === ref.id);
+      return t ? { minX: t.bbox[0], minY: t.bbox[1], maxX: t.bbox[2], maxY: t.bbox[3] } : null;
+    }
+    case "tablecell": {
+      const c = (sch.tables ?? []).flatMap((t) => t.cells).find((x) => x.id === ref.id);
+      return c ? boxOfPoints(c.corners as unknown as P[]) : null;
+    }
     case "field": {
       const f = fieldIndex(sch).get(ref.id);
       return f ? fieldBox(f.field, measureStrokeText) : null;
@@ -205,6 +220,13 @@ export function hitItem(sch: Schematic, ref: SchItemRef, p: P, tol: number): boo
       const corners: P[] = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
       return distToPolyline(p, corners, true) <= tol;
     }
+    // A table defers to its cells (`SCH_TABLE::HitTest` is for a window; a click is `SCH_TABLECELL::HitTest`).
+    case "table":
+      return false;
+    case "tablecell": {
+      const c = (sch.tables ?? []).flatMap((t) => t.cells).find((x) => x.id === ref.id);
+      return c ? cellHitDistance(c, p[0], p[1]) <= tol : false;
+    }
     case "pin": {
       const pin = pinById(sch, ref.id);
       return pin ? hitPin(pin, p, tol, measureStrokeText) : false;
@@ -238,6 +260,8 @@ export function boxItems(sch: Schematic, box: [number, number, number, number], 
   const pins: string[] = [];
   for (const ref of allItems(sch)) {
     if (!pick(ref.id)) continue;
+    // A window selects a table whole, not its cells (`SELECTION_TOOL::FilterCollectorForTableCells`).
+    if (ref.kind === "tablecell") continue;
     const ib = itemBounds(sch, ref);
     if (!ib) continue;
     if (crossing ? boxesOverlap(ib, b) : boxEncloses(b, ib)) (ref.kind === "pin" ? pins : out).push(ref.id);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { BoardStatsReply, BoardTable } from "../api/types";
 import { fixtureTable as table } from "./tableFixture";
 import { allItemIds } from "../components/canvas/clipboard";
-import { extremeCell, rowsOf, colsOf, shiftColsAfterInsert, shiftRowsAfterInsert, autoPenFor, blockBounds, boardNumbersOf, tableCellIds, canMerge, canUnmerge, cellAddress, cellById, cellDialogValues, cellEditOf, cellHitDistance, cellItemId, csvFileName, drawTableBox, drawTableGrid, escapeCsv, gridColumn, parseCellItemId, polygonDistance, selectColumns, selectRows, selectTables, tableCsv, tableDialogValues, tablePatchOf, widthAfterToggle } from "./tables";
+import { promoteCells, extremeCell, rowsOf, colsOf, shiftColsAfterInsert, shiftRowsAfterInsert, autoPenFor, blockBounds, boardNumbersOf, schCellAddress, schDrawTableGrid, tableCellIds, canMerge, canUnmerge, cellAddress, cellById, cellDialogValues, cellEditOf, cellHitDistance, cellItemId, csvFileName, drawTableBox, drawTableGrid, escapeCsv, gridColumn, parseCellItemId, polygonDistance, selectColumns, selectRows, selectTables, tableCsv, tableDialogValues, tablePatchOf, widthAfterToggle } from "./tables";
 
 
 const boardOf = (...tables: BoardTable[]) => ({ drawings: { shapes: [], texts: [], groups: [], dimensions: [], dimension_settings: {} as never, tables } });
@@ -184,4 +184,28 @@ test("the board's numbers for Place Board Characteristics are kicad-cli's statis
   assert.equal(boardNumbersOf({ ok: false, message: "no kicad-cli" } as BoardStatsReply), null);
   assert.equal(boardNumbersOf({ ok: true } as BoardStatsReply), null);
   assert.equal(boardNumbersOf({ ...stats, pad_properties: undefined })!.press_fit_pads, 0, "no pad property entries is none");
+});
+
+test("Draw Table on a sheet: columns of 15 glyphs, rows of 2, cells of at least 5 by 2 grid cells, rounded to the grid (SCH_DRAWING_TOOLS::DrawTable)", () => {
+  // 50 mil text, a 1.27 mm grid: 19.05 mm columns, 2.54 mm rows
+  assert.deepEqual(schDrawTableGrid([0, 0], [20_000, 5_000], 1_270, 1_270), { cols: 1, rows: 1, cellW: 20_320, cellH: 5_080 }, "20 mm holds one column: 15.7 glyph widths round to 16 grid cells");
+  assert.deepEqual(schDrawTableGrid([0, 0], [60_000, 12_000], 1_270, 1_270), { cols: 3, rows: 4, cellW: 20_320, cellH: 2_540 }, "60 mm is three columns of 20 mm; 12 mm is four rows of 3 mm, which the grid rounds to 2 cells");
+  // never fewer than one cell, never smaller than 5 by 2 grid cells, whichever way the cursor went
+  assert.deepEqual(schDrawTableGrid([0, 0], [-5_000, 100], 1_270, 1_270), { cols: 1, rows: 1, cellW: 6_350, cellH: 2_540 });
+  assert.deepEqual(schDrawTableGrid([100, 100], [100, 100], 1_270, 2_540), { cols: 1, rows: 1, cellW: 12_700, cellH: 5_080 });
+});
+
+test("a sheet's cell address counts the row from 0, a board's from 1", () => {
+  assert.equal(schCellAddress(0, 0), "A0");
+  assert.equal(schCellAddress(3, 1), "B3");
+  assert.equal(cellAddress(0, 0), "A1");
+});
+
+test("a selected cell stands for its table in Move, Rotate and Lock (RequestSelection with aPromoteCellSelections), once each", () => {
+  const a = table(2, 2);
+  const tables = [a, { ...table(1, 1), id: "tbl_b" }];
+  assert.deepEqual(promoteCells([cellItemId("tbl_a", 0, 1), cellItemId("tbl_a", 1, 1), "R1", "tbl_b"], tables), ["tbl_a", "R1", "tbl_b"]);
+  // an id that merely looks like a cell of a table the sheet does not have is left alone, and so is a table's own id
+  assert.deepEqual(promoteCells(["tbl_zz:0:1", "tbl_a"], tables), ["tbl_zz:0:1", "tbl_a"]);
+  assert.deepEqual(promoteCells(["tbl_a:0:0"], undefined), ["tbl_a:0:0"]);
 });

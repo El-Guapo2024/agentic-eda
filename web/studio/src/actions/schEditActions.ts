@@ -13,6 +13,7 @@ import { getGridOverrides } from "../state/gridOverrides";
 import { getGridSettings } from "../state/gridSettings";
 import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-port/schConvertText";
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
+import { promoteCells } from "../kicad-port/tables";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 import { registerSchFieldActions } from "./schFieldActions";
 import { registerSchGroupActions } from "./schGroupActions";
@@ -61,7 +62,8 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   const lock = (mode: LockMode) =>
     schematicOnly(() => {
       if (!sch) return;
-      const cmd = lockCmd(mode, requestSelection(), new Set(sch.locked ?? []));
+      // A table is what is locked, not a cell of it (the file knows only `(locked yes)` of the `(table`): the cells selected stand for their tables.
+      const cmd = lockCmd(mode, promoteCells(requestSelection(), sch.tables), new Set(sch.locked ?? []));
       if (cmd) void api.cmd({ op: "sch_edit", ...cmd });
     });
   m.set("eeschema.InteractiveEdit.lock", lock("lock"));
@@ -110,6 +112,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   m.set("eeschema.InteractiveDrawing.drawArc", arm("sch_arc"));
   m.set("eeschema.InteractiveDrawing.drawBezier", arm("sch_bezier"));
   m.set("eeschema.InteractiveDrawing.drawTextBox", arm("sch_textbox"));
+  m.set("eeschema.InteractiveDrawing.drawTable", arm("sch_table"));
   m.set("eeschema.InteractiveDrawing.drawRuleArea", arm("sch_rule_area"));
   m.set("eeschema.InteractiveDrawing.placeClassLabel", arm("sch_directive"));
 

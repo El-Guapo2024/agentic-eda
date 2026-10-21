@@ -13,6 +13,7 @@ import { boardNumbersOf, tablesOf } from "../kicad-port/tables";
 /** The board's tables, selection and verbs as the table actions use them. */
 export function boardTableEditor(ctx: CommonActionContext): TableEditor {
   return {
+    scope: "pcb",
     tables: () => tablesOf(ctx.api.getState().board),
     selection: () => [...ctx.api.getState().selection],
     setSelection: (ids) => {

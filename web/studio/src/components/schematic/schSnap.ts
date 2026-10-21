@@ -148,6 +148,10 @@ function kindOfSelected(sch: Schematic, id: string): SchItemKind {
       return "sheet";
     case "graphic":
       return "shape";
+    case "table":
+    case "tablecell":
+      // `EE_GRID_HELPER::GetItemGrid` has no case for a table: the graphics grid
+      return "shape";
     case "field":
       return "field";
     case "pin":
@@ -273,6 +277,7 @@ export function toolCategory(tool: string): GridCategory {
     case "sch_arc":
     case "sch_bezier":
     case "sch_textbox":
+    case "sch_table":
       return "graphics";
     case "sch_text":
       return "text";
