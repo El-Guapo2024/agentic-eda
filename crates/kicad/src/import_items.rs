@@ -22,12 +22,14 @@ use crate::sexpr::{self, Sexpr};
 pub(crate) struct ItemRef {
     pub uuid: Option<String>,
     pub locked: bool,
+    /// The hatch of a shape (`(fill hatch)`, `(fill reverse_hatch)`, `(fill cross_hatch)`), which `Shape` has no field for.
+    pub hatch: Option<eda_model::pcb_items::HatchKind>,
 }
 
 impl ItemRef {
-    /// Read the `(uuid ..)`/`(tstamp ..)` and `locked` of one parsed item.
+    /// Read the `(uuid ..)`/`(tstamp ..)`, `locked` and hatch of one parsed item.
     pub(crate) fn of(item: &[Sexpr]) -> ItemRef {
-        ItemRef { uuid: item_uuid(item), locked: is_locked(item) }
+        ItemRef { uuid: item_uuid(item), locked: is_locked(item), hatch: sexpr::find(item, "fill").and_then(|f| sexpr::txt(f, 1)).and_then(eda_model::pcb_items::HatchKind::from_token) }
     }
 }
 
@@ -57,6 +59,8 @@ pub(crate) struct Refs {
     pub texts: Vec<ItemRef>,
     pub dimensions: Vec<ItemRef>,
     pub barcodes: Vec<ItemRef>,
+    /// The items of `eda_model::pcb_items` (text boxes, ..).
+    pub board_items: crate::pcb_items_io::ItemRefs,
     pub tables: Vec<ItemRef>,
 }
 
@@ -92,6 +96,9 @@ impl Refs {
             note(&self.texts, dr.texts.iter().map(|t| t.id.as_str()).collect());
             note(&self.dimensions, dr.dimensions.iter().map(|d| d.id.as_str()).collect());
             note(&self.barcodes, dr.barcodes.iter().map(|b| b.id.as_str()).collect());
+            note(&self.board_items.text_boxes, dr.board_items.text_boxes.iter().map(|t| t.id.as_str()).collect());
+            note(&self.board_items.images, dr.board_items.images.iter().map(|i| i.id.as_str()).collect());
+            note(&self.board_items.points, dr.board_items.points.iter().map(|p| p.id.as_str()).collect());
             note(&self.tables, dr.tables.iter().map(|t| t.id.as_str()).collect());
         }
 

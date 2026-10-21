@@ -7,7 +7,9 @@
 // or re-spanning an existing via isn't a field edit there either, it's
 // delete-and-redraw).
 import { useEffect, useState } from "react";
+import type { Cmd } from "../api/types";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
+import { canFill, fillOf, fillWidthError, SHAPE_FILL_CHOICES, type ShapeFill } from "../kicad-port/shapeFill";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, formatXY, umFrom, umTo } from "../state/units";
 
@@ -28,7 +30,8 @@ export function ItemPropertiesDialog() {
   const [viaDrill, setViaDrill] = useState(0);
   const [shapeLayer, setShapeLayer] = useState("");
   const [shapeWidth, setShapeWidth] = useState(0);
-  const [shapeFilled, setShapeFilled] = useState(false);
+  const [shapeFill, setShapeFill] = useState<ShapeFill>("none");
+  const [shapeError, setShapeError] = useState("");
 
   // Populate the editable copies whenever the dialog opens on a
   // (possibly different) item -- not every render, or a mid-edit
@@ -41,7 +44,8 @@ export function ItemPropertiesDialog() {
     if (shape) {
       setShapeLayer(shape.layer);
       setShapeWidth(umTo(shape.stroke_width, units));
-      setShapeFilled(shape.filled);
+      setShapeFill(fillOf(shape));
+      setShapeError("");
     }
     setWidth("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -113,13 +117,28 @@ export function ItemPropertiesDialog() {
                 <span>
                   <input type="number" step="any" value={shapeWidth} onChange={(e) => setShapeWidth(Number(e.target.value) || 0)} style={{ width: 90 }} /> {units}
                 </span>
-                <span>Filled</span>
-                <span>
-                  <input type="checkbox" checked={shapeFilled} onChange={(e) => setShapeFilled(e.target.checked)} />
-                </span>
+                {canFill(shape.kind) && (
+                  <>
+                    <span>Fill</span>
+                    <span>
+                      <select value={shapeFill} onChange={(e) => setShapeFill(e.target.value as ShapeFill)} data-testid="shape-fill">
+                        {SHAPE_FILL_CHOICES.map((c) => (
+                          <option key={c.value} value={c.value}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </>
+                )}
               </>
             )}
           </div>
+          {shape && shapeError && (
+            <p style={{ color: "var(--chrome-error, #d33)", fontSize: 11, marginTop: 10 }} data-testid="shape-error">
+              {shapeError}
+            </p>
+          )}
           {track && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>Net and layer have no edit command yet -- delete and redraw to change either.</p>}
           {via && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>Net and layer span have no edit command yet, same as real KiCad's own dialog -- delete and redraw to change either.</p>}
         </div>
@@ -153,7 +172,14 @@ export function ItemPropertiesDialog() {
               className="primary"
               onClick={async () => {
                 const stroke_width = Math.round(umFrom(shapeWidth, units));
-                if (await api.cmd({ op: "edit_shape", id, layer: shapeLayer, stroke_width, filled: shapeFilled })) close();
+                // `DIALOG_SHAPE_PROPERTIES::Validate`: a fill that is not solid needs a line to be seen by.
+                const error = canFill(shape.kind) ? fillWidthError(shape.kind, shapeFill, stroke_width) : null;
+                setShapeError(error ?? "");
+                if (error) return;
+                // The layer and the line width as before, then the fill as one of the five choices: one undo step.
+                const cmds: Cmd[] = [{ op: "edit_shape", id, layer: shapeLayer, stroke_width, filled: shapeFill === "solid" }];
+                if (canFill(shape.kind) && shapeFill !== fillOf(shape)) cmds.push({ op: "pcb_item", verb: "set_shape_style", ids: [id], fill: shapeFill });
+                if (await api.cmdBatch(cmds)) close();
               }}
             >
               Apply

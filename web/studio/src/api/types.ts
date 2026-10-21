@@ -11,6 +11,7 @@
 
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
+import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
 import type { TableCmdWire } from "./tableTypes";
 import type { TuningPattern } from "./tuneTypes";
 
@@ -462,11 +463,19 @@ export interface TeardropSettings {
 
 export type ShapeKind = "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
 
+/** A hatch line of a hatched shape: `[x1, y1, x2, y2]`, µm (the `SEG`s of `EDA_SHAPE::GetHatchLines`). */
+export type HatchLine = [Um, Um, Um, Um];
+
 interface ShapeCommon {
   id: string;
   layer: string;
   stroke_width: Um;
   filled: boolean;
+  /** The hatch kind of a hatched rectangle, circle or polygon (`FILL_T::HATCH`, `REVERSE_HATCH`, `CROSS_HATCH`); `filled` is false then. Absent for a shape that is not hatched. */
+  fill?: "hatch" | "reverse_hatch" | "cross_hatch";
+  /** The lines `EDA_SHAPE::UpdateHatching` makes of that hatch from the board as it is, and the width they are drawn with (the shape's line width). */
+  hatch_lines?: HatchLine[];
+  hatch_width?: Um;
 }
 
 export type Shape =
@@ -506,6 +515,13 @@ export interface Drawings {
   dimension_settings: DimensionSettings;
   /** The length-tuning patterns of the board (`PCB_TUNING_PATTERN`, crates/model/src/tuning.rs); each is also listed in `groups` with the tracks of its meander as members. */
   tuning_patterns?: TuningPattern[];
+  /** The board's text boxes (`PCB_TEXTBOX`) -- see api/pcbItemTypes.ts. Absent from a backend built before they existed. */
+  text_boxes?: BoardTextBox[];
+  /** The board's reference images (`PCB_REFERENCE_IMAGE`) -- see api/pcbItemTypes.ts. */
+  images?: BoardRefImage[];
+  /** The board's points (`PCB_POINT`) and barcodes (`PCB_BARCODE`) -- see api/pcbItemTypes.ts. */
+  points?: BoardPoint[];
+  barcodes?: BoardBarcode[];
   /** The tables of the board (`PCB_TABLE`, crates/model/src/table.rs), with the geometry `crates/cli/src/table_json.rs` works out. Absent when the board has none. */
   tables?: BoardTable[];
 }
@@ -1660,6 +1676,8 @@ export type Cmd =
   | ({ op: "sch_edit" } & SchEditCmd)
   /** Move, Drag, Rotate, Mirror and Align of every kind of schematic item (crates/ops/src/sch_move.rs) -- see api/schEditTypes.ts. */
   | ({ op: "sch_move" } & SchMoveCmd)
+  /** The board's text boxes, reference images, points and hatch fills (crates/ops/src/pcb_items.rs) -- see api/pcbItemTypes.ts. */
+  | ({ op: "pcb_item" } & PcbItemCmd)
   /** The board's tables (crates/ops/src/pcb_tables.rs): Draw Table, the Table Properties and Table Cell Properties dialogs, rows, columns, merged cells -- see api/tableTypes.ts. */
   | ({ op: "table" } & TableCmdWire)
   | ({ op: "sch_table" } & TableCmdWire)

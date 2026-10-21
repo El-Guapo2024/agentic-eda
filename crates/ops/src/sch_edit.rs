@@ -531,6 +531,7 @@ fn graphic_kind_name(s: &SchGraphicKind) -> &'static str {
         SchGraphicKind::TextBox { .. } => "text-box",
         SchGraphicKind::RuleArea { .. } => "rule-area",
         SchGraphicKind::Directive { .. } => "directive-label",
+        SchGraphicKind::Image { .. } => "image",
     }
 }
 
@@ -591,11 +592,27 @@ fn check_graphic(g: &SchGraphic) -> Result<(), Vec<CheckResult>> {
                 return bad("a directive label's pole cannot have a negative length");
             }
         }
+        SchGraphicKind::Image { scale_ppm, data, .. } => {
+            if *scale_ppm <= 0 {
+                return bad("an image's scale must be a positive number");
+            }
+            if eda_model::image_info::header_of_base64(data).is_none() {
+                return bad("an image needs the data of a PNG, JPEG, GIF or BMP file");
+            }
+        }
     }
     Ok(())
 }
 
+/// An image's data without the white space a pasted or typed text may have.
+fn compact_image(graphic: &mut SchGraphic) {
+    if let SchGraphicKind::Image { data, .. } = &mut graphic.shape {
+        *data = eda_model::image_info::compact(data);
+    }
+}
+
 fn add_graphic(sch: &mut SchematicSection, mut graphic: SchGraphic) -> Result<(), Vec<CheckResult>> {
+    compact_image(&mut graphic);
     check_graphic(&graphic)?;
     graphic.id = String::new();
     sch.extras.graphics.push(graphic);
@@ -614,10 +631,17 @@ fn delete_graphic(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckR
 }
 
 fn edit_graphic(sch: &mut SchematicSection, id: &str, mut graphic: SchGraphic) -> Result<(), Vec<CheckResult>> {
-    check_graphic(&graphic)?;
     let Some(i) = sch.extras.graphics.iter().position(|g| g.id == id) else {
         return Err(vec![CheckResult::fail("ops_unknown_graphic", id, "no drawn graphic with this id")]);
     };
+    // The browser does not hold an image's pixels: an edit that sends none keeps the ones the image has.
+    if let (SchGraphicKind::Image { data, .. }, SchGraphicKind::Image { data: old, .. }) = (&mut graphic.shape, &sch.extras.graphics[i].shape) {
+        if data.is_empty() {
+            *data = old.clone();
+        }
+    }
+    compact_image(&mut graphic);
+    check_graphic(&graphic)?;
     graphic.id = id.to_string();
     if sch.extras.graphics[i] == graphic {
         return Err(vec![CheckResult::fail("ops_graphic_unchanged", id, "the graphic already has these properties")]);
@@ -875,6 +899,46 @@ mod tests {
         assert_eq!(sch.extras.graphics.len(), 1);
         assert!(!sch.extras.is_locked(&ids[0]), "a deleted item's lock goes with it");
         assert_eq!(b.apply(&Cmd::sch(SchCmd::DeleteGraphic { id: ids[0].clone() })).unwrap_err()[0].check, "ops_unknown_graphic");
+    }
+
+    fn image(x: i64, y: i64, scale_ppm: i64, rgb: [u8; 3]) -> SchGraphic {
+        SchGraphic::new(SchGraphicKind::Image { at: p(x, y), scale_ppm, data: eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, rgb, 254)) })
+    }
+
+    /// `SCH_DRAWING_TOOLS::PlaceImage` / `DIALOG_IMAGE_PROPERTIES`: an image is a graphic with the pixels of a file; an edit that sends no pixels keeps them, a size is the
+    /// pixels at their definition times the scale, and a file that is no image is refused.
+    #[test]
+    fn an_image_is_added_edited_with_or_without_its_pixels_moved_and_refused_when_it_is_no_image() {
+        let model = ConstraintModel::default();
+        let mut b = Board::new(design_with_schematic(empty_sheet()), &model, 100, 300);
+        let first = image(10_000, 20_000, 1_000_000, [1, 2, 3]);
+        let data = if let SchGraphicKind::Image { data, .. } = &first.shape { data.clone() } else { unreachable!() };
+        b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: first })).unwrap();
+        let id = b.design().schematic.as_ref().unwrap().extras.graphics[0].id.clone();
+        assert!(id.starts_with("img_"), "{id}");
+        let graphics = |b: &Board| b.design().schematic.as_ref().unwrap().extras.graphics.clone();
+        assert_eq!(crate::sch_scene::graphic_bounds_for_test(&graphics(&b)[0]), Some((p(7_000, 18_000), p(13_000, 22_000))), "60 x 40 px at 254 ppi are 6 mm x 4 mm around the centre");
+
+        // Image Properties: the position and the scale; the browser sends no pixels
+        b.apply(&Cmd::sch(SchCmd::EditGraphic { id: id.clone(), graphic: SchGraphic::new(SchGraphicKind::Image { at: p(0, 0), scale_ppm: 2_000_000, data: String::new() }) })).unwrap();
+        match &graphics(&b)[0].shape {
+            SchGraphicKind::Image { at, scale_ppm, data: kept } => assert_eq!((*at, *scale_ppm, kept.as_str()), (p(0, 0), 2_000_000, data.as_str()), "the pixels stay"),
+            other => panic!("{other:?}"),
+        }
+        // new pixels replace them
+        b.apply(&Cmd::sch(SchCmd::EditGraphic { id: id.clone(), graphic: image(0, 0, 2_000_000, [9, 9, 9]) })).unwrap();
+        assert!(matches!(&graphics(&b)[0].shape, SchGraphicKind::Image { data: d, .. } if *d != data));
+        b.apply(&Cmd::sch(SchCmd::SetLocked { ids: vec![id.clone()], locked: true })).unwrap();
+        assert!(b.design().schematic.as_ref().unwrap().extras.is_locked(&id), "an image locks like any graphic");
+
+        let refuse = |b: &mut Board, g: SchGraphic| assert_eq!(b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: g })).unwrap_err()[0].check, "ops_bad_graphic");
+        refuse(&mut b, image(0, 0, 0, [1, 1, 1]));
+        refuse(&mut b, image(0, 0, -1, [1, 1, 1]));
+        refuse(&mut b, SchGraphic::new(SchGraphicKind::Image { at: p(0, 0), scale_ppm: 1_000_000, data: "AAAA".into() }));
+        refuse(&mut b, SchGraphic::new(SchGraphicKind::Image { at: p(0, 0), scale_ppm: 1_000_000, data: String::new() }));
+        assert_eq!(graphics(&b).len(), 1);
+        b.apply(&Cmd::sch(SchCmd::DeleteGraphic { id })).unwrap();
+        assert!(graphics(&b).is_empty());
     }
 
     #[test]

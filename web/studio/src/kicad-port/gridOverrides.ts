@@ -94,7 +94,7 @@ export function selectionGrid(categories: readonly GridCategory[], size: (catego
 // ----------------------------------------------------------------------------------------------------------------------------------------- item kinds
 
 /** What the board editor's grid helper calls an item (`PCB_GRID_HELPER::GetItemGrid`: by `Type()`). */
-export type PcbItemKind = "footprint" | "pad" | "track" | "via" | "shape" | "dimension" | "text" | "field" | "zone" | "group" | "other";
+export type PcbItemKind = "footprint" | "pad" | "track" | "via" | "shape" | "dimension" | "text" | "field" | "zone" | "group" | "textbox" | "image" | "barcode" | "point" | "other";
 
 /** `PCB_GRID_HELPER::GetItemGrid`. */
 export function pcbItemGrid(kind: PcbItemKind | null | undefined): GridCategory {
@@ -108,6 +108,10 @@ export function pcbItemGrid(kind: PcbItemKind | null | undefined): GridCategory 
       return "text";
     case "shape":
     case "dimension":
+    // `PCB_TEXTBOX_T`, `PCB_REFERENCE_IMAGE_T` and `PCB_BARCODE_T` are graphics too (a `PCB_POINT_T` takes the current grid).
+    case "textbox":
+    case "image":
+    case "barcode":
       return "graphics";
     case "track":
       return "wires";

@@ -41,7 +41,7 @@ const FILLABLE: ReadonlySet<SchGraphicShape["type"]> = new Set(["rectangle", "ci
 /** The graphic with the spec applied, or null when nothing about it would change. */
 export function editedGraphic(g: SchGraphic, spec: GlobalEditSpec): SchGraphic | null {
   const kind = g.shape.type;
-  const reached = kind === "text_box" ? spec.kinds.textBoxes : kind === "rule_area" ? spec.kinds.ruleAreas : kind === "directive" ? false : spec.kinds.shapes;
+  const reached = kind === "text_box" ? spec.kinds.textBoxes : kind === "rule_area" ? spec.kinds.ruleAreas : kind === "directive" || kind === "image" ? false : spec.kinds.shapes;
   if (!reached) return null;
   const next: SchGraphic = { ...g, shape: { ...g.shape } as SchGraphicShape };
   if (next.shape.type === "text_box") {

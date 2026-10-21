@@ -13,9 +13,10 @@ import { circumcircle } from "./trackArc";
 import { fieldAsText, fieldById } from "./fpFields";
 import { footprintBox } from "./footprintBox";
 import { groupLeaves } from "./groupTree";
+import { extraItemById, type ExtraKind } from "./pcbExtraItems";
 import { cellById, tableById } from "./tables";
 
-export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field" | "table" | "tablecell";
+export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field" | "table" | "tablecell" | ExtraKind;
 
 /**
  * The id a pad is selected, highlighted and listed under: `REF.NUMBER`, with `#k` after it for the k-th pad (from 2) of the footprint that
@@ -66,6 +67,9 @@ export function itemKind(board: BoardState, id: string): ItemKind | null {
   if (dr?.texts.some((t) => t.id === id)) return "text";
   if (dr?.dimensions.some((d) => d.id === id)) return "dimension";
   if (dr?.groups.some((g) => g.id === id)) return "group";
+  // The text boxes, images, points and barcodes (GAPS.md item 24).
+  const extra = extraItemById(board, id);
+  if (extra) return extra.kind;
   // A table (`PCB_TABLE`), and its cells (`<table id>:<row>:<col>`, `PCB_TABLECELL`).
   if (dr?.tables?.some((t) => t.id === id)) return "table";
   if (id.includes(":") && cellById(board, id)) return "tablecell";
@@ -143,7 +147,7 @@ export function itemPosition(board: BoardState, id: string): [number, number] | 
       return hit ? [hit.field.x, hit.field.y] : null;
     }
     default:
-      return null;
+      return extraItemById(board, id)?.position ?? null;
   }
 }
 
@@ -213,7 +217,7 @@ export function itemBounds(board: BoardState, id: string, opts: { includeText?: 
       return hit && hit.field.text !== "" ? textBounds(fieldAsText(hit.field)) : hit ? [hit.field.x, hit.field.y, hit.field.x, hit.field.y] : null;
     }
     default:
-      return null;
+      return extraItemById(board, id)?.bounds ?? null;
   }
 }
 

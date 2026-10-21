@@ -41,6 +41,7 @@ import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialo
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
 import { TextDialog } from "./components/TextDialog";
+import { PcbItemDialogs } from "./components/PcbItemDialogs";
 import { ItemPropertiesDialog } from "./components/ItemPropertiesDialog";
 import { MoveExactDialog } from "./components/MoveExactDialog";
 import { PcbParityDialogs } from "./components/PcbParityDialogs";
@@ -263,6 +264,7 @@ function StudioFrame() {
       <NetInspectorDialog />
       <ZoneDialog />
       <TextDialog />
+      <PcbItemDialogs />
       <ItemPropertiesDialog />
       <MoveExactDialog />
       <PcbParityDialogs />

@@ -6,6 +6,8 @@
 import type { Dispatch } from "react";
 import type { Action, StudioApi } from "../../state/store";
 import { openGroupDialog } from "../../state/commonDialogs";
+import { openBarcodeDialog, openRefImageDialog, openTextBoxDialog } from "../../state/pcbItemDialogs";
+import { barcodeToCmd } from "../../kicad-port/barcodeShapes";
 import { padById } from "../../kicad-port/pcbItems";
 import { fieldById } from "../../kicad-port/fpFields";
 import { tablesOf } from "../../kicad-port/tables";
@@ -21,6 +23,15 @@ export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch
     return;
   }
   if (api.textById(id)) dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "edit", id } });
+  // A text box's Properties are `DIALOG_TEXTBOX_PROPERTIES` (`PCB_BASE_EDIT_FRAME::ShowTextBoxPropertiesDialog`).
+  else if (api.getState().board?.drawings?.text_boxes?.some((t) => t.id === id)) {
+    const box = api.getState().board!.drawings!.text_boxes!.find((t) => t.id === id)!;
+    openTextBoxDialog({ id, box });
+  }
+  // A reference image's Properties are `DIALOG_REFERENCE_IMAGE_PROPERTIES` (`PCB_BASE_EDIT_FRAME::ShowReferenceImagePropertiesDialog`).
+  else if (api.getState().board?.drawings?.images?.some((i) => i.id === id)) openRefImageDialog({ id });
+  // A barcode's are `DIALOG_BARCODE_PROPERTIES` (`PCB_BASE_EDIT_FRAME::ShowBarcodePropertiesDialog`).
+  else if (api.getState().board?.drawings?.barcodes?.some((b) => b.id === id)) openBarcodeDialog({ id, barcode: barcodeToCmd(api.getState().board!.drawings!.barcodes!.find((b) => b.id === id)!) });
   // A zone gets the full dialog_copper_zones.cpp port (ZoneDialog.tsx),
   // same as "Add Zone" -- not the plain read-only-ish ItemPropertiesDialog
   // every other item here still uses.

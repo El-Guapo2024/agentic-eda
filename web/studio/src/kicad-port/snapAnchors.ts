@@ -50,6 +50,7 @@ export interface DragFilter {
   graphics?: boolean;
   text?: boolean;
   dimensions?: boolean;
+  points?: boolean;
 }
 
 export interface AnchorContext {
@@ -301,6 +302,11 @@ export function computeItemAnchors(out: AnchorList, item: SnapItem, ref: Pt, fro
     case "text":
       if (from && !allowed(filter, "text")) break;
       if (ctx.visible(item)) out.add(item.at, ANCHOR.ORIGIN, [item]);
+      break;
+    // `case PCB_POINT_T: if( aSelectionFilter && !aSelectionFilter->points ) break; if( checkVisibility( aItem ) ) addAnchor( aItem->GetPosition(), ORIGIN | SNAPPABLE, aItem, PT_CENTER );`
+    case "point":
+      if (!allowed(filter, "points")) break;
+      if (ctx.visible(item)) out.add(item.at, ANCHOR.ORIGIN | SNAP, [item], PT.CENTER);
       break;
   }
 }

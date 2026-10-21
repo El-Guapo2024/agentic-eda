@@ -70,6 +70,9 @@ mod lib_editors_tests;
 #[path = "review_tests.rs"]
 mod review_tests;
 #[cfg(test)]
+#[path = "pcb_items_tests.rs"]
+mod pcb_items_tests;
+#[cfg(test)]
 #[path = "table_tests.rs"]
 mod table_tests;
 
@@ -1384,6 +1387,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::PasteSch { fragment, dx, dy, .. } => format!("schematic paste --items {} --by {},{}", fragment.section.symbols.len() + fragment.section.power_symbols.len() + fragment.section.wires.len() + fragment.section.labels.len() + fragment.section.texts.len() + fragment.section.no_connects.len() + fragment.section.bus_entries.len() + fragment.section.junctions.len() + fragment.section.lines.len() + fragment.section.extras.graphics.len(), mm(*dx), mm(*dy)),
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
+        Cmd::PcbItem(c) => c.describe(),
         Cmd::Table(c) => c.describe(),
         Cmd::SchTable(c) => format!("schematic {}", c.describe()),
         Cmd::AddErcExclusion { check, location, .. } => format!("schematic erc-exclude {check:?} {location:?}"),
@@ -1650,6 +1654,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::PasteSch { .. } => "schematic-paste",
         Cmd::SchEdit(c) => c.kind(),
         Cmd::SchMove(c) => c.kind(),
+        Cmd::PcbItem(c) => c.kind(),
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
         Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
@@ -3406,7 +3411,7 @@ mod tests {
     /// independently of `reconcile_schematic`'s own. Two references, R1
     /// and R2, each starting on their own singleton net (so a later merge
     /// is unambiguous), no placement/routing section.
-    fn setup_schematic(dir: &Path) {
+    pub(super) fn setup_schematic(dir: &Path) {
         let part = |r: &str| Part {
             reference: r.into(),
             mpn: None,

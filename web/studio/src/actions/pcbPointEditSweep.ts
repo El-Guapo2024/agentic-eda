@@ -24,6 +24,7 @@ import {
   type EditPoint,
 } from "../kicad-port/pcbPointEdit";
 import { PointEntryDialog } from "../components/PcbPointEditDialogs";
+import { reshapeCmds } from "../kicad-port/shapeFill";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 
@@ -79,10 +80,14 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
         return;
       }
       if (item.shape.kind !== "polygon") return;
-      void applyEdit([{ op: "delete_shape", id: item.id }, { op: "add_shape", shape: shapeToCmd({ ...item.shape, pts: next.ring }) }], [item.id]);
+      const re = reshapeCmds(board, item.id, shapeToCmd({ ...item.shape, pts: next.ring }));
+      void applyEdit(re.cmds, re.removed);
       return;
     }
-    if (item.kind === "shape") void applyEdit([{ op: "delete_shape", id: item.id }, { op: "add_shape", shape: next.shape }], [item.id]);
+    if (item.kind === "shape") {
+      const re = reshapeCmds(board, item.id, next.shape);
+      void applyEdit(re.cmds, re.removed);
+    }
   };
 
   // ------------------------------------------------- Move Corner To... / Move Midpoint To...

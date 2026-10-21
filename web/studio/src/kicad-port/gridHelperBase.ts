@@ -35,6 +35,8 @@ export interface Visibility {
   layerVisible(layer: string): boolean;
   /** The layers that are drawn at full strength in high-contrast mode; null when the display is normal contrast. */
   highContrastLayers: ReadonlySet<string> | null;
+  /** The Points object (`LAYER_POINTS`) is on: a point that is not shown is not snapped to either. Absent means on. */
+  pointsVisible?: boolean;
 }
 
 /** A set of layers an item must be on to be snapped to, or every layer. */

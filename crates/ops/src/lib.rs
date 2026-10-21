@@ -82,6 +82,7 @@ mod sch_groups;
 mod pcb_paste;
 mod pcb_paste_special;
 mod design_blocks;
+pub mod pcb_items;
 mod pcb_props;
 mod pcb_table_builders;
 mod pcb_tables;
@@ -682,6 +683,9 @@ pub enum Cmd {
     /// `pcbnew.Control.repairBoard` (`BOARD_EDITOR_CONTROL::RepairBoard`): see [`board_control::repair_board`].
     /// Refused when there is nothing to repair, so no empty undo step is pushed.
     RepairBoard,
+    /// The board items the IR gained with GAPS.md item 24 (package P16): text boxes, reference images, points and the hatch fill of shapes -- one verb family, see
+    /// [`pcb_items::PcbItemCmd`]. On the wire: `{"op": "pcb_item", "verb": "add_text_box", "text_box": {..}}`.
+    PcbItem(pcb_items::PcbItemCmd),
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -2182,6 +2186,7 @@ impl Cmd {
             Cmd::PasteSch { .. } => vec!["paste"],
             Cmd::SchEdit(c) => c.ids(),
             Cmd::SchMove(c) => c.ids(),
+            Cmd::PcbItem(c) => c.ids(),
             Cmd::Table(c) | Cmd::SchTable(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::ClearErcExclusions => vec!["erc_exclusions"],
@@ -2771,6 +2776,7 @@ impl<'a> Board<'a> {
             Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode).map(|_| ()),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
+            Cmd::PcbItem(c) => self.apply_pcb_item(c),
             Cmd::Table(c) => self.apply_table(c),
             Cmd::SchTable(c) => self.apply_sch_table(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
@@ -3889,6 +3895,9 @@ impl<'a> Board<'a> {
             // and the `.kicad_pcb` writer and importer carry both.
             out.extend(dr.dimensions.iter().map(|d| d.id.clone()));
             out.extend(dr.groups.iter().map(|g| g.id.clone()));
+            out.extend(dr.barcodes.iter().map(|b| b.id.clone()));
+            // A point has no lock in the file (`parsePCB_POINT` takes none), so it is not lockable.
+            out.extend(dr.board_items.lockable_ids().map(String::from));
             // A table is locked as a whole (`(table .. (locked yes))`); its cells are not items of their own to lock.
             out.extend(dr.tables.iter().map(|t| t.id.clone()));
         }
@@ -3982,6 +3991,7 @@ impl<'a> Board<'a> {
                     d.layer = (*dest).to_string();
                 }
             }
+            dr.board_items.swap_layers(&|l| map.get(l).map(|d| (*d).to_string()));
         }
         Ok(())
     }
@@ -4012,6 +4022,7 @@ impl<'a> Board<'a> {
         if dr.shapes.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")]);
         }
+        dr.board_items.set_hatch(id, None);
         Ok(())
     }
 
@@ -4035,6 +4046,10 @@ impl<'a> Board<'a> {
         s.set_layer(layer.into());
         s.set_stroke_width(stroke_width);
         s.set_filled(filled);
+        // A solid fill takes the place of a hatch; "not filled" leaves one as it is (the fill choice is `SetShapeStyle`'s).
+        if filled {
+            dr.board_items.set_hatch(id, None);
+        }
         Ok(())
     }
 
@@ -5807,6 +5822,8 @@ mod import_graphics_tests;
 mod import_graphics_sch_tests;
 #[cfg(test)]
 mod pcb_groups_tests;
+#[cfg(test)]
+mod pcb_items_tests;
 #[cfg(test)]
 mod tuning_tests;
 #[cfg(test)]

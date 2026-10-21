@@ -22,11 +22,13 @@ import { drawStrokeWidthUm } from "../../kicad-port/layerDefaults";
 import { activeLayerName } from "../../kicad-port/layerPresets";
 import { carryStart } from "../../kicad-port/pcbTransform";
 import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
+import { EXTRA_KINDS, extraItemLabel } from "../../kicad-port/pcbExtraItems";
 import { fieldById } from "../../kicad-port/fpFields";
 import { isGroup, substituteSelection, topLevelGroup, withinScope } from "../../kicad-port/groupTree";
 import type { ToolId } from "../../state/store";
 import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/types";
 import { activeEditPoint, cmdShapeToShape, moveShapePoint, shapeEditPoints, shapeToCmd, type EditPoint } from "../../kicad-port/pcbPointEdit";
+import { reshapeCmds } from "../../kicad-port/shapeFill";
 import { applyCommands } from "../../actions/pcbSweepKit";
 import { picker } from "../../actions/pcbPicker";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
@@ -80,6 +82,7 @@ import { padAt } from "../../kicad-port/boardControlPick";
 import { canExclude, rcMenu } from "../../kicad-port/rcItems";
 import { drcMarkerAt, drcMenuContext, runMarkerMenu, selectMarkerDrc, showDrcInDialog, toMenuEntries } from "../../actions/checkerOps";
 import { askExclusionComment } from "../../state/checkerView";
+import { useImageVersion } from "./imageCache";
 import "../../styles/canvas.css";
 
 /** `ZONE_SETTINGS << aSrcZone` (zone_create_helper.cpp createZoneFromExisting): the fill + rule-area settings of an existing zone, as `api.addZone` takes them. */
@@ -93,7 +96,7 @@ function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
  * What a plain drag of a clicked item picks up. Every kind can be: the drop is one `move_items` (kicad-port/pcbTransform.ts `planCarry`), and a pad
  * stands for its footprint (`FilterCollectorForFreePads`) -- dragging a pad drags the footprint, as in pcbnew.
  */
-const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad", "field"]);
+const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad", "field", ...EXTRA_KINDS]);
 
 /** The tools whose clicks go through a grid helper: `BestSnapAnchor` on every event, or the router's `snapToItem`. */
 const PLACING_TOOLS = new Set<string>(["route", "diffpair", "tune", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "table", "measure", "drill_origin", "local_ratsnest", "picker"]);
@@ -331,6 +334,8 @@ export function Canvas() {
     dispatch({ type: "MARK_VIEW_INITIALIZED" });
   }, [board, containerSize, dispatch]);
 
+  // The reference images are bitmaps that arrive after the board does: the canvas paints again when one has.
+  const imageVersion = useImageVersion();
   // Render loop: repaint whenever anything visible changes.
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -436,7 +441,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, containerSize, imageVersion]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -549,6 +554,9 @@ export function Canvas() {
           const hit = board ? cellById(board, c.id) : undefined;
           return hit ? `Table cell ${cellAddress(hit.cell.row, hit.cell.col)}` : `Table cell ${c.id}`;
         }
+        default:
+          // The text boxes, images, points and barcodes (`GetItemDescription`).
+          return extraItemLabel(board, c.id);
       }
     },
     [api, board]
@@ -1288,11 +1296,12 @@ export function Canvas() {
     } else if (drag.kind === "tuneHandle") {
       void drag.drag.finish(api);
     } else if (drag.kind === "shapePoint") {
-      // A shape's id is its geometry's: dropping the handle makes a new shape (selected) in place of the old one, one undo step.
+      // A shape's id is its geometry's: dropping the handle makes a new shape (selected) in place of the old one, one undo step. A hatched shape is changed in place, to keep its hatch.
       const preview = shapePointPreview;
       setShapePointPreview(null);
       if (preview && JSON.stringify(shapeToCmd(preview.shape)) !== JSON.stringify(shapeToCmd(drag.base))) {
-        void applyCommands(api, dispatch, [{ op: "delete_shape", id: drag.shapeId }, { op: "add_shape", shape: shapeToCmd(preview.shape) }], [drag.shapeId]);
+        const re = reshapeCmds(board, drag.shapeId, shapeToCmd(preview.shape));
+        void applyCommands(api, dispatch, re.cmds, re.removed);
       }
     }
   };

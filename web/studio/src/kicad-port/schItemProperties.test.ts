@@ -395,3 +395,28 @@ test("graphicShapeWith follows the EDA_SHAPE setters and refuses a property the 
   assert.equal(graphicShapeWith(rect, "Radius", 4), null);
   assert.equal(graphicShapeWith({ type: "polygon", pts: [] }, "Start X", 4), null);
 });
+
+test("an image is a SCH_BITMAP with the rows of SCH_BITMAP_DESC; its scale and size are one edit_graphic that keeps the pixels", () => {
+  const s = sheet();
+  s.graphics = [...(s.graphics ?? []), graphic("img_a", { type: "image", at: { x: 50_000, y: 40_000 }, scale_ppm: 1_000_000, px: [120, 80], ppi: 254, hash: "h" })];
+  const item = schItemOf(s, "img_a")!;
+  assert.equal(item.type, "SCH_BITMAP");
+  assert.equal(schFriendlyName(item), "Image");
+  const rows = schGrid(s, ["img_a"], "mm").groups.map((g) => [g.caption, g.rows.map((r) => r.name)]);
+  assert.deepEqual(rows.map((r) => r[0]), ["Basic Properties", "Image Properties"]);
+  assert.deepEqual(rows[0]![1], ["Locked", "Position X", "Position Y"]);
+  assert.deepEqual(rows[1]![1], ["Scale", "Width", "Height"]);
+  // 120 px at 254 ppi are 12 mm
+  const sent = (name: string, value: number) => {
+    const cmds = edit(s, ["img_a"], name, value);
+    assert.equal(cmds.length, 1);
+    return (cmds[0] as unknown as { verb: string; id: string; graphic: { shape: Record<string, unknown> } });
+  };
+  const half = sent("Scale", 0.5);
+  assert.deepEqual([half.verb, half.id, half.graphic.shape], ["edit_graphic", "img_a", { type: "image", at: { x: 50_000, y: 40_000 }, scale_ppm: 500_000 }]);
+  assert.equal(sent("Width", 6_000).graphic.shape.scale_ppm, 500_000);
+  assert.equal(sent("Height", 16_000).graphic.shape.scale_ppm, 2_000_000);
+  assert.ok(!("data" in half.graphic.shape) && !("px" in half.graphic.shape) && !("hash" in half.graphic.shape), "no pixels and none of the state's description go back");
+  assert.deepEqual(edit(s, ["img_a"], "Scale", 1), []);
+  assert.deepEqual(edit(s, ["img_a"], "Position X", 51_000), [{ op: "sch_move", verb: "move", ids: ["img_a"], dx: 1_000, dy: 0 }]);
+});

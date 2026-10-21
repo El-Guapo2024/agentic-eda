@@ -24,6 +24,9 @@ import { shapeToCmd } from "./pcbPointEdit";
 import { circumcircle } from "./trackArc";
 import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
+import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import { registerExtraItemProperties } from "./pcbItemProperties";
+import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
 import { registerTableProperties, tableItemOf, tableItemsOf } from "./pcbTableProperties";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
@@ -45,6 +48,10 @@ export type PcbType =
   | "PCB_DIM_LEADER"
   | "PCB_DIM_CENTER"
   | "PCB_GROUP"
+  | "PCB_TEXTBOX"
+  | "PCB_REFERENCE_IMAGE"
+  | "PCB_POINT"
+  | "PCB_BARCODE"
   | "PCB_TABLE"
   | "PCB_TABLECELL";
 
@@ -63,6 +70,10 @@ export interface PcbItem {
   readonly shape?: Shape;
   readonly dim?: Dimension;
   readonly group?: Group;
+  readonly textBox?: BoardTextBox;
+  readonly image?: BoardRefImage;
+  readonly point?: BoardPoint;
+  readonly barcode?: BoardBarcode;
   /** A table (`PCB_TABLE`), or the table a cell (`PCB_TABLECELL`) is in. */
   readonly table?: BoardTable;
   readonly cell?: BoardTableCell;
@@ -93,7 +104,7 @@ export function pcbContext(board: BoardState, units: LengthUnit): PcbCtx {
   for (const z of rt?.zones ?? []) if (z.net) nets.add(z.net);
   const copper = board.layers;
   const all = [...copper, ...enabledOptionalLayers(board.board_rules?.layer_setup)];
-  const used = [...(board.drawings?.shapes ?? []).map((s) => s.layer), ...(board.drawings?.texts ?? []).map((t) => t.layer), ...(board.drawings?.dimensions ?? []).map((d) => d.layer)];
+  const used = [...(board.drawings?.shapes ?? []).map((s) => s.layer), ...(board.drawings?.texts ?? []).map((t) => t.layer), ...(board.drawings?.dimensions ?? []).map((d) => d.layer), ...(board.drawings?.text_boxes ?? []).map((t) => t.layer), ...(board.drawings?.images ?? []).map((i) => i.layer), ...(board.drawings?.points ?? []).map((p) => p.layer)];
   for (const l of used) if (!all.includes(l)) all.push(l);
   return {
     board,
@@ -133,6 +144,14 @@ export function pcbItemOf(board: BoardState, id: string): PcbItem | null {
   if (dim) return { type: DIM_TYPE[dim.kind], id, dim };
   const group = dr?.groups.find((g) => g.id === id);
   if (group) return { type: "PCB_GROUP", id, group };
+  const textBox = dr?.text_boxes?.find((t) => t.id === id);
+  if (textBox) return { type: "PCB_TEXTBOX", id, textBox };
+  const image = dr?.images?.find((i) => i.id === id);
+  if (image) return { type: "PCB_REFERENCE_IMAGE", id, image };
+  const point = dr?.points?.find((p) => p.id === id);
+  if (point) return { type: "PCB_POINT", id, point };
+  const barcode = dr?.barcodes?.find((b) => b.id === id);
+  if (barcode) return { type: "PCB_BARCODE", id, barcode };
   const tableItem = tableItemOf(board, id);
   if (tableItem) return tableItem;
   const pad = id.includes(".") ? padById(board, id) : null;
@@ -160,6 +179,10 @@ function indexOf(board: BoardState): Map<string, PcbItem> {
   for (const text of dr?.texts ?? []) put({ type: "PCB_TEXT", id: text.id, text });
   for (const dim of dr?.dimensions ?? []) put({ type: DIM_TYPE[dim.kind], id: dim.id, dim });
   for (const group of dr?.groups ?? []) put({ type: "PCB_GROUP", id: group.id, group });
+  for (const textBox of dr?.text_boxes ?? []) put({ type: "PCB_TEXTBOX", id: textBox.id, textBox });
+  for (const image of dr?.images ?? []) put({ type: "PCB_REFERENCE_IMAGE", id: image.id, image });
+  for (const point of dr?.points ?? []) put({ type: "PCB_POINT", id: point.id, point });
+  for (const barcode of dr?.barcodes ?? []) put({ type: "PCB_BARCODE", id: barcode.id, barcode });
   for (const item of tableItemsOf(board)) put(item);
   return out;
 }
@@ -202,6 +225,14 @@ export function typeName(item: PcbItem): string {
       return "Leader";
     case "PCB_GROUP":
       return "Group";
+    case "PCB_TEXTBOX":
+      return "Text Box";
+    case "PCB_REFERENCE_IMAGE":
+      return "Reference Image";
+    case "PCB_POINT":
+      return "Point";
+    case "PCB_BARCODE":
+      return "Barcode";
     case "PCB_TABLE":
       return "Table";
     case "PCB_TABLECELL":
@@ -212,7 +243,7 @@ export function typeName(item: PcbItem): string {
 }
 
 /** Every `KICAD_T` name an item here can have (the choices of the Type property). */
-export const TYPE_NAMES: readonly string[] = ["Dimension", "Footprint", "Graphic", "Group", "Leader", "Pad", "Table", "Table Cell", "Text", "Track", "Via", "Zone"];
+export const TYPE_NAMES: readonly string[] = ["Barcode", "Dimension", "Footprint", "Graphic", "Group", "Leader", "Pad", "Point", "Reference Image", "Table", "Table Cell", "Text", "Text Box", "Track", "Via", "Zone"];
 
 /** `GetFriendlyName()`: the caption of a single selected item (`EDA_ITEM::GetFriendlyName`, `PCB_TRACK::`, `ZONE::`). */
 export function pcbFriendlyName(item: PcbItem): string {
@@ -243,6 +274,14 @@ export function pcbFriendlyName(item: PcbItem): string {
       return "Leader";
     case "PCB_GROUP":
       return "Group";
+    case "PCB_TEXTBOX":
+      return "Text Box";
+    case "PCB_REFERENCE_IMAGE":
+      return "Reference Image";
+    case "PCB_POINT":
+      return "Point";
+    case "PCB_BARCODE":
+      return "Barcode";
     case "PCB_TABLE":
       return "Table";
     case "PCB_TABLECELL":
@@ -330,6 +369,10 @@ export function positionOf(i: PcbItem): [number, number] {
   if (i.zone) return i.zone.outline[0] ?? [0, 0];
   if (i.text) return [i.text.x, i.text.y];
   if (i.dim) return [i.dim.start[0], i.dim.start[1]];
+  if (i.textBox) return i.textBox.pts[0] ?? i.textBox.start;
+  if (i.image) return [i.image.x, i.image.y];
+  if (i.point) return [i.point.x, i.point.y];
+  if (i.barcode) return [i.barcode.x, i.barcode.y];
   const s = i.shape;
   if (s) {
     if (s.kind === "arc") return arcShapeCenter(s) ?? [s.start[0], s.start[1]];
@@ -1257,14 +1300,15 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       owner: "EDA_SHAPE",
       name: "Fill",
       kind: "enum",
-      choices: () => [
-        { label: "None", value: 0 },
-        { label: "Solid", value: 1 },
-      ],
-      get: (i) => (i.shape!.filled ? 1 : 0),
+      // `UI_FILL_MODE`: None, Solid, Hatch, Reverse Hatch, Cross-hatch (`EDA_SHAPE::GetFillModeProp`), numbered in that order.
+      choices: () => SHAPE_FILL_CHOICES.map((c, n) => ({ label: c.label, value: n })),
+      get: (i) => SHAPE_FILL_CHOICES.findIndex((c) => c.value === fillOf(i.shape!)),
       // `fillAvailable`: polygons, rectangles, circles and Beziers (`PCB_SHAPE_DESC` takes the Bezier away again)
       available: (i) => kindOf(i) === "polygon" || kindOf(i) === "rect" || kindOf(i) === "circle",
-      set: (i, v) => (i.shape!.filled === (num(v) === 1) ? [] : [{ op: "edit_shape", id: i.id, layer: i.shape!.layer, stroke_width: i.shape!.stroke_width, filled: num(v) === 1 }]),
+      set: (i, v) => {
+        const fill = SHAPE_FILL_CHOICES[Math.round(num(v))]?.value;
+        return fill === undefined || fill === fillOf(i.shape!) ? [] : [{ op: "pcb_item", verb: "set_shape_style", ids: [i.id], fill }];
+      },
     },
     SHAPE
   );
@@ -1495,6 +1539,9 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     "Group Properties"
   );
+
+  // The text boxes, reference images, points and barcodes (GAPS.md item 24): kicad-port/pcbItemProperties.ts.
+  registerExtraItemProperties(pm, add, (c) => layerChoicesOf(c, c.allLayers));
 
   pm.rebuild();
   return pm;

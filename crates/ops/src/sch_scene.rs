@@ -972,8 +972,13 @@ pub(crate) fn graphic_position(g: &SchGraphic) -> Point {
         SchGraphicKind::Rectangle { start, .. } | SchGraphicKind::Arc { start, .. } | SchGraphicKind::Bezier { start, .. } | SchGraphicKind::TextBox { start, .. } => *start,
         SchGraphicKind::Circle { center, .. } => *center,
         SchGraphicKind::Polygon { pts } | SchGraphicKind::RuleArea { pts, .. } => pts.first().copied().unwrap_or_default(),
-        SchGraphicKind::Directive { at, .. } => *at,
+        SchGraphicKind::Directive { at, .. } | SchGraphicKind::Image { at, .. } => *at,
     }
+}
+
+#[cfg(test)]
+pub(crate) fn graphic_bounds_for_test(g: &SchGraphic) -> Option<(Point, Point)> {
+    graphic_box(g)
 }
 
 fn graphic_box(g: &SchGraphic) -> Option<(Point, Point)> {
@@ -984,6 +989,11 @@ fn graphic_box(g: &SchGraphic) -> Option<(Point, Point)> {
         SchGraphicKind::Bezier { start, c1, c2, end } => points_box(&[*start, *c1, *c2, *end]),
         SchGraphicKind::Polygon { pts } | SchGraphicKind::RuleArea { pts, .. } => points_box(pts),
         SchGraphicKind::Directive { at, .. } => Some((*at, *at)),
+        // `REFERENCE_IMAGE::GetBoundingBox`: `BOX2I::ByCenter( m_pos, size )`
+        SchGraphicKind::Image { at, scale_ppm, data } => {
+            let (w, h) = eda_model::image_info::header_of_base64(data).map_or((0, 0), |hd| eda_model::image_info::size_um(&hd, *scale_ppm));
+            Some((Point { x: at.x - w / 2, y: at.y - h / 2 }, Point { x: at.x - w / 2 + w, y: at.y - h / 2 + h }))
+        }
     }
 }
 

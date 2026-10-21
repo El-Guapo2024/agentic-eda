@@ -10,6 +10,7 @@
 import type { BoardState } from "../../api/types";
 import { PcbGridHelper, type GridEnv, type LayerSel, type SnapOverlay, type Visibility } from "../../kicad-port/pcbGridHelper";
 import { sceneOf, type SnapScene } from "../../kicad-port/snapScene";
+import { objectOn } from "../../kicad-port/appearance";
 import { computeVisibleGridSize } from "../../kicad-port/grid";
 import { gridSizeFor, pcbItemGrid, selectionGrid, type GridCategory, type GridOverrides, type PcbItemKind } from "../../kicad-port/gridOverrides";
 import { itemKind } from "../../kicad-port/pcbItems";
@@ -89,7 +90,7 @@ export class PcbSnap {
   /** What is drawn: a layer unless the Appearance panel turned it off, and in high-contrast mode only the active layer's items at full strength. */
   private visibility(): Visibility {
     const v = this.view!;
-    return { layerVisible: (layer) => v.layerVisible[layer] !== false, highContrastLayers: v.highContrast && v.activeLayer ? new Set([v.activeLayer]) : null };
+    return { layerVisible: (layer) => v.layerVisible[layer] !== false, highContrastLayers: v.highContrast && v.activeLayer ? new Set([v.activeLayer]) : null, pointsVisible: objectOn(v.layerVisible, "ly_points") };
   }
 
   private helperFor(tool: string): PcbGridHelper {

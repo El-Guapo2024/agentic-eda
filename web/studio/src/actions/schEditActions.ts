@@ -17,6 +17,7 @@ import { promoteCells } from "../kicad-port/tables";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 import { registerSchFieldActions } from "./schFieldActions";
 import { registerSchGroupActions } from "./schGroupActions";
+import { registerSchImageActions } from "./schImageActions";
 import { registerSchBodyStyleActions } from "./schBodyStyleActions";
 import { registerSchModuleSheetActions } from "./schModuleSheetActions";
 import { registerSchPinActions } from "./schPinActions";
@@ -197,6 +198,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
 
   registerSchSheetPinActions(registry, ctx);
   registerSchGroupActions(registry, ctx);
+  registerSchImageActions(registry, ctx);
   registerSchPinActions(registry, ctx);
   registerSchPinHelperActions(registry, ctx);
   registerSchFieldActions(registry, ctx);

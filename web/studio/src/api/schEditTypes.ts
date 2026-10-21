@@ -60,9 +60,26 @@ export type SchGraphicShape =
       pin_length_um: Um;
       netclass?: string;
       component_class?: string;
+    }
+  | {
+      /** `SCH_BITMAP`: an image on the sheet (crates/model/src/sch_extras.rs `SchGraphicKind::Image`). */
+      type: "image";
+      /** The image's centre. */
+      at: PointXY;
+      /** `(scale s)` in millionths (1.0 is 1000000); absent is 1. */
+      scale_ppm?: number;
+      /**
+       * The file (PNG, JPEG, GIF or BMP) in base64, no line breaks. `add_graphic` needs it; an `edit_graphic` that leaves it out keeps the image's pixels. The state never carries it:
+       * it describes the image with `px`, `ppi` and `hash` and the pixels are `GET /api/sch_image`.
+       */
+      data?: string;
+      /** The size in pixels, the definition in pixels per inch and the hash of the file (the state only). */
+      px?: [number, number];
+      ppi?: number;
+      hash?: string;
     };
 
-/** One drawn shape / text box / rule area / directive label (`crates/model/src/sch_extras.rs` `SchGraphic`). */
+/** One drawn shape / text box / rule area / directive label / image (`crates/model/src/sch_extras.rs` `SchGraphic`). */
 export interface SchGraphic {
   id: string;
   shape: SchGraphicShape;

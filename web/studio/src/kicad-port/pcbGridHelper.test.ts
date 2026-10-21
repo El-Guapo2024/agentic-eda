@@ -284,3 +284,17 @@ test("a new scene makes the helper forget what it snapped to", () => {
   assert.equal(h.getSnapped(), null);
   assert.equal(h.overlay().snapLine, null);
 });
+
+test("a point is an anchor of its own: the cursor near it lands on it, off the grid, while the Points object is on and its layer is shown", () => {
+  const board = { drawings: { shapes: [], texts: [], dimensions: [], points: [{ id: "pnt_a", layer: "F.SilkS", x: 10_130, y: 9_870, size: 1_000 }] } };
+  const { h } = make(board);
+  near(h.bestSnapAnchor([10_200, 9_800], ACTIVE), [10_130, 9_870]);
+  // the Points object off (`LAYER_POINTS`: "All points hidden")
+  const { h: hidden } = make(board);
+  hidden.visibility = { layerVisible: () => true, highContrastLayers: null, pointsVisible: false };
+  near(hidden.bestSnapAnchor([10_200, 9_800], ACTIVE), [10_000, 10_000]);
+  // and its layer off
+  const { h: off } = make(board);
+  off.visibility = { layerVisible: (l) => l !== "F.SilkS", highContrastLayers: null };
+  near(off.bestSnapAnchor([10_200, 9_800], new Set(["B.SilkS"])), [10_000, 10_000]);
+});

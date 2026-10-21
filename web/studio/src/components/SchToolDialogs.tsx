@@ -12,6 +12,7 @@ import { PowerSymbolPropertiesDialog } from "./PowerSymbolPropertiesDialog";
 import { SheetPinPropertiesDialog } from "./SheetPinPropertiesDialog";
 import { CleanupPinsDialog, SyncPinsDialog } from "./SchPinDialogs";
 import { LabelPropertiesDialog, SheetPropertiesDialog, ShapePropertiesDialog, StrokePropertiesDialog, TextPropertiesDialog } from "./SchPropertiesDialogs";
+import { SchImageDialog } from "./SchImageDialog";
 import { commitGraphic } from "./schematic/schShapeTools";
 
 const DEFAULT_TEXT_SIZE_UM = 1270; // SCHEMATIC_SETTINGS::m_DefaultTextSize, 50 mil
@@ -55,6 +56,7 @@ export function SchToolDialogs() {
       if (!g) return null;
       if (g.shape.type === "text_box") return <TextBoxDialog key={`pg:${g.id}`} dialog={{ kind: "text_box", start: g.shape.start, end: g.shape.end }} edit={g} />;
       if (g.shape.type === "directive") return <DirectiveDialog key={`pg:${g.id}`} dialog={{ kind: "directive", at: g.shape.at }} edit={g} />;
+      if (g.shape.type === "image") return <SchImageDialog key={`pg:${g.id}`} id={g.id} />;
       return <ShapePropertiesDialog key={`pg:${g.id}`} id={g.id} />;
     }
   }

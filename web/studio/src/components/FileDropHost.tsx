@@ -10,6 +10,7 @@ import { useActionRunner } from "../actions/useActionRunner";
 import { dropMessage, planDrop } from "../kicad-port/fileDrops";
 import { getImportGraphicsDialog } from "../state/importDialogs";
 import { MAX_IMPORT_BYTES } from "../api/libraryClient";
+import { readImageFile } from "../actions/imageFiles";
 
 const hasFiles = (e: DragEvent): boolean => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
 
@@ -58,6 +59,16 @@ export function FileDropHost() {
       const word = dropMessage(tab, plan);
       if (plan.open) {
         const file = files.find((f) => f.name === plan.open!.name)!;
+        // An image (`ddAddImage`) is bytes, not text: it is handed over as the base64 the placement carries.
+        if (plan.open.action.endsWith("ddAddImage")) {
+          try {
+            run(plan.open.action, await readImageFile(file));
+          } catch (err) {
+            toast(err instanceof Error ? err.message : String(err), "error");
+          }
+          if (word) toast(word);
+          return;
+        }
         if (file.size > MAX_IMPORT_BYTES) return toast(`${file.name} is larger than 64 MB, which the studio's server will not read`, "error");
         let text: string;
         try {

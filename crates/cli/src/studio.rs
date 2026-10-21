@@ -602,6 +602,24 @@ fn handle(
             None => respond(stream, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
         },
         ("GET", "/api/version") => respond(stream, "200 OK", "application/json", version(dir, job).to_string().as_bytes()),
+        // The pixels of a board's reference image and of a schematic's image (the state describes them; crates/cli/src/image_api.rs).
+        ("GET", "/api/pcb_image") => {
+            let r = crate::image_api::pcb_image(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        ("GET", "/api/sch_image") => {
+            let r = crate::image_api::sch_image(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        // The shape of a barcode, as kicad-cli plots it (crates/cli/src/barcode_api.rs): `202 {"status":"pending"}` while the plot runs, the browser asks again.
+        ("GET", "/api/barcode_shape") => {
+            let r = crate::barcode_api::shape_route(dir, target);
+            respond(stream, r.status, "application/json", r.body.as_bytes())
+        }
+        ("POST", "/api/barcode_preview") => {
+            let r = crate::barcode_api::preview_route(dir, &body);
+            respond(stream, r.status, "application/json", r.body.as_bytes())
+        }
         ("GET", "/api/state") => {
             let v = state(dir, job, crate::text_vars_json::clock_of(target)).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -1217,7 +1235,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         })
     });
     let drawings = design.drawings.as_ref().map(|d| {
-        json!({
+        let mut drawings = json!({
             "shapes": d.shapes.iter().map(shape_json).collect::<Vec<_>>(),
             "texts": d.texts.iter().map(|t| tv.text_json(json!({
                 "id": t.id, "content": t.content, "x": t.at.x, "y": t.at.y, "angle": t.angle,
@@ -1243,7 +1261,10 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             "dimension_settings": dimension_settings_json(&d.dimension_settings),
             // `PCB_TABLE`: the grid, the corners of every cell, the border lines and the placed lines of the text -- see `crate::table_json`.
             "tables": d.tables.iter().map(|t| crate::table_json::table_json(t, tv.board())).collect::<Vec<_>>(),
-        })
+        });
+        // The text boxes, reference images and points (`eda_model::pcb_items`).
+        crate::pcb_items_json::extend(&mut drawings, &design, &model, d, &tv);
+        drawings
     });
     Ok(json!({
         "name": Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board"),
@@ -1697,8 +1718,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // Explicit junctions (`J`) and graphic lines on the notes layer (`I`) -- see `eda_model::ir::Junction`/`SchLine`.
     let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y], "look": sch.extras.junction_looks.get(&j.id) })).collect();
     let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_um": l.width_um, "stroke": sch.extras.strokes.get(&l.id) })).collect();
-    // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`, serialized as stored) and the ids of locked items.
-    let graphics: Value = serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null);
+    // Drawn shapes, text boxes, rule areas, directive labels and images (`SchGraphic`, serialized as stored; an image is described, its pixels are `GET /api/sch_image`) and the ids of locked items.
+    let graphics: Value = crate::image_api::sch_graphics_json(&sch.extras.graphics);
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
     let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);

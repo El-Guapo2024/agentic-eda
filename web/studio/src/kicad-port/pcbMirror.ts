@@ -20,6 +20,7 @@
 import type { BoardState, Cmd, CmdRouteTrack, CmdShape, Shape } from "../api/types";
 import { itemKind, itemPosition, itemBounds, unionBounds } from "./pcbItems";
 import { arcRouteTrack, lineRouteTrack, type P } from "./trackArc";
+import { reshapeCmds } from "./shapeFill";
 
 export type FlipDirection = "leftRight" | "topBottom";
 
@@ -101,8 +102,9 @@ export function planMirror(board: BoardState, ids: readonly string[], centre: re
     const kind = itemKind(board, id);
     if (kind === "shape") {
       const s = board.drawings!.shapes.find((q) => q.id === id)!;
-      cmds.push({ op: "delete_shape", id }, { op: "add_shape", shape: mirrorShape(s, centre, dir) });
-      removed.push(id);
+      const re = reshapeCmds(board, id, mirrorShape(s, centre, dir));
+      cmds.push(...re.cmds);
+      removed.push(...re.removed);
     } else if (kind === "track") {
       const t = board.routing!.tracks.find((q) => q.id === id)!;
       removeTracks.push(id);

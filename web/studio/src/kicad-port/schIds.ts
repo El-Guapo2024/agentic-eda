@@ -49,6 +49,8 @@ export function graphicId(shape: SchGraphicShape, taken?: ReadonlySet<string>): 
       return itemId("rarea", `rarea|${shape.pts.map(xy).join(";")}`, taken);
     case "directive":
       return itemId("dirl", `dirl|${xy(shape.at)}|${shape.netclass ?? ""}`, taken);
+    case "image":
+      return itemId("img", `img|${xy(shape.at)}|${shape.scale_ppm ?? 1_000_000}|${(shape.data ?? "").slice(0, 96)}`, taken);
   }
 }
 

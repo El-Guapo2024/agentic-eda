@@ -121,6 +121,8 @@ struct Targets {
     shapes: BTreeSet<String>,
     texts: BTreeSet<String>,
     dimensions: BTreeSet<String>,
+    /// The text boxes, images and points (`crate::pcb_items`).
+    board_items: BTreeSet<String>,
     /// Tables (`PCB_TABLE`); a click selects a cell, but a move, a turn and a flip take its table (`FilterCollectorForTableCells`), which the caller sends.
     tables: BTreeSet<String>,
     /// Footprint fields on their own (`REF:Reference`): text a footprint carries, moved without it.
@@ -129,7 +131,7 @@ struct Targets {
 
 impl Targets {
     fn is_empty(&self) -> bool {
-        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.tables.is_empty() && self.fields.is_empty()
+        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.board_items.is_empty() && self.tables.is_empty() && self.fields.is_empty()
     }
 }
 
@@ -165,6 +167,8 @@ impl Board<'_> {
             out.texts.insert(id.to_string());
         } else if dr.dimensions.iter().any(|d| d.id == id) {
             out.dimensions.insert(id.to_string());
+        } else if crate::pcb_items::has_board_item(dr, id) {
+            out.board_items.insert(id.to_string());
         } else if dr.tables.iter().any(|t| t.id == id) {
             out.tables.insert(id.to_string());
         } else {
@@ -189,7 +193,7 @@ impl Board<'_> {
                     self.file_item(&m, &mut out);
                 }
             } else if !self.file_item(id, &mut out) {
-                return Err(vec![CheckResult::fail("ops_unknown_item", id, "no placed part, track, via, zone, shape, text, dimension or group with this id")]);
+                return Err(vec![CheckResult::fail("ops_unknown_item", id, "no placed part, track, via, zone, shape, text, text box, dimension or group with this id")]);
             }
         }
         if out.is_empty() {
@@ -259,6 +263,7 @@ impl Board<'_> {
             for d in dr.dimensions.iter_mut().filter(|d| targets.dimensions.contains(&d.id)) {
                 transform_dimension(d, x, copper);
             }
+            crate::pcb_items::transform_board_items(dr, &targets.board_items, x, copper);
             for t in dr.tables.iter_mut().filter(|t| targets.tables.contains(&t.id)) {
                 super::pcb_tables::transform_table(t, x, copper);
             }

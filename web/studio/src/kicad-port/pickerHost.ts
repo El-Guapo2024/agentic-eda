@@ -51,6 +51,11 @@ export interface PickerSession {
   hover?: (at: PickPoint) => string | null;
   /** `SetCursor`: the pointer over the canvas while the session runs; the delete tool asks for `REMOVE`. */
   cursor?: "default" | "remove";
+  /**
+   * The schematic canvas answers a point session with the click aligned to the grid of this category (`EE_GRID_HELPER::Align( .., GRID_GRAPHICS )`) instead of the raw point: the
+   * Place Image tool puts an image where the grid holds the cursor. The board's canvas always snaps (`BestSnapAnchor`) and ignores this.
+   */
+  snap?: "graphics";
 }
 
 export class PickerHost {

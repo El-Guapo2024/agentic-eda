@@ -87,6 +87,9 @@ import { picker } from "../actions/pcbPicker";
 import { pickNewMemberAt } from "../actions/schGroupActions";
 import { pasteOffset, previewIds, withPaste } from "../kicad-port/schClipboard";
 import { cancelSchPaste, useSchPaste } from "../state/schPasteStore";
+import { useSchImageHand } from "../state/schImageHand";
+import { imageSizeUm, SCALE_PPM } from "../kicad-port/refImage";
+import { useImageVersion } from "./canvas/imageCache";
 import "../styles/canvas.css";
 
 /** `m_DefaultTextSize`: the glyph size of a sheet's text until Schematic Setup says another (50 mil), micrometres; Draw Table sizes its columns and rows by it. */
@@ -166,6 +169,9 @@ export function SchematicView() {
   const schControl = useSchControlState();
   /** The paste being carried (`SCH_EDITOR_CONTROL::Paste` -> the Move tool): the items it would add, until a click drops them or Escape throws them away. */
   const paste = useSchPaste();
+  /** The image Place Image holds (state/schImageHand.ts), and the number of bitmaps that have arrived: the sheet is painted again for either. */
+  const imageHand = useSchImageHand();
+  const imageVersion = useImageVersion();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -347,6 +353,17 @@ export function SchematicView() {
     const collisionOverlay = held && patch ? patch.net_collision : undefined;
     paintSchematic(ctx, state.schematicView, displaySch, { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId });
     if (collisionOverlay) paintNetCollision(ctx, state.schematicView.scale || 1, collisionOverlay);
+    // The image in the hand, centred on the grid-snapped cursor (`GRID_GRAPHICS`), outlined as a selected image is.
+    if (imageHand && state.cursorUm) {
+      const [cx, cy] = snap.align([state.cursorUm.x, state.cursorUm.y], NO_MODS, "graphics");
+      const [w, h] = imageSizeUm(imageHand.px, imageHand.ppi, SCALE_PPM);
+      const x0 = cx - Math.trunc(w / 2);
+      const y0 = cy - Math.trunc(h / 2);
+      ctx.drawImage(imageHand.img, x0, y0, w, h);
+      ctx.strokeStyle = layerColor("LAYER_SELECTION_SHADOWS");
+      ctx.lineWidth = Math.max(150, (1 / state.schematicView.scale) * 2);
+      ctx.strokeRect(x0, y0, w, h);
+    }
     if (state.drawState?.kind === "wire") {
       // sch_line_wire_bus_tool.cpp doDrawSegments + computeBreakPoint: the
       // rubber band from the last click to the cursor is two segments (an
@@ -416,7 +433,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId]);
+  }, [sch, displaySch, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -589,7 +606,9 @@ export function SchematicView() {
         // PICKER_TOOL::Main: while a pick session runs (actions/pcbPicker.ts: Group Properties' "Click on new member...") a left click answers it -- with the item under it, the outermost
         // group it is in -- and does nothing else.
         if (picker.session()) {
-          picker.click({ point: { x: wx, y: wy }, item: () => pickNewMemberAt(sch, wx, wy, state.schematicView.scale, state.schSelectionFilter, state.schEnteredGroupId) });
+          // A session that places something on the grid (Place Image) is answered with the point the grid holds the cursor at.
+          const [px, py] = picker.session()?.snap === "graphics" ? snap.align([wx, wy], NO_MODS, "graphics") : [wx, wy];
+          picker.click({ point: { x: px, y: py }, item: () => pickNewMemberAt(sch, wx, wy, state.schematicView.scale, state.schSelectionFilter, state.schEnteredGroupId) });
           return;
         }
 

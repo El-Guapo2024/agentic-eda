@@ -79,3 +79,18 @@ test("a directive label is hit on its flag", () => {
   assert.equal(graphicHit(d, [0, -1_000], 50), true, "on the pole");
   assert.equal(graphicHit(d, [8_000, 8_000], 50), false);
 });
+
+// ------------------------------------------------------------------------------------------------------------------------- images
+
+test("an image on the sheet is its box: pixels at their definition times the scale, centred, hit anywhere inside", () => {
+  // 60 x 40 px at 254 ppi are 6 x 4 mm
+  const g = { id: "img_a", shape: { type: "image" as const, at: { x: 10_000, y: 20_000 }, scale_ppm: 1_000_000, px: [60, 40] as [number, number], ppi: 254, hash: "h" } };
+  assert.deepEqual(graphicBounds(g), { minX: 7_000, minY: 18_000, maxX: 13_000, maxY: 22_000 });
+  assert.equal(graphicHit(g, [10_000, 20_000], 0), true, "the middle of an image is a hit, whatever is drawn there");
+  assert.equal(graphicHit(g, [13_000, 22_000], 0), true, "the corner");
+  assert.equal(graphicHit(g, [13_200, 20_000], 100), false);
+  assert.equal(graphicHit(g, [13_050, 20_000], 100), true, "within the accuracy of the box");
+  assert.deepEqual(graphicOutline(g).pts, [[7_000, 18_000], [13_000, 18_000], [13_000, 22_000], [7_000, 22_000]]);
+  const big = { ...g, shape: { ...g.shape, scale_ppm: 2_500_000 } };
+  assert.deepEqual(graphicBounds(big), { minX: 2_500, minY: 15_000, maxX: 17_500, maxY: 25_000 });
+});

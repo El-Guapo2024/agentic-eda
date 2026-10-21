@@ -7,6 +7,8 @@
 // Everything here is pure (no store, no DOM) so it is unit-tested in
 // pcbEditActions.test.ts.
 
+import type { ExtraKind } from "./pcbExtraItems";
+
 // ------------------------------------------------------------------ lock
 
 /**
@@ -136,7 +138,7 @@ export function grabNearestUnconnectedFootprints(parts: readonly UnconnectedPart
 // --------------------------------------------------------- move anchors
 
 /** Every kind of item the move tools carry: a footprint, track, via, zone, graphic, text, dimension or group. */
-export type MovableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group";
+export type MovableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | ExtraKind;
 
 type XY = readonly [number, number];
 
@@ -152,6 +154,10 @@ export interface AnchorBoard {
     texts: readonly { id: string; x: number; y: number }[];
     dimensions?: readonly { id: string; start: XY }[];
     groups?: readonly { id: string; member_ids: readonly string[] }[];
+    text_boxes?: readonly { id: string; start: XY; pts: readonly XY[] }[];
+    images?: readonly { id: string; x: number; y: number }[];
+    points?: readonly { id: string; x: number; y: number }[];
+    barcodes?: readonly { id: string; x: number; y: number }[];
   } | null;
 }
 
@@ -180,6 +186,18 @@ export function movableItem(board: AnchorBoard, id: string): { kind: MovableKind
   if (text) return { kind: "text", at: [text.x, text.y] };
   const dim = board.drawings?.dimensions?.find((d) => d.id === id);
   if (dim) return { kind: "dimension", at: [dim.start[0], dim.start[1]] };
+  // The text boxes, images, points and barcodes (GAPS.md item 24): `PCB_TEXTBOX::GetPosition()` is the shape's, its start (the first corner of a polygon).
+  const textBox = board.drawings?.text_boxes?.find((t) => t.id === id);
+  if (textBox) return { kind: "textbox", at: [(textBox.pts[0] ?? textBox.start)[0], (textBox.pts[0] ?? textBox.start)[1]] };
+  // `PCB_REFERENCE_IMAGE::GetPosition()` is the image's centre.
+  const image = board.drawings?.images?.find((i) => i.id === id);
+  if (image) return { kind: "image", at: [image.x, image.y] };
+  // `PCB_POINT::GetPosition()`
+  const point = board.drawings?.points?.find((q) => q.id === id);
+  if (point) return { kind: "point", at: [point.x, point.y] };
+  // `PCB_BARCODE::GetPosition()` is the barcode's centre.
+  const barcode = board.drawings?.barcodes?.find((q) => q.id === id);
+  if (barcode) return { kind: "barcode", at: [barcode.x, barcode.y] };
   const group = board.drawings?.groups?.find((g) => g.id === id);
   if (group) {
     const anchors = group.member_ids.map((m) => (m === id ? null : movableItem(board, m))).filter((m): m is NonNullable<typeof m> => m != null);

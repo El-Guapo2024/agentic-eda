@@ -112,7 +112,7 @@ pub fn parse_clipboard(text: &str) -> Result<SchFragment, String> {
     if imported.unresolved_symbols > 0 {
         notes.push(format!("{} symbol(s) had no library symbol in the clipboard and were left out", imported.unresolved_symbols));
     }
-    for (tag, what) in [("table", "tables"), ("image", "images")] {
+    for (tag, what) in [("table", "tables")] {
         if sexpr::find_all(root, tag).next().is_some() {
             notes.push(format!("{what} are not pasted"));
         }
@@ -901,6 +901,17 @@ mod tests {
         let f = parse_clipboard(&backwards).unwrap();
         assert_eq!(f.section.wires.len(), 1);
         assert_eq!(f.section.wires[0].pts.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), vec![(0, 0), (10_000, 0), (10_000, 5_000)]);
+    }
+
+    /// An image copied in KiCad is `(image ..)` in the fragment, and pastes as an image (it used to be left out with "images are not pasted").
+    #[test]
+    fn an_image_in_a_fragment_is_pasted_as_an_image() {
+        let data = eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(30, 20, [5, 6, 7], 300));
+        let text = format!("(image (at 50.8 38.1) (scale 2) (uuid \"6a2e1b0c-5a3a-4a41-9d7e-0d5e5c2e0009\") (data \"{}\" \"{}\"))\n", &data[..40], &data[40..]);
+        let f = parse_clipboard(&text).expect("a fragment with an image parses");
+        assert!(f.notes.iter().all(|n| !n.contains("images")), "{:?}", f.notes);
+        let images: Vec<_> = f.section.extras.graphics.iter().filter_map(|g| if let eda_model::sch_extras::SchGraphicKind::Image { at, scale_ppm, data } = &g.shape { Some((*at, *scale_ppm, data.clone())) } else { None }).collect();
+        assert_eq!(images, vec![(Point { x: 50_800, y: 38_100 }, 2_000_000, data)]);
     }
 
     #[test]

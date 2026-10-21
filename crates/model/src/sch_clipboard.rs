@@ -341,7 +341,7 @@ pub fn translate_graphic(shape: &mut SchGraphicKind, dx: Um, dy: Um) {
             shift(end, dx, dy);
         }
         SchGraphicKind::Polygon { pts } | SchGraphicKind::RuleArea { pts, .. } => pts.iter_mut().for_each(|p| shift(p, dx, dy)),
-        SchGraphicKind::Directive { at, .. } => shift(at, dx, dy),
+        SchGraphicKind::Directive { at, .. } | SchGraphicKind::Image { at, .. } => shift(at, dx, dy),
     }
 }
 
@@ -408,6 +408,8 @@ fn positions(section: &SchematicSection) -> Vec<(Point, bool)> {
                 None => continue,
             },
             SchGraphicKind::Directive { at, .. } => (*at, true),
+            // `SCH_BITMAP::GetPosition` is the image's centre
+            SchGraphicKind::Image { at, .. } => (*at, false),
         };
         out.push((p, connectable));
     }
@@ -456,7 +458,7 @@ pub fn closest_anchor(section: &SchematicSection, connection_points: &[Point], c
             SchGraphicKind::Arc { start, end, .. } => others.extend([*start, *end]),
             SchGraphicKind::Bezier { start, end, .. } => others.extend([*start, *end]),
             SchGraphicKind::Polygon { pts } | SchGraphicKind::RuleArea { pts, .. } => others.extend(pts.iter().copied()),
-            SchGraphicKind::Directive { at, .. } => others.push(*at),
+            SchGraphicKind::Directive { at, .. } | SchGraphicKind::Image { at, .. } => others.push(*at),
         }
     }
     best(others)

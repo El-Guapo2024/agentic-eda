@@ -34,6 +34,8 @@ import { layerIsVisible, layerStateKey, isCopper } from "../../kicad-port/layerP
 import { zoneCopperLayers, zoneIsOnCopper, zoneLayers } from "../../kicad-port/zoneLayers";
 import { drcMarkerObject } from "../../kicad-port/appearance";
 import { drawFootprintArt } from "./fpArtPaint";
+import { isAnyFill } from "../../kicad-port/shapeFill";
+import { drawPcbItems, drawRefImages } from "./pcbItemsPaint";
 import { drawTablePreview, drawTables } from "./tablePaint";
 import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
 import type { TuneHoverReply } from "../../api/tuneTypes";
@@ -758,7 +760,7 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
     const selected = opts.selection.has(s.id);
     ctx.save();
     // A filled shape takes the Filled Shapes opacity, any other graphic on copper the track opacity (`PCB_RENDER_SETTINGS::GetColor`).
-    ctx.globalAlpha *= s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled ? opacityOf(opts.appearance, "shapes") : isCopper(s.layer) ? opacityOf(opts.appearance, "tracks") : 1;
+    ctx.globalAlpha *= s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) ? opacityOf(opts.appearance, "shapes") : isCopper(s.layer) ? opacityOf(opts.appearance, "tracks") : 1;
     ctx.strokeStyle = selected ? layerColor("selection") : layerColor(bucketish);
     ctx.fillStyle = ctx.strokeStyle;
     ctx.lineWidth = Math.max(s.stroke_width, hairlineUm(view, selected ? 2 : 1));
@@ -819,6 +821,28 @@ export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketc
   }
   if (s.filled && !sketch) ctx.fill();
   ctx.stroke();
+  drawHatchLines(ctx, s);
+}
+
+/**
+ * The lines of a hatched rectangle, circle or polygon (`PCB_PAINTER::draw( PCB_SHAPE )`: `UpdateHatching`, then `DrawLine` for each of `GetHatchLines()` with the line width the
+ * shape's own). The server works the lines out from the board as it is -- which is what `rehatchShapes`, run after every commit, comes to -- and the state carries them; the pen keeps the
+ * stroke's colour and has flat ends.
+ */
+export function drawHatchLines(ctx: CanvasRenderingContext2D, s: Shape) {
+  const lines = s.hatch_lines;
+  if (!lines || lines.length === 0) return;
+  ctx.save();
+  ctx.lineCap = "butt";
+  // The line width of the shape, and no thinner than the hairline the outline is kept visible with at a low zoom (`drawShapes` set it).
+  ctx.lineWidth = Math.max(s.hatch_width ?? s.stroke_width, ctx.lineWidth);
+  ctx.beginPath();
+  for (const [x1, y1, x2, y2] of lines) {
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+  }
+  ctx.stroke();
+  ctx.restore();
 }
 
 /** Circumcenter + radius of the circle through three points, or null if they're (nearly) collinear. Exported: viewer3d/scene.ts reuses this to sample the same true arc geometry for the 3D silk stand-in, instead of re-deriving it. */
@@ -1306,6 +1330,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       // Edge.Cuts is a layer like the others (the Layers tab and the presets switch it); in high contrast it is neither dimmed away nor hidden, only pushed back
       // -- "Graphics on Edge_Cuts layer are not fully dimmed or hidden because they are useful when working on another layer" (`dim_factor_Edge_Cuts`, at least 0.3).
       if (layerIsVisible(opts.layerVisible, "Edge.Cuts")) withAlpha(ctx, opts.highContrast && opts.activeLayer && opts.activeLayer !== "board_edge" ? 0.3 : 1, () => drawOutline(ctx, view, board.outline_is_shapes ? null : board.outline));
+      // The reference images (`LAYER_DRAW_BITMAPS`) lie under every other item.
+      for (const pass of passes) withAlpha(ctx, pass.alpha, () => drawRefImages(ctx, view, pass.b, opts));
     },
     ...Object.fromEntries(Object.keys(copper(board)).map((key) => [key, () => copperPasses.forEach((pass) => withAlpha(ctx, pass.alpha, () => pass.layers[key]?.()))])),
     // pcb_actions.cpp updateLocalRatsnest's non-router equivalent: redraw
@@ -1332,6 +1358,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawTexts(ctx, view, pass.b, opts);
       drawTables(ctx, view, pass.b, opts);
       drawDimensions(ctx, view, pass.b, opts);
+      drawPcbItems(ctx, view, pass.b, opts);
     });
   }
   // The overlays of footprints: locked items' shadow, the courtyards a move puts in conflict, and the anchors.
@@ -1345,6 +1372,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     ctx.save();
     ctx.transform(a, b, c, d, e, f);
     const moving = copper(carry.moving);
+    drawRefImages(ctx, view, carry.moving, own);
     for (const key of drawOrder()) moving[key]?.();
     for (const part of carry.moving.parts) drawFootprint(ctx, view, part, own);
     drawFields(ctx, view, [...fieldsToDraw(carry.moving.parts), ...carry.fields.map((field) => ({ field }))], own);
@@ -1352,6 +1380,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     drawTexts(ctx, view, carry.moving, own);
     drawTables(ctx, view, carry.moving, own);
     drawDimensions(ctx, view, carry.moving, own);
+    drawPcbItems(ctx, view, carry.moving, own);
     drawAnchors(ctx, view, carry.moving, own);
     drawSelectedGroups(ctx, view, carry.moving, own);
     ctx.restore();

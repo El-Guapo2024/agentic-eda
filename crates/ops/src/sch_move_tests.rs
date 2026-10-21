@@ -895,3 +895,34 @@ fn a_move_on_a_sub_sheet_runs_there_and_leaves_the_root_alone() {
     let e = b.apply(&Cmd::OnSheet { sheet: "sheet_a".into(), cmd: Box::new(Cmd::SchMove(mv(&["R1"], G, 0))) }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_item");
 }
+
+// ------------------------------------------------------------------------------------------------------------------------- images
+
+fn image_section() -> eda_model::ir::SchematicSection {
+    let mut s = section();
+    let data = eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, [3, 3, 3], 254));
+    s.extras.graphics.push(SchGraphic::new(SchGraphicKind::Image { at: p(101_600, 63_500), scale_ppm: 1_000_000, data }));
+    s.assign_missing_ids();
+    s
+}
+
+fn image_at(s: &eda_model::ir::SchematicSection) -> Point {
+    match &s.extras.graphics[0].shape {
+        SchGraphicKind::Image { at, .. } => *at,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// `SCH_BITMAP::Move` shifts the centre; a turn about the image's own centre leaves the centre (the pixels are not turned here: GAPS.md item 24), and a turn about another point
+/// takes the centre round it.
+#[test]
+fn an_image_moves_by_its_centre_and_turns_about_its_own() {
+    let s = image_section();
+    let id = s.extras.graphics[0].id.clone();
+    let moved = run_on(s.clone(), SchMoveCmd::Move { ids: ids(&[&id]), dx: 2 * G, dy: -G, turns: Vec::new(), about: None });
+    assert_eq!(image_at(&moved), p(101_600 + 2 * G, 63_500 - G));
+    let turned = run_on(s.clone(), rotate(&[&id], true));
+    assert_eq!(image_at(&turned), p(101_600, 63_500), "about its own centre");
+    // the pixels and the scale stay
+    assert_eq!(turned.extras.graphics[0].shape, s.extras.graphics[0].shape);
+}

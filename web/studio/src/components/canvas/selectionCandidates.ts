@@ -20,11 +20,13 @@ import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { distToPolyline, distToSegment, pointInPolygon, polygonArea, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
 import { objectOn } from "../../kicad-port/appearance";
+import { isAnyFill } from "../../kicad-port/shapeFill";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { zonePickLayer } from "../../kicad-port/zoneLayers";
+import { extraHitDistance, extraItems, type ExtraKind } from "../../kicad-port/pcbExtraItems";
 import { cellArea, cellHitDistance, isSelectableCell } from "../../kicad-port/tables";
 
-export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | "table" | "tablecell";
+export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | "table" | "tablecell" | ExtraKind;
 
 export interface SelectionCandidate extends GuessCandidate {
   kind: SelectableKind;
@@ -52,9 +54,12 @@ export interface SelectionFilter {
   text: boolean;
   dimensions: boolean;
   pads: boolean;
+  /** `m_filter.points` (`PCB_POINT`) and `m_filter.otherItems` (a barcode). */
+  points: boolean;
+  otherItems: boolean;
 }
 
-export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true, pads: true };
+export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true, pads: true, points: true, otherItems: true };
 
 function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
   switch (kind) {
@@ -79,6 +84,15 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
     case "table":
     case "tablecell":
       return filter.text;
+    // `PCB_TEXTBOX_T` shares `m_filter.text`, `PCB_REFERENCE_IMAGE_T` `m_filter.graphics`, `PCB_POINT_T` has `m_filter.points` and `PCB_BARCODE_T` falls to `m_filter.otherItems`.
+    case "textbox":
+      return filter.text;
+    case "image":
+      return filter.graphics;
+    case "point":
+      return filter.points;
+    case "barcode":
+      return filter.otherItems;
   }
 }
 
@@ -254,8 +268,8 @@ export function collectSelectionCandidates(
     consider("zone", z.id, d, area, zonePickLayer(z, layerVisible, activeLayer));
   }
   for (const s of board.drawings?.shapes ?? []) {
-    // A filled shape at opacity 0 cannot be picked (`options.m_FilledShapeOpacity == 0.0 && IsAnyFill()`).
-    if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled && !objectOn(layerVisible, "shapes")) continue;
+    // A filled or hatched shape at opacity 0 cannot be picked (`options.m_FilledShapeOpacity == 0.0 && IsAnyFill()`).
+    if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) && !objectOn(layerVisible, "shapes")) continue;
     consider("shape", s.id, shapeHitDistance(s, xUm, yUm), shapeArea(s), s.layer);
   }
   for (const t of board.drawings?.texts ?? []) {
@@ -263,6 +277,11 @@ export function collectSelectionCandidates(
     const inside = xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1;
     const d = inside ? 0 : Math.hypot(xUm - t.x, yUm - t.y) - (x1 - x0) / 2;
     consider("text", t.id, d, Math.max((x1 - x0) * (y1 - y0), 1), t.layer);
+  }
+  // The text boxes, images, points and barcodes (GAPS.md item 24): a text box is hit anywhere in its bounding box (`PCB_TEXTBOX::HitTest`).
+  for (const item of extraItems(board)) {
+    const [x0, y0, x1, y1] = item.bounds;
+    consider(item.kind, item.id, extraHitDistance(item, xUm, yUm), Math.max((x1 - x0) * (y1 - y0), 1), item.layer);
   }
   // `PCB_TABLE`: a click finds a cell, not the table ("Tables should defer to their table cells"); a cell another one covers is not an item. The table is locked as a whole.
   for (const tb of board.drawings?.tables ?? []) {
@@ -374,7 +393,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
     consider("zone", z.id, boxOf(z.outline), zonePickLayer(z, layerVisible, activeLayer));
   }
   for (const s of board.drawings?.shapes ?? []) {
-    if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled && !objectOn(layerVisible, "shapes")) continue;
+    if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) && !objectOn(layerVisible, "shapes")) continue;
     consider("shape", s.id, shapeBoundingBox(s), s.layer);
   }
   for (const t of board.drawings?.texts ?? []) {
@@ -384,6 +403,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   for (const dim of board.drawings?.dimensions ?? []) {
     consider("dimension", dim.id, dimensionHit(dim, dim.text_at[0], dim.text_at[1]).box, dim.layer);
   }
+  for (const item of extraItems(board)) consider(item.kind, item.id, item.bounds, item.layer);
   // A window takes tables, whole (`PCB_TABLE::HitTest( aRect, aContained, aAccuracy )` on the box round the first and the last cell), not their cells.
   for (const tb of board.drawings?.tables ?? []) {
     consider("table", tb.id, tb.bbox, tb.layer);

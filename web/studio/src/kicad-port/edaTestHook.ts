@@ -134,7 +134,7 @@ type IdItems = readonly { id?: string }[] | undefined;
 export interface BoardLike {
   parts?: readonly { ref: string; pads?: readonly { num: string }[]; fields?: readonly { id: string }[] }[];
   routing?: { tracks?: IdItems; vias?: IdItems; zones?: IdItems } | null;
-  drawings?: { shapes?: IdItems; texts?: IdItems; dimensions?: IdItems; groups?: IdItems; tables?: readonly { id: string; cells?: IdItems }[] } | null;
+  drawings?: { shapes?: IdItems; texts?: IdItems; dimensions?: IdItems; groups?: IdItems; text_boxes?: IdItems; images?: IdItems; points?: IdItems; barcodes?: IdItems; tables?: readonly { id: string; cells?: IdItems }[] } | null;
 }
 
 /** The schematic's state JSON as far as the hook reads it. */
@@ -168,6 +168,10 @@ export function boardLists(board: BoardLike | null | undefined): ItemLists {
     shape: ids(board?.drawings?.shapes),
     text: ids(board?.drawings?.texts),
     dimension: ids(board?.drawings?.dimensions),
+    textbox: ids(board?.drawings?.text_boxes),
+    image: ids(board?.drawings?.images),
+    point: ids(board?.drawings?.points),
+    barcode: ids(board?.drawings?.barcodes),
     group: ids(board?.drawings?.groups),
     // `PCB_TABLE` and its cells (`<table id>:<row>:<col>`): a click selects a cell, a window a table. Listed only when the board has tables.
     ...tableLists(board),

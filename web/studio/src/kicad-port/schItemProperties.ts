@@ -20,6 +20,7 @@ import { buildGrid, extractValueAndWritability, planEdit, tooSmall, type EditPla
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import { colorToHex, hexToColor, isUnspecified, strokeEditCmd, UNSPECIFIED_COLOR } from "./schProperties";
 import { circumcircle } from "./trackArc";
+import { DEFAULT_PPI, imageSizeUm, SCALE_PPM, scaleForHeightUm, scaleForWidthUm } from "./refImage";
 import { registerSchTableProperties, schTableItemOf } from "./schTableProperties";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
@@ -39,6 +40,7 @@ export type SchType =
   | "SCH_TEXTBOX"
   | "SCH_SHAPE"
   | "SCH_RULE_AREA"
+  | "SCH_BITMAP"
   | "SCH_SHEET"
   | "SCH_TABLE"
   | "SCH_TABLECELL";
@@ -143,7 +145,7 @@ function resolve(idx: SchIndex, id: string): SchItem | null {
   const graphic = idx.graphic.get(id);
   if (graphic) {
     const t = graphic.shape.type;
-    return { type: t === "text_box" ? "SCH_TEXTBOX" : t === "rule_area" ? "SCH_RULE_AREA" : t === "directive" ? "SCH_DIRECTIVE_LABEL" : "SCH_SHAPE", id, graphic };
+    return { type: t === "text_box" ? "SCH_TEXTBOX" : t === "rule_area" ? "SCH_RULE_AREA" : t === "directive" ? "SCH_DIRECTIVE_LABEL" : t === "image" ? "SCH_BITMAP" : "SCH_SHAPE", id, graphic };
   }
   return schTableItemOf(idx.sch, id);
 }
@@ -193,6 +195,8 @@ export function schFriendlyName(item: SchItem): string {
       return "Graphic";
     case "SCH_RULE_AREA":
       return "Rule Area";
+    case "SCH_BITMAP":
+      return "Image";
     case "SCH_SHEET":
       return "Sheet";
     case "SCH_TABLE":
@@ -718,7 +722,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       name: "Shape",
       kind: "string",
       get: (i) =>
-        ({ rectangle: "Rectangle", circle: "Circle", arc: "Arc", bezier: "Bezier", polygon: "Polygon", text_box: "Rectangle", rule_area: "Polygon", directive: "Polygon" })[shapeOf(i).type],
+        ({ rectangle: "Rectangle", circle: "Circle", arc: "Arc", bezier: "Bezier", polygon: "Polygon", text_box: "Rectangle", rule_area: "Polygon", directive: "Polygon", image: "Rectangle" })[shapeOf(i).type],
     },
     SHAPE_PROPS
   );
@@ -846,6 +850,52 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   ruleFlag("Exclude From Simulation", "exclude_from_sim");
   ruleFlag("Exclude From Bill of Materials", "exclude_from_bom");
   ruleFlag("Do not Populate", "dnp");
+
+  // The image (`SCH_BITMAP_DESC`): its position, scale and size. The scale and the size move the image about its centre (no transform origin offset here).
+  pm.inheritsAfter("SCH_BITMAP", "SCH_ITEM");
+  const image = (i: SchItem): Extract<SchGraphicShape, { type: "image" }> => i.graphic!.shape as Extract<SchGraphicShape, { type: "image" }>;
+  const imagePos = (axis: 0 | 1) => (i: SchItem, v: PropValue, c: SchCtx): Cmd[] => {
+    const delta = Math.round(num(v)) - (axis === 0 ? image(i).at.x : image(i).at.y);
+    return delta === 0 || c.locked.has(i.id) ? [] : [{ op: "sch_move", verb: "move", ids: [i.id], dx: axis === 0 ? delta : 0, dy: axis === 1 ? delta : 0 }];
+  };
+  add({ owner: "SCH_BITMAP", name: "Position X", kind: "int", display: "coord", get: (i) => image(i).at.x, writeable: unlocked, set: imagePos(0) });
+  add({ owner: "SCH_BITMAP", name: "Position Y", kind: "int", display: "coord", get: (i) => image(i).at.y, writeable: unlocked, set: imagePos(1) });
+  const IMAGE_PROPS = "Image Properties";
+  /** `edit_graphic` of the image with another scale: no `data` (the pixels stay), and none of the state's `px`, `ppi`, `hash`, which the command does not know. */
+  const rescale = (i: SchItem, scalePpm: number): Cmd[] =>
+    scalePpm <= 0 || scalePpm === (image(i).scale_ppm ?? SCALE_PPM) ? [] : [{ op: "sch_edit", verb: "edit_graphic", id: i.id, graphic: { shape: { type: "image", at: image(i).at, scale_ppm: scalePpm } } }];
+  add(
+    {
+      owner: "SCH_BITMAP",
+      name: "Scale",
+      kind: "double",
+      get: (i) => (image(i).scale_ppm ?? SCALE_PPM) / SCALE_PPM,
+      validate: (v) => (num(v) <= 0 ? "Scale must be a positive number." : null),
+      set: (i, v) => rescale(i, Math.round(num(v) * SCALE_PPM)),
+    },
+    IMAGE_PROPS
+  );
+  const imageSide = (name: "Width" | "Height"): void => {
+    add(
+      {
+        owner: "SCH_BITMAP",
+        name,
+        kind: "int",
+        display: "size",
+        get: (i) => imageSizeUm(image(i).px ?? [0, 0], image(i).ppi ?? DEFAULT_PPI, image(i).scale_ppm ?? SCALE_PPM)[name === "Width" ? 0 : 1],
+        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+        set: (i, v) => {
+          const want = Math.round(num(v));
+          const px = image(i).px ?? [0, 0];
+          const ppi = image(i).ppi ?? DEFAULT_PPI;
+          return want <= 0 ? [] : rescale(i, name === "Width" ? scaleForWidthUm(px, ppi, want) : scaleForHeightUm(px, ppi, want));
+        },
+      },
+      IMAGE_PROPS
+    );
+  };
+  imageSide("Width");
+  imageSide("Height");
 
   // A no-connect flag has no registration in KiCad: nothing to show.
   pm.registerType("SCH_NO_CONNECT");

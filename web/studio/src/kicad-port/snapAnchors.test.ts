@@ -252,3 +252,16 @@ test("the scene: polylines are segments, pads and vias are on the right layers, 
   assert.equal(queryScene(scene, box(0, -100, 100, 100), new Set(["t1"])).length, 0, "skipping a track skips its segments");
   assert.equal(queryScene(scene, box(0, -100, 100, 100), new Set(["t1#1"])).length, 1);
 });
+
+test("a point: its position is an origin anchor, snappable, of the centre type; the selection filter's Points switch takes it away, picking up or not", () => {
+  const board = { drawings: { shapes: [], texts: [], dimensions: [], points: [{ id: "pnt_a", layer: "F.SilkS", x: 3_000, y: 4_000, size: 1_000 }] } };
+  for (const from of [false, true]) {
+    const list = anchorsOf(board, "point", [0, 0], from);
+    assert.equal(list.length, 1);
+    assert.deepEqual([list[0]!.pos, list[0]!.flags, list[0]!.pointTypes], [[3_000, 4_000], ANCHOR.ORIGIN | ANCHOR.SNAPPABLE, PT.CENTER]);
+    assert.deepEqual(anchorsOf(board, "point", [0, 0], from, ctx(always, { points: false })), [], `filtered out (from ${from})`);
+  }
+  // a point that is not shown has no anchor
+  const hidden: AnchorContext = { ...ctx(), visible: () => false };
+  assert.deepEqual(anchorsOf(board, "point", [0, 0], false, hidden), []);
+});

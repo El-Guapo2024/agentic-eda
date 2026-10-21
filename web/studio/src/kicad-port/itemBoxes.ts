@@ -12,6 +12,7 @@
 import type { BoardState, CmdShape, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, PointXY, Shape } from "../api/types";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { libPointToInternalUm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
+import { extraItems } from "./pcbExtraItems";
 import { padIds } from "./pcbItems";
 import { groupLeaves } from "./groupTree";
 import { customPadBox } from "./padShape";
@@ -96,6 +97,8 @@ export function pcbItemBoxes(board: BoardState): ItemBoxes {
     const b = boxOfPoints(pts);
     if (b) out.set(d.id, b);
   }
+  // The text boxes and reference images (GAPS.md item 24).
+  for (const item of extraItems(board)) out.set(item.id, item.bounds);
   // A table (`PCB_TABLE::GetBoundingBox`) and each of its cells.
   for (const t of board.drawings?.tables ?? []) {
     out.set(t.id, [t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]]);

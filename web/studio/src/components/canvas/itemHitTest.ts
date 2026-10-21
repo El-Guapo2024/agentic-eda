@@ -11,6 +11,7 @@
 // cursor at a normal zoom level.
 import type { BoardText, Shape } from "../../api/types";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import { hatchDistance } from "../../kicad-port/shapeFill";
 
 /** `EDA_SHAPE::getMaxError()` for the board (`BOARD_DESIGN_SETTINGS::m_MaxError`, 0.005 mm): the flattening tolerance a Bezier is drawn/hit-tested at. */
 export const BEZIER_MAX_ERROR_UM = 5;
@@ -98,20 +99,21 @@ export function shapeHitDistance(s: Shape, px: number, py: number): number {
   switch (s.kind) {
     case "segment":
       return distToSegment(px, py, s.start[0], s.start[1], s.end[0], s.end[1]);
+    // A hatched shape is hit on its outline or on a hatch line (`EDA_SHAPE::hitTest`: `IsHatchedFill() && GetHatching().Collide( aPosition, maxdist )`), not inside it.
     case "rect": {
       const pts = [s.start, [s.end[0], s.start[1]], s.end, [s.start[0], s.end[1]]] as const;
       if (s.filled && pointInPolygon(px, py, pts)) return 0;
-      return distToPolyline(px, py, [...pts, pts[0]]);
+      return Math.min(distToPolyline(px, py, [...pts, pts[0]]), hatchDistance(s, px, py));
     }
     case "circle": {
       const r = Math.hypot(s.end[0] - s.center[0], s.end[1] - s.center[1]);
       const d = Math.hypot(px - s.center[0], py - s.center[1]);
       if (s.filled && d <= r) return 0;
-      return Math.abs(d - r);
+      return Math.min(Math.abs(d - r), hatchDistance(s, px, py));
     }
     case "polygon": {
       if (s.filled && pointInPolygon(px, py, s.pts)) return 0;
-      return distToPolyline(px, py, [...s.pts, s.pts[0]!]);
+      return Math.min(distToPolyline(px, py, [...s.pts, s.pts[0]!]), hatchDistance(s, px, py));
     }
     case "arc":
       // No stroked-arc distance here (would need the same circumcircle
