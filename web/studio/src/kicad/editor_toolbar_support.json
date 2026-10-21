@@ -57,7 +57,7 @@
     "pcbnew.InteractiveDrawing.placeReferenceImage": "not ported: reference images",
     "pcbnew.InteractiveDrawing.text": "supported",
     "pcbnew.InteractiveDrawing.textbox": "not ported: text boxes",
-    "pcbnew.InteractiveDrawing.drawTable": "not ported: tables",
+    "pcbnew.InteractiveDrawing.drawTable": "not ported: footprint tables (the board editor has Draw Table; a table inside a footprint is carried as text)",
     "pcbnew.InteractiveDrawing.orthogonalDimension": "not ported: dimensions",
     "pcbnew.InteractiveDrawing.alignedDimension": "not ported: dimensions",
     "pcbnew.InteractiveDrawing.centerDimension": "not ported: dimensions",
