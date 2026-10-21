@@ -73,6 +73,13 @@ test("isActionEnabledForTab: Update PCB from Schematic exists for the board and 
   assert.equal(onSymbol, "eeschema.SymbolLibraryControl.saveLibraryAs");
 });
 
+test("isActionEnabledForTab: Edit Table is one action of the board's and the sheet's table tools, so it is live on both tabs though its name says pcbnew", () => {
+  assert.equal(isActionEnabledForTab("pcbnew.TableEditor.editTable", "pcb", true), true);
+  assert.equal(isActionEnabledForTab("pcbnew.TableEditor.editTable", "schematic", true), true);
+  assert.equal(isActionEnabledForTab("pcbnew.TableEditor.editTable", "symbol", true), false);
+  assert.equal(isActionEnabledForTab("pcbnew.TableEditor.editTable", "pcb", false), false, "unregistered stays disabled");
+});
+
 test("isActionEnabledForTab: Ctrl+N -- the editor-specific actions are enabled only on their own tab (common.Control.new is only registered on the pcb/schematic tabs, so exactly one is live per tab)", () => {
   assert.equal(isActionEnabledForTab("pcbnew.ModuleEditor.newFootprint", "pcb", true), false);
   assert.equal(isActionEnabledForTab("eeschema.SymbolLibraryControl.newSymbol", "schematic", true), false);

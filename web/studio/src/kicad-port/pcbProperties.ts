@@ -13,7 +13,7 @@
 // `BOARD_COMMIT::Push( "Edit Properties" )`.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
+import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
 import { effectiveClassName } from "./boardSetupRules";
@@ -27,6 +27,7 @@ import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "
 import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
 import { registerExtraItemProperties } from "./pcbItemProperties";
 import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
+import { registerTableProperties, tableItemOf, tableItemsOf } from "./pcbTableProperties";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -50,7 +51,9 @@ export type PcbType =
   | "PCB_TEXTBOX"
   | "PCB_REFERENCE_IMAGE"
   | "PCB_POINT"
-  | "PCB_BARCODE";
+  | "PCB_BARCODE"
+  | "PCB_TABLE"
+  | "PCB_TABLECELL";
 
 /** One selected board item: the class, the id the selection holds, and the record of the board state it stands for (only the one of its kind is set). */
 export interface PcbItem {
@@ -71,6 +74,9 @@ export interface PcbItem {
   readonly image?: BoardRefImage;
   readonly point?: BoardPoint;
   readonly barcode?: BoardBarcode;
+  /** A table (`PCB_TABLE`), or the table a cell (`PCB_TABLECELL`) is in. */
+  readonly table?: BoardTable;
+  readonly cell?: BoardTableCell;
 }
 
 /** What the getters read besides the item (`PCB_PROPERTIES_PANEL::updateLists` and the frame). */
@@ -146,6 +152,8 @@ export function pcbItemOf(board: BoardState, id: string): PcbItem | null {
   if (point) return { type: "PCB_POINT", id, point };
   const barcode = dr?.barcodes?.find((b) => b.id === id);
   if (barcode) return { type: "PCB_BARCODE", id, barcode };
+  const tableItem = tableItemOf(board, id);
+  if (tableItem) return tableItem;
   const pad = id.includes(".") ? padById(board, id) : null;
   if (pad) return { type: "PAD", id, part: pad.part, pad: pad.pad };
   const field = id.includes(":") ? fieldById(board, id) : null;
@@ -175,6 +183,7 @@ function indexOf(board: BoardState): Map<string, PcbItem> {
   for (const image of dr?.images ?? []) put({ type: "PCB_REFERENCE_IMAGE", id: image.id, image });
   for (const point of dr?.points ?? []) put({ type: "PCB_POINT", id: point.id, point });
   for (const barcode of dr?.barcodes ?? []) put({ type: "PCB_BARCODE", id: barcode.id, barcode });
+  for (const item of tableItemsOf(board)) put(item);
   return out;
 }
 
@@ -224,13 +233,17 @@ export function typeName(item: PcbItem): string {
       return "Point";
     case "PCB_BARCODE":
       return "Barcode";
+    case "PCB_TABLE":
+      return "Table";
+    case "PCB_TABLECELL":
+      return "Table Cell";
     default:
       return "Dimension";
   }
 }
 
 /** Every `KICAD_T` name an item here can have (the choices of the Type property). */
-export const TYPE_NAMES: readonly string[] = ["Barcode", "Dimension", "Footprint", "Graphic", "Group", "Leader", "Pad", "Point", "Reference Image", "Text", "Text Box", "Track", "Via", "Zone"];
+export const TYPE_NAMES: readonly string[] = ["Barcode", "Dimension", "Footprint", "Graphic", "Group", "Leader", "Pad", "Point", "Reference Image", "Table", "Table Cell", "Text", "Text Box", "Track", "Via", "Zone"];
 
 /** `GetFriendlyName()`: the caption of a single selected item (`EDA_ITEM::GetFriendlyName`, `PCB_TRACK::`, `ZONE::`). */
 export function pcbFriendlyName(item: PcbItem): string {
@@ -269,6 +282,10 @@ export function pcbFriendlyName(item: PcbItem): string {
       return "Point";
     case "PCB_BARCODE":
       return "Barcode";
+    case "PCB_TABLE":
+      return "Table";
+    case "PCB_TABLECELL":
+      return "Table Cell";
     default:
       return "Dimension";
   }
@@ -342,6 +359,8 @@ const moveCmd = (ids: string[], dx: number, dy: number): Cmd[] => (dx === 0 && d
  * centre and any other shape's start.
  */
 export function positionOf(i: PcbItem): [number, number] {
+  if (i.cell) return [i.cell.corners[0][0], i.cell.corners[0][1]];
+  if (i.table) return [i.table.x, i.table.y];
   if (i.field) return [i.field.x, i.field.y];
   if (i.pad) return [i.pad.x, i.pad.y];
   if (i.part) return i.part.at ? [i.part.at[0], i.part.at[1]] : [0, 0];
@@ -511,9 +530,10 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     name: "Layer",
     kind: "enum",
     choices: (_i, c) => layerChoicesOf(c, c.allLayers),
-    get: (i) => i.text?.layer ?? i.dim?.layer ?? i.field?.layer ?? "",
+    get: (i) => i.text?.layer ?? i.dim?.layer ?? i.field?.layer ?? i.table?.layer ?? "",
     set: (i, v) => {
       const layer = String(v);
+      if (i.table) return i.table.layer === layer ? [] : [{ op: "table", verb: "set", id: i.table.id, layer }];
       if (i.text) return i.text.layer === layer ? [] : [textCmd(i.text, { layer })];
       if (i.dim) return i.dim.layer === layer ? [] : [dimCmd(i.dim, { layer })];
       if (i.field) return i.field.layer === layer ? [] : [editFieldCmd(i.part!, i.field, { layer })];
@@ -1179,6 +1199,9 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   pm.inheritsAfter("PCB_FIELD", "PCB_TEXT");
   pm.inheritsAfter("PCB_FIELD", "EDA_TEXT");
   pm.mask("PCB_FIELD", "BOARD_ITEM", "Locked");
+
+  // ------------------------------------------------------------------------------------------------------------------ PCB_TABLE, PCB_TABLECELL
+  registerTableProperties(pm, { add });
 
   // ---------------------------------------------------------------------------------------------------------- EDA_SHAPE, PCB_SHAPE
   pm.registerType("EDA_SHAPE");

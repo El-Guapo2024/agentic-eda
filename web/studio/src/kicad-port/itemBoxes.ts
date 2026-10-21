@@ -99,6 +99,14 @@ export function pcbItemBoxes(board: BoardState): ItemBoxes {
   }
   // The text boxes and reference images (GAPS.md item 24).
   for (const item of extraItems(board)) out.set(item.id, item.bounds);
+  // A table (`PCB_TABLE::GetBoundingBox`) and each of its cells.
+  for (const t of board.drawings?.tables ?? []) {
+    out.set(t.id, [t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]]);
+    for (const c of t.cells) {
+      const b = boxOfPoints(c.corners);
+      if (b) out.set(c.id, b);
+    }
+  }
   // A group's box is its items' (the groups it holds opened), so the order the groups are listed in does not matter.
   const groups = board.drawings?.groups ?? [];
   for (const g of groups) {

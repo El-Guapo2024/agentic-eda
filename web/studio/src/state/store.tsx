@@ -22,6 +22,7 @@ import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "../components/canvas/clipboard";
 import { subItemIds } from "../kicad-port/pcbItems";
+import { tableCellIds } from "../kicad-port/tables";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
@@ -115,6 +116,8 @@ export type ToolId =
    * dimension kinds `state.nextDimensionKind` names -- see `DrawState`'s
    * own `"dimension"` kind. */
   | "dimension"
+  /** `pcbnew.InteractiveDrawing.drawTable` (`DRAWING_TOOL::DrawTable`): the first click is the table's first corner, the cursor sizes the grid (`DrawState`'s `"table"` kind), the second opens Table Properties. */
+  | "table"
   // ---------------------------------------------------- eeschema placement
   // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp TwoClickPlace/
   // SingleClickPlace) -- SchematicView.tsx's own doc has the full
@@ -153,6 +156,8 @@ export type ToolId =
   | "sch_arc"
   | "sch_bezier"
   | "sch_textbox"
+  /** `eeschema.InteractiveDrawing.drawTable` (`SCH_DRAWING_TOOLS::DrawTable`): the first click is the table's first corner, the cursor sizes the grid (`DrawState`'s `"table"` kind), the second opens Table Properties. */
+  | "sch_table"
   | "sch_rule_area"
   | "sch_directive"
   /** Break / Slice (`SCH_MOVE_TOOL`'s `BREAK` / `SLICE` modes): the cut wire's new end follows the cursor until the click that drops it -- kicad-port/schBreak.ts. */
@@ -185,6 +190,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   bus: "Bus: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   measure: "Measure: click a start point, click again for the end point. Click anywhere to start a new measurement, Esc to clear",
   dimension: "Dimension: click the first feature point, then the second",
+  table: "Table: click the first corner, move to size the grid, click again to set it (Esc to cancel)",
   sch_label_local: "Label: click where to place it",
   sch_label_global: "Global Label: click where to place it",
   sch_label_hier: "Hierarchical Label: click where to place it",
@@ -203,6 +209,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_arc: "Arc: click the start, then the end. Esc to cancel",
   sch_bezier: "Bezier curve: click the start, the end, then control points 1 and 2. Esc to cancel",
   sch_textbox: "Text Box: click one corner, then the opposite one, then enter the text. Esc to cancel",
+  sch_table: "Table: click the first corner, move to size the grid, click again to set its text and borders. Esc to cancel",
   sch_rule_area: "Rule Area: click the corners, double-click or press End to close it, Backspace to remove the last corner. Esc to cancel",
   sch_directive: "Directive Label: click where to place it",
   sch_break: "Break / Slice: move the new end of the wire, click to drop it, Esc to cancel",
@@ -333,6 +340,8 @@ export type DrawState =
    * second click commits it (same one-shot-flag convention as zones' own
    * `nextZoneIsRuleArea`), not stored per-draw here. */
   | { kind: "dimension"; pts: [Um, Um][] }
+  /** Draw Table (`DRAWING_TOOL::DrawTable`): the first corner, once it is clicked; the grid follows the cursor (kicad-port/tables.ts `drawTableGrid`). */
+  | { kind: "table"; origin: [Um, Um] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
   | { kind: "wire"; pts: [Um, Um][] }
   /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */
@@ -1238,6 +1247,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       for (const g of action.board.drawings?.groups ?? []) live.add(g.id);
       // A pad and a footprint's field are items too (`REF.NUMBER`, `REF:Name`): they stay selected while their footprint has them, hidden or not.
       for (const id of subItemIds(action.board)) live.add(id);
+      // So is a table's cell (`TABLE:ROW:COL`): selected through its table, it lasts as long as the table has it.
+      for (const id of tableCellIds(action.board)) live.add(id);
       const selection = state.tab === "schematic" ? state.selection : new Set([...state.selection].filter((r) => refs.has(r) || live.has(r)));
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
       // A group that was dissolved or emptied is no longer the one worked in (`EDIT_TOOL::DeleteItems`: "If the entered group has been emptied then leave it").

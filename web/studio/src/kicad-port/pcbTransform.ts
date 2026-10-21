@@ -19,6 +19,7 @@ import type { BoardState, Cmd, PointXY } from "../api/types";
 import { parseFieldId } from "./fpFields";
 import { itemBounds, itemKind, itemPosition, padParent, unionBounds } from "./pcbItems";
 import { ancestors, groupAndDescendants, groupLeaves, isGroup, parentGroup } from "./groupTree";
+import { cellById } from "./tables";
 
 export type FlipDirection = "left_right" | "top_bottom";
 export type Pt = readonly [number, number];
@@ -65,7 +66,9 @@ export function editableSelection(board: BoardState, ids: readonly string[], opt
   const seen = new Set<string>();
   let lockedOut = false;
   for (const raw of ids) {
-    const id = itemKind(board, raw) === "pad" ? padParent(board, raw) : raw;
+    // (`FilterCollectorForTableCells`: a table cell stands for its table in a move, a turn, a flip, a duplicate and a delete of the whole item)
+    const kind = itemKind(board, raw);
+    const id = kind === "pad" ? padParent(board, raw) : kind === "tablecell" ? (cellById(board, raw)?.table.id ?? null) : raw;
     if (id == null || seen.has(id) || itemKind(board, id) == null) continue;
     seen.add(id);
     if (respectLocks && isLocked(board, id)) {

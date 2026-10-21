@@ -163,7 +163,8 @@ export class PcbSnap {
     if (!v?.board) return "current";
     const cats = ids.map((id): GridCategory => {
       const kind = itemKind(v.board!, id);
-      const mapped: PcbItemKind | null = kind === "part" ? "footprint" : kind;
+      // (`GetItemGrid`: a table has no grid of its own, the current one)
+      const mapped: PcbItemKind | null = kind === "part" ? "footprint" : kind === "table" || kind === "tablecell" ? null : kind;
       return pcbItemGrid(mapped);
     });
     return selectionGrid(cats, (c) => gridSizeFor(c, v.gridUm, v.grids, v.overrides));

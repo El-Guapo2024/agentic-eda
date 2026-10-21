@@ -118,16 +118,13 @@ pub fn lookup(b: &Barcode, text: &str) -> Reply {
 }
 
 /// [`lookup`] that waits for the plot: what the tests ask for.
+#[cfg(test)]
 pub fn shape_blocking(b: &Barcode, text: &str) -> Result<Arc<BarcodeShape>, String> {
-    let k = key(b, text);
     loop {
         match lookup(b, text) {
             Reply::Ready(shape) => return Ok(shape),
             Reply::Failed(e) => return Err(e),
-            Reply::Pending => {
-                let _ = &k;
-                std::thread::sleep(std::time::Duration::from_millis(40));
-            }
+            Reply::Pending => std::thread::sleep(std::time::Duration::from_millis(40)),
         }
     }
 }

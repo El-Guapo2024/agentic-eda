@@ -58,6 +58,7 @@ import { GlobalEditTracksAndViasDialog } from "./components/GlobalEditTracksAndV
 import { GlobalEditTextAndGraphicsDialog } from "./components/GlobalEditTextAndGraphicsDialog";
 import { CreateArrayDialog } from "./components/CreateArrayDialog";
 import { DimensionPropertiesDialog } from "./components/DimensionPropertiesDialog";
+import { TableDialogs } from "./components/TableDialogs";
 import { BoardSetupDialog } from "./components/BoardSetupDialog";
 import { LabelDialog } from "./components/LabelDialog";
 import { SheetDialog } from "./components/SheetDialog";
@@ -280,6 +281,7 @@ function StudioFrame() {
       <GlobalEditTextAndGraphicsDialog />
       <CreateArrayDialog />
       <DimensionPropertiesDialog />
+      <TableDialogs />
       <BoardSetupDialog />
       <LabelDialog />
       <SheetDialog />

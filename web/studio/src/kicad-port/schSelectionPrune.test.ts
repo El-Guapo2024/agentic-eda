@@ -56,3 +56,10 @@ test("the pins of sheets and of symbols stay selected while they are on the shee
   });
   assert.deepEqual([...keepOnSheet(new Set(["pin:R1:1", "pin:R1:7", "shpin_1", "shpin_x"]), sch)].sort(), ["pin:R1:1", "shpin_1"]);
 });
+
+test("a table and its cells stay selected when the sheet is read again, and a cell the table lost does not", () => {
+  const sch = sheet({ tables: [{ id: "tbl_a", cells: [{ id: "tbl_a:0:0" }, { id: "tbl_a:0:1" }] }] });
+  assert.deepEqual([...keepOnSheet(new Set(["tbl_a", "tbl_a:0:1", "tbl_a:1:0", "tbl_gone"]), sch)].sort(), ["tbl_a", "tbl_a:0:1"]);
+  // a sheet of an older backend has no tables
+  assert.deepEqual([...keepOnSheet(new Set(["tbl_a"]), sheet({}))], []);
+});

@@ -38,8 +38,14 @@ fn preview(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
         let cmd = if sheet.is_empty() { cmd } else { Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(cmd) } };
         b.apply(&cmd)?;
     }
-    let (sch, _) = crate::studio::resolve_sheet(b.design(), &sheet);
+    let (sch, breadcrumb) = crate::studio::resolve_sheet(b.design(), &sheet);
     let mut patch = patch_json(&sch, &model);
+    // The tables of the sheet where the held ones would be: every cell's corners and placed text lines are the server's (`crate::table_json`), a turned table has new ones.
+    if !sch.extras.tables.is_empty() {
+        let project = crate::text_vars_json::project(dir, &meta.intent, eda_model::text_vars::Clock::utc_now());
+        let shown = crate::text_vars_json::SchShown::new(dir, b.design(), &model, &breadcrumb, project);
+        patch["tables"] = Value::Array(sch.extras.tables.iter().map(|t| crate::table_json::sch_table_json(t, &|tok: &str| shown.resolve(tok))).collect());
+    }
     // what the net-collision monitor draws for the held selection (`SCH_DRAG_NET_COLLISION_MONITOR`): where the move would join two nets and where it pulls a connection apart
     if let Some(o) = b.net_collision() {
         patch["net_collision"] = json!({

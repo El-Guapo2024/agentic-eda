@@ -8,6 +8,7 @@ import type { BoardState, Cmd } from "../api/types";
 import { expandGroups } from "./groupTree";
 import { isLocked } from "./pcbTransform";
 import { extraDeleteCmd, extraItems } from "./pcbExtraItems";
+import { cellById } from "./tables";
 
 /** The tuning patterns (`PCB_GENERATOR`s) among `ids`: deleting one puts the track back as it was before it was tuned, which the tuner's API does (`/api/tune/remove`), not a verb. */
 export function tuningPatternIds(board: BoardState | null | undefined, ids: readonly string[]): string[] {
@@ -41,11 +42,26 @@ export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cm
   const dimensions = new Set((board.drawings?.dimensions ?? []).map((d) => d.id));
   const placed = new Set(board.parts.filter((p) => p.placed).map((p) => p.ref));
   const extras = new Map(extraItems(board).map((i) => [i.id, i]));
+  const tables = new Set((board.drawings?.tables ?? []).map((t) => t.id));
   const cmds: Cmd[] = [];
+  // `EDIT_TOOL::DeleteItems`: a table is removed, but a table cell only has its text cleared ("Clear contents of table cell"); a locked table keeps both.
+  const cleared = new Map<string, [number, number][]>();
   for (const id of wanted) {
-    const known = tracks.has(id) || vias.has(id) || zones.has(id) || shapes.has(id) || texts.has(id) || dimensions.has(id) || extras.has(id) || placed.has(id);
+    const cell = tables.has(id) ? undefined : cellById(board, id);
+    if (!cell) continue;
+    if (wanted.has(cell.table.id)) continue;
+    if (isLocked(board, cell.table.id)) {
+      skippedLocked++;
+      continue;
+    }
+    cleared.set(cell.table.id, [...(cleared.get(cell.table.id) ?? []), [cell.cell.row, cell.cell.col]]);
+  }
+  for (const [tid, cells] of cleared) cmds.push({ op: "table", verb: "edit_cells", id: tid, cells, edit: { text: "" } });
+  for (const id of wanted) {
+    const known = tables.has(id) || tracks.has(id) || vias.has(id) || zones.has(id) || shapes.has(id) || texts.has(id) || dimensions.has(id) || extras.has(id) || placed.has(id);
     if (!known) continue;
-    if (tracks.has(id)) cmds.push({ op: "delete_track", id });
+    if (tables.has(id)) cmds.push({ op: "table", verb: "delete", id });
+    else if (tracks.has(id)) cmds.push({ op: "delete_track", id });
     else if (vias.has(id)) cmds.push({ op: "delete_via", id });
     else if (zones.has(id)) cmds.push({ op: "delete_zone", id });
     else if (shapes.has(id)) cmds.push({ op: "delete_shape", id });

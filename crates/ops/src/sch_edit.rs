@@ -779,6 +779,7 @@ pub(crate) fn lockable_ids(sch: &SchematicSection) -> BTreeSet<&str> {
     out.extend(sch.lines.iter().map(|l| l.id.as_str()));
     out.extend(sch.sheets.iter().map(|s| s.id.as_str()));
     out.extend(sch.extras.graphics.iter().map(|g| g.id.as_str()));
+    out.extend(sch.extras.tables.iter().map(|t| t.id.as_str()));
     out.remove("");
     out
 }

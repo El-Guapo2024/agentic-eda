@@ -6,13 +6,14 @@
 import type { Schematic } from "../api/types";
 import { fieldItems, parseFieldId } from "./schFieldEdit";
 import { parsePinItemId, pinItems, referenceOfKey } from "./schPins";
+import { parseCellItemId } from "./tables";
 
 export interface SchSelectionFilter {
   /** Allow selecting locked items. */
   lockedItems: boolean;
   /** Symbols, power symbols and sheets. */
   symbols: boolean;
-  /** Text, text boxes (and fields). */
+  /** Text, text boxes, tables and their cells (and fields). */
   text: boolean;
   /** Wires, buses and junctions. */
   wires: boolean;
@@ -82,6 +83,11 @@ export function categoryById(sch: Schematic): Map<string, SchFilterCategory> {
     // SCH_TEXTBOX_T is text, SCH_RULE_AREA_T has its own switch, SCH_DIRECTIVE_LABEL_T has no case (other items), the rest are SCH_SHAPE_T.
     out.set(g.id, g.shape.type === "text_box" ? "text" : g.shape.type === "rule_area" ? "ruleAreas" : g.shape.type === "directive" ? "otherItems" : "graphics");
   }
+  // SCH_TABLE_T and SCH_TABLECELL_T are text
+  for (const t of sch.tables ?? []) {
+    out.set(t.id, "text");
+    for (const c of t.cells) out.set(c.id, "text");
+  }
   // SCH_FIELD_T is text
   for (const f of fieldItems(sch)) out.set(f.id, "text");
   // SCH_PIN_T and SCH_SHEET_PIN_T
@@ -94,6 +100,8 @@ export function categoryById(sch: Schematic): Map<string, SchFilterCategory> {
 function lockKey(id: string): string {
   const pin = parsePinItemId(id);
   if (pin) return referenceOfKey(pin.key); // `SCH_PIN::IsLocked`: the pin of a locked symbol
+  const cell = parseCellItemId(id);
+  if (cell) return cell.table; // a cell is as locked as its table
   const f = parseFieldId(id);
   if (!f) return id;
   const unit = /^(.*)#(\d+)$/.exec(f.owner);

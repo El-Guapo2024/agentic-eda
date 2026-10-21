@@ -39,6 +39,8 @@ pub(crate) enum Item {
     NoteLine(usize),
     /// A drawn shape, text box, rule area or directive label (`SchGraphic`).
     Graphic(usize),
+    /// A table (`SCH_TABLE`, `SchExtras::tables`): not connectable; it moves and turns as a whole.
+    Table(usize),
     Text(usize),
     Label(usize),
     Power(usize),
@@ -51,7 +53,7 @@ impl Item {
     /// `KICAD_T` order, which `SELECTION::GetItemsSortedByTypeAndXY` sorts by first.
     pub(crate) fn rank(self) -> u8 {
         match self {
-            Item::Graphic(_) | Item::Text(_) => 0,
+            Item::Graphic(_) | Item::Table(_) | Item::Text(_) => 0,
             Item::Junction(_) => 1,
             Item::NoConnect(_) => 2,
             Item::BusEntry(_) => 3,
@@ -318,6 +320,7 @@ impl<'m> Scene<'m> {
         out.extend(self.segs.iter().enumerate().filter(|(_, s)| !s.dead).map(|(i, _)| Item::Seg(i)));
         out.extend((0..self.sch.lines.len()).map(Item::NoteLine));
         out.extend((0..self.sch.extras.graphics.len()).map(Item::Graphic));
+        out.extend((0..self.sch.extras.tables.len()).map(Item::Table));
         out.extend((0..self.sch.texts.len()).map(Item::Text));
         out.extend((0..self.sch.labels.len()).map(Item::Label));
         out.extend((0..self.sch.power_symbols.len()).map(Item::Power));
@@ -347,7 +350,7 @@ impl<'m> Scene<'m> {
         match it {
             Item::Seg(_) | Item::Junction(_) | Item::NoConnect(_) | Item::BusEntry(_) | Item::Label(_) | Item::Power(_) | Item::Symbol(_) | Item::SheetPin(..) | Item::Sheet(_) => true,
             Item::Graphic(i) => matches!(self.graphic(i).shape, SchGraphicKind::Directive { .. }),
-            Item::NoteLine(_) | Item::Text(_) => false,
+            Item::NoteLine(_) | Item::Table(_) | Item::Text(_) => false,
         }
     }
 
@@ -360,6 +363,7 @@ impl<'m> Scene<'m> {
             Item::Seg(i) => self.segs[i].a,
             Item::NoteLine(i) => self.sch.lines[i].pts.first().copied().unwrap_or_default(),
             Item::Graphic(i) => graphic_position(&self.sch.extras.graphics[i]),
+            Item::Table(i) => self.sch.extras.tables[i].at,
             Item::Text(i) => self.sch.texts[i].at,
             Item::Label(i) => self.sch.labels[i].at,
             Item::Power(i) => self.sch.power_symbols[i].at,
@@ -424,7 +428,7 @@ impl<'m> Scene<'m> {
             }
             Item::Symbol(i) => self.pin_tips(i),
             Item::Sheet(i) => self.sch.sheets[i].pins.iter().map(|p| p.at).collect(),
-            Item::NoteLine(_) | Item::Text(_) => Vec::new(),
+            Item::NoteLine(_) | Item::Table(_) | Item::Text(_) => Vec::new(),
         }
     }
 
@@ -492,6 +496,10 @@ impl<'m> Scene<'m> {
                 points_box(&[b.at, Point { x: b.at.x + b.size.x, y: b.at.y + b.size.y }])
             }
             Item::Graphic(i) => graphic_box(self.graphic(i)),
+            Item::Table(i) => {
+                let b = self.sch.extras.tables[i].bounding_box();
+                Some((Point { x: b.x0, y: b.y0 }, Point { x: b.x1, y: b.y1 }))
+            }
             Item::Text(i) => pt(self.sch.texts[i].at),
             Item::Label(i) => pt(self.sch.labels[i].at),
             Item::Power(i) => self.power_box(i),

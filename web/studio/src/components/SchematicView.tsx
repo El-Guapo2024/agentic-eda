@@ -64,6 +64,9 @@ import { summarizeSelection } from "./schematic/schSelectionSummary";
 import { schContextMenu } from "../kicad-port/schContextMenu";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { finishShapeDraw, isSchShapeTool, paintShapePreview, shapeToolClick } from "./schematic/schShapeTools";
+import { drawSchTablePreview } from "./schematic/schTablePaint";
+import { schDrawTableGrid } from "../kicad-port/tables";
+import { openDrawnTableDialog } from "../state/tableDialogs";
 import { breakPreviewSheet, commitBreak } from "./schematic/schBreakTool";
 import { paintPinPreview, placePinClick } from "./schematic/schPinTool";
 import type { MenuNode } from "../kicad/types";
@@ -88,6 +91,9 @@ import { useSchImageHand } from "../state/schImageHand";
 import { imageSizeUm, SCALE_PPM } from "../kicad-port/refImage";
 import { useImageVersion } from "./canvas/imageCache";
 import "../styles/canvas.css";
+
+/** `m_DefaultTextSize`: the glyph size of a sheet's text until Schematic Setup says another (50 mil), micrometres; Draw Table sizes its columns and rows by it. */
+const DEFAULT_TEXT_SIZE_UM = 1_270;
 
 type DragState =
   /** `WX_VIEW_CONTROLS` DRAG_PANNING by the middle (1) or right (2) button, as `input.drag_middle` / `drag_right` say; `moved`: the press has become a drag (a right press that never did opens the context menu). */
@@ -392,6 +398,11 @@ export function SchematicView() {
       // The sheet pin the next click would drop.
       if (state.drawState.pin) paintPinPreview(ctx, state.schematicView, sch, state.drawState.pin, shapeSnap(state.cursorUm.x, state.cursorUm.y, true));
     }
+    // `SCH_DRAWING_TOOLS::DrawTable`: the grid the cursor sizes, from the first corner.
+    if (state.drawState?.kind === "table" && state.cursorUm) {
+      const origin = state.drawState.origin;
+      drawSchTablePreview(ctx, state.schematicView, origin, schDrawTableGrid(origin, shapeSnap(state.cursorUm.x, state.cursorUm.y, true), DEFAULT_TEXT_SIZE_UM, snap.gridSize("graphics")));
+    }
     // `S`: the sheet being sized, from its first corner to the (grid-snapped) cursor.
     if (state.drawState?.kind === "sheet" && state.cursorUm) {
       const start = state.drawState.start;
@@ -647,6 +658,22 @@ export function SchematicView() {
           } else {
             dispatch({ type: "SET_DRAW_STATE", draw: next });
           }
+          return;
+        }
+
+        // `SCH_DRAWING_TOOLS::DrawTable`: the first click is the table's first corner, the cursor sizes the grid, the second opens Table Properties; the table is on the sheet only once
+        // OK is clicked ("Draw Table"). The tool stays armed for the next one.
+        if (state.activeTool === "sch_table") {
+          const c = snapToGrid(wx, wy);
+          const draw = state.drawState;
+          if (draw?.kind !== "table") {
+            dispatch({ type: "SET_SELECTION", refs: [] });
+            dispatch({ type: "SET_DRAW_STATE", draw: { kind: "table", origin: c } });
+            return;
+          }
+          const grid = schDrawTableGrid(draw.origin, c, DEFAULT_TEXT_SIZE_UM, snap.gridSize("graphics"));
+          dispatch({ type: "SET_DRAW_STATE", draw: null });
+          openDrawnTableDialog({ layer: "", at: draw.origin, cols: grid.cols, rows: grid.rows, cellW: grid.cellW, cellH: grid.cellH, lineWidth: 0 }, "sch");
           return;
         }
 

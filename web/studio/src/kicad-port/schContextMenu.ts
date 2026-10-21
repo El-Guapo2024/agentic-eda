@@ -45,6 +45,12 @@ export interface SchSelectionSummary {
   pins: number;
   /** Preferences > Editing Options > "Allow unconstrained pin swaps" (`m_Input.allow_unconstrained_pin_swaps`): Swap Pins is in the menu only with it on. */
   allowPinSwaps: boolean;
+  /** Selected tables (`SCH_TABLE_T`) and table cells (`SCH_TABLECELL_T`). */
+  tables: number;
+  tableCells: number;
+  /** `cellBlockSelection` (two cells or more that fill a rectangle) and `mergedCellsSelection` (one of them is merged) of `EDIT_TABLE_TOOL_BASE::addMenus`. */
+  cellBlock: boolean;
+  mergedCells: boolean;
   /** Selected groups (`SCH_GROUP_T`). */
   groups: number;
   /** `m_enteredGroup != nullptr`: a group is being worked in. */
@@ -88,6 +94,10 @@ export function emptySummary(): SchSelectionSummary {
     multiBodyStyle: false,
     pins: 0,
     allowPinSwaps: false,
+    tables: 0,
+    tableCells: 0,
+    cellBlock: false,
+    mergedCells: false,
     groups: 0,
     inGroup: false,
     group: { count: 0, hasGroup: false, onlyOneGroup: false, hasUngroupedItems: false, hasMember: false },
@@ -140,6 +150,9 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
     single && s.groups === 1 && { type: "item", action: "eeschema.InteractiveDrawing.placeLinkedDesignBlock", disabled: !s.linkedGroup },
     single && s.groups === 1 && { type: "item", action: "eeschema.InteractiveDrawing.saveToLinkedDesignBlock", disabled: !s.linkedGroup }
   );
+  // `SCH_SELECTION_TOOL::Init`: Select Column(s), Select Row(s) and Select Table for a selection of table cells only (`cellSelection`, order 2).
+  const cellSelection = s.tableCells > 0 && s.tableCells === s.total;
+  add(cellSelection && item("common.InteractiveSelection.SelectColumns"), cellSelection && item("common.InteractiveSelection.Rows"), cellSelection && item("common.InteractiveSelection.SelectTable"), cellSelection && sep);
   // `selToolMenu.AddMenu( makePinTricksMenu( m_selectionTool ), S_C::AllPinsOrSheetPins, 1 )`: Pin Helpers (`PIN_TRICKS_MENU`) for a selection of pins and sheet pins
   add(allPinsOrSheetPins(s) && { type: "submenu", label: "Pin Helpers", items: PIN_HELPERS.map((h) => ({ type: "item", action: h.action, label: h.label }) as MenuNode) });
   if (sheetSelection) add(item("eeschema.NavigateTool.enterSheet"), sep);
@@ -169,7 +182,7 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   const swappable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.sheetPins + s.junctions + s.noConnects;
   add(s.total > 1 && swappable === s.total && item("eeschema.InteractiveEdit.swap"));
   // `propertiesCondition`: one item of a type that has a properties dialog.
-  add(single && s.symbols + s.powerSymbols + s.sheets + s.sheetPins + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields + s.groups === 1 && item("eeschema.InteractiveEdit.properties"));
+  add(single && s.symbols + s.powerSymbols + s.sheets + s.sheetPins + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields + s.groups + s.tables + s.tableCells === 1 && item("eeschema.InteractiveEdit.properties"));
   // `autoplaceCondition`: any selected item is one that has fields (a symbol, a sheet); the command also takes the item of a selected field
   add(s.symbols + s.powerSymbols + s.sheets + s.fields > 0 && item("eeschema.InteractiveEdit.autoplaceFields"));
   if (single && s.symbols === 1) {
@@ -192,6 +205,27 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   add(connected && item("eeschema.InteractiveEdit.assignNetclass"), connected && item("eeschema.InteractiveEdit.findNetInInspector"));
   // `SCH_POINT_EDITOR::Init`: Count( 1 ) && addCornerCondition / removeCornerCondition.
   add(single && s.canAddCorner && item("eeschema.PointEditor.addCorner"), single && s.canRemoveCorner && item("eeschema.PointEditor.removeCorner"));
+
+  // `SCH_EDIT_TABLE_TOOL::Init` (`EDIT_TABLE_TOOL_BASE::addMenus`, order 100): the structure edits of a selection of table cells.
+  if (cellSelection) {
+    add(
+      sep,
+      item("common.TableEditor.addRowAbove"),
+      item("common.TableEditor.addRowBelow"),
+      item("common.TableEditor.addColBefore"),
+      item("common.TableEditor.addColAfter"),
+      sep,
+      item("common.TableEditor.deleteRows"),
+      item("common.TableEditor.deleteColumns"),
+      sep,
+      s.cellBlock && item("common.TableEditor.mergeCells"),
+      s.mergedCells && item("common.TableEditor.unmergeCell"),
+      (s.cellBlock || s.mergedCells) && sep,
+      item("pcbnew.TableEditor.editTable"),
+      sep,
+      item("common.TableEditor.exportTableCSV")
+    );
+  }
 
   // The Locking submenu (`LOCK_CONTEXT_MENU`): Lock when anything is unlocked, Unlock when anything is locked, Toggle always.
   if (s.total > 0) {

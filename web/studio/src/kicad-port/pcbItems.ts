@@ -14,8 +14,9 @@ import { fieldAsText, fieldById } from "./fpFields";
 import { footprintBox } from "./footprintBox";
 import { groupLeaves } from "./groupTree";
 import { extraItemById, type ExtraKind } from "./pcbExtraItems";
+import { cellById, tableById } from "./tables";
 
-export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field" | ExtraKind;
+export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field" | "table" | "tablecell" | ExtraKind;
 
 /**
  * The id a pad is selected, highlighted and listed under: `REF.NUMBER`, with `#k` after it for the k-th pad (from 2) of the footprint that
@@ -69,6 +70,9 @@ export function itemKind(board: BoardState, id: string): ItemKind | null {
   // The text boxes, images, points and barcodes (GAPS.md item 24).
   const extra = extraItemById(board, id);
   if (extra) return extra.kind;
+  // A table (`PCB_TABLE`), and its cells (`<table id>:<row>:<col>`, `PCB_TABLECELL`).
+  if (dr?.tables?.some((t) => t.id === id)) return "table";
+  if (id.includes(":") && cellById(board, id)) return "tablecell";
   if (id.includes(".") && padById(board, id)) return "pad";
   // A footprint's Reference, Value or user field (`PCB_FIELD`): an item of its own, `REF:Name`.
   if (id.includes(":") && fieldById(board, id)) return "field";
@@ -124,6 +128,15 @@ export function itemPosition(board: BoardState, id: string): [number, number] | 
     case "group": {
       const b = itemBounds(board, id);
       return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : null;
+    }
+    // `PCB_TABLE::GetPosition()` is the first cell's first corner; a cell's is its own.
+    case "table": {
+      const t = tableById(board, id);
+      return t ? [t.x, t.y] : null;
+    }
+    case "tablecell": {
+      const c = cellById(board, id)?.cell;
+      return c ? [c.corners[0][0], c.corners[0][1]] : null;
     }
     case "pad": {
       const hit = padById(board, id);
@@ -185,6 +198,15 @@ export function itemBounds(board: BoardState, id: string, opts: { includeText?: 
     case "group": {
       const groups = board.drawings?.groups ?? [];
       return groups.some((q) => q.id === id) ? unionBounds(groupLeaves(groups, id).map((m) => itemBounds(board, m))) : null;
+    }
+    // `PCB_TABLE::GetBoundingBox` (the first and the last cell's boxes) and a cell's own box.
+    case "table": {
+      const t = tableById(board, id);
+      return t ? [t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]] : null;
+    }
+    case "tablecell": {
+      const c = cellById(board, id)?.cell;
+      return c ? boundsOf(c.corners) : null;
     }
     case "pad": {
       const hit = padById(board, id);

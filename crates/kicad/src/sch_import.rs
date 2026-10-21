@@ -590,6 +590,11 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let graphic_locked: Vec<bool> = graphics.iter().map(|g| g.locked).collect();
         let graphic_uuid: Vec<Option<String>> = graphics.iter().map(|g| g.uuid.clone()).collect();
         sch.extras.graphics = graphics.into_iter().map(|g| g.graphic).collect();
+        // Its tables (`SCH_TABLE`), with what a lock and a group need of each.
+        let tables = crate::sch_table_io::read_all(root);
+        let table_locked: Vec<bool> = tables.iter().map(|t| t.locked).collect();
+        let table_uuid: Vec<Option<String>> = tables.iter().map(|t| t.uuid.clone()).collect();
+        sch.extras.tables = tables.into_iter().map(|t| t.table).collect();
         sch.assign_missing_ids();
         let mut locked: Vec<String> = Vec::new();
         let mut take = |ids: Vec<&str>, flags: &[bool]| locked.extend(ids.into_iter().zip(flags).filter(|(_, l)| **l).map(|(id, _)| id.to_string()));
@@ -602,6 +607,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         take(sch.lines.iter().map(|l| l.id.as_str()).collect(), &line_locked);
         take(sch.sheets.iter().map(|s| s.id.as_str()).collect(), &sheet_locked);
         take(sch.extras.graphics.iter().map(|g| g.id.as_str()).collect(), &graphic_locked);
+        take(sch.extras.tables.iter().map(|t| t.id.as_str()).collect(), &table_locked);
         locked.extend(locked_refs);
         for id in locked.into_iter().filter(|id| !id.is_empty()) {
             sch.extras.set_locked(&id, true);
@@ -666,6 +672,9 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         }
         for (u, g) in graphic_uuid.into_iter().zip(&sch.extras.graphics) {
             note(u, &g.id);
+        }
+        for (u, t) in table_uuid.into_iter().zip(&sch.extras.tables) {
+            note(u, &t.id);
         }
         // a bus entry and a sheet are known by the uuid of the file already
         for id in sch.bus_entries.iter().map(|b| &b.id).chain(sch.sheets.iter().map(|s| &s.id)) {

@@ -415,6 +415,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         }
         // The text boxes, reference images and points (`eda_model::pcb_items`).
         crate::pcb_items_io::write_all(&mut out, &drawings.board_items, &is_locked, &mut written);
+        // `PCB_TABLE`: the grid and the looks of its cells, with the corners the grid decides (`crate::pcb_table`).
+        let mut tables: Vec<&eda_model::table::Table> = drawings.tables.iter().collect();
+        tables.sort_by(|a, b| a.id.cmp(&b.id));
+        for t in &tables {
+            let uuid = crate::pcb_table::write(&mut out, t, is_locked(&t.id));
+            written.entry(t.id.clone()).or_default().push(uuid);
+        }
         // `PCB_DIMENSION_BASE`: the geometry and the text are worked out in one place
         // (`eda_connectivity::dimension`); KiCad recomputes both when it loads the file.
         let mut dims: Vec<&eda_model::ir::Dimension> = drawings.dimensions.iter().collect();

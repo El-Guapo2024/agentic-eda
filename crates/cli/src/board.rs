@@ -72,6 +72,9 @@ mod review_tests;
 #[cfg(test)]
 #[path = "pcb_items_tests.rs"]
 mod pcb_items_tests;
+#[cfg(test)]
+#[path = "table_tests.rs"]
+mod table_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1385,6 +1388,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
         Cmd::PcbItem(c) => c.describe(),
+        Cmd::Table(c) => c.describe(),
+        Cmd::SchTable(c) => format!("schematic {}", c.describe()),
         Cmd::AddErcExclusion { check, location, .. } => format!("schematic erc-exclude {check:?} {location:?}"),
         Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::ClearErcExclusions => "schematic erc-unexclude --all".to_string(),
@@ -1685,6 +1690,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",
         Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } | Cmd::ReplaceSymbolGraphic { .. } => "symbol-shape",
         Cmd::EditSymbolText { .. } => "symbol-text",
+        Cmd::Table(_) => "table",
+        Cmd::SchTable(_) => "schematic-table",
     }
 }
 

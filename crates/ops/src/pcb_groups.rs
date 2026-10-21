@@ -56,6 +56,7 @@ fn universe(design: &Design) -> BTreeSet<String> {
         out.extend(dr.shapes.iter().map(|s| s.id().to_string()));
         out.extend(dr.texts.iter().map(|t| t.id.clone()));
         out.extend(dr.dimensions.iter().map(|d| d.id.clone()));
+        out.extend(dr.tables.iter().map(|t| t.id.clone()));
         out.extend(dr.groups.iter().map(|g| g.id.clone()));
     }
     out

@@ -84,6 +84,9 @@ mod pcb_paste_special;
 mod design_blocks;
 pub mod pcb_items;
 mod pcb_props;
+mod pcb_table_builders;
+mod pcb_tables;
+pub use pcb_tables::TableCmd;
 mod pcb_transform;
 mod tuning;
 mod zone_overrides;
@@ -1223,6 +1226,14 @@ pub enum Cmd {
     /// Move, Drag, Rotate, Mirror and Align to Grid for every kind of schematic item -- one verb family, one undo step per command, on the
     /// sheet in view (`OnSheet`) -- see [`sch_move::SchMoveCmd`]. On the wire: `{"op": "sch_move", "verb": "drag", "ids": [...], ...}`.
     SchMove(sch_move::SchMoveCmd),
+    /// The board's tables (`PCB_TABLE`): Draw Table's commit, the Table Properties and Table Cell Properties dialogs, add and delete rows and columns, merge and unmerge
+    /// cells -- one verb family, see [`pcb_tables::TableCmd`]. On the wire: `{"op": "table", "verb": "add_row", "id": "tbl_..", ..}`. Move, turn, flip, delete, lock and
+    /// group a table with the verbs that do the same for any item (`move_items`, `rotate_items`, `flip_items`, `set_locked`, `group`).
+    Table(pcb_tables::TableCmd),
+    /// The same table verbs on the tables of the sheet in view (`SchExtras::tables`): Draw Table, Table Properties and Table Cell Properties, Add / Delete Row(s) and
+    /// Column(s), Merge and Unmerge Cells -- `eda_model::table`'s edits, one copy for both editors (`EDIT_TABLE_TOOL_BASE`). On the wire:
+    /// `{"op": "sch_table", "verb": "add_row", "id": "tbl_..", "row": 0}`. A table of a sheet has no layer, and no stackup or characteristics to build.
+    SchTable(pcb_tables::TableCmd),
     /// Run `cmd` on the sheet at `sheet` instead of the root: the root-to-here list of `SheetInstance::id`s joined by `/`
     /// (what `GET /api/schematic?sheet=` takes; empty is the root). KiCad edits whichever sheet is open
     /// (`SCH_EDIT_FRAME::GetCurrentSheet`); every schematic verb here acts on one screen, and this names which. A sheet that
@@ -1903,6 +1914,7 @@ impl Cmd {
             | Cmd::SwapSchItems { .. }
             | Cmd::PasteSch { .. }
             | Cmd::SchEdit(_)
+            | Cmd::SchTable(_)
             | Cmd::SchMove(_)
             | Cmd::AddErcExclusion { .. }
             | Cmd::DeleteErcExclusion { .. }
@@ -2000,6 +2012,8 @@ impl Cmd {
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
+            // A table is drawn text and lines: nothing it covers is connected to it.
+            Cmd::SchTable(_) => false,
             // A definition kept with the schematic changes no connection.
             Cmd::EmbedLibSymbol { .. } => false,
             // Drawn lines, shapes and text are not wires: nothing they cross is connected to them.
@@ -2173,6 +2187,7 @@ impl Cmd {
             Cmd::SchEdit(c) => c.ids(),
             Cmd::SchMove(c) => c.ids(),
             Cmd::PcbItem(c) => c.ids(),
+            Cmd::Table(c) | Cmd::SchTable(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::ClearErcExclusions => vec!["erc_exclusions"],
             Cmd::SetConnectionGrid { .. } => vec!["connection_grid"],
@@ -2762,6 +2777,8 @@ impl<'a> Board<'a> {
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
+            Cmd::Table(c) => self.apply_table(c),
+            Cmd::SchTable(c) => self.apply_sch_table(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
             Cmd::InGroup { group, cmd } => self.in_group(group, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
@@ -3881,6 +3898,8 @@ impl<'a> Board<'a> {
             out.extend(dr.barcodes.iter().map(|b| b.id.clone()));
             // A point has no lock in the file (`parsePCB_POINT` takes none), so it is not lockable.
             out.extend(dr.board_items.lockable_ids().map(String::from));
+            // A table is locked as a whole (`(table .. (locked yes))`); its cells are not items of their own to lock.
+            out.extend(dr.tables.iter().map(|t| t.id.clone()));
         }
         out
     }
@@ -5823,6 +5842,10 @@ mod pcb_edit_details_tests;
 mod pcb_global_edit_tests;
 #[cfg(test)]
 mod sch_clipboard_tests;
+#[cfg(test)]
+mod pcb_tables_tests;
+#[cfg(test)]
+mod sch_tables_tests;
 
 pub mod board_control;
 pub mod page_settings;

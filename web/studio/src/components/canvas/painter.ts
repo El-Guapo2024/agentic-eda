@@ -36,6 +36,7 @@ import { drcMarkerObject } from "../../kicad-port/appearance";
 import { drawFootprintArt } from "./fpArtPaint";
 import { isAnyFill } from "../../kicad-port/shapeFill";
 import { drawPcbItems, drawRefImages } from "./pcbItemsPaint";
+import { drawTablePreview, drawTables } from "./tablePaint";
 import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
 import type { TuneHoverReply } from "../../api/tuneTypes";
 import { copperColor, drawAnchors, drawBoardArea, drawConflicts, drawLockedShadows, drawSheet, footprintShown, on, on as objectOnPaint, opacityOf, ratsnestColor, type PaintAppearance } from "./appearancePaint";
@@ -1157,6 +1158,12 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   // `S` (the schematic's sheet tool) and the schematic's shape tools draw their own rubber band in SchematicView.tsx -- never reaches the board painter.
   if (draw.kind === "sheet" || draw.kind === "sch_shape") return;
 
+  // `DRAWING_TOOL::DrawTable`: the grid the cursor sizes from the first corner.
+  if (draw.kind === "table") {
+    drawTablePreview(ctx, view, board, draw.origin, opts);
+    return;
+  }
+
   const cursor = opts.cursorUm;
   const pts = draw.pts.slice();
   // A finished measurement (2 points already fixed) is a static ruler --
@@ -1349,6 +1356,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       // Free-standing graphics/text (Place > Line/Arc/.../Text) -- same visual tier as silkscreen, after copper and footprints, before the in-progress tool preview.
       drawShapes(ctx, view, pass.b, opts);
       drawTexts(ctx, view, pass.b, opts);
+      drawTables(ctx, view, pass.b, opts);
       drawDimensions(ctx, view, pass.b, opts);
       drawPcbItems(ctx, view, pass.b, opts);
     });
@@ -1370,6 +1378,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     drawFields(ctx, view, [...fieldsToDraw(carry.moving.parts), ...carry.fields.map((field) => ({ field }))], own);
     drawShapes(ctx, view, carry.moving, own);
     drawTexts(ctx, view, carry.moving, own);
+    drawTables(ctx, view, carry.moving, own);
     drawDimensions(ctx, view, carry.moving, own);
     drawPcbItems(ctx, view, carry.moving, own);
     drawAnchors(ctx, view, carry.moving, own);

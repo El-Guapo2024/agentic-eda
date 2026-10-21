@@ -72,6 +72,8 @@ import type { MenuNode } from "../../kicad/types";
 import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner } from "../../kicad-port/zonePointEditor";
 import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
+import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
+import { openDrawnTableDialog } from "../../state/tableDialogs";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
@@ -97,7 +99,7 @@ function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
 const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad", "field", ...EXTRA_KINDS]);
 
 /** The tools whose clicks go through a grid helper: `BestSnapAnchor` on every event, or the router's `snapToItem`. */
-const PLACING_TOOLS = new Set<string>(["route", "diffpair", "tune", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "measure", "drill_origin", "local_ratsnest", "picker"]);
+const PLACING_TOOLS = new Set<string>(["route", "diffpair", "tune", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "table", "measure", "drill_origin", "local_ratsnest", "picker"]);
 
 /** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
 const PAN_BUTTONS = new Set([1, 2]);
@@ -543,12 +545,21 @@ export function Canvas() {
           const hit = board ? fieldById(board, c.id) : null;
           return hit ? `${hit.field.name} field of ${hit.part.ref}${hit.field.name === "Reference" ? "" : ` (${hit.field.text})`}` : `Field ${c.id}`;
         }
+        // `PCB_TABLE::GetItemDescription`, `PCB_TABLECELL::GetItemDescription`.
+        case "table": {
+          const t = board ? tableById(board, c.id) : undefined;
+          return t ? `${t.cols} column table` : `Table ${c.id}`;
+        }
+        case "tablecell": {
+          const hit = board ? cellById(board, c.id) : undefined;
+          return hit ? `Table cell ${cellAddress(hit.cell.row, hit.cell.col)}` : `Table cell ${c.id}`;
+        }
         default:
           // The text boxes, images, points and barcodes (`GetItemDescription`).
           return extraItemLabel(board, c.id);
       }
     },
-    [api]
+    [api, board]
   );
 
   /**
@@ -799,6 +810,21 @@ export function Canvas() {
           }
         } else {
           dispatch({ type: "SET_DRAW_STATE", draw: { kind: "dimension", pts: [[sx, sy]] } });
+        }
+        return;
+      }
+
+      // `DRAWING_TOOL::DrawTable`: the first click is the table's first corner, the cursor sizes its grid, and the second click opens Table Properties on it (OK adds the
+      // table as one step, "Draw Table"; Cancel adds nothing). The tool stays armed for the next table.
+      if (state.activeTool === "table") {
+        const draw = state.drawState;
+        if (draw?.kind === "table") {
+          const s = drawTableSession(board.board_rules?.text_graphics, state.activeLayer, draw.origin, [sx, sy], state.gridUm);
+          dispatch({ type: "SET_DRAW_STATE", draw: null });
+          openDrawnTableDialog({ layer: s.layer, at: draw.origin, cols: s.grid.cols, rows: s.grid.rows, cellW: s.grid.cellW, cellH: s.grid.cellH, lineWidth: s.lineWidth });
+        } else {
+          dispatch({ type: "SET_SELECTION", refs: [] });
+          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "table", origin: [sx, sy] } });
         }
         return;
       }
