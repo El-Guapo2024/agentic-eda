@@ -1241,6 +1241,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // Task item 7 -- see `eda_model::ir::Dimension`'s own doc.
             "dimensions": d.dimensions.iter().map(dimension_json).collect::<Vec<_>>(),
             "dimension_settings": dimension_settings_json(&d.dimension_settings),
+            // `PCB_TABLE`: the grid, the corners of every cell, the border lines and the placed lines of the text -- see `crate::table_json`.
+            "tables": d.tables.iter().map(|t| crate::table_json::table_json(t, tv.board())).collect::<Vec<_>>(),
         })
     });
     Ok(json!({
@@ -1700,6 +1702,16 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
     let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
+    // The sheet's tables (`SCH_TABLE`): every cell's corners and placed text lines, worked out once here (`crate::table_json`); a cell's own variables (`${ROW}`, `${CELL(..)}`) and then the sheet's.
+    let tables: Vec<Value> = sch
+        .extras
+        .tables
+        .iter()
+        .map(|t| match &shown {
+            Some(sh) => crate::table_json::sch_table_json(t, &|tok: &str| sh.resolve(tok)),
+            None => crate::table_json::sch_table_json(t, &|_: &str| None),
+        })
+        .collect();
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
     let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y], "stroke": sch.extras.strokes.get(&be.id) })).collect();
@@ -1831,6 +1843,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "junctions": junctions,
         "lines": lines,
         "graphics": graphics,
+        "tables": tables,
         "locked": locked,
         "groups": groups,
         "title_block": title_block,

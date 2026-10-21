@@ -77,6 +77,7 @@ fn key_of(scene: &Scene, it: Item) -> Key {
         Item::SheetPin(s, p) => named("sheet_pin", &scene.sch.sheets[s].pins[p].id, s * 10_000 + p),
         Item::Sheet(i) => named("sheet", &scene.sch.sheets[i].id, i),
         Item::Graphic(i) => named("graphic", &scene.sch.extras.graphics[i].id, i),
+        Item::Table(i) => named("table", &scene.sch.extras.tables[i].id, i),
         Item::NoteLine(i) => named("line", &scene.sch.lines[i].id, i),
         Item::Text(i) => named("text", &scene.sch.texts[i].id, i),
     }

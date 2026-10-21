@@ -6,7 +6,7 @@ import type { Schematic } from "../api/types";
 import { fieldItems, isShownField } from "./schFieldEdit";
 import { pinItems } from "./schPins";
 
-/** Every id a sheet can have selected: its wires, bus entries, junctions, graphic lines, drawn shapes, sheets, no-connects, labels, texts, power symbols, symbol references, the pins of sheets and of symbols and the shown fields of those. */
+/** Every id a sheet can have selected: its wires, bus entries, junctions, graphic lines, drawn shapes, sheets, tables and their cells, no-connects, labels, texts, power symbols, symbol references, the pins of sheets and of symbols and the shown fields of those. */
 export function sheetItemIds(sch: Schematic): Set<string> {
   const ids = new Set<string>();
   const add = (items: ReadonlyArray<{ id?: string }> | undefined) => {
@@ -25,6 +25,9 @@ export function sheetItemIds(sch: Schematic): Set<string> {
   add(sch.symbols);
   // the groups of the sheet (`SCH_GROUP`)
   add(sch.groups);
+  // the tables of the sheet (`SCH_TABLE`) and their cells (`SCH_TABLECELL`, `<table id>:<row>:<col>`)
+  add(sch.tables);
+  for (const t of sch.tables ?? []) add(t.cells);
   // the pins of sheets and of symbols (`SCH_SHEET_PIN_T`, `SCH_PIN_T`)
   for (const s of sch.sheets ?? []) add(s.pins);
   for (const p of pinItems(sch)) ids.add(p.id);

@@ -50,6 +50,7 @@ import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from ".
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
 import { dashPattern, drawSelectionBox, paintGraphics, rgba } from "./schGraphicsPainter";
+import { paintSchTables } from "./schTablePaint";
 import { drawGroups } from "./schGroupPainter";
 import type { SchStroke } from "../../api/schEditTypes";
 import { allItems, itemBounds } from "./schItems";
@@ -1036,6 +1037,9 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`).
   // `SCH_PAINTER::draw( SCH_DIRECTIVE_LABEL )`: with Show Directive Labels off, a directive label is drawn only while it is selected.
   paintGraphics(ctx, view, display.showDirectiveLabels ? (sch.graphics ?? []) : (sch.graphics ?? []).filter((g) => g.shape.type !== "directive" || opts.selection.has(g.id)), opts.selection);
+
+  // Tables (`SCH_TABLE`): the cells' fills and text, then the border and separator lines.
+  paintSchTables(ctx, view, sch.tables ?? [], opts.selection);
 
   // Hierarchical sheets (GAPS.md #6) -- drawn early, like the wires/
   // junctions pass above, so a sheet's own local wires/labels/symbols

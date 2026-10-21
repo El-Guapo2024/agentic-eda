@@ -146,3 +146,21 @@ test("a board with something on it is not empty", () => {
   assert.ok(boardHasItems(board({ routing: routing([track("t1")]) })));
   assert.ok(boardHasItems(board({ drawings: drawings({ texts: [{ id: "x" }] }) })));
 });
+
+test("table cells and tables are counted, a cell is as locked as its table, and a block of cells is told from a ragged one and from merged cells", () => {
+  const cell = (row: number, col: number, over: Record<string, unknown> = {}) => ({ id: `tbl_a:${row}:${col}`, row, col, col_span: 1, row_span: 1, text: "", ...over });
+  const tbl = { id: "tbl_a", layer: "F.SilkS", rows: 2, cols: 3, cells: [cell(0, 0), cell(0, 1), cell(0, 2), cell(1, 0), cell(1, 1), cell(1, 2)] };
+  const b = board({ drawings: drawings({ tables: [tbl] }) });
+  const row = summarizePcbSelection(b, ["tbl_a:0:0", "tbl_a:0:1"]);
+  assert.deepEqual([row.total, row.tableCells, row.tables, row.cellBlock, row.mergedCells], [2, 2, 0, true, false]);
+  const ragged = summarizePcbSelection(b, ["tbl_a:0:0", "tbl_a:1:1"]);
+  assert.ok(!ragged.cellBlock, "two corners of a 2 x 2 block are not a block");
+  assert.ok(!summarizePcbSelection(b, ["tbl_a:0:0"]).cellBlock, "one cell is no block");
+  const whole = summarizePcbSelection(b, ["tbl_a"]);
+  assert.deepEqual([whole.total, whole.tableCells, whole.tables], [1, 0, 1]);
+  const mergedTable = { ...tbl, cells: [cell(0, 0, { col_span: 2 }), cell(0, 1, { col_span: 0 }), ...tbl.cells.slice(2)] };
+  const m = summarizePcbSelection(board({ drawings: drawings({ tables: [mergedTable] }) }), ["tbl_a:0:0"]);
+  assert.ok(m.mergedCells);
+  const locked = summarizePcbSelection(board({ drawings: drawings({ tables: [tbl] }), locked: ["tbl_a"] }), ["tbl_a:0:0", "tbl_a:1:2"]);
+  assert.deepEqual([locked.locked, locked.unlocked], [2, 0]);
+});

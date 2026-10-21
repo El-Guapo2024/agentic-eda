@@ -30,8 +30,8 @@ pub const FOR_ERC_DRC: u32 = 1;
 /// `ADVANCED_CFG::m_ResolveTextRecursionDepth` (default 6): how deep nested variables and the passes of one text go.
 pub const MAX_DEPTH: usize = 6;
 
-const ESC_DOLLAR: &str = "<<<ESC_DOLLAR:";
-const ESC_AT: &str = "<<<ESC_AT:";
+pub(crate) const ESC_DOLLAR: &str = "<<<ESC_DOLLAR:";
+pub(crate) const ESC_AT: &str = "<<<ESC_AT:";
 
 /// A resolver is asked for one token (`NAME`, without the `${}`) and answers its text, or `None` when it is not one of its variables.
 pub type Resolver<'a> = dyn Fn(&str) -> Option<String> + 'a;

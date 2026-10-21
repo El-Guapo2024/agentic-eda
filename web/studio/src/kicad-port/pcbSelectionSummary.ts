@@ -12,6 +12,7 @@ import { convertAvailability } from "./pcbConvert";
 import { emptyPcbSummary, type PcbSelectionSummary, type ShapeKind } from "./pcbContextMenu";
 import { ancestors, parentGroup } from "./groupTree";
 import { itemBounds, itemKind, padById } from "./pcbItems";
+import { canMerge, canUnmerge, cellById } from "./tables";
 
 const isCopper = (layer: string): boolean => layer.endsWith(".Cu");
 
@@ -49,7 +50,9 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
     if (kind === null) continue;
     onlyItem = id;
     s.total++;
-    if (lockedItem(board, id)) s.locked++;
+    // A table cell is as locked as its table.
+    const cell = kind === "tablecell" ? cellById(board, id) : undefined;
+    if (lockedItem(board, cell ? cell.table.id : id)) s.locked++;
     else s.unlocked++;
     switch (kind) {
       case "part":
@@ -92,6 +95,12 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
       case "dimension":
         s.dimensions++;
         break;
+      case "tablecell":
+        s.tableCells++;
+        break;
+      case "table":
+        s.tables++;
+        break;
       case "group":
         s.groups++;
         break;
@@ -105,6 +114,12 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
       }
     } else if (!parentGroup(groups, kind === "pad" ? (padById(board, id)?.part.ref ?? id) : id)) hasUngroupedItems = true;
     if (parentGroup(groups, id)) hasMember = true;
+  }
+  // `cellBlockSelection` / `mergedCellsSelection` (EDIT_TABLE_TOOL_BASE::addMenus): the selected cells fill a rectangle; one of them is merged.
+  if (s.tableCells > 0) {
+    const cells = ids.flatMap((id) => (cellById(board, id) ? [cellById(board, id)!.cell] : []));
+    s.cellBlock = canMerge(cells);
+    s.mergedCells = canUnmerge(cells);
   }
   s.group = { hasGroup, onlyOneGroup, hasUngroupedItems, hasMember };
   s.linkedGroup = s.total === 1 && s.groups === 1 && groups.some((g) => ids.includes(g.id) && (g.design_block ?? "") !== "");

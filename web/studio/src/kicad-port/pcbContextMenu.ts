@@ -20,7 +20,7 @@
 // and the menus of the tools that take over the right click: pcbnew/router/router_tool.cpp (ROUTER_TOOL::Init, while routing) and
 // pcbnew/tools/drawing_tool.cpp (DRAWING_TOOL::Init, while a graphic, zone, text, dimension or via is being drawn).
 //
-// Not built, because the IR has nothing for them: table cells (Select Column(s), Row(s), Table), gate swap, generators (Update All Tuning Patterns). An entry
+// Not built, because the IR has nothing for them: gate swap, generators (Update All Tuning Patterns). An entry
 // KiCad offers that this studio has not wired is still listed, disabled, as the schematic's menu does (`MenuNodeView` knows which actions have a handler).
 //
 // The entries of the Zoom and Grid submenus, the Track/Via Width list and the like are data, handed in by the caller (`PcbMenuContext`). Pure: no store, no
@@ -49,6 +49,12 @@ export interface PcbSelectionSummary {
   copperZones: number;
   /** `PCB_TEXT_T` (and fields, which this studio does not select on their own). */
   texts: number;
+  /** `PCB_TABLECELL_T` and `PCB_TABLE_T`. */
+  tableCells: number;
+  tables: number;
+  /** The menu's `cellBlockSelection` (two cells or more that fill a rectangle) and `mergedCellsSelection` (one of them is merged). */
+  cellBlock: boolean;
+  mergedCells: boolean;
   dimensions: number;
   groups: number;
   /** `PCB_SHAPE_T`, by `SHAPE_T`. */
@@ -90,6 +96,10 @@ export function emptyPcbSummary(): PcbSelectionSummary {
     zones: 0,
     copperZones: 0,
     texts: 0,
+    tableCells: 0,
+    tables: 0,
+    cellBlock: false,
+    mergedCells: false,
     dimensions: 0,
     groups: 0,
     shapes: emptyShapes(),
@@ -138,7 +148,7 @@ export function defaultMenuContext(): PcbMenuContext {
 type Sel = PcbSelectionSummary;
 
 /** The `KICAD_T` lists the conditions use, as the kinds of the summary they cover. */
-type Kind = "footprint" | "pad" | "track" | "arc" | "via" | "zone" | "text" | "dimension" | "group" | "shape" | "segment" | "rect" | "circle" | "shapeArc" | "polygon" | "bezier";
+type Kind = "footprint" | "pad" | "track" | "arc" | "via" | "zone" | "text" | "dimension" | "group" | "shape" | "segment" | "rect" | "circle" | "shapeArc" | "polygon" | "bezier" | "tablecell" | "table";
 
 const count = (s: Sel, kind: Kind): number => {
   switch (kind) {
@@ -158,6 +168,10 @@ const count = (s: Sel, kind: Kind): number => {
       return s.texts;
     case "dimension":
       return s.dimensions;
+    case "tablecell":
+      return s.tableCells;
+    case "table":
+      return s.tables;
     case "group":
       return s.groups;
     case "shape":
@@ -307,6 +321,16 @@ const A = {
   placeLinkedDesignBlock: "pcbnew.InteractiveDrawing.placeLinkedDesignBlock",
   saveToLinkedDesignBlock: "pcbnew.InteractiveDrawing.saveToLinkedDesignBlock",
   clearHighlight: "pcbnew.EditorControl.clearHighlight",
+  addRowAbove: "common.TableEditor.addRowAbove",
+  addRowBelow: "common.TableEditor.addRowBelow",
+  addColBefore: "common.TableEditor.addColBefore",
+  addColAfter: "common.TableEditor.addColAfter",
+  deleteRows: "common.TableEditor.deleteRows",
+  deleteColumns: "common.TableEditor.deleteColumns",
+  mergeCells: "common.TableEditor.mergeCells",
+  unmergeCells: "common.TableEditor.unmergeCell",
+  editTable: "pcbnew.TableEditor.editTable",
+  exportTableCSV: "common.TableEditor.exportTableCSV",
   selectColumns: "common.InteractiveSelection.SelectColumns",
   selectRows: "common.InteractiveSelection.Rows",
   selectTable: "common.InteractiveSelection.SelectTable",
@@ -640,7 +664,8 @@ export function buildSelectionMenu(): ConditionalMenu {
 
   // ---- PCB_SELECTION_TOOL::Init
   const groupEnterCondition: Cond = and(countIs(1), whenHas("group"));
-  const tableCellSelection: Cond = () => false; // no table cells in the IR
+  // `SELECTION_CONDITIONS::MoreThan( 0 ) && OnlyTypes( { SCH_TABLECELL_T, PCB_TABLECELL_T } )`
+  const tableCellSelection: Cond = (s) => onlyTypes(s, ["tablecell"]);
   menu.addMenu("Select", selectMenu, notEmpty);
   menu.addSeparator(always, 1000);
   // "Cancel" goes at the top of the context menu when a tool is active
@@ -715,6 +740,24 @@ export function buildSelectionMenu(): ConditionalMenu {
   menu.addSeparator(always, 2000);
   menu.addItem(A.properties, propertiesCondition, 2000);
 
+  // ---- PCB_EDIT_TABLE_TOOL::Init (`EDIT_TABLE_TOOL_BASE::addMenus`)
+  menu.addSeparator(always, 100);
+  menu.addItem(A.addRowAbove, and(tableCellSelection, notMoving), 100);
+  menu.addItem(A.addRowBelow, and(tableCellSelection, notMoving), 100);
+  menu.addItem(A.addColBefore, and(tableCellSelection, notMoving), 100);
+  menu.addItem(A.addColAfter, and(tableCellSelection, notMoving), 100);
+  menu.addSeparator(always, 100);
+  menu.addItem(A.deleteRows, and(tableCellSelection, notMoving), 100);
+  menu.addItem(A.deleteColumns, and(tableCellSelection, notMoving), 100);
+  menu.addSeparator(always, 100);
+  menu.addItem(A.mergeCells, and(tableCellSelection, (s) => s.cellBlock), 100);
+  menu.addItem(A.unmergeCells, and(tableCellSelection, (s) => s.mergedCells), 100);
+  menu.addSeparator(always, 100);
+  menu.addItem(A.editTable, and(tableCellSelection, notMoving), 100);
+  menu.addSeparator(always, 100);
+  menu.addItem(A.exportTableCSV, and(tableCellSelection, notMoving), 100);
+  menu.addSeparator(always, 100);
+
   // ---- PAD_TOOL::Init
   const padSelection: Cond = whenHas("pad");
   const singlePad: Cond = and(countIs(1), whenOnly("pad"));
@@ -734,7 +777,7 @@ export function buildSelectionMenu(): ConditionalMenu {
   menu.addMenu("Zones", zoneMenu, whenOnly("zone"), 100);
 
   // ---- BOARD_INSPECTION_TOOL::Init: "Only show the net menu if all items in the selection are connectable"
-  const showNetMenu: Cond = (s) => s.total > 0 && s.footprints === 0 && s.texts === 0 && s.dimensions === 0 && s.groups === 0 && s.shapes.segment + s.shapes.rect + s.shapes.circle + s.shapes.arc + s.shapes.polygon + s.shapes.bezier === s.copperShapes;
+  const showNetMenu: Cond = (s) => s.total > 0 && s.footprints === 0 && s.texts === 0 && s.tables === 0 && s.tableCells === 0 && s.dimensions === 0 && s.groups === 0 && s.shapes.segment + s.shapes.rect + s.shapes.circle + s.shapes.arc + s.shapes.polygon + s.shapes.bezier === s.copperShapes;
   menu.addMenu("Net Inspection Tools", netMenu, showNetMenu, 100);
 
   // ---- ALIGN_DISTRIBUTE_TOOL::Init

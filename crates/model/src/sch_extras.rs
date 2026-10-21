@@ -105,6 +105,10 @@ pub struct SchExtras {
     /// stored. The writer says it in `(effects ... (justify ...))` and the importer reads it back, so KiCad draws the text where the studio does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub text_justify: BTreeMap<String, SchTextJustify>,
+    /// The tables of this sheet (`SCH_TABLE`, written as `(table ..)`), in the order of the file: the cells' text, sizes and strokes, the grid -- see [`crate::table::Table`]. A table is
+    /// selected, moved, locked and grouped like any item of the sheet (its id is `tbl_..`), and a click picks one of its cells. Additive: empty and not written for a sheet with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<crate::table::Table>,
     /// The groups of this sheet (`SCH_GROUP`, written as `(group "name" (uuid ..) (members ..))`): a named set of the ids of items of the sheet -- a symbol's reference (every
     /// placed unit), the id of a wire, label, text, power symbol, no-connect, bus entry, junction, graphic line, drawn shape or sheet -- and of other groups, so groups nest.
     /// A group has no geometry of its own: its box is its members'. A pin, a field and a sheet pin go along with the item that has them and are never members. The tree is
@@ -403,7 +407,13 @@ impl SchExtras {
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()
             && self.text_justify.is_empty()
+            && self.tables.is_empty()
             && self.groups.is_empty()
+    }
+
+    /// The table `id`, if the sheet has it.
+    pub fn table(&self, id: &str) -> Option<&crate::table::Table> {
+        self.tables.iter().find(|t| t.id == id)
     }
 
     /// True when `id` is locked.
@@ -436,6 +446,17 @@ impl SchExtras {
                 let id = crate::ir::next_item_id(self.graphics[i].shape.id_prefix(), &self.graphics[i].id_seed(), existing);
                 existing.insert(id.clone());
                 self.graphics[i].id = id;
+            }
+        }
+        // The tables too (`tbl_..`), in the order of their places (the same contract as the board's `DrawingsSection::assign_table_ids`).
+        existing.extend(self.tables.iter().map(|t| t.id.clone()).filter(|s| !s.is_empty()));
+        let mut order: Vec<usize> = (0..self.tables.len()).collect();
+        order.sort_by(|&a, &b| (self.tables[a].at, self.tables[a].id_seed()).cmp(&(self.tables[b].at, self.tables[b].id_seed())));
+        for i in order {
+            if self.tables[i].id.is_empty() {
+                let id = crate::ir::next_item_id("tbl", &self.tables[i].id_seed(), existing);
+                existing.insert(id.clone());
+                self.tables[i].id = id;
             }
         }
     }

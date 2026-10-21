@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { applyPatch } from "./schMove";
+import { fixtureTable } from "./tableFixture";
 import type { Schematic, SchField } from "../api/types";
 import type { SchMovePatch } from "../api/schEditTypes";
 import { addUserFieldCmd, autoplaceCmd, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeUm, fieldVisibilityCmds, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText, fieldTextCmd, isStandardSymbolField, newUserFieldName, removeUserFieldCmd, userFieldNameError, userFieldsOf } from "./schFieldEdit";
@@ -203,4 +204,17 @@ test("the commands of a user-defined field are the backend's verbs", () => {
   assert.deepEqual(addUserFieldCmd("R1", " Maker ", "Panasonic"), { op: "sch_edit", verb: "add_user_field", id: "R1", name: "Maker", text: "Panasonic" });
   assert.deepEqual(removeUserFieldCmd("R1", "Maker"), { op: "sch_edit", verb: "remove_user_field", id: "R1", name: "Maker" });
   assert.deepEqual(fieldTextCmd("U1#2", "MPN", "x"), { op: "sch_edit", verb: "edit_field", id: "fld:U1#2:MPN", text: "x" });
+});
+
+test("a held table is shown as the server laid it out for where it would be; a table the patch does not name stays", () => {
+  const moved = { ...fixtureTable(1, 2), id: "tbl_a" };
+  const other = { ...fixtureTable(1, 1), id: "tbl_b" };
+  const shifted = { ...moved, x: 5_000, cells: moved.cells.map((c) => ({ ...c, corners: c.corners.map(([x, y]) => [x + 5_000, y] as [number, number]) as typeof c.corners })) };
+  const sch = { symbols: [], power_symbols: [], wires: [], labels: [], texts: [], no_connects: [], bus_entries: [], junctions: [], lines: [], graphics: [], sheets: [], tables: [moved, other] } as unknown as Parameters<typeof applyPatch>[0];
+  const patch = { symbols: [], power_symbols: [], wires: [], labels: [], texts: [], no_connects: [], bus_entries: [], junctions: [], lines: [], graphics: [], sheets: [], tables: [shifted] };
+  const out = applyPatch(sch, patch);
+  assert.equal(out.tables![0], shifted);
+  assert.equal(out.tables![1], other);
+  // a patch of an older server, or of a sheet with no table, leaves the tables as they are
+  assert.equal(applyPatch(sch, { ...patch, tables: undefined }).tables![0], moved);
 });

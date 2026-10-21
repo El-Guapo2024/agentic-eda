@@ -6,7 +6,7 @@ import type { MenuNode } from "../kicad/types";
 const sel = (over: Partial<SchSelectionSummary>): SchSelectionSummary => {
   const s = { ...emptySummary(), ...over };
   // total and the lock counts follow from the kinds unless a test sets them.
-  const kinds = s.symbols + s.powerSymbols + s.wires + s.buses + s.lines + s.localLabels + s.globalLabels + s.hierLabels + s.directiveLabels + s.texts + s.textBoxes + s.junctions + s.busEntries + s.noConnects + s.sheets + s.shapes + s.ruleAreas;
+  const kinds = s.symbols + s.powerSymbols + s.wires + s.buses + s.lines + s.localLabels + s.globalLabels + s.hierLabels + s.directiveLabels + s.texts + s.textBoxes + s.junctions + s.busEntries + s.noConnects + s.sheets + s.shapes + s.ruleAreas + s.tables + s.tableCells;
   if (over.total === undefined) s.total = kinds;
   if (over.locked === undefined && over.unlocked === undefined) s.unlocked = s.total;
   return s;
@@ -97,4 +97,42 @@ test("a single power symbol offers Properties, as the one symbol it is in KiCad 
   assert.ok(actionsOf(schContextMenu(sel({ symbols: 1 }))).includes("eeschema.InteractiveEdit.properties"));
   assert.ok(!actionsOf(schContextMenu(sel({ powerSymbols: 2 }))).includes("eeschema.InteractiveEdit.properties"));
   assert.ok(!actionsOf(schContextMenu(sel({ powerSymbols: 1, symbols: 1 }))).includes("eeschema.InteractiveEdit.properties"));
+});
+
+// `SCH_EDIT_TABLE_TOOL::Init` (`EDIT_TABLE_TOOL_BASE::addMenus`) and `SCH_SELECTION_TOOL::Init`'s Select Column(s)/Row(s)/Table.
+test("a selection of table cells offers the selections and the structure edits of a table", () => {
+  const a = actionsOf(schContextMenu(sel({ tableCells: 1 })));
+  for (const want of [
+    "common.InteractiveSelection.SelectColumns",
+    "common.InteractiveSelection.Rows",
+    "common.InteractiveSelection.SelectTable",
+    "common.TableEditor.addRowAbove",
+    "common.TableEditor.addRowBelow",
+    "common.TableEditor.addColBefore",
+    "common.TableEditor.addColAfter",
+    "common.TableEditor.deleteRows",
+    "common.TableEditor.deleteColumns",
+    "pcbnew.TableEditor.editTable",
+    "common.TableEditor.exportTableCSV",
+    "eeschema.InteractiveEdit.properties",
+  ])
+    assert.ok(a.includes(want), want);
+  // a single cell is no block and not merged: neither Merge nor Unmerge
+  assert.ok(!a.includes("common.TableEditor.mergeCells") && !a.includes("common.TableEditor.unmergeCell"));
+});
+
+test("Merge Cells is offered for a block of cells and Unmerge Cell when one of them is merged", () => {
+  assert.ok(actionsOf(schContextMenu(sel({ tableCells: 2, cellBlock: true }))).includes("common.TableEditor.mergeCells"));
+  const merged = actionsOf(schContextMenu(sel({ tableCells: 1, mergedCells: true })));
+  assert.ok(merged.includes("common.TableEditor.unmergeCell") && !merged.includes("common.TableEditor.mergeCells"));
+});
+
+test("a table that is not a selection of cells has no table editing entries, and a cell with something else has none either", () => {
+  const whole = actionsOf(schContextMenu(sel({ tables: 1 })));
+  assert.ok(!whole.includes("common.TableEditor.addRowAbove") && !whole.includes("common.InteractiveSelection.SelectTable"));
+  assert.ok(whole.includes("eeschema.InteractiveEdit.properties"), "a table has Properties");
+  const mixed = actionsOf(schContextMenu(sel({ tableCells: 1, symbols: 1 })));
+  assert.ok(!mixed.includes("common.TableEditor.addRowAbove") && !mixed.includes("common.InteractiveSelection.Rows"));
+  // neither is offered when nothing is selected
+  assert.ok(!actionsOf(schContextMenu(sel({}))).includes("common.TableEditor.deleteRows"));
 });

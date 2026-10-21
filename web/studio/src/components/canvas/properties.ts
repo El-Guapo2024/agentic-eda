@@ -8,8 +8,12 @@ import type { Action, StudioApi } from "../../state/store";
 import { openGroupDialog } from "../../state/commonDialogs";
 import { padById } from "../../kicad-port/pcbItems";
 import { fieldById } from "../../kicad-port/fpFields";
+import { tablesOf } from "../../kicad-port/tables";
+import { openTablePropertiesFor } from "../../actions/tableActions";
 
 export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch<Action>): void {
+  // `EDIT_TOOL::Properties`: table cells open Table Cell Properties (on every selected cell of the table), a table Table Properties.
+  if (openTablePropertiesFor(tablesOf(api.getState().board), [...api.getState().selection], id)) return;
   // A tuning pattern (`PCB_TUNING_PATTERN::ShowPropertiesDialog`): the Tuning Pattern dialog, which tunes it again.
   if (api.getState().board?.drawings?.tuning_patterns?.some((p) => p.id === id)) {
     dispatch({ type: "PCBX", patch: { tuneDialogPattern: id } });

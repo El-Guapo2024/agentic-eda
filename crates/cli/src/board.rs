@@ -69,6 +69,9 @@ mod lib_editors_tests;
 #[cfg(test)]
 #[path = "review_tests.rs"]
 mod review_tests;
+#[cfg(test)]
+#[path = "table_tests.rs"]
+mod table_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1381,6 +1384,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::PasteSch { fragment, dx, dy, .. } => format!("schematic paste --items {} --by {},{}", fragment.section.symbols.len() + fragment.section.power_symbols.len() + fragment.section.wires.len() + fragment.section.labels.len() + fragment.section.texts.len() + fragment.section.no_connects.len() + fragment.section.bus_entries.len() + fragment.section.junctions.len() + fragment.section.lines.len() + fragment.section.extras.graphics.len(), mm(*dx), mm(*dy)),
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
+        Cmd::Table(c) => c.describe(),
+        Cmd::SchTable(c) => format!("schematic {}", c.describe()),
         Cmd::AddErcExclusion { check, location, .. } => format!("schematic erc-exclude {check:?} {location:?}"),
         Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::ClearErcExclusions => "schematic erc-unexclude --all".to_string(),
@@ -1680,6 +1685,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",
         Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } | Cmd::ReplaceSymbolGraphic { .. } => "symbol-shape",
         Cmd::EditSymbolText { .. } => "symbol-text",
+        Cmd::Table(_) => "table",
+        Cmd::SchTable(_) => "schematic-table",
     }
 }
 

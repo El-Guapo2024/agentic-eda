@@ -121,13 +121,15 @@ struct Targets {
     shapes: BTreeSet<String>,
     texts: BTreeSet<String>,
     dimensions: BTreeSet<String>,
+    /// Tables (`PCB_TABLE`); a click selects a cell, but a move, a turn and a flip take its table (`FilterCollectorForTableCells`), which the caller sends.
+    tables: BTreeSet<String>,
     /// Footprint fields on their own (`REF:Reference`): text a footprint carries, moved without it.
     fields: BTreeSet<String>,
 }
 
 impl Targets {
     fn is_empty(&self) -> bool {
-        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.fields.is_empty()
+        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.tables.is_empty() && self.fields.is_empty()
     }
 }
 
@@ -163,6 +165,8 @@ impl Board<'_> {
             out.texts.insert(id.to_string());
         } else if dr.dimensions.iter().any(|d| d.id == id) {
             out.dimensions.insert(id.to_string());
+        } else if dr.tables.iter().any(|t| t.id == id) {
+            out.tables.insert(id.to_string());
         } else {
             return false;
         }
@@ -254,6 +258,9 @@ impl Board<'_> {
             }
             for d in dr.dimensions.iter_mut().filter(|d| targets.dimensions.contains(&d.id)) {
                 transform_dimension(d, x, copper);
+            }
+            for t in dr.tables.iter_mut().filter(|t| targets.tables.contains(&t.id)) {
+                super::pcb_tables::transform_table(t, x, copper);
             }
         }
         if !targets.tracks.is_empty() || !targets.vias.is_empty() {

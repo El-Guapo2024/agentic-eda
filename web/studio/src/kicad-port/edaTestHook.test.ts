@@ -90,6 +90,10 @@ test("the board and the schematic lists carry every kind the editors select", ()
   const s = schematicLists({ symbols: [{ id: "R1" }], wires: [{ id: "w" }], labels: [{ id: "l" }] });
   assert.deepEqual([s.symbol, s.wire, s.label], [["R1"], ["w"], ["l"]]);
   assert.deepEqual(Object.values(schematicLists(undefined)).flat(), []);
+  // a sheet's tables and their cells are items of the sheet, listed when it has any
+  const t = schematicLists({ tables: [{ id: "tbl_a", cells: [{ id: "tbl_a:0:0" }, { id: "tbl_a:0:1" }] }] });
+  assert.deepEqual([t.table, t.tablecell], [["tbl_a"], ["tbl_a:0:0", "tbl_a:0:1"]]);
+  assert.equal("table" in schematicLists({ symbols: [] }), false);
   // a sheet's pins are items of their own, and a pin of a symbol is named by its id
   assert.deepEqual(schematicLists({ sheets: [{ id: "sh", pins: [{ id: "p1" }, { id: "p2" }] }] }).sheet_pin, ["p1", "p2"]);
   assert.deepEqual(selectionWithKinds(["pin:R1:2", "R1", "other"], kindIndex(schematicLists({ symbols: [{ id: "R1" }] }))), [

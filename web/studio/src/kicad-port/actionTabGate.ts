@@ -71,7 +71,11 @@ export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set([
  * `common.*` actions that act on a whole document and exist for the two document editors only: the board editor and
  * the schematic editor.
  */
-export const BOARD_AND_SCHEMATIC_ONLY: ReadonlySet<string> = new Set(["common.Control.updatePcbFromSchematic"]);
+export const BOARD_AND_SCHEMATIC_ONLY: ReadonlySet<string> = new Set([
+  "common.Control.updatePcbFromSchematic",
+  // Edit Table... (`ACTIONS::editTable`, `EDIT_TABLE_TOOL_BASE`): one common action that the board's and the sheet's table tools both run, though its name says pcbnew.
+  "pcbnew.TableEditor.editTable",
+]);
 
 /**
  * Save As (`ACTIONS::saveAs`) is the File menu's entry of the board editor, the schematic editor and the Footprint Editor

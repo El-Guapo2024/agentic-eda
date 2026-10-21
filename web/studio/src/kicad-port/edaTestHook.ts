@@ -134,7 +134,7 @@ type IdItems = readonly { id?: string }[] | undefined;
 export interface BoardLike {
   parts?: readonly { ref: string; pads?: readonly { num: string }[]; fields?: readonly { id: string }[] }[];
   routing?: { tracks?: IdItems; vias?: IdItems; zones?: IdItems } | null;
-  drawings?: { shapes?: IdItems; texts?: IdItems; dimensions?: IdItems; groups?: IdItems } | null;
+  drawings?: { shapes?: IdItems; texts?: IdItems; dimensions?: IdItems; groups?: IdItems; tables?: readonly { id: string; cells?: IdItems }[] } | null;
 }
 
 /** The schematic's state JSON as far as the hook reads it. */
@@ -151,6 +151,7 @@ export interface SchematicLike {
   graphics?: IdItems;
   bus_entries?: IdItems;
   groups?: IdItems;
+  tables?: readonly { id: string; cells?: IdItems }[];
 }
 
 const ids = (items: IdItems): string[] => (items ?? []).flatMap((i) => (i.id ? [i.id] : []));
@@ -168,7 +169,14 @@ export function boardLists(board: BoardLike | null | undefined): ItemLists {
     text: ids(board?.drawings?.texts),
     dimension: ids(board?.drawings?.dimensions),
     group: ids(board?.drawings?.groups),
+    // `PCB_TABLE` and its cells (`<table id>:<row>:<col>`): a click selects a cell, a window a table. Listed only when the board has tables.
+    ...tableLists(board),
   };
+}
+
+function tableLists(board: BoardLike | null | undefined): ItemLists {
+  const tables = board?.drawings?.tables ?? [];
+  return tables.length === 0 ? {} : { table: ids(tables), tablecell: tables.flatMap((t) => ids(t.cells)) };
 }
 
 export function schematicLists(sch: SchematicLike | null | undefined): ItemLists {
@@ -195,6 +203,8 @@ export function schematicLists(sch: SchematicLike | null | undefined): ItemLists
     graphic: ids(sch?.graphics),
     bus_entry: ids(sch?.bus_entries),
     group: ids(sch?.groups),
+    // `SCH_TABLE` and its cells (`<table id>:<row>:<col>`), listed only when the sheet has tables.
+    ...tableLists({ drawings: { tables: sch?.tables } }),
   };
 }
 

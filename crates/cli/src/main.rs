@@ -41,6 +41,7 @@ mod library_place;
 mod library_search;
 mod library_tables;
 mod text_variables;
+mod table_json;
 mod text_vars_json;
 mod page_json;
 mod sch_api;
