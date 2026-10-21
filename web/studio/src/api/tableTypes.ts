@@ -23,12 +23,28 @@ export interface TableSeparatorsEdit {
   style?: TableLineStyleName;
 }
 
+/** `StrokeProps`: the rows of the Properties panel's "Table Properties" group, each of which changes one field of the border or of the separators. */
+export interface TableStrokeProps {
+  external?: boolean;
+  header?: boolean;
+  border_width_um?: Um;
+  border_style?: TableLineStyleName;
+  /** A colour with no alpha is `COLOR4D::UNSPECIFIED` and clears it. */
+  border_color?: { r: number; g: number; b: number; a: number };
+  rows?: boolean;
+  cols?: boolean;
+  separators_width_um?: Um;
+  separators_style?: TableLineStyleName;
+  separators_color?: { r: number; g: number; b: number; a: number };
+}
+
 /** `TablePatch`: what the Table Properties dialog and the Properties panel change in the table itself. A field left out stays. */
 export interface TablePatch {
   /** "Start X" / "Start Y". */
   at?: PointXY;
   border?: TableBorderEdit;
   separators?: TableSeparatorsEdit;
+  props?: TableStrokeProps;
   /** The text of every cell, row by row. */
   texts?: string[][];
 }

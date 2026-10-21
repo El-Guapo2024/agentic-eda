@@ -7,7 +7,7 @@
 //! dialog handles a field several selected cells disagree on (`INDETERMINATE_STATE`).
 
 use crate::ir::{Point, TextJustify, TextVAlign, Um};
-use crate::table::{Table, TableLineStyle, TableText};
+use crate::table::{Table, TableColor, TableLineStyle, TableText};
 use serde::{Deserialize, Serialize};
 
 /// `GetPenSizeForNormal`: an eighth of the glyph, `KiROUND`ed.
@@ -97,6 +97,79 @@ pub struct SeparatorsEdit {
     pub style: TableLineStyle,
 }
 
+/// The rows of the Properties panel's "Table Properties" group (`PCB_TABLE_DESC`, `SCH_TABLE_DESC`): each setter (`SetStrokeExternal`, `SetBorderWidth`,
+/// `SetSeparatorsStyle` ...) changes one field of the border or of the separators and nothing else -- unlike the dialog's `border` and `separators`, which set a whole
+/// half at once and give a stroke nothing draws the width -1. A colour with no alpha is `COLOR4D::UNSPECIFIED`, which clears the colour.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StrokeProps {
+    /// "External Border".
+    #[serde(default)]
+    pub external: Option<bool>,
+    /// "Header Border".
+    #[serde(default)]
+    pub header: Option<bool>,
+    /// "Border Width".
+    #[serde(default)]
+    pub border_width_um: Option<Um>,
+    /// "Border Style".
+    #[serde(default)]
+    pub border_style: Option<TableLineStyle>,
+    /// "Border Color".
+    #[serde(default)]
+    pub border_color: Option<TableColor>,
+    /// "Row Separators".
+    #[serde(default)]
+    pub rows: Option<bool>,
+    /// "Cell Separators".
+    #[serde(default)]
+    pub cols: Option<bool>,
+    /// "Separators Width".
+    #[serde(default)]
+    pub separators_width_um: Option<Um>,
+    /// "Separators Style".
+    #[serde(default)]
+    pub separators_style: Option<TableLineStyle>,
+    /// "Separators Color".
+    #[serde(default)]
+    pub separators_color: Option<TableColor>,
+}
+
+impl StrokeProps {
+    fn apply(&self, t: &mut Table) {
+        if let Some(v) = self.external {
+            t.border.external = v;
+        }
+        if let Some(v) = self.header {
+            t.border.header = v;
+        }
+        if let Some(v) = self.border_width_um {
+            t.border.stroke.width_um = v;
+        }
+        if let Some(v) = self.border_style {
+            t.border.stroke.style = v;
+        }
+        if let Some(c) = self.border_color {
+            t.border.stroke.color = (c.a != 0).then_some(c);
+        }
+        if let Some(v) = self.rows {
+            t.separators.rows = v;
+        }
+        if let Some(v) = self.cols {
+            t.separators.cols = v;
+        }
+        if let Some(v) = self.separators_width_um {
+            t.separators.stroke.width_um = v;
+        }
+        if let Some(v) = self.separators_style {
+            t.separators.stroke.style = v;
+        }
+        if let Some(c) = self.separators_color {
+            t.separators.stroke.color = (c.a != 0).then_some(c);
+        }
+    }
+}
+
 /// What a table dialog or the Properties panel changes in a table itself (not its layer or lock, which belong to the editor).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +181,9 @@ pub struct TablePatch {
     pub border: Option<BorderEdit>,
     #[serde(default)]
     pub separators: Option<SeparatorsEdit>,
+    /// The rows of the Properties panel: single fields of the border and of the separators, applied after `border` and `separators`.
+    #[serde(default)]
+    pub props: Option<StrokeProps>,
     /// The grid of the dialog: the text of every cell, row by row. A cell another one covers has no text whatever the grid says.
     #[serde(default)]
     pub texts: Option<Vec<Vec<String>>>,
@@ -150,6 +226,9 @@ pub fn patch_table(t: &mut Table, p: &TablePatch) -> Result<(), String> {
         t.separators.cols = s.cols;
         t.separators.stroke.width_um = if s.rows || s.cols { s.width_um.max(0) } else { -1 };
         t.separators.stroke.style = style_or_solid(s.style);
+    }
+    if let Some(props) = &p.props {
+        props.apply(t);
     }
     Ok(())
 }
@@ -248,6 +327,24 @@ mod tests {
         assert_eq!((t.border.stroke.width_um, t.border.stroke.style), (0, TableLineStyle::Solid), "a negative width is 0 and the default style shows as solid");
         patch_table(&mut t, &TablePatch { separators: Some(SeparatorsEdit { rows: false, cols: true, width_um: 150, style: TableLineStyle::Dot }), ..TablePatch::default() }).unwrap();
         assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_um), (false, true, 150));
+    }
+
+    #[test]
+    fn a_properties_row_changes_one_field_of_a_stroke_and_leaves_the_rest() {
+        let mut t = table();
+        t.border.stroke.width_um = -1;
+        // `SetStrokeExternal` alone: the width stays -1 (nothing draws until the width is set too), the dialog's rule does not apply.
+        patch_table(&mut t, &TablePatch { props: Some(StrokeProps { external: Some(false), ..StrokeProps::default() }), ..TablePatch::default() }).unwrap();
+        assert_eq!((t.border.external, t.border.header, t.border.stroke.width_um), (false, true, -1));
+        let red = TableColor { r: 255, g: 0, b: 0, a: 255 };
+        let props = StrokeProps { border_width_um: Some(250), border_style: Some(TableLineStyle::Dot), border_color: Some(red), cols: Some(false), separators_width_um: Some(80), ..StrokeProps::default() };
+        patch_table(&mut t, &TablePatch { props: Some(props), ..TablePatch::default() }).unwrap();
+        assert_eq!((t.border.stroke.width_um, t.border.stroke.style, t.border.stroke.color), (250, TableLineStyle::Dot, Some(red)));
+        assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_um, t.separators.stroke.style), (true, false, 80, TableLineStyle::Solid));
+        // An unspecified colour (no alpha) clears it.
+        let clear = StrokeProps { border_color: Some(TableColor { r: 0, g: 0, b: 0, a: 0 }), ..StrokeProps::default() };
+        patch_table(&mut t, &TablePatch { props: Some(clear), ..TablePatch::default() }).unwrap();
+        assert_eq!(t.border.stroke.color, None);
     }
 
     #[test]
