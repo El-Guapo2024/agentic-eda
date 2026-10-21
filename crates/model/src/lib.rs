@@ -41,6 +41,7 @@ pub mod sheet_list;
 pub mod symbol;
 pub mod sym_fields;
 pub mod table;
+pub mod table_edit;
 pub mod table_text;
 pub mod text_vars;
 pub mod via_extra;

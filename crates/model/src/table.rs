@@ -568,6 +568,39 @@ impl Table {
         self.at = Point { x: c0.x - ox, y: c0.y - oy };
     }
 
+    /// `PCB_TABLE::Flip( aCentre, aFlipDirection )`: the table is turned over to `layer`. Its columns (`left_right`) or rows run the other way, the text of its cells
+    /// is mirrored when the layers are side specific (`PCB_TEXTBOX::Flip`), and it lies where the mirror image of its box about the axis through `centre` is, with the
+    /// angle it had. (KiCad finishes with a move by the table's width or height whose reason cannot be measured -- kicad-cli does not flip -- so the place is the
+    /// mirror image's.)
+    pub fn flip(&mut self, centre: Point, left_right: bool, layer: String, mirror_text: bool) {
+        if !self.is_well_formed() {
+            return;
+        }
+        let orig = self.bounding_box();
+        let target = if left_right { Point { x: 2 * centre.x - orig.x1, y: orig.y0 } } else { Point { x: orig.x0, y: 2 * centre.y - orig.y1 } };
+        let (rows, cols) = (self.row_count(), self.col_count());
+        if left_right {
+            for r in 0..rows {
+                self.cells[r * cols..(r + 1) * cols].reverse();
+            }
+            self.col_widths.reverse();
+        } else {
+            let old = std::mem::take(&mut self.cells);
+            let mut lines: Vec<Vec<TableCell>> = old.chunks(cols).map(<[TableCell]>::to_vec).collect();
+            lines.reverse();
+            self.cells = lines.into_iter().flatten().collect();
+            self.row_heights.reverse();
+        }
+        if mirror_text {
+            for c in &mut self.cells {
+                c.style.mirror = !c.style.mirror;
+            }
+        }
+        self.layer = layer;
+        let now = self.bounding_box();
+        self.translate(target.x - now.x0, target.y - now.y0);
+    }
+
     // ------------------------------------------------------------------------------------------------------------------- structure edits
 
     /// A copy of `src` as `PCB_EDIT_TABLE_TOOL::copyCell` makes one: every look, no text, no uuid.
@@ -925,6 +958,29 @@ mod tests {
             t.rotate(Point { x: 0, y: 0 }, 90_000);
         }
         assert_eq!((t.angle, t.at), (0, Point { x: 0, y: 0 }));
+    }
+
+    #[test]
+    fn a_flipped_table_is_the_mirror_image_with_its_columns_reversed_and_its_text_mirrored() {
+        let mut t = grid(2, 3);
+        t.col_widths = vec![10_000, 20_000, 30_000];
+        t.at = Point { x: 10_000, y: 5_000 };
+        // the table spans x 10..70 mm; mirrored about x = 0 it spans -70..-10
+        t.flip(Point { x: 0, y: 0 }, true, "B.SilkS".into(), true);
+        assert_eq!(t.layer, "B.SilkS");
+        assert_eq!(t.col_widths, vec![30_000, 20_000, 10_000]);
+        assert_eq!(t.texts(), vec![vec!["c2", "c1", "c0"], vec!["c5", "c4", "c3"]]);
+        assert!(t.cells.iter().all(|c| c.style.mirror));
+        let b = t.bounding_box();
+        assert_eq!((b.x0, b.x1, b.y0, b.y1), (-70_000, -10_000, 5_000, 15_000));
+        // top-bottom reverses the rows instead
+        let mut u = grid(2, 2);
+        u.row_heights = vec![5_000, 8_000];
+        u.flip(Point { x: 0, y: 0 }, false, "B.SilkS".into(), false);
+        assert_eq!(u.row_heights, vec![8_000, 5_000]);
+        assert_eq!(u.texts(), vec![vec!["c2", "c3"], vec!["c0", "c1"]]);
+        let b = u.bounding_box();
+        assert_eq!((b.y0, b.y1), (-13_000, 0));
     }
 
     #[test]
