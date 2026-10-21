@@ -2908,6 +2908,11 @@ impl DrawingsSection {
     /// whose `id` is still empty. See [`RoutingSection::assign_missing_ids`]
     /// -- same contract, same reason for a stable per-kind processing order.
     pub fn assign_missing_ids(&mut self) {
+        // The hatch of a shape that is gone goes with it, before a shape made now can be given its id (the same geometry makes the same id).
+        if !self.board_items.shape_styles.is_empty() {
+            let live: std::collections::BTreeSet<String> = self.shapes.iter().map(|s| s.id().to_string()).collect();
+            self.board_items.prune_shape_styles(&live);
+        }
         let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).chain(self.tuning_patterns.iter().map(|t| t.id.as_str())).chain(self.barcodes.iter().map(|b| b.id.as_str())).chain(self.board_items.ids()).filter(|s| !s.is_empty()).map(String::from).collect();
 
         for i in 0..self.tuning_patterns.len() {

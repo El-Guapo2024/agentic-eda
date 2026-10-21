@@ -1,10 +1,12 @@
-// The board editor's tools for the item kinds GAPS.md item 24 (package P16) added: Draw Text Box and Place Reference Image today; Place Point, Add Barcode and Rehatch Shapes as
-// their steps land. Called from `registerPcbEditSweep`. Each tool is a run of picker sessions (kicad-port/pickerHost.ts: the next canvas click answers the session, Escape
+// The board editor's tools for the item kinds GAPS.md item 24 (package P16) added: Draw Text Box, Place Reference Image, Place Point and Rehatch Shapes today; Add Barcode as its step
+// lands. Called from `registerPcbEditSweep`. Each tool is a run of picker sessions (kicad-port/pickerHost.ts: the next canvas click answers the session, Escape
 // ends it) -- `DRAWING_TOOL`'s own loop of clicks is a loop of picks here -- and ends in the item's dialog.
 //
 //   pcbnew.InteractiveDrawing.textbox               DRAWING_TOOL::DrawRectangle with PCB_ACTIONS::drawTextBox, then DIALOG_TEXTBOX_PROPERTIES (OK adds the box, Cancel throws it away)
 //   pcbnew.InteractiveDrawing.placeReferenceImage   DRAWING_TOOL::PlaceReferenceImage: a file chooser, the image follows the cursor by its centre, a click drops it on the active layer
 //   pcbnew.InteractiveDrawing.placePoint            DRAWING_TOOL::PlacePoint (`IPO_REPEAT | IPO_SINGLE_CLICK`): each click puts a point of the default size on the active layer, until Escape
+//   pcbnew.InteractiveDrawing.barcode               DRAWING_TOOL::DrawBarcode: a click opens Barcode Properties on a QR code of the active layer at the click; OK adds it, Cancel does not; the tool goes on until Escape
+//   pcbnew.Control.rehatchShapes                    PCB_CONTROL::RehatchShapes: the hatch lines of every hatched shape worked out again from the board as it is
 import { newTextBox } from "../kicad-port/pcbTextBox";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import { imageSizeUm, SCALE_PPM } from "../kicad-port/refImage";
@@ -13,7 +15,9 @@ import { asPickedImage, chooseImageFile, loadPickedImage, readImageFile, type Lo
 import { picker } from "./pcbPicker";
 import { applyCommands, createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 import { setToolPreview } from "../components/canvas/pcbItemsPaint";
-import { openTextBoxDialog } from "../state/pcbItemDialogs";
+import { openBarcodeDialog, openTextBoxDialog } from "../state/pcbItemDialogs";
+import { newBarcode } from "../kicad-port/barcodeShapes";
+import { textStyleOf } from "../kicad-port/layerDefaults";
 
 export function registerPcbItemActions(m: Map<string, (param?: unknown) => void>, ctx: SweepCtx): void {
   const { pcbOnly } = createSweepHelpers(ctx);
@@ -24,6 +28,35 @@ export function registerPcbItemActions(m: Map<string, (param?: unknown) => void>
     if (ctx.state.tab === "pcb") startPlaceImageTool(ctx, asPickedImage(param));
   });
   m.set("pcbnew.InteractiveDrawing.placePoint", pcbOnly(() => startPlacePointTool(ctx)));
+  m.set("pcbnew.InteractiveDrawing.barcode", pcbOnly(() => startBarcodeTool(ctx)));
+  // KiCad posts `rehatchShapes` after every commit, undo and file load and keeps the lines in each shape; here the server works them out from the board as it is every time it describes it
+  // (`eda_drc::hatch`), so the action is to describe it again -- the lines are never older than the board, and a shape put over a hatched one has already cut its lines.
+  m.set("pcbnew.Control.rehatchShapes", pcbOnly(() => void ctx.api.refresh()));
+}
+
+/**
+ * `DRAWING_TOOL::DrawBarcode`: each click -- where the grid helper holds the cursor, `GRID_TEXT` -- makes a barcode on the active layer with the layer's text size (a 40 mm QR code of level L,
+ * `PCB_BARCODE( parent )`) and opens Barcode Properties on it; OK adds it as one undo step ("Draw Barcode") and selects it, Cancel throws it away; after either the tool waits for the next
+ * click, until Escape.
+ */
+function startBarcodeTool(ctx: SweepCtx): void {
+  const { api, dispatch } = ctx;
+  const layer = () => activeLayerName(api.getState().activeLayer, "F.SilkS");
+  const next = (): void => {
+    picker.start({
+      kind: "point",
+      prompt: "Add barcode: click to place it (Escape ends the tool)",
+      onPoint: (at) => {
+        const board = api.getState().board;
+        if (!board) return false;
+        const height = textStyleOf(board.board_rules?.text_graphics, layer()).heightUm;
+        openBarcodeDialog({ id: null, barcode: newBarcode(layer(), at, height), onClose: next });
+        return false;
+      },
+    });
+  };
+  dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+  next();
 }
 
 /**

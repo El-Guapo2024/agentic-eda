@@ -2,7 +2,9 @@
 // `paintBoard` (painter.ts) once for the board and once for the items in the hand, after the dimensions. Ports of `PCB_PAINTER::draw( const PCB_TEXTBOX* )` (pcbnew/pcb_painter.cpp at
 // KiCad 8303b2ad): the border in the layer's colour with its line style, the text in the stroke font wrapped to the box, and, for a knockout box, the box filled with the text cut out.
 import type { BoardState } from "../../api/types";
-import type { BoardRefImage, BoardTextBox } from "../../api/pcbItemTypes";
+import type { BoardBarcode, BoardRefImage, BoardTextBox } from "../../api/pcbItemTypes";
+import { barcodeShape, barcodeShapeKey, symbolCorners } from "../../kicad-port/barcodeShapes";
+import { requestBarcodeShape } from "./barcodeCache";
 import { parseCssColor } from "../../kicad-port/appearance";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { refImageBounds } from "../../kicad-port/pcbExtraItems";
@@ -129,6 +131,7 @@ export function drawPoints(ctx: CanvasRenderingContext2D, view: ViewTransform, b
 /** Every item of the kinds this module draws that the board has, and the rubber band of the tool in progress. */
 export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
   drawTextBoxes(ctx, view, board, opts);
+  drawBarcodes(ctx, view, board, opts);
   drawPoints(ctx, view, board, opts);
   const cursor = opts.snappedCursor ?? (opts.cursorUm ? ([opts.cursorUm.x, opts.cursorUm.y] as const) : null);
   // The image in the hand follows the cursor, centred on it, at the alpha it will have.
@@ -152,6 +155,59 @@ export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
     ctx.strokeRect(toolPreview.from[0], toolPreview.from[1], cursor[0] - toolPreview.from[0], cursor[1] - toolPreview.from[1]);
     ctx.restore();
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------- barcodes
+
+function drawBarcodes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
+  for (const b of board.drawings?.barcodes ?? []) {
+    if (!layerIsVisible(opts.layerVisible, b.layer)) continue;
+    requestBarcodeShape(b);
+    drawBarcode(ctx, view, b, opts.selection.has(b.id));
+  }
+}
+
+/**
+ * `PCB_PAINTER::draw( const PCB_BARCODE* )`: the polygons of the symbol and of its text (`m_poly`) filled in the layer's colour, in the selection colour when selected. They are what kicad-cli
+ * plots of the barcode (kicad-port/barcodeShapes.ts); until they arrive, or when the code cannot be made, the box the symbol will fill is drawn with a cross through it.
+ */
+export function drawBarcode(ctx: CanvasRenderingContext2D, view: ViewTransform, b: BoardBarcode, selected: boolean, color?: string): void {
+  const ink = color ?? (selected ? layerColor("selection") : layerColor(layerKeyOf(b.layer)));
+  const state = barcodeShape(barcodeShapeKey(b));
+  ctx.save();
+  ctx.fillStyle = ink;
+  ctx.strokeStyle = ink;
+  if (state?.status === "ready" && state.paths.length > 0) {
+    for (const path of state.paths) {
+      ctx.beginPath();
+      for (const ring of path) {
+        ring.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(b.x + x, b.y + y) : ctx.lineTo(b.x + x, b.y + y)));
+        ctx.closePath();
+      }
+      ctx.fill("evenodd");
+    }
+  } else if (b.text.length > 0 || state?.status === "failed") {
+    // not here yet (or none: an empty text has nothing to encode): the box, crossed
+    const c = symbolCorners(b);
+    ctx.lineWidth = hairlineUm(view, 1);
+    ctx.setLineDash([hairlineUm(view, 4), hairlineUm(view, 3)]);
+    ctx.beginPath();
+    c.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.closePath();
+    ctx.moveTo(c[0]![0], c[0]![1]);
+    ctx.lineTo(c[2]![0], c[2]![1]);
+    ctx.moveTo(c[1]![0], c[1]![1]);
+    ctx.lineTo(c[3]![0], c[3]![1]);
+    ctx.stroke();
+  } else {
+    const c = symbolCorners(b);
+    ctx.lineWidth = hairlineUm(view, 1);
+    ctx.beginPath();
+    c.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.closePath();
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawTextBoxes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {

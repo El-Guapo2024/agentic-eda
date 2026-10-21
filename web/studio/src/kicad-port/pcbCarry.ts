@@ -134,9 +134,10 @@ export function splitCarried(board: BoardState, refs: readonly string[]): Carrie
   const textBoxes = take(board.drawings?.text_boxes);
   const images = take(board.drawings?.images);
   const points = take(board.drawings?.points);
+  const barcodes = take(board.drawings?.barcodes);
   const groups = take(board.drawings?.groups);
   const routing = (side: "in" | "out") => (board.routing ? { ...board.routing, tracks: tracks[side], vias: vias[side], zones: zones[side] } : null);
-  const drawings = (side: "in" | "out") => (board.drawings ? { ...board.drawings, shapes: shapes[side], texts: texts[side], dimensions: dimensions[side], text_boxes: textBoxes[side], images: images[side], points: points[side], groups: groups[side] } : null);
+  const drawings = (side: "in" | "out") => (board.drawings ? { ...board.drawings, shapes: shapes[side], texts: texts[side], dimensions: dimensions[side], text_boxes: textBoxes[side], images: images[side], points: points[side], barcodes: barcodes[side], groups: groups[side] } : null);
   return {
     still: { ...board, parts: parts.out, routing: routing("out"), drawings: drawings("out") },
     moving: { ...board, parts: parts.in, routing: routing("in"), drawings: drawings("in") },

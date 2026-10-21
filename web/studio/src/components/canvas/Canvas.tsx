@@ -28,6 +28,7 @@ import { isGroup, substituteSelection, topLevelGroup, withinScope } from "../../
 import type { ToolId } from "../../state/store";
 import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/types";
 import { activeEditPoint, cmdShapeToShape, moveShapePoint, shapeEditPoints, shapeToCmd, type EditPoint } from "../../kicad-port/pcbPointEdit";
+import { reshapeCmds } from "../../kicad-port/shapeFill";
 import { applyCommands } from "../../actions/pcbSweepKit";
 import { picker } from "../../actions/pcbPicker";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
@@ -1269,11 +1270,12 @@ export function Canvas() {
     } else if (drag.kind === "tuneHandle") {
       void drag.drag.finish(api);
     } else if (drag.kind === "shapePoint") {
-      // A shape's id is its geometry's: dropping the handle makes a new shape (selected) in place of the old one, one undo step.
+      // A shape's id is its geometry's: dropping the handle makes a new shape (selected) in place of the old one, one undo step. A hatched shape is changed in place, to keep its hatch.
       const preview = shapePointPreview;
       setShapePointPreview(null);
       if (preview && JSON.stringify(shapeToCmd(preview.shape)) !== JSON.stringify(shapeToCmd(drag.base))) {
-        void applyCommands(api, dispatch, [{ op: "delete_shape", id: drag.shapeId }, { op: "add_shape", shape: shapeToCmd(preview.shape) }], [drag.shapeId]);
+        const re = reshapeCmds(board, drag.shapeId, shapeToCmd(preview.shape));
+        void applyCommands(api, dispatch, re.cmds, re.removed);
       }
     }
   };

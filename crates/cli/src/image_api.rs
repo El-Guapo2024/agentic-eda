@@ -37,7 +37,7 @@ pub(crate) fn sch_graphics_json(graphics: &[SchGraphic]) -> Value {
     v
 }
 
-fn query_value(target: &str, key: &str) -> String {
+pub(crate) fn query_value(target: &str, key: &str) -> String {
     let query = target.split('?').nth(1).unwrap_or("");
     query
         .split('&')

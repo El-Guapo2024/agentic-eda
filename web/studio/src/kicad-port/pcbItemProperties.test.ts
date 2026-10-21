@@ -173,3 +173,46 @@ test("a point is a PCB_POINT with the rows of PCB_POINT_DESC: position, lock, la
   assert.deepEqual(edit(b, ["pnt_a"], "Position Y", 21_000), [{ op: "move_items", ids: ["pnt_a"], dx: 0, dy: 1_000 }]);
   assert.equal(pcbEdit(b, ["pnt_a"], "Size", 0, "mm").ok, false, "a mark of no size is refused");
 });
+
+// ----------------------------------------------------------------------------------------------------------------------------- barcodes
+
+test("a barcode is a PCB_BARCODE with the rows of PCB_BARCODE_DESC; Error Correction is for the QR kinds (Micro QR has no High) and the margins for a knockout; every row is one edit_barcode", () => {
+  const b = board();
+  b.drawings!.barcodes = [{ id: "bar_a", layer: "F.SilkS", x: 10_000, y: 20_000, angle: 0, w: 10_000, h: 10_000, text: "HELLO", text_height: 1_500, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x: 0, margin_y: 0 }];
+  const item = pcbItemOf(b, "bar_a")!;
+  assert.equal(item.type, "PCB_BARCODE");
+  assert.equal(pcbFriendlyName(item), "Barcode");
+  const rows = (): string[] => pcbGrid(b, ["bar_a"], "mm").groups.flatMap((g) => g.rows).map((r) => r.name);
+  assert.deepEqual(rows(), ["Position X", "Position Y", "Locked", "Layer", "Text", "Show Text", "Text Size", "Width", "Height", "Orientation", "Barcode Type", "Error Correction", "Knockout"]);
+  const sentBarcode = (cmds: Cmd[]) => {
+    assert.equal(cmds.length, 1);
+    const c = cmds[0]! as Extract<Cmd, { op: "pcb_item" }>;
+    assert.equal(c.verb, "edit_barcode");
+    return c as Extract<typeof c, { verb: "edit_barcode" }>;
+  };
+  const text = sentBarcode(edit(b, ["bar_a"], "Text", "WORLD"));
+  assert.deepEqual([text.id, text.barcode.text, text.barcode.kind, text.barcode.width_um, text.barcode.at], ["bar_a", "WORLD", "qr", 10_000, { x: 10_000, y: 20_000 }]);
+  assert.equal(sentBarcode(edit(b, ["bar_a"], "Width", 12_000)).barcode.width_um, 12_000);
+  assert.equal(sentBarcode(edit(b, ["bar_a"], "Orientation", 90)).barcode.angle, 90_000);
+  assert.equal(sentBarcode(edit(b, ["bar_a"], "Orientation", -90)).barcode.angle, 270_000, "a turn is 0 to 360");
+  assert.equal(sentBarcode(edit(b, ["bar_a"], "Show Text", false)).barcode.show_text, false);
+  assert.equal(sentBarcode(edit(b, ["bar_a"], "Layer", "F.Fab")).barcode.layer, "F.Fab");
+  assert.deepEqual(edit(b, ["bar_a"], "Text", "HELLO"), [], "the same text sends nothing");
+  assert.deepEqual(edit(b, ["bar_a"], "Position X", 11_000), [{ op: "move_items", ids: ["bar_a"], dx: 1_000, dy: 0 }]);
+  assert.equal(pcbEdit(b, ["bar_a"], "Width", 0, "mm").ok, false, "a symbol of no size is refused");
+  // the kinds: Micro QR has no High, so a High level goes to Q with the kind; Code 128 has no level at all
+  b.drawings!.barcodes![0]!.ecc = "H";
+  const micro = sentBarcode(edit(b, ["bar_a"], "Barcode Type", "microqr"));
+  assert.deepEqual([micro.barcode.kind, micro.barcode.ecc], ["microqr", "Q"]);
+  assert.deepEqual(pcbGrid(b, ["bar_a"], "mm").groups.flatMap((g) => g.rows).find((r) => r.name === "Error Correction")?.choices?.map((c) => c.value), ["L", "M", "Q", "H"]);
+  b.drawings!.barcodes![0]!.kind = "microqr";
+  b.drawings!.barcodes![0]!.ecc = "Q";
+  assert.deepEqual(pcbGrid(b, ["bar_a"], "mm").groups.flatMap((g) => g.rows).find((r) => r.name === "Error Correction")?.choices?.map((c) => c.value), ["L", "M", "Q"]);
+  b.drawings!.barcodes![0]!.kind = "code128";
+  assert.ok(!rows().includes("Error Correction"), "a one-dimensional code has no error correction");
+  // a knockout has margins
+  assert.ok(!rows().includes("Margin X"));
+  b.drawings!.barcodes![0]!.knockout = true;
+  assert.deepEqual(rows().slice(-3), ["Knockout", "Margin X", "Margin Y"]);
+  assert.equal(sentBarcode(edit(b, ["bar_a"], "Margin X", 800)).barcode.margin_x_um, 800);
+});

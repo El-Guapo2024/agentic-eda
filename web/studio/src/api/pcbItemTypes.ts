@@ -187,10 +187,12 @@ export type PcbItemCmd =
   | { verb: "add_barcode"; barcode: CmdBarcode }
   | { verb: "edit_barcode"; id: string; barcode: CmdBarcode }
   | { verb: "delete_barcode"; id: string }
-  /** `pcbnew.Control.rehatchShapes`: the hatch lines of every hatched shape worked out again (`PCB_CONTROL::RehatchShapes`). */
-  | { verb: "rehatch_shapes" }
-  /** A shape's fill: none, solid, hatch, reverse hatch or cross-hatch (`EDA_SHAPE::SetFillMode`), and its border's line style. */
-  | { verb: "set_shape_style"; ids: string[]; fill?: ShapeFill; line_style?: SchLineStyle };
+  /**
+   * The fill of rectangles, circles and polygons: none, solid, hatch, reverse hatch or cross-hatch (`EDA_SHAPE::SetFillModeProp`; the Fill row of the Properties panel and the shape
+   * dialog's choice), for all of `ids` as one undo step. The hatch lines are worked out when the board is described -- `pcbnew.Control.rehatchShapes` (`PCB_CONTROL::RehatchShapes`,
+   * which KiCad posts after every commit, undo and file load) is that, so there is no verb for it. A fill left out changes nothing.
+   */
+  | { verb: "set_shape_style"; ids: string[]; fill?: ShapeFill };
 
 /** `FILL_T`: how a closed shape is filled (`UI_FILL_MODE`). */
 export type ShapeFill = "none" | "solid" | "hatch" | "reverse_hatch" | "cross_hatch";

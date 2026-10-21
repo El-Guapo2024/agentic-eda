@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { BoardRefImage } from "../api/pcbItemTypes";
+import type { BoardBarcode, BoardRefImage } from "../api/pcbItemTypes";
+import { barcodeShapeKey, setBarcodeShape } from "./barcodeShapes";
 import type { BoardState } from "../api/types";
 import { pcbItemBoxes } from "./itemBoxes";
 import { movableItem } from "./pcbEditActions";
@@ -82,4 +83,31 @@ test("a point is a mark: its box is centred, a click hits the bars of its X or t
   assert.deepEqual(movableItem(b as never, "pnt_a"), { kind: "point", at: [10_000, 20_000] });
   assert.deepEqual(splitCarried(b, ["pnt_a"]).moving.drawings?.points?.map((p) => p.id), ["pnt_a"]);
   assert.deepEqual(pcbItemBoxes(b).get("pnt_a"), [9_000, 19_000, 11_000, 21_000]);
+});
+
+test("a barcode is the box of its symbol (and of its text, once the shape is known), turned with it; a click hits either; it is deleted by its own verb", () => {
+  const code: BoardBarcode = { id: "bar_a", layer: "F.SilkS", x: 20_000, y: 30_000, angle: 0, w: 10_000, h: 10_000, text: "HELLO", text_height: 1_500, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x: 0, margin_y: 0 };
+  const b = board();
+  b.drawings!.barcodes = [code];
+  const item = extraItemById(b, "bar_a")!;
+  assert.equal(item.kind, "barcode");
+  assert.deepEqual(item.position, [20_000, 30_000]);
+  // no shape yet: the symbol's box, and a click in it hits
+  assert.deepEqual(item.bounds, [15_000, 25_000, 25_000, 35_000]);
+  assert.equal(extraHitDistance(item, 20_000, 30_000), 0);
+  assert.equal(extraHitDistance(item, 25_000, 35_000), 0);
+  assert.equal(extraHitDistance(item, 25_300, 30_000), 300);
+  assert.deepEqual(extraDeleteCmd(item), { op: "pcb_item", verb: "delete_barcode", id: "bar_a" });
+  assert.equal(extraItemLabel(b, "bar_a"), "Barcode 'HELLO' on F.SilkS");
+  assert.ok(extraItemIds(b).includes("bar_a"));
+  assert.deepEqual(movableItem(b as never, "bar_a"), { kind: "barcode", at: [20_000, 30_000] });
+  assert.deepEqual(splitCarried(b, ["bar_a"]).moving.drawings?.barcodes?.map((q) => q.id), ["bar_a"]);
+  assert.deepEqual(splitCarried(b, ["bar_a"]).still.drawings?.barcodes, []);
+  assert.deepEqual(pcbItemBoxes(b).get("bar_a"), [15_000, 25_000, 25_000, 35_000]);
+  // the shape arrives: a symbol of 10 mm and its text under it (1 mm under the symbol, 2 mm wide and 1.5 mm high): the box grows to hold it and a click on the text hits
+  setBarcodeShape(barcodeShapeKey(code), { status: "ready", paths: [[[[-5_000, -5_000], [5_000, -5_000], [5_000, 5_000], [-5_000, 5_000]]], [[[-1_000, 6_000], [1_000, 6_000], [1_000, 7_500], [-1_000, 7_500]]]] });
+  const shaped = extraItemById(b, "bar_a")!;
+  assert.deepEqual(shaped.bounds, [15_000, 25_000, 25_000, 37_500]);
+  assert.equal(extraHitDistance(shaped, 20_000, 37_000), 0, "on the text");
+  assert.ok(extraHitDistance(shaped, 24_000, 37_000) > 1_000, "beside the text, under the symbol: no hit");
 });

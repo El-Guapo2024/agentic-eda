@@ -698,6 +698,14 @@ function addLayerShape(group: THREE.Group, s: Shape, y: number, lineMaterial: TH
   const line = closed ? new THREE.LineLoop(geometry, lineMaterial) : new THREE.Line(geometry, lineMaterial);
   line.name = `${kind}-shape-line`;
   group.add(line);
+  // A hatched shape has the lines `EDA_SHAPE::UpdateHatching` makes as well (`GetHatching()` in the 3D viewer's `create_3Dgraphic_brd_items.cpp`).
+  if (s.hatch_lines && s.hatch_lines.length > 0) {
+    const ends: THREE.Vector3[] = [];
+    for (const [x1, y1, x2, y2] of s.hatch_lines) ends.push(new THREE.Vector3(mm(x1), y, mm(y1)), new THREE.Vector3(mm(x2), y, mm(y2)));
+    const hatch = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ends), lineMaterial);
+    hatch.name = `${kind}-shape-hatch`;
+    group.add(hatch);
+  }
 }
 
 /** Texture resolution for silk text -- pixels per mm of text height, chosen crisp enough for typical zoom levels (this becomes strokeFont.ts's own "sizeUm" unit for the offscreen canvas, in pixels rather than um -- see buildSilkTextMesh). */

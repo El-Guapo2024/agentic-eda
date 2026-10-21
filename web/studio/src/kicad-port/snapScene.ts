@@ -12,6 +12,7 @@ import { arcThrough, box, circle, seg, type ArcG, type Box, type Geom, type Pt }
 import { outlineContains } from "./padOutline";
 import { footprintBox } from "./footprintBox";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
+import { hatchDistance } from "./shapeFill";
 
 export type SnapItemType = "footprint" | "pad" | "track" | "via" | "shape" | "zone" | "dimension" | "text" | "point";
 
@@ -192,7 +193,7 @@ export function shapeHit(s: Shape): (p: Pt) => boolean {
       return (p) => distToSegment(p, s.start, s.end) <= half;
     case "circle": {
       const r = dist(s.center, s.end);
-      return (p) => (s.filled ? dist(p, s.center) <= r + half : Math.abs(dist(p, s.center) - r) <= half);
+      return (p) => (s.filled ? dist(p, s.center) <= r + half : Math.abs(dist(p, s.center) - r) <= half || hatchDistance(s, p[0], p[1]) <= half);
     }
     case "arc": {
       const a = arcThrough(s.start, s.mid, s.end);
@@ -201,10 +202,10 @@ export function shapeHit(s: Shape): (p: Pt) => boolean {
     case "rect": {
       const corners: Pt[] = [s.start, [s.end[0], s.start[1]], s.end, [s.start[0], s.end[1]]];
       const b = box(s.start[0], s.start[1], s.end[0], s.end[1]);
-      return (p) => (s.filled && p[0] >= b.x0 && p[0] <= b.x1 && p[1] >= b.y0 && p[1] <= b.y1) || distToPolyline(p, corners, true) <= half;
+      return (p) => (s.filled && p[0] >= b.x0 && p[0] <= b.x1 && p[1] >= b.y0 && p[1] <= b.y1) || distToPolyline(p, corners, true) <= half || hatchDistance(s, p[0], p[1]) <= half;
     }
     case "polygon":
-      return (p) => (s.filled && insidePolygon(p, s.pts)) || distToPolyline(p, s.pts, true) <= half;
+      return (p) => (s.filled && insidePolygon(p, s.pts)) || distToPolyline(p, s.pts, true) <= half || hatchDistance(s, p[0], p[1]) <= half;
     case "bezier":
       return (p) => distToPolyline(p, [s.start, s.c1, s.c2, s.end], false) <= half;
   }

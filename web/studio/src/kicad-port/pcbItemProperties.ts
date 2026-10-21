@@ -1,11 +1,12 @@
 // The Properties panel's rows for the board items GAPS.md item 24 (package P16) added: the text box (`PCB_TEXTBOX_DESC` and the `EDA_TEXT_DESC` it takes after, pcbnew/pcb_textbox.cpp,
-// common/eda_text.cpp at KiCad 8303b2ad); reference images, points and barcodes as their steps land. Called from `build()` of pcbProperties.ts, which keeps the registry; this file only
+// common/eda_text.cpp at KiCad 8303b2ad); reference images, points and barcodes. Called from `build()` of pcbProperties.ts, which keeps the registry; this file only
 // adds classes to it. A text box takes after `BOARD_ITEM` (position, layer, lock) and has its own text rows: the same names and groups as `EDA_TEXT`'s, which edit one `pcb_item` verb of
 // the whole box (`edit_text_box`) -- the free text's setters are the text's own verbs and a field's the footprint's.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import type { BarcodeEcc, BarcodeKind, BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
 import type { Cmd } from "../api/types";
+import { BARCODE_KINDS, barcodeToCmd, clampEcc, eccChoices, hasErrorCorrection } from "./barcodeShapes";
 import type { PcbCtx, PcbItem } from "./pcbProperties";
 import { tooSmall } from "./propertyGrid";
 import type { Choice, PropValue, PropertyDef, PropertyManager } from "./propertyManager";
@@ -109,10 +110,95 @@ function registerPoint(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]):
   });
 }
 
+/** The cmd that replaces barcode `b` with `b` changed by `patch`: every field of it goes, its id, lock and groups stay (`edit_barcode`). */
+function barcodeCmd(b: BoardBarcode, patch: Partial<BoardBarcode>): Cmd[] {
+  const next: BoardBarcode = { ...b, ...patch };
+  // `PCB_BARCODE::SetErrorCorrection`: a Micro QR code has no High.
+  next.ecc = clampEcc(next.kind, next.ecc);
+  return [{ op: "pcb_item", verb: "edit_barcode", id: b.id, barcode: barcodeToCmd(next) }];
+}
+
+/** Register `PCB_BARCODE` and its properties (`PCB_BARCODE_DESC`, pcbnew/pcb_barcode.cpp): the rows of a board item and, under "Barcode Properties", the text, its size and whether it is shown, the size and
+ * turn of the symbol, the kind, the error correction of the QR kinds (Micro QR has no High) and the knockout with its margins. */
+function registerBarcode(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
+  pm.registerType("PCB_BARCODE");
+  pm.inheritsAfter("PCB_BARCODE", "BOARD_ITEM");
+  const own = (i: PcbItem): BoardBarcode => i.barcode!;
+  pm.replaceProperty("BOARD_ITEM", "Layer", {
+    owner: "PCB_BARCODE",
+    name: "Layer",
+    kind: "enum",
+    choices: (_i, c) => layerChoices(c),
+    get: (i) => own(i).layer,
+    set: (i, v) => (own(i).layer === String(v) ? [] : barcodeCmd(own(i), { layer: String(v) })),
+  });
+  const GROUP = "Barcode Properties";
+  const row = (def: Omit<PropertyDef<PcbItem, PcbCtx, Cmd>, "owner">): void => add({ owner: "PCB_BARCODE", ...def } as PropertyDef<PcbItem, PcbCtx, Cmd>, GROUP);
+  const size = (name: string, get: (b: BoardBarcode) => number, key: keyof BoardBarcode): void =>
+    row({
+      name,
+      kind: "int",
+      display: "size",
+      get: (i) => get(own(i)),
+      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+      set: (i, v) => {
+        const want = Math.round(num(v));
+        return want <= 0 || want === get(own(i)) ? [] : barcodeCmd(own(i), { [key]: want } as Partial<BoardBarcode>);
+      },
+    });
+  row({ name: "Text", kind: "string", get: (i) => own(i).text, set: (i, v) => (own(i).text === String(v) ? [] : barcodeCmd(own(i), { text: String(v) })) });
+  row({ name: "Show Text", kind: "bool", get: (i) => own(i).show_text, set: (i, v) => (own(i).show_text === Boolean(v) ? [] : barcodeCmd(own(i), { show_text: Boolean(v) })) });
+  size("Text Size", (b) => b.text_height, "text_height");
+  size("Width", (b) => b.w, "w");
+  size("Height", (b) => b.h, "h");
+  row({
+    name: "Orientation",
+    kind: "double",
+    display: "degree",
+    get: (i) => own(i).angle / 1000,
+    set: (i, v) => {
+      const mdeg = Math.round(norm360(num(v)) * 1000) % 360_000;
+      return mdeg === own(i).angle ? [] : barcodeCmd(own(i), { angle: mdeg });
+    },
+  });
+  row({
+    name: "Barcode Type",
+    kind: "enum",
+    choices: () => BARCODE_KINDS.map((k) => ({ label: k.property, value: k.value })),
+    get: (i) => own(i).kind,
+    set: (i, v) => (own(i).kind === v ? [] : barcodeCmd(own(i), { kind: String(v) as BarcodeKind })),
+  });
+  row({
+    name: "Error Correction",
+    kind: "enum",
+    choices: (i) => eccChoices(own(i).kind).map((c) => ({ label: c.label, value: c.value })),
+    get: (i) => own(i).ecc,
+    available: (i) => hasErrorCorrection(own(i).kind),
+    set: (i, v) => (own(i).ecc === v ? [] : barcodeCmd(own(i), { ecc: String(v) as BarcodeEcc })),
+  });
+  row({ name: "Knockout", kind: "bool", get: (i) => own(i).knockout, set: (i, v) => (own(i).knockout === Boolean(v) ? [] : barcodeCmd(own(i), { knockout: Boolean(v) })) });
+  const margin = (name: string, get: (b: BoardBarcode) => number, key: "margin_x" | "margin_y"): void =>
+    row({
+      name,
+      kind: "int",
+      display: "size",
+      get: (i) => get(own(i)),
+      available: (i) => own(i).knockout,
+      validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
+      set: (i, v) => {
+        const want = Math.round(num(v));
+        return want < 0 || want === get(own(i)) ? [] : barcodeCmd(own(i), { [key]: want } as Partial<BoardBarcode>);
+      },
+    });
+  margin("Margin X", (b) => b.margin_x, "margin_x");
+  margin("Margin Y", (b) => b.margin_y, "margin_y");
+}
+
 /** Register `PCB_TEXTBOX` and its properties, and the other classes of the family. */
 export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
   registerReferenceImage(pm, add, layerChoices);
   registerPoint(pm, add, layerChoices);
+  registerBarcode(pm, add, layerChoices);
   pm.registerType("PCB_TEXTBOX");
   pm.inheritsAfter("PCB_TEXTBOX", "BOARD_ITEM");
   // A text box is on any layer (`BOARD_ITEM`'s row would read the layer off a text or a dimension).

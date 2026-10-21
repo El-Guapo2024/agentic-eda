@@ -8,6 +8,8 @@
 //   1  the text box: Draw Text Box (two corners, Text Box Properties, OK adds, Cancel does not), the box grown to hold its text, the variables in its text, the drawn look (border,
 //      wrapped text, knockout), Text Box Properties on a box that is there (E: layer, border style, margins, knockout), the Properties panel rows, selecting it by a click, moving it
 //      with the pointer, Move / Rotate / Flip / Delete / Lock, every edit one undo step, and the file kicad-cli reads (`/api/export`'s derived board).
+//   4  the barcode: Add Barcode (a click, Barcode Properties with the preview kicad-cli plots, OK adds it, Cancel does not, a text the kind cannot encode is refused), the polygons painted, picked by a
+//      click, the Properties rows, Flip, a drag, Delete and the `(barcode ..)` of the derived board.
 //   3  the point and the hatch fill: Place Point (each click a point on the active layer, repeating until Escape, snapping to the points that are there), the X and ring painted, a click that
 //      picks it, the Properties rows (Size; the lock is not writeable), Flip, the Points row of the Appearance panel and the `(point ..)` of the derived board.
 //   2  the reference image and the schematic's image: Place Reference Image (the file in the hand follows the cursor, a click puts it on the active layer, Escape drops it), the picture
@@ -895,6 +897,378 @@
       await undo();
       t((await myPoints()).length === 1, "one undo brings it back");
       await deletePoints();
+    });
+
+    // ------------------------------------------------------------------------------------------------------------------ 3b. the hatch fill
+    const shapesNow = async () => (await board()).drawings?.shapes ?? [];
+    const shapesBefore = new Set((await shapesNow()).map((x) => x.id));
+    const myShapes = async () => (await shapesNow()).filter((x) => !shapesBefore.has(x.id));
+    const deleteShapes = async () => { for (const x of await myShapes()) await cmd({ op: "delete_shape", id: x.id }); };
+    const addShape = async (shape) => {
+      const rev0 = E.state().revision;
+      await cmd({ op: "add_shape", shape });
+      await waitFor(() => E.state().revision !== rev0, 8000);
+      await sleep(400);
+      return (await myShapes()).at(-1);
+    };
+    const shapeById = async (id) => (await shapesNow()).find((x) => x.id === id);
+    /** The colour of the canvas at (x, y) millimetres of the board (CSS pixels of the canvas times its pixel ratio). */
+    const pixelAtMm = (ts, xmm, ymm) => {
+      const [sx, sy] = ts(xmm, ymm);
+      const c = pcbCanvas();
+      const k = c.width / c.getBoundingClientRect().width;
+      const d = c.getContext("2d").getImageData(Math.round(sx * k), Math.round(sy * k), 1, 1).data;
+      return [d[0], d[1], d[2]];
+    };
+    const inked = (px) => Math.max(...px) > 60;
+    /** The middle of a hatch line, and the middle of the gap beside it (one millimetre along x + y), in millimetres. */
+    const lineMid = (l) => [(l[0] + l[2]) / 2000, (l[1] + l[3]) / 2000];
+    const gapMid = (l) => [lineMid(l)[0] + 0.5, lineMid(l)[1] + 0.5];
+    // a 10 mm square left of the board, where nothing else is painted, with a 0.2 mm line: a hatch line every 2 mm along x + y
+    const squareAt = () => ({ kind: "rect", layer: "F.Fab", stroke_width: 200, filled: false, start: { x: Math.round((bx0 - 14) * 1000), y: Math.round((by0 + 4) * 1000) }, end: { x: Math.round((bx0 - 4) * 1000), y: Math.round((by0 + 14) * 1000) } });
+    const fillRow = () => document.querySelector('.prop-row[data-prop="Fill"]');
+
+    await scenario("Fill (Properties panel): a rectangle is hatched, reverse-hatched and cross-hatched, painted with the lines the server works out, picked on a line and not between; one undo step each", async (t) => {
+      await deleteShapes();
+      const sq = await addShape(squareAt());
+      t(!!sq && sq.fill === undefined && sq.hatch_lines === undefined, "a rectangle that is not filled says nothing of hatching");
+      if (!sq) return;
+      await select([sq.id]);
+      if (!document.querySelector(".prop-row")) { document.querySelector('button[aria-label="Show Properties"]')?.click(); await sleep(500); }
+      const sel = fillRow()?.querySelector("[data-prop-input]");
+      t(!!sel, "the Properties panel has the Fill row of an EDA_SHAPE");
+      if (!sel) return;
+      t([...sel.options].map((o) => o.textContent.trim()).join("|") === "None|Solid|Hatch|Reverse Hatch|Cross-hatch", `with the five choices of UI_FILL_MODE (${[...sel.options].map((o) => o.textContent.trim()).join("|")})`);
+      setValue(sel, "2");
+      await waitFor(async () => (await shapeById(sq.id))?.fill === "hatch", 6000);
+      let s2 = await shapeById(sq.id);
+      t(s2.fill === "hatch" && s2.filled === false && s2.hatch_width === 200, `Hatch: the state says how it is hatched and with which width (${s2.fill}, ${s2.hatch_width})`);
+      const lines = s2.hatch_lines ?? [];
+      t(lines.length === 9 && lines.every((l) => l[0] + l[1] === l[2] + l[3] && ((bx0 * 1000 + 0) * 0 + (l[0] + l[1])) % 2000 === (lines[0][0] + lines[0][1]) % 2000), `nine lines of slope -1, 2 mm apart (${lines.length})`);
+      // zoom to the square (Zoom to Selection) so a hatch line is several pixels wide and the square is all the canvas shows
+      await select([sq.id]);
+      await E.run("common.Control.zoomFitSelection");
+      await sleep(800);
+      toScreen = (await screenOf(false)) ?? toScreen;
+      await E.run("common.InteractiveSelection.clear");
+      await sleep(500);
+      const mid = lineMid(lines[4]);
+      const gap = gapMid(lines[4]);
+      t(inked(pixelAtMm(toScreen, ...mid)), `the canvas paints a hatch line (${pixelAtMm(toScreen, ...mid)} at its middle)`);
+      t(!inked(pixelAtMm(toScreen, ...gap)), `and nothing between two of them (${pixelAtMm(toScreen, ...gap)})`);
+      // a click on a line picks the shape, a click between two lines picks nothing (a hatched shape is not filled)
+      await E.run("common.InteractiveSelection.clear");
+      await escape();
+      await click(toScreen, ...gap);
+      t(!E.state().selection.some((x) => x.id === sq.id), "a click between two lines picks nothing");
+      await click(toScreen, ...mid);
+      t(E.state().selection.some((x) => x.id === sq.id && x.kind === "shape"), `a click on a hatch line picks the shape (${JSON.stringify(E.state().selection)})`);
+
+      await select([sq.id]);
+      await waitFor(() => !!fillRow(), 4000);
+      setValue(fillRow().querySelector("[data-prop-input]"), "3");
+      await waitFor(async () => (await shapeById(sq.id))?.fill === "reverse_hatch", 6000);
+      s2 = await shapeById(sq.id);
+      t(s2.fill === "reverse_hatch" && s2.hatch_lines.length === 9 && s2.hatch_lines.every((l) => l[1] - l[0] === l[3] - l[2]), "Reverse Hatch: the lines run the other way (slope +1)");
+      await waitFor(() => !!fillRow(), 4000);
+      setValue(fillRow().querySelector("[data-prop-input]"), "4");
+      await waitFor(async () => (await shapeById(sq.id))?.fill === "cross_hatch", 6000);
+      s2 = await shapeById(sq.id);
+      t(s2.fill === "cross_hatch" && s2.hatch_lines.length === 18, `Cross-hatch: both, ${s2.hatch_lines?.length} lines`);
+      await undo();
+      t((await shapeById(sq.id)).fill === "reverse_hatch", "one undo takes the cross-hatch back to the reverse hatch");
+      await undo();
+      t((await shapeById(sq.id)).fill === "hatch", "and one more to the hatch");
+      await select([sq.id]);
+      await waitFor(() => !!fillRow(), 4000);
+      setValue(fillRow().querySelector("[data-prop-input]"), "1");
+      await waitFor(async () => (await shapeById(sq.id))?.filled === true, 6000);
+      s2 = await shapeById(sq.id);
+      t(s2.filled === true && s2.fill === undefined && s2.hatch_lines === undefined, "Solid is not a hatch: filled, no lines");
+      await select([sq.id]);
+      await waitFor(() => !!fillRow(), 4000);
+      setValue(fillRow().querySelector("[data-prop-input]"), "0");
+      await waitFor(async () => (await shapeById(sq.id))?.filled === false, 6000);
+      s2 = await shapeById(sq.id);
+      t(s2.filled === false && s2.fill === undefined, "None takes the fill away");
+      // None, Solid and the first Hatch go back one by one, to the square as it was added
+      await undo();
+      t((await shapeById(sq.id)).filled === true, "one undo takes None back to Solid");
+      await undo();
+      t((await shapeById(sq.id)).fill === "hatch", "one more to the hatch");
+      await undo();
+      t((await shapeById(sq.id)).fill === undefined && (await shapeById(sq.id)).filled === false, "and one more to the square as it was added");
+      await deleteShapes();
+    });
+
+    await scenario("a shape put over a hatched one cuts its lines at once (rehatchShapes after every commit); Rehatch Shapes is an action; Move, Flip and Delete take the hatch with the shape; the derived board has (fill hatch)", async (t) => {
+      await deleteShapes();
+      const sq = await addShape(squareAt());
+      if (!sq) return t(false, "a square was added");
+      await cmd({ op: "pcb_item", verb: "set_shape_style", ids: [sq.id], fill: "hatch" });
+      await sleep(900);
+      const alone = (await shapeById(sq.id)).hatch_lines.length;
+      t(alone === 9, `the square has nine lines (${alone})`);
+      // a vertical bar across the middle of it, 1 mm wide, on the same layer
+      const cx = Math.round((bx0 - 9) * 1000);
+      const bar = await addShape({ kind: "segment", layer: "F.Fab", stroke_width: 1000, filled: false, start: { x: cx, y: Math.round((by0 + 2) * 1000) }, end: { x: cx, y: Math.round((by0 + 16) * 1000) } });
+      const cut = (await shapeById(sq.id)).hatch_lines;
+      t(cut.length > alone, `the lines the bar crosses are cut in two (${alone} -> ${cut.length})`);
+      // no line comes within the bar's half width and half the spacing (1 mm) of its axis
+      const near_ = cut.filter((l) => [l[0], l[2]].some((x) => Math.abs(x - cx) < 1400));
+      t(near_.length === 0, `none of the lines reaches the 1 mm round the bar's edge (${near_.length} do)`);
+      toScreen = (await screenOf()) ?? toScreen;
+      await sleep(400);
+      const before = JSON.stringify((await shapeById(sq.id)).hatch_lines);
+      t((await E.actions()).some((a) => a.id === "pcbnew.Control.rehatchShapes" && a.enabled !== false), "Rehatch Shapes is an action of the board editor");
+      const ver0 = E.state().revision;
+      await E.run("pcbnew.Control.rehatchShapes");
+      await sleep(700);
+      t(JSON.stringify((await shapeById(sq.id)).hatch_lines) === before, "running it works the same lines out again");
+      void ver0;
+      await cmd({ op: "delete_shape", id: bar.id });
+      await sleep(900);
+      t((await shapeById(sq.id)).hatch_lines.length === alone, "take the bar away and the lines are whole again");
+      // Move and Flip take the hatch with the shape; the lines are the shape's, moved
+      await select([sq.id]);
+      await E.run("pcbnew.InteractiveEdit.flip");
+      await sleep(900);
+      const flipped = (await myShapes())[0];
+      t(!!flipped && flipped.fill === "hatch" && flipped.layer === "B.Fab" && flipped.hatch_lines.length === 9, `Flip keeps the hatch (${flipped?.layer}, ${flipped?.fill}, ${flipped?.hatch_lines?.length} lines)`);
+      await undo();
+      await select([sq.id]);
+      const x0 = (await shapeById(sq.id)).hatch_lines[0][0];
+      await cmd({ op: "move_items", ids: [sq.id], dx: 2000, dy: 0 });
+      await sleep(900);
+      t((await shapeById(sq.id)).fill === "hatch" && (await shapeById(sq.id)).hatch_lines[0][0] === x0 + 2000, "Move keeps the hatch and the lines move with the shape");
+      await undo();
+      const text = await fetch("/api/board.kicad_pcb").then((r) => r.text());
+      t(/\(gr_rect [^\n]*\(fill hatch\)/.test(text), "the derived board has the (fill hatch) of the shape");
+      await E.run("common.InteractiveSelection.clear");
+      await select([sq.id]);
+      await E.run("common.Interactive.delete");
+      await sleep(800);
+      t(!(await shapeById(sq.id)), "Delete removes it");
+      await undo();
+      t((await shapeById(sq.id))?.fill === "hatch", "one undo brings it back hatched");
+      await deleteShapes();
+    });
+
+    await scenario("Shape Properties (E): the Fill choice has the five fills, a fill that is not solid needs a line width, OK sets the layer, the line and the fill as one undo step", async (t) => {
+      await deleteShapes();
+      const sq = await addShape(squareAt());
+      if (!sq) return t(false, "a square was added");
+      await select([sq.id]);
+      await E.run("pcbnew.InteractiveEdit.properties");
+      await sleep(500);
+      const sel = tid("shape-fill");
+      t(!!sel && [...sel.options].map((o) => o.textContent.trim()).join("|") === "None|Solid|Hatch|Reverse Hatch|Cross-hatch", "E opens Shape Properties with a Fill choice of the five fills");
+      if (!sel) return;
+      setValue(sel, "cross_hatch");
+      await sleep(200);
+      const apply = () => [...document.querySelectorAll(".dialog button")].find((b) => b.textContent.trim() === "Apply");
+      // a width of zero is refused with KiCad's message and the dialog stays
+      const width = [...document.querySelectorAll(".dialog input[type=number]")][0];
+      setValue(width, "0");
+      await sleep(200);
+      apply()?.click();
+      await sleep(500);
+      t(/greater than zero for an unfilled rectangle/.test(tid("shape-error")?.textContent ?? "") && !!tid("shape-fill"), `a fill that is not solid with no line width is refused (${tid("shape-error")?.textContent})`);
+      setValue(width, "0.3");
+      await sleep(200);
+      apply()?.click();
+      await waitFor(async () => (await shapeById(sq.id))?.fill === "cross_hatch", 6000);
+      const s2 = await shapeById(sq.id);
+      t(s2.fill === "cross_hatch" && s2.stroke_width === 300 && s2.hatch_width === 300, `OK sets the line and the fill together (${s2.fill}, ${s2.stroke_width})`);
+      await sleep(300);
+      await undo();
+      const s3 = await shapeById(sq.id);
+      t(s3.fill === undefined && s3.stroke_width === 200, `and one undo takes both back (${s3.fill}, ${s3.stroke_width})`);
+      await deleteShapes();
+    });
+
+    // ------------------------------------------------------------------------------------------------------------------ 4. the barcode
+    const barcodesNow = async () => (await board()).drawings?.barcodes ?? [];
+    const barcodesBefore = new Set((await barcodesNow()).map((x) => x.id));
+    const myBarcodes = async () => (await barcodesNow()).filter((x) => !barcodesBefore.has(x.id));
+    const deleteBarcodes = async () => { for (const x of await myBarcodes()) await cmd({ op: "pcb_item", verb: "delete_barcode", id: x.id }); };
+    /** The pixels of the canvas that are the pale yellow of the F.SilkS layer (242, 237, 161), nothing else of a board is this colour. */
+    const silkPixels = () => {
+      const c = pcbCanvas();
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] > 195 && d[i + 2] > 120 && d[i + 2] < 200 && d[i] - d[i + 2] > 40) n++;
+      return n;
+    };
+    /** Wait for the shape of barcode `id` to be served (kicad-cli plots it the first time it is asked for: `pending` until it has). */
+    const shapeOf = async (id, ms = 20000) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        const r = await json(`/api/barcode_shape?id=${encodeURIComponent(id)}`);
+        if (r.status !== "pending") return r;
+        await sleep(300);
+      }
+      return { status: "timeout" };
+    };
+    const qrAt = (dx, dy, extra = {}) => ({ layer: "F.SilkS", at: { x: Math.round((bx0 - 20 + dx) * 1000), y: Math.round((by0 + 10 + dy) * 1000) }, angle: 0, width_um: 12000, height_um: 12000, text: "HELLO", text_height_um: 1500, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_um: 0, margin_y_um: 0, ...extra });
+
+    await scenario("Add Barcode: a click opens Barcode Properties with a preview of what kicad-cli plots, OK adds a QR code as one undo step and selects it, Cancel adds nothing, a text the kind cannot encode is refused", async (t) => {
+      await deleteBarcodes();
+      toScreen = (await screenOf()) ?? toScreen;
+      t((await E.actions()).some((a) => a.id === "pcbnew.InteractiveDrawing.barcode" && a.enabled !== false), "Add Barcode is an action of the board editor");
+      await E.run("pcbnew.InteractiveDrawing.barcode");
+      await sleep(300);
+      t(/Add barcode/i.test(E.state().picker ?? ""), `the tool is running (${E.state().picker})`);
+      await click(toScreen, ...at(8, 8));
+      await waitFor(() => !!tid("pcb-barcode-properties"), 4000);
+      const dlg = tid("pcb-barcode-properties");
+      t(!!dlg, "a click opens Barcode Properties");
+      if (!dlg) return;
+      t(tid("pbc-kind").value === "qr" && tid("pbc-width").value === "40" && tid("pbc-height").value === "40" && tid("pbc-show-text").checked === true && tid("pbc-knockout").checked === false, `it starts as PCB_BARCODE( parent ): a 40 mm QR code, text shown, no knockout (${tid("pbc-kind").value} ${tid("pbc-width").value})`);
+      t([...tid("pbc-kind").options].map((o) => o.textContent.trim()).join("|") === "Code 39|Code 128|Data Matrix|QR Code|Micro QR Code", "the kinds are Code 39, Code 128, Data Matrix, QR Code and Micro QR Code");
+      setValue(tid("pbc-text"), "HELLO");
+      setValue(tid("pbc-width"), "12");
+      setValue(tid("pbc-height"), "12");
+      // the preview is what kicad-cli plots of the barcode: it arrives after a moment
+      await waitFor(() => (tid("pbc-preview-svg")?.getAttribute("data-paths") ?? "0") > 0, 20000);
+      t(Number(tid("pbc-preview-svg")?.getAttribute("data-paths") ?? 0) > 5, `the preview has the polygons of the plot (${tid("pbc-preview-svg")?.getAttribute("data-paths")} paths)`);
+      // Micro QR has no High level
+      setValue(tid("pbc-ecc"), "H");
+      await sleep(150);
+      setValue(tid("pbc-kind"), "microqr");
+      await sleep(250);
+      t(![...tid("pbc-ecc").options].some((o) => o.value === "H") && tid("pbc-ecc").value === "Q", `Micro QR has no High: the level goes to Q (${tid("pbc-ecc").value})`);
+      setValue(tid("pbc-kind"), "qr");
+      await sleep(250);
+      t(tid("pbc-ecc").disabled === false, "the error correction is for the QR kinds");
+      setValue(tid("pbc-kind"), "code128");
+      await sleep(250);
+      t(tid("pbc-ecc").disabled === true, "and not for Code 128");
+      setValue(tid("pbc-kind"), "qr");
+      await sleep(250);
+      const n0 = (await barcodesNow()).length;
+      tid("pbc-ok").click();
+      await waitFor(async () => (await barcodesNow()).length === n0 + 1, 8000);
+      const made = (await myBarcodes())[0];
+      t(!!made && made.kind === "qr" && made.text === "HELLO" && made.w === 12000 && made.h === 12000 && made.show_text === true, `OK adds the barcode (${JSON.stringify(made && [made.kind, made.text, made.w])})`);
+      if (!made) return;
+      t(near(made.x, (bx0 + 8) * 1000, 1500) && near(made.y, (by0 + 8) * 1000, 1500), `where the click was (${made.x}, ${made.y})`);
+      await waitFor(() => E.state().selection.some((x) => x.id === made.id && x.kind === "barcode"), 4000);
+      t(E.state().selection.some((x) => x.id === made.id && x.kind === "barcode"), `the new barcode is selected (${JSON.stringify(E.state().selection)})`);
+      t(E.state().picker != null, "and the tool goes on");
+      await escape();
+      // Cancel adds nothing
+      await E.run("pcbnew.InteractiveDrawing.barcode");
+      await sleep(300);
+      await click(toScreen, ...at(20, 20));
+      await waitFor(() => !!tid("pcb-barcode-properties"), 4000);
+      tid("pbc-cancel")?.click();
+      await sleep(600);
+      t((await myBarcodes()).length === 1 && !tid("pcb-barcode-properties"), "Cancel adds nothing");
+      // a text Code 39 cannot take: the dialog says so and stays
+      await click(toScreen, ...at(20, 20));
+      await waitFor(() => !!tid("pcb-barcode-properties"), 4000);
+      setValue(tid("pbc-kind"), "code39");
+      setValue(tid("pbc-text"), "h\u00e9llo");
+      setValue(tid("pbc-width"), "20");
+      setValue(tid("pbc-height"), "8");
+      await waitFor(() => /No barcode/.test(tid("pbc-preview")?.textContent ?? ""), 20000);
+      tid("pbc-ok").click();
+      await waitFor(() => /Barcode Error/.test(tid("pbc-error")?.textContent ?? ""), 6000);
+      t(/Barcode Error/.test(tid("pbc-error")?.textContent ?? "") && !!tid("pcb-barcode-properties") && (await myBarcodes()).length === 1, `a text the kind cannot encode is refused (${tid("pbc-error")?.textContent})`);
+      tid("pbc-cancel")?.click();
+      await sleep(500);
+      await escape();
+      await undo();
+      t((await myBarcodes()).length === 0, "one undo takes the barcode away");
+      await redo();
+      t((await myBarcodes()).length === 1, "one redo brings it back");
+      await undo();
+    });
+
+    await scenario("a barcode is painted from what kicad-cli plots, picked by a click on the symbol, listed with the rows of PCB_BARCODE, edited in the Properties panel (one undo step each), flipped, moved by a drag and deleted; the derived board has it", async (t) => {
+      await deleteBarcodes();
+      const rev0 = E.state().revision;
+      await cmd({ op: "pcb_item", verb: "add_barcode", barcode: qrAt(0, 0) });
+      await waitFor(() => E.state().revision !== rev0, 8000);
+      await sleep(500);
+      const code = (await myBarcodes())[0];
+      t(!!code && code.kind === "qr" && code.w === 12000, "a 12 mm QR code was added");
+      if (!code) return;
+      const reply = await shapeOf(code.id);
+      t(reply.status === "ready" && reply.paths.length > 5, `the server serves the plot's polygons (${reply.status}, ${reply.paths?.length} paths)`);
+      const xs = (reply.paths ?? []).flat(2).map((p) => p[0]);
+      t(Math.min(...xs) === -6000 && Math.max(...xs) === 6000, `12 mm wide, centred on the barcode's place (${Math.min(...xs)}..${Math.max(...xs)})`);
+      await select([code.id]);
+      await E.run("common.Control.zoomFitSelection");
+      await sleep(800);
+      toScreen = (await screenOf(false)) ?? toScreen;
+      await E.run("common.InteractiveSelection.clear");
+      await sleep(700);
+      const base = silkPixels();
+      t(base > 800, `the board paints the barcode in the colour of its layer (${base} pixels)`);
+      // a click on the symbol picks it, a click far away does not
+      await escape();
+      await click(toScreen, code.x / 1000 + 3, code.y / 1000 + 3);
+      t(E.state().selection.some((x) => x.id === code.id && x.kind === "barcode"), `a click on the symbol picks the barcode (${JSON.stringify(E.state().selection)})`);
+      // the Properties panel
+      if (!document.querySelector(".prop-row")) { document.querySelector('button[aria-label="Show Properties"]')?.click(); await sleep(500); }
+      const row = (name) => document.querySelector(`.prop-row[data-prop="${name}"]`);
+      const names = ["Text", "Show Text", "Text Size", "Width", "Height", "Orientation", "Barcode Type", "Error Correction", "Knockout"];
+      t(names.every((n) => !!row(n)) && !!row("Position X") && !!row("Layer") && !!row("Locked"), "the panel has the rows of PCB_BARCODE_DESC");
+      t(!row("Margin X"), "and the margins only for a knockout");
+      const text = row("Text")?.querySelector("[data-prop-input]");
+      if (text) {
+        setValue(text, "WORLD 2026");
+        text.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        text.dispatchEvent(new Event("blur", { bubbles: true }));
+        await sleep(900);
+        t((await myBarcodes())[0].text === "WORLD 2026", "a text typed in the panel is the barcode's");
+        const again = await shapeOf(code.id);
+        t(again.status === "ready" && JSON.stringify(again.paths) !== JSON.stringify(reply.paths), "and kicad-cli plots the new code");
+        await undo();
+        t((await myBarcodes())[0].text === "HELLO", "one undo takes it back");
+      } else t(false, "the Text row has an input");
+      const turn = row("Orientation")?.querySelector("[data-prop-input]");
+      if (turn) {
+        setValue(turn, "90");
+        turn.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        turn.dispatchEvent(new Event("blur", { bubbles: true }));
+        await sleep(900);
+        t((await myBarcodes())[0].angle === 90000, "an orientation typed in the panel turns it");
+        await undo();
+        t((await myBarcodes())[0].angle === 0, "one undo takes it back");
+      }
+      // Flip: the back layer, mirrored
+      await select([code.id]);
+      await E.run("pcbnew.InteractiveEdit.flip");
+      await sleep(900);
+      const flipped = (await myBarcodes())[0];
+      t(flipped.layer === "B.SilkS", `F puts it on the back layer (${flipped.layer})`);
+      const mirrored = await shapeOf(code.id);
+      t(mirrored.status === "ready" && JSON.stringify(mirrored.paths) !== JSON.stringify(reply.paths), "and its shape is the mirrored one");
+      await undo();
+      // a drag carries it (the Properties panel is open now: the canvas is as big as it was and the view is zoomed to the barcode again before the pointer is used)
+      await select([code.id]);
+      await E.run("common.Control.zoomFitSelection");
+      await sleep(800);
+      toScreen = (await screenOf(false)) ?? toScreen;
+      await E.run("common.InteractiveSelection.clear");
+      await sleep(400);
+      const [cx, cy] = [code.x / 1000, code.y / 1000];
+      await drag(toScreen, [cx + 3, cy + 3], [cx + 5, cy + 4]);
+      const moved = (await myBarcodes())[0];
+      t(near(moved.x - code.x, 2000, 800) && near(moved.y - code.y, 1000, 800), `a drag carries it (${moved.x - code.x}, ${moved.y - code.y})`);
+      if (moved.x !== code.x || moved.y !== code.y) await undo();
+      const text2 = await fetch("/api/board.kicad_pcb").then((r) => r.text());
+      t(/\(barcode \(at [\d.-]+ [\d.-]+ 0\) \(layer "F\.SilkS"\) \(size 12 12\) \(text "HELLO"\)/.test(text2), "the derived board has the (barcode ..) with its size, text and layer");
+      await select([code.id]);
+      await E.run("common.Interactive.delete");
+      await sleep(700);
+      t((await myBarcodes()).length === 0, "Delete removes it");
+      await undo();
+      t((await myBarcodes()).length === 1, "one undo brings it back");
+      await deleteBarcodes();
     });
 
     await toBoard();

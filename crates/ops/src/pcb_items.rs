@@ -9,8 +9,9 @@
 
 use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
-use eda_model::ir::{DrawingsSection, Millideg, Point, Um};
-use eda_model::pcb_items::{PcbPoint, RefImage, TextBox};
+use eda_model::barcode::{Barcode, BarcodeKind, EccLevel};
+use eda_model::ir::{DrawingsSection, Millideg, Point, Shape, Um};
+use eda_model::pcb_items::{PcbPoint, RefImage, ShapeFill, TextBox};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -50,6 +51,22 @@ pub enum PcbItemCmd {
     EditPoint { id: String, layer: String, at: Point, size_um: Um },
     /// Remove a point.
     DeletePoint { id: String },
+    /// `pcbnew.InteractiveDrawing.barcode` (`DRAWING_TOOL::DrawBarcode`) after `DIALOG_BARCODE_PROPERTIES`'s OK: the barcode on the board. `barcode.id` is ignored; a Micro QR code takes
+    /// level Q for High (`PCB_BARCODE::SetErrorCorrection`).
+    AddBarcode { barcode: Barcode },
+    /// `DIALOG_BARCODE_PROPERTIES::TransferDataFromWindow` and the Properties panel: the barcode with every field replaced, in place -- its id, its place in the drawing order, its lock and its
+    /// groups stay.
+    EditBarcode { id: String, barcode: Barcode },
+    /// Remove a barcode (`EDIT_TOOL::DeleteItems`).
+    DeleteBarcode { id: String },
+    /// The fill of rectangles, circles and polygons (`EDA_SHAPE::SetFillModeProp`: the Fill row of the Properties panel and the shape dialog's choice): none, solid, hatch, reverse hatch or
+    /// cross-hatch, for all of `ids` as one undo step. The hatch lines are worked out when the board is described (`eda_drc::hatch`), as KiCad's `rehatchShapes` does after every commit,
+    /// so there is nothing for a verb to refresh. Only fills: a fill of `null` changes nothing.
+    SetShapeStyle {
+        ids: Vec<String>,
+        #[serde(default)]
+        fill: Option<ShapeFill>,
+    },
 }
 
 impl PcbItemCmd {
@@ -59,6 +76,9 @@ impl PcbItemCmd {
             PcbItemCmd::AddTextBox { text_box } => vec![text_box.text.as_str()],
             PcbItemCmd::AddRefImage { image } => vec![image.layer.as_str()],
             PcbItemCmd::AddPoint { point } => vec![point.layer.as_str()],
+            PcbItemCmd::SetShapeStyle { ids, .. } => ids.iter().map(String::as_str).collect(),
+            PcbItemCmd::AddBarcode { barcode } => vec![barcode.layer.as_str()],
+            PcbItemCmd::EditBarcode { id, .. } | PcbItemCmd::DeleteBarcode { id } => vec![id.as_str()],
             PcbItemCmd::EditTextBox { id, .. }
             | PcbItemCmd::DeleteTextBox { id }
             | PcbItemCmd::EditRefImage { id, .. }
@@ -83,6 +103,10 @@ impl PcbItemCmd {
             PcbItemCmd::AddPoint { point: p } => format!("point add --layer {} --at {},{} --size {}", p.layer, mm(p.at.x), mm(p.at.y), mm(p.size_um)),
             PcbItemCmd::EditPoint { id, layer, at, size_um } => format!("point edit {id} --layer {layer} --at {},{} --size {}", mm(at.x), mm(at.y), mm(*size_um)),
             PcbItemCmd::DeletePoint { id } => format!("point delete {id}"),
+            PcbItemCmd::AddBarcode { barcode: b } => format!("barcode add --layer {} --at {},{} --size {}x{} --kind {} --text {:?}", b.layer, mm(b.at.x), mm(b.at.y), mm(b.width_um), mm(b.height_um), b.kind.file_name(), b.text),
+            PcbItemCmd::EditBarcode { id, barcode: b } => format!("barcode edit {id} --layer {} --at {},{} --size {}x{} --kind {} --text {:?}", b.layer, mm(b.at.x), mm(b.at.y), mm(b.width_um), mm(b.height_um), b.kind.file_name(), b.text),
+            PcbItemCmd::DeleteBarcode { id } => format!("barcode delete {id}"),
+            PcbItemCmd::SetShapeStyle { ids, fill } => format!("shape style {} --fill {}", ids.join(","), fill.map_or("unchanged".to_string(), |f| format!("{f:?}").to_lowercase())),
         }
     }
 
@@ -92,6 +116,8 @@ impl PcbItemCmd {
             PcbItemCmd::AddTextBox { .. } | PcbItemCmd::EditTextBox { .. } | PcbItemCmd::DeleteTextBox { .. } => "text-box",
             PcbItemCmd::AddRefImage { .. } | PcbItemCmd::EditRefImage { .. } | PcbItemCmd::SetRefImageData { .. } | PcbItemCmd::DeleteRefImage { .. } => "ref-image",
             PcbItemCmd::AddPoint { .. } | PcbItemCmd::EditPoint { .. } | PcbItemCmd::DeletePoint { .. } => "point",
+            PcbItemCmd::SetShapeStyle { .. } => "shape-style",
+            PcbItemCmd::AddBarcode { .. } | PcbItemCmd::EditBarcode { .. } | PcbItemCmd::DeleteBarcode { .. } => "barcode",
         }
     }
 }
@@ -110,7 +136,86 @@ impl<'a> Board<'a> {
             PcbItemCmd::AddPoint { point } => self.add_point(point.clone()),
             PcbItemCmd::EditPoint { id, layer, at, size_um } => self.edit_point(id, layer, *at, *size_um),
             PcbItemCmd::DeletePoint { id } => self.delete_point(id),
+            PcbItemCmd::SetShapeStyle { ids, fill } => self.set_shape_style(ids, *fill),
+            PcbItemCmd::AddBarcode { barcode } => self.add_barcode(barcode.clone()),
+            PcbItemCmd::EditBarcode { id, barcode } => self.edit_barcode(id, barcode.clone()),
+            PcbItemCmd::DeleteBarcode { id } => self.delete_barcode(id),
         }
+    }
+
+    /// What a barcode must be to be drawn: a layer the board has on, a symbol and a text of a size, an angle under a turn and margins that are not negative (`DIALOG_BARCODE_PROPERTIES`
+    /// takes any size above zero; `PCB_BARCODE::SetRect` keeps one at 0.01 mm at least).
+    fn check_barcode(&self, what: &str, b: &Barcode) -> Result<(), Vec<CheckResult>> {
+        if b.layer.is_empty() {
+            return Err(fail("ops_bad_barcode", what, "a barcode needs a layer"));
+        }
+        self.layer_is_on(&b.layer, what)?;
+        if b.width_um <= 0 || b.height_um <= 0 {
+            return Err(fail("ops_bad_barcode", what, "the size of a barcode must be greater than zero"));
+        }
+        if b.text_height_um <= 0 {
+            return Err(fail("ops_bad_barcode", what, "the text size of a barcode must be greater than zero"));
+        }
+        if b.angle >= 360_000 {
+            return Err(fail("ops_bad_barcode", what, "the angle of a barcode is below 360 degrees"));
+        }
+        if b.margin_x_um < 0 || b.margin_y_um < 0 {
+            return Err(fail("ops_bad_barcode", what, "the margins of a barcode cannot be negative"));
+        }
+        Ok(())
+    }
+
+    fn add_barcode(&mut self, mut b: Barcode) -> Result<(), Vec<CheckResult>> {
+        self.check_barcode("barcode", &b)?;
+        b.id = String::new();
+        normalize_barcode(&mut b);
+        let dr = self.drawings_mut();
+        dr.barcodes.push(b);
+        dr.assign_missing_ids();
+        Ok(())
+    }
+
+    fn edit_barcode(&mut self, id: &str, mut b: Barcode) -> Result<(), Vec<CheckResult>> {
+        self.check_barcode(id, &b)?;
+        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_barcode", id, "the board has no drawings yet"))?;
+        let slot = dr.barcodes.iter_mut().find(|x| x.id == id).ok_or_else(|| fail("ops_unknown_barcode", id, "no barcode with this id"))?;
+        b.id = id.to_string();
+        normalize_barcode(&mut b);
+        *slot = b;
+        Ok(())
+    }
+
+    fn delete_barcode(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_barcode", id, "the board has no drawings yet"))?;
+        let before = dr.barcodes.len();
+        dr.barcodes.retain(|b| b.id != id);
+        if dr.barcodes.len() == before {
+            return Err(fail("ops_unknown_barcode", id, "no barcode with this id"));
+        }
+        Ok(())
+    }
+
+    /// `SetShapeStyle`: a rectangle, a circle or a polygon (the kinds `fillAvailable` lets have a fill) is solid (`Shape::filled`), hatched (the board's `shape_styles`) or neither. Every shape
+    /// is checked before any is changed.
+    fn set_shape_style(&mut self, ids: &[String], fill: Option<ShapeFill>) -> Result<(), Vec<CheckResult>> {
+        if ids.is_empty() {
+            return Err(fail("ops_bad_shape_style", "ids", "name at least one shape"));
+        }
+        let Some(fill) = fill else { return Ok(()) };
+        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_shape", &ids[0], "the board has no drawings yet"))?;
+        for id in ids {
+            let shape = dr.shapes.iter().find(|s| s.id() == id).ok_or_else(|| fail("ops_unknown_shape", id, "no shape with this id"))?;
+            if !matches!(shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. }) {
+                return Err(fail("ops_bad_shape_style", id, "only a rectangle, a circle or a polygon has a fill"));
+            }
+        }
+        for id in ids {
+            if let Some(shape) = dr.shapes.iter_mut().find(|s| s.id() == id) {
+                shape.set_filled(fill == ShapeFill::Solid);
+            }
+            dr.board_items.set_hatch(id, fill.hatch());
+        }
+        Ok(())
     }
 
     /// `DIALOG_TEXTBOX_PROPERTIES`'s checks, and what a box must be to be drawn: a layer the board has on, a glyph size KiCad accepts, a pen that fits the glyphs, margins
@@ -292,6 +397,29 @@ pub(crate) fn transform_ref_image(i: &mut RefImage, x: Xform, copper: usize) {
     }
 }
 
+/// `PCB_BARCODE::SetErrorCorrection`: a Micro QR code has no High level, so a High one is Quartile.
+pub(crate) fn normalize_barcode(b: &mut Barcode) {
+    if b.kind == BarcodeKind::MicroQr && b.ecc == EccLevel::H {
+        b.ecc = EccLevel::Q;
+    }
+}
+
+/// `PCB_BARCODE::Move` / `::Rotate` / `::Flip`: the centre goes where the transform puts it, a turn adds to the barcode's own angle (`Xform::Rotate`'s is clockwise, the file's
+/// counter-clockwise, so it is taken off), a flip puts the barcode on the other side's layer and a top-bottom one turns it half a turn; the symbol is mirrored on a back layer when it is drawn.
+pub(crate) fn transform_barcode(b: &mut Barcode, x: Xform, copper: usize) {
+    b.at = x.point(b.at);
+    match x {
+        Xform::Move { .. } => {}
+        Xform::Rotate { angle, .. } => b.angle = norm360(b.angle as i64 - angle) as Millideg,
+        Xform::Flip { dir, .. } => {
+            if matches!(dir, FlipDirection::TopBottom) {
+                b.angle = norm360(b.angle as i64 + 180_000) as Millideg;
+            }
+            b.layer = flip_layer(&b.layer, copper);
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------------------------------------------------------- the transform verbs
 
 fn norm360(a: i64) -> i64 {
@@ -426,11 +554,14 @@ pub(crate) fn transform_board_items(dr: &mut DrawingsSection, ids: &BTreeSet<Str
     for p in dr.board_items.points.iter_mut().filter(|p| ids.contains(&p.id)) {
         transform_point(p, x, copper);
     }
+    for b in dr.barcodes.iter_mut().filter(|b| ids.contains(&b.id)) {
+        transform_barcode(b, x, copper);
+    }
 }
 
 /// Is `id` the id of an item of the kinds this module adds?
 pub(crate) fn has_board_item(dr: &DrawingsSection, id: &str) -> bool {
-    dr.board_items.ids().any(|i| i == id)
+    dr.board_items.ids().any(|i| i == id) || dr.barcodes.iter().any(|b| b.id == id)
 }
 
 #[cfg(test)]

@@ -157,6 +157,7 @@ export interface AnchorBoard {
     text_boxes?: readonly { id: string; start: XY; pts: readonly XY[] }[];
     images?: readonly { id: string; x: number; y: number }[];
     points?: readonly { id: string; x: number; y: number }[];
+    barcodes?: readonly { id: string; x: number; y: number }[];
   } | null;
 }
 
@@ -194,6 +195,9 @@ export function movableItem(board: AnchorBoard, id: string): { kind: MovableKind
   // `PCB_POINT::GetPosition()`
   const point = board.drawings?.points?.find((q) => q.id === id);
   if (point) return { kind: "point", at: [point.x, point.y] };
+  // `PCB_BARCODE::GetPosition()` is the barcode's centre.
+  const barcode = board.drawings?.barcodes?.find((q) => q.id === id);
+  if (barcode) return { kind: "barcode", at: [barcode.x, barcode.y] };
   const group = board.drawings?.groups?.find((g) => g.id === id);
   if (group) {
     const anchors = group.member_ids.map((m) => (m === id ? null : movableItem(board, m))).filter((m): m is NonNullable<typeof m> => m != null);

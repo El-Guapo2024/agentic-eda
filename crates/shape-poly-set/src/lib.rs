@@ -25,8 +25,13 @@
 //!
 //! `Fracture`/`Unfracture` are the cache-friendly, index-based algorithms
 //! (`fractureSingleCacheFriendly`/`unfractureSingle`) -- see `fracture.rs`.
+//!
+//! `hatch.rs` is `GenerateHatchLines` (what `EDA_SHAPE::UpdateHatching` makes the lines of a hatched shape with) and `basic_shapes.rs` the circle and the stadium
+//! polygons (`TransformCircleToPolygon`, `TransformOvalToPolygon`) a hatched shape's knockouts are made of.
 
+pub mod basic_shapes;
 pub mod fracture;
+pub mod hatch;
 
 use eda_clipper2::{self as cl, ClipType, Clipper64, ClipperOffset, EndType, FillRule, JoinType, Path64, Paths64, Point64, PolyTree64};
 

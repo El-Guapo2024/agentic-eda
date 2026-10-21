@@ -132,6 +132,25 @@ impl Hatch {
             Hatch::CrossHatch => "cross_hatch",
         }
     }
+
+    /// Inverse of [`Hatch::token`]; `None` for a word that is not a hatched fill.
+    pub fn from_token(token: &str) -> Option<Hatch> {
+        match token {
+            "hatch" => Some(Hatch::Hatch),
+            "reverse_hatch" => Some(Hatch::ReverseHatch),
+            "cross_hatch" => Some(Hatch::CrossHatch),
+            _ => None,
+        }
+    }
+
+    /// The slopes `EDA_SHAPE::UpdateHatching` hatches with: -1 for a hatch (lines from the top left to the bottom right in KiCad's y-down frame), +1 for a reverse hatch, both for a cross-hatch.
+    pub fn slopes(self) -> &'static [f64] {
+        match self {
+            Hatch::Hatch => &[-1.0],
+            Hatch::ReverseHatch => &[1.0],
+            Hatch::CrossHatch => &[1.0, -1.0],
+        }
+    }
 }
 
 fn is_solid(s: &LineStyle) -> bool {

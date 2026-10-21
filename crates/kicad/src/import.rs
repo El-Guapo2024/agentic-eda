@@ -243,6 +243,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // deterministic ids a fresh route or a hand-add would get, so an
     // imported board is addressable from the moment it lands.
     design.assign_missing_ids();
+    // The shapes' hatch (`(fill hatch)` and the others), named by the ids the shapes have just been given.
+    if let Some(dr) = design.drawings.as_mut() {
+        let styles: Vec<eda_model::pcb_items::ShapeStyle> = dr.shapes.iter().zip(&refs.shapes).filter_map(|(s, r)| r.hatch.map(|h| eda_model::pcb_items::ShapeStyle { id: s.id().to_string(), hatch: Some(h) })).collect();
+        dr.board_items.shape_styles = styles;
+    }
     // The vias' tokens beyond `Via`'s fields, named by the ids the vias have just been given.
     let via_extras: Vec<eda_model::via_extra::ViaExtra> = design.routing.iter().flat_map(|r| r.vias.iter()).zip(via_extras).filter(|(_, x)| !x.is_default()).map(|(v, mut x)| { x.id = v.id.clone(); x }).collect();
     if !via_extras.is_empty() {

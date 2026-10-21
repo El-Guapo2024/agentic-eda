@@ -16,6 +16,7 @@
 pub mod board;
 pub mod constraints;
 pub mod dru;
+pub mod hatch;
 pub mod inspect;
 mod fp_art;
 pub mod kimath;

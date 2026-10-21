@@ -107,7 +107,12 @@ impl Board<'_> {
         let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_shape", id, "the board has no drawings yet"))?;
         let slot = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| fail("ops_unknown_shape", id, "no shape with this id"))?;
         shape.set_id(id.to_string());
+        let solid = shape.is_filled();
         *slot = shape;
+        // A solid fill takes the place of a hatch.
+        if solid {
+            dr.board_items.set_hatch(id, None);
+        }
         Ok(())
     }
 }

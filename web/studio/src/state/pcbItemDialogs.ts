@@ -1,8 +1,8 @@
-// Which of the board items' dialogs is open (GAPS.md item 24, package P16): Text Box Properties today; Barcode Properties and Reference Image Properties as their steps land.
+// Which of the board items' dialogs is open (GAPS.md item 24, package P16): Text Box Properties, Reference Image Properties and Barcode Properties.
 // Plain module state with subscribers (like `state/commonDialogs.ts`), so an action in the action runner can open a dialog without a place in the big reducer.
 // `components/PcbItemDialogs.tsx` renders them.
 import { useSyncExternalStore } from "react";
-import type { BoardTextBox } from "../api/pcbItemTypes";
+import type { BoardTextBox, CmdBarcode } from "../api/pcbItemTypes";
 
 /** `DIALOG_TEXTBOX_PROPERTIES`: the box it edits (`id` null for one the Draw Text Box tool just drew and the board does not have yet) and what to do when it closes. */
 export interface TextBoxDialog {
@@ -17,12 +17,21 @@ export interface RefImageDialog {
   id: string;
 }
 
+/** `DIALOG_BARCODE_PROPERTIES`: the barcode it edits (`id` null for one the Add Barcode tool just made and the board does not have yet) as the verbs take it, and what to do when it closes. */
+export interface BarcodeDialog {
+  id: string | null;
+  barcode: CmdBarcode;
+  /** After OK or Cancel: the Add Barcode tool waits for its next click (`DrawBarcode`'s loop). */
+  onClose?: () => void;
+}
+
 export interface PcbItemDialogsState {
   textBox: TextBoxDialog | null;
   refImage: RefImageDialog | null;
+  barcode: BarcodeDialog | null;
 }
 
-const CLOSED: PcbItemDialogsState = { textBox: null, refImage: null };
+const CLOSED: PcbItemDialogsState = { textBox: null, refImage: null, barcode: null };
 
 let current: PcbItemDialogsState = CLOSED;
 const listeners = new Set<() => void>();
@@ -61,4 +70,14 @@ export function openRefImageDialog(dialog: RefImageDialog): void {
 
 export function closeRefImageDialog(): void {
   set({ ...current, refImage: null });
+}
+
+export function openBarcodeDialog(dialog: BarcodeDialog): void {
+  set({ ...current, barcode: dialog });
+}
+
+export function closeBarcodeDialog(): void {
+  const done = current.barcode?.onClose;
+  set({ ...current, barcode: null });
+  done?.();
 }

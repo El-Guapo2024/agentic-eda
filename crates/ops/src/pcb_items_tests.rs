@@ -343,3 +343,286 @@ fn the_point_commands_have_one_wire_form() {
     let back: Cmd = serde_json::from_value(serde_json::to_value(&add).unwrap()).unwrap();
     assert_eq!(back, add);
 }
+
+// ------------------------------------------------------------------------------------------------------------------ shape fills (hatch)
+
+use eda_model::ir::Shape;
+use eda_model::pcb_items::{HatchKind, ShapeFill};
+
+fn style(b: &mut Board<'_>, shape_ids: &[&str], fill: ShapeFill) -> Result<(), Vec<CheckResult>> {
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: Some(fill) }))
+}
+
+fn hatch_of(b: &Board<'_>, id: &str) -> Option<HatchKind> {
+    drawings(b).board_items.hatch_of(id)
+}
+
+fn solid(b: &Board<'_>, id: &str) -> bool {
+    drawings(b).shapes.iter().find(|s| s.id() == id).unwrap().is_filled()
+}
+
+#[test]
+fn a_shape_is_hatched_unhatched_and_filled_by_one_verb_each_and_a_fill_replaces_the_one_before() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    style(&mut b, &["shp_rect"], ShapeFill::Hatch).unwrap();
+    assert_eq!((hatch_of(&b, "shp_rect"), solid(&b, "shp_rect")), (Some(HatchKind::Hatch), false));
+    style(&mut b, &["shp_rect"], ShapeFill::CrossHatch).unwrap();
+    assert_eq!(hatch_of(&b, "shp_rect"), Some(HatchKind::CrossHatch));
+    style(&mut b, &["shp_rect"], ShapeFill::Solid).unwrap();
+    assert_eq!((hatch_of(&b, "shp_rect"), solid(&b, "shp_rect")), (None, true), "solid is not a hatch");
+    style(&mut b, &["shp_rect"], ShapeFill::ReverseHatch).unwrap();
+    assert_eq!((hatch_of(&b, "shp_rect"), solid(&b, "shp_rect")), (Some(HatchKind::ReverseHatch), false), "a hatch is not solid");
+    style(&mut b, &["shp_rect"], ShapeFill::None).unwrap();
+    assert_eq!((hatch_of(&b, "shp_rect"), solid(&b, "shp_rect")), (None, false));
+    assert!(drawings(&b).board_items.shape_styles.is_empty(), "an empty style is not kept");
+}
+
+#[test]
+fn several_shapes_are_given_a_fill_together_or_not_at_all() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    b.apply(&Cmd::AddShape { shape: Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, center: p(50_000, 50_000), end: p(55_000, 50_000) } }).unwrap();
+    let circle = drawings(&b).shapes.iter().find(|s| matches!(s, Shape::Circle { .. })).unwrap().id().to_string();
+    style(&mut b, &["shp_rect", &circle], ShapeFill::Hatch).unwrap();
+    assert_eq!((hatch_of(&b, "shp_rect"), hatch_of(&b, &circle)), (Some(HatchKind::Hatch), Some(HatchKind::Hatch)));
+
+    // A line, an arc and a curve have no fill; one of them among the ids refuses the lot, and nothing changes.
+    let before = serde_json::to_value(b.design()).unwrap();
+    assert_eq!(style(&mut b, &["shp_rect", "shp_seg"], ShapeFill::Solid).unwrap_err()[0].check, "ops_bad_shape_style");
+    assert_eq!(style(&mut b, &["shp_rect", "shp_arc"], ShapeFill::None).unwrap_err()[0].check, "ops_bad_shape_style");
+    assert_eq!(style(&mut b, &["shp_rect", "shp_nope"], ShapeFill::None).unwrap_err()[0].check, "ops_unknown_shape");
+    assert_eq!(style(&mut b, &[], ShapeFill::None).unwrap_err()[0].check, "ops_bad_shape_style");
+    assert_eq!(serde_json::to_value(b.design()).unwrap(), before, "a refused command changes nothing");
+    // No fill given is no change.
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(&["shp_rect"]), fill: None })).unwrap();
+    assert_eq!(hatch_of(&b, "shp_rect"), Some(HatchKind::Hatch));
+}
+
+#[test]
+fn a_hatched_shape_keeps_its_hatch_through_a_move_a_turn_and_a_flip_and_loses_it_when_it_is_deleted() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    style(&mut b, &["shp_rect"], ShapeFill::Hatch).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&["shp_rect"]), dx: 1_000, dy: 2_000 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&["shp_rect"]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!(hatch_of(&b, "shp_rect"), Some(HatchKind::Hatch), "the shape is the same shape, so it is as hatched as it was");
+    b.apply(&Cmd::DeleteShape { id: "shp_rect".into() }).unwrap();
+    assert!(drawings(&b).board_items.shape_styles.is_empty(), "the hatch goes with the shape");
+}
+
+#[test]
+fn the_old_verbs_that_set_a_fill_put_a_solid_fill_in_place_of_a_hatch_and_leave_it_alone_otherwise() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    style(&mut b, &["shp_rect"], ShapeFill::Hatch).unwrap();
+    // The layer and the line width change, the shape is not asked to be solid: it stays hatched.
+    b.apply(&Cmd::EditShape { id: "shp_rect".into(), layer: "F.SilkS".into(), stroke_width: 250, filled: false }).unwrap();
+    assert_eq!(hatch_of(&b, "shp_rect"), Some(HatchKind::Hatch));
+    b.apply(&Cmd::EditShape { id: "shp_rect".into(), layer: "F.SilkS".into(), stroke_width: 250, filled: true }).unwrap();
+    assert_eq!((hatch_of(&b, "shp_rect"), solid(&b, "shp_rect")), (None, true));
+
+    style(&mut b, &["shp_rect"], ShapeFill::CrossHatch).unwrap();
+    let mut replaced = drawings(&b).shapes.iter().find(|s| s.id() == "shp_rect").unwrap().clone();
+    replaced.set_filled(false);
+    b.apply(&Cmd::ReplaceShape { id: "shp_rect".into(), shape: replaced.clone() }).unwrap();
+    assert_eq!(hatch_of(&b, "shp_rect"), Some(HatchKind::CrossHatch), "a replaced shape that is not solid is as hatched as it was");
+    replaced.set_filled(true);
+    b.apply(&Cmd::ReplaceShape { id: "shp_rect".into(), shape: replaced }).unwrap();
+    assert_eq!(hatch_of(&b, "shp_rect"), None);
+}
+
+#[test]
+fn a_shape_added_where_a_hatched_one_was_deleted_is_not_hatched() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    b.apply(&Cmd::AddShape { shape: Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, start: p(0, 0), end: p(5_000, 5_000) } }).unwrap();
+    let id = drawings(&b).shapes.iter().find(|s| s.points().first() == Some(&p(0, 0))).unwrap().id().to_string();
+    style(&mut b, &[&id], ShapeFill::Hatch).unwrap();
+    b.apply(&Cmd::DeleteShape { id: id.clone() }).unwrap();
+    b.apply(&Cmd::AddShape { shape: Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, start: p(0, 0), end: p(5_000, 5_000) } }).unwrap();
+    assert_eq!(hatch_of(&b, &id), None);
+}
+
+#[test]
+fn the_shape_style_command_has_one_wire_form() {
+    let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_shape_style", "ids": ["shp_a", "shp_b"], "fill": "reverse_hatch"})).unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: shape_ids, fill }) = &c else { panic!("{c:?}") };
+    assert_eq!((shape_ids.as_slice(), *fill), (&["shp_a".to_string(), "shp_b".to_string()][..], Some(ShapeFill::ReverseHatch)));
+    assert_eq!(c.domain(), Domain::Pcb);
+    assert_eq!(c.subjects(), vec!["shp_a", "shp_b"]);
+    let Cmd::PcbItem(p) = &c else { panic!() };
+    assert_eq!(p.describe(), "shape style shp_a,shp_b --fill reversehatch");
+    let back: Cmd = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+    assert_eq!(back, c);
+    let none: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_shape_style", "ids": ["shp_a"]})).unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { fill, .. }) = &none else { panic!() };
+    assert_eq!(*fill, None, "the fill left out is no change");
+}
+
+#[test]
+fn a_duplicate_a_paste_and_an_array_of_a_hatched_shape_are_hatched_the_same_way() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    style(&mut b, &["shp_rect"], ShapeFill::CrossHatch).unwrap();
+    let hatched = |b: &Board<'_>| drawings(b).shapes.iter().filter(|s| hatch_of(b, s.id()).is_some()).count();
+
+    // Duplicate: the copy has an id of its own and the hatch of the shape it was made from.
+    b.apply(&Cmd::Duplicate { ids: ids(&["shp_rect"]) }).unwrap();
+    assert_eq!(hatched(&b), 2);
+    let copy = drawings(&b).shapes.iter().find(|s| s.id() != "shp_rect" && matches!(s, Shape::Rect { .. })).unwrap().id().to_string();
+    assert_eq!(hatch_of(&b, &copy), Some(HatchKind::CrossHatch));
+
+    // Copy and Paste: the KiCad text has the hatch (`(fill cross_hatch)`) and a paste reads it back.
+    let text = eda_kicad::export_pcb_clipboard(b.design(), &m, &ids(&["shp_rect"]), p(0, 90_000)).unwrap();
+    assert!(text.contains("(fill cross_hatch)"), "{text}");
+    b.apply(&Cmd::PasteClipboard { text, at: p(40_000, 40_000) }).unwrap();
+    assert_eq!(hatched(&b), 3);
+
+    // Create Array: each copy of the set is hatched.
+    b.apply(&Cmd::CreateArray {
+        ids: ids(&["shp_rect"]),
+        geometry: array::ArrayGeometry::Grid { nx: 3, ny: 1, dx: 20_000, dy: 0, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false },
+        arrange: false,
+        reannotate: true,
+    })
+    .unwrap();
+    assert_eq!(hatched(&b), 5, "two more");
+    assert!(drawings(&b).board_items.shape_styles.iter().all(|st| drawings(&b).shapes.iter().any(|s| s.id() == st.id)), "every style names a shape");
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------- barcodes
+
+use eda_model::barcode::{Barcode, BarcodeKind, EccLevel};
+
+fn barcodes<'a>(b: &'a Board<'_>) -> &'a [Barcode] {
+    &drawings(b).barcodes
+}
+
+fn qr(layer: &str, at: Point) -> Barcode {
+    Barcode {
+        id: String::new(),
+        at,
+        angle: 0,
+        layer: layer.into(),
+        width_um: 10_000,
+        height_um: 10_000,
+        text: "HELLO".into(),
+        text_height_um: 1_500,
+        kind: BarcodeKind::Qr,
+        ecc: EccLevel::L,
+        show_text: true,
+        knockout: false,
+        margin_x_um: 0,
+        margin_y_um: 0,
+    }
+}
+
+fn add_barcode(b: &mut Board<'_>, barcode: Barcode) -> String {
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddBarcode { barcode })).unwrap();
+    barcodes(b).last().unwrap().id.clone()
+}
+
+#[test]
+fn a_barcode_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let mut code = qr("F.SilkS", p(30_000, 40_000));
+    code.id = "caller_id".into();
+    let id = add_barcode(&mut b, code);
+    assert!(id.starts_with("bar_"), "an id the caller sent is ignored: {id}");
+    assert_eq!(barcodes(&b).len(), 1);
+
+    let mut edited = barcodes(&b)[0].clone();
+    edited.text = "WORLD".into();
+    edited.kind = BarcodeKind::DataMatrix;
+    edited.layer = "F.Fab".into();
+    edited.knockout = true;
+    edited.margin_x_um = 700;
+    edited.angle = 90_000;
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditBarcode { id: id.clone(), barcode: edited })).unwrap();
+    let c = &barcodes(&b)[0];
+    assert_eq!((c.id.as_str(), c.text.as_str(), c.kind, c.layer.as_str(), c.knockout, c.margin_x_um, c.angle), (id.as_str(), "WORLD", BarcodeKind::DataMatrix, "F.Fab", true, 700, 90_000), "an edit keeps the id");
+
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteBarcode { id: id.clone() })).unwrap();
+    assert!(barcodes(&b).is_empty());
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteBarcode { id: id.clone() })).unwrap_err()[0].check, "ops_unknown_barcode");
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditBarcode { id, barcode: qr("F.SilkS", p(0, 0)) })).unwrap_err()[0].check, "ops_unknown_barcode");
+}
+
+#[test]
+fn a_barcode_that_cannot_be_drawn_is_refused_and_a_micro_qr_code_has_no_high_level() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let refused = |b: &mut Board<'_>, mutate: &dyn Fn(&mut Barcode)| {
+        let mut c = qr("F.SilkS", p(0, 0));
+        mutate(&mut c);
+        let e = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddBarcode { barcode: c })).unwrap_err();
+        assert!(barcodes(b).is_empty(), "nothing was added");
+        e[0].check.clone()
+    };
+    assert_eq!(refused(&mut b, &|c| c.layer = String::new()), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.width_um = 0), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.height_um = -1), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.text_height_um = 0), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.angle = 360_000), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.margin_y_um = -5), "ops_bad_barcode");
+    let mut off = model(&["F.Cu", "B.Cu"]);
+    off.board.layer_setup.enabled.retain(|l| l != "F.Fab");
+    let mut c = Board::new(design(), &off, 100, 300);
+    assert_eq!(c.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddBarcode { barcode: qr("F.Fab", p(0, 0)) })).unwrap_err()[0].check, "ops_layer_off");
+
+    // `SetErrorCorrection`: Micro QR takes Q for High; QR keeps it.
+    let mut micro = qr("F.SilkS", p(0, 0));
+    micro.kind = BarcodeKind::MicroQr;
+    micro.ecc = EccLevel::H;
+    add_barcode(&mut b, micro);
+    let mut full = qr("F.SilkS", p(5_000, 0));
+    full.ecc = EccLevel::H;
+    add_barcode(&mut b, full);
+    let (m1, m2) = (&barcodes(&b)[0], &barcodes(&b)[1]);
+    assert_eq!((m1.kind, m1.ecc, m2.kind, m2.ecc), (BarcodeKind::MicroQr, EccLevel::Q, BarcodeKind::Qr, EccLevel::H));
+}
+
+#[test]
+fn a_barcode_moves_turns_flips_and_locks_with_the_verbs_that_take_any_item() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let id = add_barcode(&mut b, qr("F.SilkS", p(10_000, 20_000)));
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: 1_000, dy: -2_000 }).unwrap();
+    assert_eq!(barcodes(&b)[0].at, p(11_000, 18_000));
+    // `PCB_BARCODE::Rotate`: the centre turns about the pivot, the angle (counter-clockwise in the file) grows by the turn; clockwise 90 here
+    b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    assert_eq!((barcodes(&b)[0].at, barcodes(&b)[0].angle), (p(-18_000, 11_000), 270_000), "clockwise on the screen about the pivot");
+    // `Flip`: left-right mirrors the centre and puts it on the back layer; top-bottom turns it half a turn as well
+    b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!((barcodes(&b)[0].layer.as_str(), barcodes(&b)[0].at, barcodes(&b)[0].angle), ("B.SilkS", p(18_000, 11_000), 270_000));
+    b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(0, 0), direction: FlipDirection::TopBottom }).unwrap();
+    assert_eq!((barcodes(&b)[0].layer.as_str(), barcodes(&b)[0].at, barcodes(&b)[0].angle), ("F.SilkS", p(18_000, -11_000), 90_000));
+    // a barcode has a lock in the file (`(locked yes)`)
+    b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: true }).unwrap();
+    assert!(drawings(&b).locked_ids.contains(&id));
+}
+
+#[test]
+fn the_barcode_commands_have_one_wire_form_and_describe_themselves() {
+    let add: Cmd = serde_json::from_value(serde_json::json!({
+        "op": "pcb_item", "verb": "add_barcode",
+        "barcode": {"layer": "F.SilkS", "at": {"x": 1000, "y": 2000}, "width_um": 12000, "height_um": 12000, "text": "A1", "text_height_um": 1500, "kind": "code128"}
+    }))
+    .unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::AddBarcode { barcode }) = &add else { panic!("{add:?}") };
+    assert_eq!((barcode.kind, barcode.ecc, barcode.show_text, barcode.knockout, barcode.angle), (BarcodeKind::Code128, EccLevel::L, true, false, 0), "what is left out is KiCad's default");
+    assert_eq!(add.domain(), Domain::Pcb);
+    let edit: Cmd = serde_json::from_value(serde_json::json!({
+        "op": "pcb_item", "verb": "edit_barcode", "id": "bar_x",
+        "barcode": {"layer": "F.Cu", "at": {"x": 1, "y": 2}, "width_um": 5000, "height_um": 6000, "text": "T", "text_height_um": 1000, "kind": "qr", "ecc": "M"}
+    }))
+    .unwrap();
+    assert_eq!(edit.subjects(), vec!["bar_x"]);
+    let Cmd::PcbItem(c) = &edit else { panic!() };
+    assert_eq!(c.describe(), "barcode edit bar_x --layer F.Cu --at 0.001,0.002 --size 5.000x6.000 --kind qr --text \"T\"");
+    let back: Cmd = serde_json::from_value(serde_json::to_value(&add).unwrap()).unwrap();
+    assert_eq!(back, add);
+}

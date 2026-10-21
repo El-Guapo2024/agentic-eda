@@ -489,10 +489,28 @@ test("shape rows send a replace_shape for the geometry and an edit_shape for lin
   assert.deepEqual(seg, { op: "replace_shape", id: "shp_seg", shape: { kind: "segment", layer: "F.SilkS", stroke_width: 150, filled: false, start: { x: 0, y: 80_000 }, end: { x: 12_000, y: 80_000 } } });
   assert.deepEqual(edit(b, ["shp_seg"], "Line Width", 300), [{ op: "edit_shape", id: "shp_seg", layer: "F.SilkS", stroke_width: 300, filled: false }]);
   assert.deepEqual(edit(b, ["shp_seg"], "Layer", "F.Fab"), [{ op: "edit_shape", id: "shp_seg", layer: "F.Fab", stroke_width: 150, filled: false }]);
-  assert.deepEqual(edit(b, ["shp_rect"], "Fill", 1), [{ op: "edit_shape", id: "shp_rect", layer: "F.Fab", stroke_width: 100, filled: true }]);
+  assert.deepEqual(edit(b, ["shp_rect"], "Fill", 1), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_rect"], fill: "solid" }]);
   assert.deepEqual(edit(b, ["shp_poly"], "Position X", 1_000), [{ op: "move_items", ids: ["shp_poly"], dx: 1_000, dy: 0 }]);
   assert.equal(edit(b, ["shp_rect"], "Width", 10_000).length, 0, "the width it already has");
   assert.equal(pcbEdit(b, ["shp_circle"], "Radius", 0, "mm").ok, false);
+});
+
+test("the Fill row offers the five fills of UI_FILL_MODE and sends one set_shape_style; the choice that is already there sends nothing", () => {
+  const b = board();
+  const choices = rowOf(b, ["shp_rect"], "Fill")!.choices!.map((c) => c.label);
+  assert.deepEqual(choices, ["None", "Solid", "Hatch", "Reverse Hatch", "Cross-hatch"]);
+  assert.deepEqual(edit(b, ["shp_rect"], "Fill", 2), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_rect"], fill: "hatch" }]);
+  assert.deepEqual(edit(b, ["shp_circle"], "Fill", 3), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_circle"], fill: "reverse_hatch" }]);
+  assert.deepEqual(edit(b, ["shp_poly"], "Fill", 4), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_poly"], fill: "cross_hatch" }]);
+  assert.equal(edit(b, ["shp_rect"], "Fill", 0).length, 0, "not filled already");
+  // A hatched shape says so: the row shows its hatch, and None takes it away.
+  const hatched = board();
+  Object.assign(hatched.drawings!.shapes[1]!, { fill: "cross_hatch", hatch_lines: [[0, 90_000, 1_000, 91_000]], hatch_width: 100 });
+  assert.equal(rowOf(hatched, ["shp_rect"], "Fill")!.value, 4);
+  assert.equal(edit(hatched, ["shp_rect"], "Fill", 4).length, 0);
+  assert.deepEqual(edit(hatched, ["shp_rect"], "Fill", 0), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_rect"], fill: "none" }]);
+  // A line has no fill row.
+  assert.equal(rowOf(b, ["shp_seg"], "Fill"), undefined);
 });
 
 test("a dimension: an edit_dimension that keeps everything else, the label's pen included", () => {

@@ -4003,6 +4003,7 @@ impl<'a> Board<'a> {
         if dr.shapes.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")]);
         }
+        dr.board_items.set_hatch(id, None);
         Ok(())
     }
 
@@ -4026,6 +4027,10 @@ impl<'a> Board<'a> {
         s.set_layer(layer.into());
         s.set_stroke_width(stroke_width);
         s.set_filled(filled);
+        // A solid fill takes the place of a hatch; "not filled" leaves one as it is (the fill choice is `SetShapeStyle`'s).
+        if filled {
+            dr.board_items.set_hatch(id, None);
+        }
         Ok(())
     }
 

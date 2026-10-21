@@ -6,7 +6,8 @@
 import type { Dispatch } from "react";
 import type { Action, StudioApi } from "../../state/store";
 import { openGroupDialog } from "../../state/commonDialogs";
-import { openRefImageDialog, openTextBoxDialog } from "../../state/pcbItemDialogs";
+import { openBarcodeDialog, openRefImageDialog, openTextBoxDialog } from "../../state/pcbItemDialogs";
+import { barcodeToCmd } from "../../kicad-port/barcodeShapes";
 import { padById } from "../../kicad-port/pcbItems";
 import { fieldById } from "../../kicad-port/fpFields";
 
@@ -25,6 +26,8 @@ export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch
   }
   // A reference image's Properties are `DIALOG_REFERENCE_IMAGE_PROPERTIES` (`PCB_BASE_EDIT_FRAME::ShowReferenceImagePropertiesDialog`).
   else if (api.getState().board?.drawings?.images?.some((i) => i.id === id)) openRefImageDialog({ id });
+  // A barcode's are `DIALOG_BARCODE_PROPERTIES` (`PCB_BASE_EDIT_FRAME::ShowBarcodePropertiesDialog`).
+  else if (api.getState().board?.drawings?.barcodes?.some((b) => b.id === id)) openBarcodeDialog({ id, barcode: barcodeToCmd(api.getState().board!.drawings!.barcodes!.find((b) => b.id === id)!) });
   // A zone gets the full dialog_copper_zones.cpp port (ZoneDialog.tsx),
   // same as "Add Zone" -- not the plain read-only-ish ItemPropertiesDialog
   // every other item here still uses.

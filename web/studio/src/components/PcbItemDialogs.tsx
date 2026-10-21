@@ -1,4 +1,4 @@
-// The dialogs of the board items GAPS.md item 24 (package P16) added. Text Box Properties (`DIALOG_TEXTBOX_PROPERTIES`, pcbnew/dialogs/dialog_textbox_properties.cpp at KiCad 8303b2ad) is here:
+// The dialogs of the board items GAPS.md item 24 (package P16) added (Barcode Properties is components/BarcodeDialog.tsx). Text Box Properties (`DIALOG_TEXTBOX_PROPERTIES`, pcbnew/dialogs/dialog_textbox_properties.cpp at KiCad 8303b2ad) is here:
 // opened after the Draw Text Box tool's second click -- the box is added by OK and gone with Cancel -- or on a box that is there (E, a double click, Properties in the context menu). It
 // has the look of the Symbol Editor's Text Box Properties (components/symbol/SymbolTextBoxDialog.tsx), with the layer, the glyph width and height, the pen (automatic or not), the
 // orientation (which turns the box about its position, `PCB_TEXTBOX::SetTextAngle`), the border and its style, the margins, knockout and the lock.
@@ -13,6 +13,7 @@ import { autoPenUm, clampPenUm, escapeQuoted, grownToFit, textBoxToCmd, TEXT_MAX
 import { checkImageScale, imageSizeUm, pcbImageUrl, scaleForHeightUm, scaleForWidthUm, scalePpmOf, scaleText } from "../kicad-port/refImage";
 import { closeRefImageDialog, closeTextBoxDialog, usePcbItemDialogs } from "../state/pcbItemDialogs";
 import { ImageEditorPanel } from "./ImageEditorPanel";
+import { PcbBarcodeDialog } from "./BarcodeDialog";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { measureStrokeText } from "./text/strokeFont";
 
@@ -83,6 +84,7 @@ export function PcbItemDialogs() {
     <>
       <PcbTextBoxDialog />
       <PcbRefImageDialog />
+      <PcbBarcodeDialog />
     </>
   );
 }

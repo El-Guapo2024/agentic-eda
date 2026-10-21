@@ -20,6 +20,7 @@ import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { distToPolyline, distToSegment, pointInPolygon, polygonArea, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
 import { objectOn } from "../../kicad-port/appearance";
+import { isAnyFill } from "../../kicad-port/shapeFill";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { zonePickLayer } from "../../kicad-port/zoneLayers";
 import { extraHitDistance, extraItems, type ExtraKind } from "../../kicad-port/pcbExtraItems";
@@ -87,6 +88,8 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
       return filter.graphics;
     case "point":
       return filter.points;
+    case "barcode":
+      return filter.otherItems;
   }
 }
 
@@ -262,8 +265,8 @@ export function collectSelectionCandidates(
     consider("zone", z.id, d, area, zonePickLayer(z, layerVisible, activeLayer));
   }
   for (const s of board.drawings?.shapes ?? []) {
-    // A filled shape at opacity 0 cannot be picked (`options.m_FilledShapeOpacity == 0.0 && IsAnyFill()`).
-    if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled && !objectOn(layerVisible, "shapes")) continue;
+    // A filled or hatched shape at opacity 0 cannot be picked (`options.m_FilledShapeOpacity == 0.0 && IsAnyFill()`).
+    if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) && !objectOn(layerVisible, "shapes")) continue;
     consider("shape", s.id, shapeHitDistance(s, xUm, yUm), shapeArea(s), s.layer);
   }
   for (const t of board.drawings?.texts ?? []) {
@@ -380,7 +383,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
     consider("zone", z.id, boxOf(z.outline), zonePickLayer(z, layerVisible, activeLayer));
   }
   for (const s of board.drawings?.shapes ?? []) {
-    if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled && !objectOn(layerVisible, "shapes")) continue;
+    if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) && !objectOn(layerVisible, "shapes")) continue;
     consider("shape", s.id, shapeBoundingBox(s), s.layer);
   }
   for (const t of board.drawings?.texts ?? []) {

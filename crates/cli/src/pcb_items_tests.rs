@@ -439,3 +439,390 @@ fn kicad_cli_loads_the_points_this_studio_writes_keeps_them_and_does_not_plot_th
     let with = body(&plot(&cli, &derived, "F.SilkS", &dir.join("with.svg")));
     assert_eq!(with, without, "a point is in no plot");
 }
+
+// ----------------------------------------------------------------------------------------------------------------------------- hatch fills
+
+use eda_model::ir::Shape;
+use eda_model::pcb_items::{HatchKind, ShapeFill};
+
+fn shapes(dir: &Path) -> Vec<Shape> {
+    load(dir).unwrap().1.drawings.map(|d| d.shapes).unwrap_or_default()
+}
+
+fn add_shape(dir: &Path, shape: Shape) -> String {
+    step(dir, Cmd::AddShape { shape }, false, "test").unwrap();
+    shapes(dir).last().unwrap().id().to_string()
+}
+
+fn set_fill(dir: &Path, id: &str, fill: ShapeFill) {
+    step(dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.to_string()], fill: Some(fill) }), false, "test").unwrap();
+}
+
+fn rect_shape(layer: &str, (x0, y0): (i64, i64), (x1, y1): (i64, i64)) -> Shape {
+    Shape::Rect { id: String::new(), layer: layer.into(), stroke_width: 200, filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } }
+}
+
+/// A vertical line 0.6 mm wide at `x` from `y0` to `y1`.
+fn bar(layer: &str, x: i64, y0: i64, y1: i64) -> Shape {
+    Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 600, filled: false, start: Point { x, y: y0 }, end: Point { x, y: y1 } }
+}
+
+/// The state's description of the shape `id`.
+fn shape_json(dir: &Path, id: &str) -> serde_json::Value {
+    state(dir)["drawings"]["shapes"].as_array().unwrap().iter().find(|s| s["id"] == id).unwrap().clone()
+}
+
+/// A hatch is one undo step of the board; the state says how the shape is hatched and carries the lines `EDA_SHAPE::UpdateHatching` makes of it from the board as it is, so a shape put
+/// over it cuts them at once (KiCad's `rehatchShapes` after every commit) and taking that shape away gives them back; the derived board has `(fill hatch)`.
+#[test]
+fn a_hatch_is_one_undo_step_described_by_the_state_with_its_lines_and_written_to_the_board() {
+    let dir = scratch("p16_hatch");
+    setup(&dir);
+    // Away from the two footprints: their Value fields are on F.Fab and cut a hatching they are over (the slow test below has the square over one).
+    let id = add_shape(&dir, rect_shape("F.Fab", (1_000, 11_000), (9_000, 19_000)));
+    assert!(shape_json(&dir, &id).get("fill").is_none() && shape_json(&dir, &id).get("hatch_lines").is_none(), "an unfilled shape says nothing of hatching");
+
+    set_fill(&dir, &id, ShapeFill::Hatch);
+    let s = shape_json(&dir, &id);
+    assert_eq!((s["fill"].as_str(), s["filled"].as_bool(), s["hatch_width"].as_i64()), (Some("hatch"), Some(false), Some(200)));
+    let lines: Vec<[i64; 4]> = s["hatch_lines"].as_array().unwrap().iter().map(|l| [l[0].as_i64().unwrap(), l[1].as_i64().unwrap(), l[2].as_i64().unwrap(), l[3].as_i64().unwrap()]).collect();
+    // 8 mm square, 0.2 mm line: a line every 2 mm along x + y, three of them 2 mm apart in x (the corners meet at x + y = 2 and 18 mm): x + y = 4, 6, ..., 16 mm.
+    assert_eq!(lines.len(), 7, "{lines:?}");
+    assert!(lines.iter().all(|l| l[0] + l[1] == l[2] + l[3] && (l[0] + l[1]) % 2_000 == 0));
+    let alone = lines.len();
+
+    // A line across the shape on its layer: the lines it crosses are cut in two, with no step of ours between.
+    let cutter = add_shape(&dir, bar("F.Fab", 5_000, 10_000, 20_000));
+    let cut = shape_json(&dir, &id)["hatch_lines"].as_array().unwrap().len();
+    assert!(cut > alone, "{cut} against {alone}");
+    step(&dir, Cmd::DeleteShape { id: cutter }, false, "test").unwrap();
+    assert_eq!(shape_json(&dir, &id)["hatch_lines"].as_array().unwrap().len(), alone, "and taking the bar away gives the lines back");
+    // One on another layer cuts nothing.
+    add_shape(&dir, bar("F.SilkS", 5_000, 10_000, 20_000));
+    assert_eq!(shape_json(&dir, &id)["hatch_lines"].as_array().unwrap().len(), alone);
+
+    // The three hatches: a reverse hatch has the lines the other way, a cross-hatch both.
+    set_fill(&dir, &id, ShapeFill::ReverseHatch);
+    let rev = shape_json(&dir, &id);
+    assert_eq!(rev["fill"], "reverse_hatch");
+    assert!(rev["hatch_lines"].as_array().unwrap().iter().all(|l| l[1].as_i64().unwrap() - l[0].as_i64().unwrap() == l[3].as_i64().unwrap() - l[2].as_i64().unwrap()));
+    set_fill(&dir, &id, ShapeFill::CrossHatch);
+    assert_eq!(shape_json(&dir, &id)["hatch_lines"].as_array().unwrap().len(), 2 * alone);
+
+    let (_, design, model) = load(&dir).unwrap();
+    let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-21", title: "t" }).unwrap();
+    assert_eq!(text.matches("(fill cross_hatch)").count(), 1, "{text}");
+    let (back, _, _) = eda_kicad::import_kicad_pcb(&text).unwrap();
+    assert_eq!(back.drawings.unwrap().board_items.shape_styles.iter().map(|s| s.hatch).collect::<Vec<_>>(), vec![Some(HatchKind::CrossHatch)]);
+
+    // Each fill is one undo step.
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!(shape_json(&dir, &id)["fill"], "reverse_hatch");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!(shape_json(&dir, &id)["fill"], "hatch");
+    set_fill(&dir, &id, ShapeFill::Solid);
+    let solid = shape_json(&dir, &id);
+    assert_eq!((solid["filled"].as_bool(), solid.get("fill").is_none(), solid.get("hatch_lines").is_none()), (Some(true), true, true), "a solid fill is not a hatch");
+}
+
+// ---- the polygons of the plot
+
+/// The polygons kicad-cli's SVG plot has for hatching: the `<path .. fill-rule:evenodd;" d="M x,y x,y .. Z">` that are filled and have no stroke, one per sub-path, in millimetres.
+fn plotted_polygons(svg: &str) -> Vec<Vec<(f64, f64)>> {
+    let mut out = Vec::new();
+    for path in svg.split("<path ").skip(1) {
+        let head = path.split("d=\"").next().unwrap_or("");
+        if !head.contains("stroke:none") || !head.contains("fill-rule:evenodd") {
+            continue;
+        }
+        let d = path.split("d=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or("");
+        for sub in d.split('M').filter(|s| !s.trim().is_empty()) {
+            let pts: Vec<(f64, f64)> = sub
+                .split(|c: char| c.is_whitespace() || c == 'Z' || c == 'L')
+                .filter(|t| t.contains(','))
+                .filter_map(|t| t.split_once(',').and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?))))
+                .collect();
+            if pts.len() >= 3 {
+                out.push(pts);
+            }
+        }
+    }
+    out
+}
+
+/// Whether every vertex of each polygon has one of the other within `tol_mm`, and the counts of vertices agree.
+fn same_polygon(a: &[(f64, f64)], b: &[(f64, f64)], tol_mm: f64) -> bool {
+    let near = |p: &(f64, f64), set: &[(f64, f64)]| set.iter().any(|q| (p.0 - q.0).abs() <= tol_mm && (p.1 - q.1).abs() <= tol_mm);
+    a.len() == b.len() && a.iter().all(|p| near(p, b)) && b.iter().all(|q| near(q, a))
+}
+
+/// The polygons of `theirs` that none of `mine` is (each of mine answers one only).
+fn unmatched(mine: &[Vec<(f64, f64)>], theirs: &[Vec<(f64, f64)>], tol_mm: f64) -> Vec<usize> {
+    let mut used = vec![false; mine.len()];
+    let mut missing = Vec::new();
+    for (i, t) in theirs.iter().enumerate() {
+        match (0..mine.len()).find(|&j| !used[j] && same_polygon(&mine[j], t, tol_mm)) {
+            Some(j) => used[j] = true,
+            None => missing.push(i),
+        }
+    }
+    missing
+}
+
+fn area_mm2(poly: &[(f64, f64)]) -> f64 {
+    let n = poly.len();
+    (0..n).map(|i| poly[i].0 * poly[(i + 1) % n].1 - poly[(i + 1) % n].0 * poly[i].1).sum::<f64>().abs() / 2.0
+}
+
+/// The hatching kicad-cli plots for a hatch, a reverse hatch and a cross-hatch of a rectangle, a circle and a polygon -- with a bar of the same layer across the rectangle -- is the
+/// hatching this studio works out: a hatch and a reverse hatch plot the same polygons (a stadium per line, to the micrometre), a cross-hatch the same area of lattice. kicad-cli's own
+/// rewrite of the file keeps the three fills.
+#[test]
+fn kicad_cli_plots_the_hatching_this_studio_works_out() {
+    if !slow() {
+        return;
+    }
+    let Some(cli) = eda_kicad_engine::find_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let dir = scratch("p16_hatch_cli");
+    setup(&dir);
+    let rect = add_shape(&dir, rect_shape("F.Fab", (1_000, 1_000), (9_000, 9_000)));
+    set_fill(&dir, &rect, ShapeFill::Hatch);
+    add_shape(&dir, bar("F.Fab", 5_000, 0, 12_000));
+    let circle = add_shape(&dir, Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 200, filled: false, center: Point { x: 15_000, y: 5_000 }, end: Point { x: 18_500, y: 5_000 } });
+    set_fill(&dir, &circle, ShapeFill::ReverseHatch);
+    let tri = add_shape(&dir, Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: 200, filled: false, pts: vec![Point { x: 11_000, y: 11_000 }, Point { x: 19_000, y: 11_000 }, Point { x: 15_000, y: 19_000 }] });
+    set_fill(&dir, &tri, ShapeFill::CrossHatch);
+
+    let args: Vec<String> = ["--layers", "F.Fab"].iter().map(|s| s.to_string()).collect();
+    crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
+    let derived = std::fs::read_dir(dir.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).expect("the derived board file");
+    let text = std::fs::read_to_string(&derived).unwrap();
+    assert_eq!((text.matches("(fill hatch)").count(), text.matches("(fill reverse_hatch)").count(), text.matches("(fill cross_hatch)").count()), (1, 1, 1), "{text}");
+
+    let theirs = plotted_polygons(&plot(&cli, &derived, "F.Fab", &dir.join("hatch.svg")));
+    let (_, design, model) = load(&dir).unwrap();
+    let all = design.drawings.clone().unwrap();
+    let hatched = |id: &str| (all.shapes.iter().find(|s| s.id() == id).unwrap(), all.board_items.hatch_of(id).unwrap());
+
+    // The three hatchings, each polygon of ours against one of kicad-cli's: a stadium per line for the hatch and the reverse hatch.
+    let to_mm = |poly: &eda_shape_poly_set::LineChain| -> Vec<(f64, f64)> { poly.iter().map(|p| (p.x as f64 / 1000.0, p.y as f64 / 1000.0)).collect() };
+    let stadiums: Vec<Vec<(f64, f64)>> = [&rect, &circle].iter().flat_map(|id| { let (s, h) = hatched(id); eda_drc::hatch::hatch_polygons(&design, Some(&model), s, h).iter().map(to_mm).collect::<Vec<_>>() }).collect();
+    assert!(stadiums.len() > 10, "{} lines", stadiums.len());
+    let (tri_shape, tri_kind) = hatched(&tri);
+    let lattice: Vec<Vec<(f64, f64)>> = eda_drc::hatch::hatch_polygons(&design, Some(&model), tri_shape, tri_kind).iter().map(to_mm).collect();
+    assert!(!lattice.is_empty());
+    // kicad-cli's polygons that are ours stadiums: those with the 12 vertices of a stadium of eight segments; the lattice is the rest.
+    let (their_stadiums, their_lattice): (Vec<_>, Vec<_>) = theirs.iter().cloned().partition(|p| p.len() == 12);
+    let missing = unmatched(&stadiums, &their_stadiums, 0.002);
+    let centres = |polys: &[Vec<(f64, f64)>]| -> Vec<(i64, i64, usize)> {
+        let mut c: Vec<_> = polys.iter().map(|p| ((p.iter().map(|q| q.0).sum::<f64>() / p.len() as f64 * 1000.0).round() as i64, (p.iter().map(|q| q.1).sum::<f64>() / p.len() as f64 * 1000.0).round() as i64, p.len())).collect();
+        c.sort();
+        c
+    };
+    assert!(
+        missing.is_empty(),
+        "{} of kicad-cli's {} hatch polygons are none of our {}: first {:?}\nours   {:?}\ntheirs {:?}",
+        missing.len(),
+        their_stadiums.len(),
+        stadiums.len(),
+        missing.first().map(|&i| &their_stadiums[i]),
+        centres(&stadiums),
+        centres(&their_stadiums)
+    );
+    assert_eq!(their_stadiums.len(), stadiums.len(), "the same number of lines, the bar's cuts included");
+    let (ours_area, theirs_area): (f64, f64) = (lattice.iter().map(|p| area_mm2(p)).sum(), their_lattice.iter().map(|p| area_mm2(p)).sum());
+    assert!(ours_area > 1.0 && (ours_area - theirs_area).abs() / theirs_area < 0.01, "the cross-hatch lattice: {ours_area} mm2 here, {theirs_area} mm2 in kicad-cli's plot");
+
+    // kicad-cli reads the file and writes the fills back.
+    let copy = dir.join("upgraded.kicad_pcb");
+    std::fs::copy(&derived, &copy).unwrap();
+    let rewrite = eda_kicad_engine::cli_command(&cli, None).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+    assert!(rewrite.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&rewrite.stdout), String::from_utf8_lossy(&rewrite.stderr));
+    let upgraded = std::fs::read_to_string(&copy).unwrap();
+    assert_eq!((upgraded.matches("(fill hatch)").count(), upgraded.matches("(fill reverse_hatch)").count(), upgraded.matches("(fill cross_hatch)").count()), (1, 1, 1), "{upgraded}");
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------- barcodes
+
+use eda_model::barcode::{Barcode, BarcodeKind, EccLevel};
+
+fn barcodes(dir: &Path) -> Vec<Barcode> {
+    load(dir).unwrap().1.drawings.map(|d| d.barcodes).unwrap_or_default()
+}
+
+fn qr(layer: &str, at: Point, text: &str) -> Barcode {
+    Barcode {
+        id: String::new(),
+        at,
+        angle: 0,
+        layer: layer.into(),
+        width_um: 8_000,
+        height_um: 8_000,
+        text: text.into(),
+        text_height_um: 1_000,
+        kind: BarcodeKind::Qr,
+        ecc: EccLevel::L,
+        show_text: true,
+        knockout: false,
+        margin_x_um: 0,
+        margin_y_um: 0,
+    }
+}
+
+fn add_barcode(dir: &Path, b: Barcode) {
+    step(dir, Cmd::PcbItem(PcbItemCmd::AddBarcode { barcode: b }), false, "test").unwrap();
+}
+
+/// A barcode is one undo step of the board; the state describes it, its shape is asked for by id (an empty text has no symbol, so that answer needs no kicad-cli), and the derived board has
+/// `(barcode ..)` as `format( const PCB_BARCODE* )` writes it.
+#[test]
+fn a_barcode_is_one_undo_step_described_by_the_state_and_written_to_the_board() {
+    let dir = scratch("p16_barcode");
+    setup(&dir);
+    assert!(barcodes(&dir).is_empty());
+    add_barcode(&dir, qr("F.SilkS", Point { x: 10_000, y: 12_000 }, "HELLO"));
+    let id = barcodes(&dir)[0].id.clone();
+    assert!(id.starts_with("bar_"));
+    let s = state(&dir);
+    let shown = &s["drawings"]["barcodes"][0];
+    assert_eq!(
+        (shown["id"].as_str(), shown["layer"].as_str(), shown["x"].as_i64(), shown["y"].as_i64(), shown["w"].as_i64(), shown["h"].as_i64(), shown["text"].as_str(), shown["kind"].as_str(), shown["ecc"].as_str(), shown["show_text"].as_bool()),
+        (Some(id.as_str()), Some("F.SilkS"), Some(10_000), Some(12_000), Some(8_000), Some(8_000), Some("HELLO"), Some("qr"), Some("L"), Some(true))
+    );
+
+    let (_, design, model) = load(&dir).unwrap();
+    let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-21", title: "t" }).unwrap();
+    assert!(text.contains("(barcode (at 10 12 0) (layer \"F.SilkS\") (size 8 8) (text \"HELLO\") (text_height 1) (type qr) (ecc_level L) (hide no) (knockout no)"), "{text}");
+    let (back, _, notes) = eda_kicad::import_kicad_pcb(&text).unwrap();
+    assert!(!notes.unread_items.contains_key("barcode"), "the importer reads it");
+    assert_eq!(back.drawings.unwrap().barcodes.len(), 1);
+
+    let mut edited = barcodes(&dir)[0].clone();
+    edited.text = "WORLD".into();
+    edited.angle = 90_000;
+    step(&dir, Cmd::PcbItem(PcbItemCmd::EditBarcode { id: id.clone(), barcode: edited }), false, "test").unwrap();
+    assert_eq!((barcodes(&dir)[0].text.as_str(), barcodes(&dir)[0].angle), ("WORLD", 90_000));
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!((barcodes(&dir)[0].text.as_str(), barcodes(&dir)[0].angle), ("HELLO", 0), "one undo takes the edit back");
+    step(&dir, Cmd::PcbItem(PcbItemCmd::DeleteBarcode { id }), false, "test").unwrap();
+    assert!(barcodes(&dir).is_empty());
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!(barcodes(&dir).len(), 1, "undo brings it back");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert!(barcodes(&dir).is_empty());
+}
+
+/// The shape routes: an unknown barcode and a bad request are refused and a barcode with no text has no symbol to plot (so no plot runs and no kicad-cli is needed).
+#[test]
+fn the_barcode_shape_routes_answer_without_a_plot_for_what_has_nothing_to_plot() {
+    let dir = scratch("p16_barcode_route");
+    setup(&dir);
+    let unknown = crate::barcode_api::shape_route(&dir, "/api/barcode_shape?id=bar_nope");
+    assert_eq!(unknown.status, "404 Not Found");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&unknown.body).unwrap()["status"], "failed");
+    add_barcode(&dir, qr("F.SilkS", Point { x: 5_000, y: 5_000 }, ""));
+    let id = barcodes(&dir)[0].id.clone();
+    let empty = crate::barcode_api::shape_route(&dir, &format!("/api/barcode_shape?id={id}"));
+    assert_eq!(empty.status, "200 OK");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&empty.body).unwrap(), serde_json::json!({ "status": "ready", "paths": [] }));
+    assert_eq!(crate::barcode_api::preview_route(&dir, b"not json").status, "400 Bad Request");
+    assert_eq!(crate::barcode_api::preview_route(&dir, br#"{"barcode": {"layer": "F.SilkS"}}"#).status, "400 Bad Request");
+    let preview = crate::barcode_api::preview_route(&dir, br#"{"barcode": {"layer": "F.SilkS", "at": {"x": 0, "y": 0}, "width_um": 5000, "height_um": 5000, "text": "", "text_height_um": 1000}}"#);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&preview.body).unwrap(), serde_json::json!({ "status": "ready", "paths": [] }));
+}
+
+/// The shape this studio serves for a barcode is what kicad-cli plots of it: for QR, Micro QR, Data Matrix and Code 128 barcodes, a turned one, one on a back layer (mirrored), one with a
+/// knockout and margins, and a text one kind cannot encode, the polygons the board's own plot has -- at the place the barcode is on the board -- are the polygons of the shape (plotted
+/// with the barcode at the origin and moved here), vertex for vertex to 2 micrometres. kicad-cli's `pcb upgrade --force` keeps the barcodes with their parameters.
+#[test]
+fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
+    if !slow() {
+        return;
+    }
+    let Some(cli) = eda_kicad_engine::find_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let dir = scratch("p16_barcode_cli");
+    setup(&dir);
+    let at = Point { x: 10_000, y: 12_000 };
+    let case = |layer: &str, kind: BarcodeKind, text: &str, w: i64, h: i64, mutate: &dyn Fn(&mut Barcode)| {
+        let mut b = qr(layer, at, text);
+        b.kind = kind;
+        b.width_um = w;
+        b.height_um = h;
+        mutate(&mut b);
+        b
+    };
+    let cases = vec![
+        ("qr", case("F.SilkS", BarcodeKind::Qr, "HELLO", 8_000, 8_000, &|_| {})),
+        ("qr turned, level H", case("F.SilkS", BarcodeKind::Qr, "TURNED 90", 8_000, 8_000, &|b| {
+            b.angle = 90_000;
+            b.ecc = EccLevel::H;
+        })),
+        ("micro qr", case("F.SilkS", BarcodeKind::MicroQr, "MQ1", 6_000, 6_000, &|b| b.ecc = EccLevel::M)),
+        ("data matrix", case("F.SilkS", BarcodeKind::DataMatrix, "DM-2026", 7_000, 7_000, &|_| {})),
+        ("code 128 with its text", case("F.SilkS", BarcodeKind::Code128, "AB-123", 14_000, 5_000, &|b| b.text_height_um = 1_200)),
+        ("qr on the back (mirrored)", case("B.SilkS", BarcodeKind::Qr, "BACK", 8_000, 8_000, &|_| {})),
+        ("qr knocked out of the silkscreen", case("F.SilkS", BarcodeKind::Qr, "KO", 8_000, 8_000, &|b| {
+            b.knockout = true;
+            b.margin_x_um = 1_000;
+            b.margin_y_um = 600;
+        })),
+        ("code 39 with a text it cannot take", case("F.SilkS", BarcodeKind::Code39, "h\u{e9}llo", 14_000, 5_000, &|_| {})),
+    ];
+    let derived_of = |dir: &Path| std::fs::read_dir(dir.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).expect("the derived board file");
+    for (name, barcode) in cases {
+        add_barcode(&dir, barcode.clone());
+        let args: Vec<String> = ["--layers", &barcode.layer].iter().map(|s| s.to_string()).collect();
+        crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
+        let derived = derived_of(&dir);
+        let svg = plot(&cli, &derived, &barcode.layer, &dir.join("theirs.svg"));
+        let theirs: Vec<Vec<Vec<[i64; 2]>>> = crate::barcode_api::filled_paths(&svg);
+        let ours = crate::barcode_api::shape_blocking(&barcode, &barcode.text).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let moved: Vec<Vec<Vec<[i64; 2]>>> = ours.paths.iter().map(|path| path.iter().map(|ring| ring.iter().map(|p| [p[0] + at.x, p[1] + at.y]).collect()).collect()).collect();
+        assert_eq!(moved.len(), theirs.len(), "{name}: the same number of polygons ({} served, {} plotted)", moved.len(), theirs.len());
+        for (i, (a, b)) in moved.iter().zip(&theirs).enumerate() {
+            assert_eq!(a.len(), b.len(), "{name}: polygon {i} has the same contours");
+            for (ra, rb) in a.iter().zip(b) {
+                assert_eq!(ra.len(), rb.len(), "{name}: polygon {i}");
+                assert!(ra.iter().zip(rb).all(|(p, q)| (p[0] - q[0]).abs() <= 2 && (p[1] - q[1]).abs() <= 2), "{name}: polygon {i} differs: {ra:?} against {rb:?}");
+            }
+        }
+        if name == "code 39 with a text it cannot take" {
+            assert!(theirs.is_empty(), "zint makes nothing of it, and so does kicad-cli's plot: {} polygons", theirs.len());
+        } else {
+            assert!(!theirs.is_empty(), "{name}: a plot with polygons in it");
+        }
+        // the extent: the barcode's own size, centred where it is (the text under it, and a knockout's margin, are outside it)
+        if name == "qr" {
+            let (xs, ys): (Vec<i64>, Vec<i64>) = (theirs.iter().flatten().flatten().map(|p| p[0]).collect(), theirs.iter().flatten().flatten().map(|p| p[1]).collect());
+            assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(at.x - 4_000), Some(at.x + 4_000)), "8 mm wide, centred on x");
+            assert!(ys.iter().min().copied() == Some(at.y - 4_000) && ys.iter().max().unwrap() > &(at.y + 4_000), "8 mm tall from the top, with its text under it");
+        }
+        let id = barcodes(&dir)[0].id.clone();
+        step(&dir, Cmd::PcbItem(PcbItemCmd::DeleteBarcode { id }), false, "test").unwrap();
+    }
+
+    // kicad-cli reads the barcodes and writes them back with what they were given
+    add_barcode(&dir, case("F.SilkS", BarcodeKind::Qr, "KEPT", 8_000, 8_000, &|b| b.ecc = EccLevel::Q));
+    add_barcode(&dir, case("F.SilkS", BarcodeKind::Code128, "KEPT-TOO", 14_000, 5_000, &|b| b.at = Point { x: 4_000, y: 3_000 }));
+    let args: Vec<String> = ["--layers", "F.SilkS"].iter().map(|s| s.to_string()).collect();
+    crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
+    let derived = derived_of(&dir);
+    let copy = dir.join("upgraded.kicad_pcb");
+    std::fs::copy(&derived, &copy).unwrap();
+    let rewrite = eda_kicad_engine::cli_command(&cli, None).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+    assert!(rewrite.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&rewrite.stdout), String::from_utf8_lossy(&rewrite.stderr));
+    let upgraded = std::fs::read_to_string(&copy).unwrap();
+    assert_eq!(upgraded.matches("(barcode").count(), 2, "kicad-cli kept both barcodes: {upgraded}");
+    let (back, _, _) = eda_kicad::import_kicad_pcb(&upgraded).unwrap();
+    let mut read: Vec<_> = back.drawings.unwrap().barcodes.into_iter().map(|b| (b.text, b.kind, b.ecc, b.at, b.width_um)).collect();
+    read.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(read[0].0, "KEPT");
+    assert_eq!((read[0].1, read[0].2, read[0].3, read[0].4), (BarcodeKind::Qr, EccLevel::Q, at, 8_000));
+    assert_eq!((read[1].0.as_str(), read[1].1), ("KEPT-TOO", BarcodeKind::Code128));
+}

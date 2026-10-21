@@ -292,6 +292,45 @@ impl PcbPoint {
     }
 }
 
+/// How a rectangle, a circle or a polygon is hatched (`FILL_T::HATCH`, `REVERSE_HATCH`, `CROSS_HATCH`; the file's `(fill hatch)`, `(fill reverse_hatch)`, `(fill cross_hatch)`): the enum a
+/// footprint's graphic has ([`crate::fp_art::Hatch`]), which the board's shapes share.
+pub use crate::fp_art::Hatch as HatchKind;
+
+/// The five fills of a shape (`UI_FILL_MODE`: None, Solid, Hatch, Reverse Hatch, Cross-hatch) as the Properties panel and the shape dialog offer them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeFill {
+    None,
+    Solid,
+    Hatch,
+    ReverseHatch,
+    CrossHatch,
+}
+
+impl ShapeFill {
+    /// The hatch this fill is, if it is one.
+    pub fn hatch(self) -> Option<HatchKind> {
+        match self {
+            ShapeFill::Hatch => Some(HatchKind::Hatch),
+            ShapeFill::ReverseHatch => Some(HatchKind::ReverseHatch),
+            ShapeFill::CrossHatch => Some(HatchKind::CrossHatch),
+            ShapeFill::None | ShapeFill::Solid => None,
+        }
+    }
+}
+
+/// What a board shape has beyond what [`crate::ir::Shape`] holds, by the shape's id: today its hatch. A shape without an entry is as `Shape::filled` says (solid or not
+/// filled). The entry is kept with the board, not with the shape, because `Shape` is built field by field in a good many places and a new field there is a change at every one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeStyle {
+    /// The id of the shape (`shp_xxxxxxxxxxxx`).
+    pub id: String,
+    /// The hatch of a rectangle, a circle or a polygon that is not filled solid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hatch: Option<HatchKind>,
+}
+
 /// The items this module adds to a board. See the module doc.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -305,14 +344,17 @@ pub struct BoardItems {
     /// The board's points (`point`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub points: Vec<PcbPoint>,
+    /// The hatch of the board's shapes, by the id of the shape ([`ShapeStyle`]). Not items of their own: see [`BoardItems::ids`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape_styles: Vec<ShapeStyle>,
 }
 
 impl BoardItems {
     pub fn is_empty(&self) -> bool {
-        self.text_boxes.is_empty() && self.images.is_empty() && self.points.is_empty()
+        self.text_boxes.is_empty() && self.images.is_empty() && self.points.is_empty() && self.shape_styles.is_empty()
     }
 
-    /// Every id of the items, for the id sets that name them.
+    /// Every id of the items, for the id sets that name them (a shape's style is the shape's, not an item).
     pub fn ids(&self) -> impl Iterator<Item = &str> {
         self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.points.iter().map(|p| p.id.as_str()))
     }
@@ -334,6 +376,32 @@ impl BoardItems {
         self.text_boxes.sort_by(|a, b| a.id.cmp(&b.id));
         self.images.sort_by(|a, b| a.id.cmp(&b.id));
         self.points.sort_by(|a, b| a.id.cmp(&b.id));
+        self.shape_styles.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+
+    /// The hatch of the shape `shape_id`, if it has one.
+    pub fn hatch_of(&self, shape_id: &str) -> Option<HatchKind> {
+        self.shape_styles.iter().find(|st| st.id == shape_id).and_then(|st| st.hatch)
+    }
+
+    /// Hatch the shape `shape_id` as `hatch` says, or take its hatch away (`None`); an entry that says nothing is not kept.
+    pub fn set_hatch(&mut self, shape_id: &str, hatch: Option<HatchKind>) {
+        match (self.shape_styles.iter().position(|st| st.id == shape_id), hatch) {
+            (Some(i), Some(h)) => self.shape_styles[i].hatch = Some(h),
+            (Some(i), None) => {
+                self.shape_styles[i].hatch = None;
+                if self.shape_styles[i] == (ShapeStyle { id: shape_id.to_string(), hatch: None }) {
+                    self.shape_styles.remove(i);
+                }
+            }
+            (None, Some(h)) => self.shape_styles.push(ShapeStyle { id: shape_id.to_string(), hatch: Some(h) }),
+            (None, None) => {}
+        }
+    }
+
+    /// Forget the styles of shapes that are gone (`live` says which ids there are), so a shape made later under the same id does not take a hatch that was not its own.
+    pub fn prune_shape_styles(&mut self, live: &std::collections::BTreeSet<String>) {
+        self.shape_styles.retain(|st| live.contains(&st.id));
     }
 
     /// Put each item on the layer `map` names for its own, when it names one (Swap Layers, `PCB_EDIT_FRAME::SwapLayers`).

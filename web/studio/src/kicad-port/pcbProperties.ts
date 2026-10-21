@@ -24,8 +24,9 @@ import { shapeToCmd } from "./pcbPointEdit";
 import { circumcircle } from "./trackArc";
 import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
-import type { BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
 import { registerExtraItemProperties } from "./pcbItemProperties";
+import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -48,7 +49,8 @@ export type PcbType =
   | "PCB_GROUP"
   | "PCB_TEXTBOX"
   | "PCB_REFERENCE_IMAGE"
-  | "PCB_POINT";
+  | "PCB_POINT"
+  | "PCB_BARCODE";
 
 /** One selected board item: the class, the id the selection holds, and the record of the board state it stands for (only the one of its kind is set). */
 export interface PcbItem {
@@ -68,6 +70,7 @@ export interface PcbItem {
   readonly textBox?: BoardTextBox;
   readonly image?: BoardRefImage;
   readonly point?: BoardPoint;
+  readonly barcode?: BoardBarcode;
 }
 
 /** What the getters read besides the item (`PCB_PROPERTIES_PANEL::updateLists` and the frame). */
@@ -141,6 +144,8 @@ export function pcbItemOf(board: BoardState, id: string): PcbItem | null {
   if (image) return { type: "PCB_REFERENCE_IMAGE", id, image };
   const point = dr?.points?.find((p) => p.id === id);
   if (point) return { type: "PCB_POINT", id, point };
+  const barcode = dr?.barcodes?.find((b) => b.id === id);
+  if (barcode) return { type: "PCB_BARCODE", id, barcode };
   const pad = id.includes(".") ? padById(board, id) : null;
   if (pad) return { type: "PAD", id, part: pad.part, pad: pad.pad };
   const field = id.includes(":") ? fieldById(board, id) : null;
@@ -169,6 +174,7 @@ function indexOf(board: BoardState): Map<string, PcbItem> {
   for (const textBox of dr?.text_boxes ?? []) put({ type: "PCB_TEXTBOX", id: textBox.id, textBox });
   for (const image of dr?.images ?? []) put({ type: "PCB_REFERENCE_IMAGE", id: image.id, image });
   for (const point of dr?.points ?? []) put({ type: "PCB_POINT", id: point.id, point });
+  for (const barcode of dr?.barcodes ?? []) put({ type: "PCB_BARCODE", id: barcode.id, barcode });
   return out;
 }
 
@@ -216,13 +222,15 @@ export function typeName(item: PcbItem): string {
       return "Reference Image";
     case "PCB_POINT":
       return "Point";
+    case "PCB_BARCODE":
+      return "Barcode";
     default:
       return "Dimension";
   }
 }
 
 /** Every `KICAD_T` name an item here can have (the choices of the Type property). */
-export const TYPE_NAMES: readonly string[] = ["Dimension", "Footprint", "Graphic", "Group", "Leader", "Pad", "Point", "Reference Image", "Text", "Text Box", "Track", "Via", "Zone"];
+export const TYPE_NAMES: readonly string[] = ["Barcode", "Dimension", "Footprint", "Graphic", "Group", "Leader", "Pad", "Point", "Reference Image", "Text", "Text Box", "Track", "Via", "Zone"];
 
 /** `GetFriendlyName()`: the caption of a single selected item (`EDA_ITEM::GetFriendlyName`, `PCB_TRACK::`, `ZONE::`). */
 export function pcbFriendlyName(item: PcbItem): string {
@@ -259,6 +267,8 @@ export function pcbFriendlyName(item: PcbItem): string {
       return "Reference Image";
     case "PCB_POINT":
       return "Point";
+    case "PCB_BARCODE":
+      return "Barcode";
     default:
       return "Dimension";
   }
@@ -343,6 +353,7 @@ export function positionOf(i: PcbItem): [number, number] {
   if (i.textBox) return i.textBox.pts[0] ?? i.textBox.start;
   if (i.image) return [i.image.x, i.image.y];
   if (i.point) return [i.point.x, i.point.y];
+  if (i.barcode) return [i.barcode.x, i.barcode.y];
   const s = i.shape;
   if (s) {
     if (s.kind === "arc") return arcShapeCenter(s) ?? [s.start[0], s.start[1]];
@@ -1266,14 +1277,15 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       owner: "EDA_SHAPE",
       name: "Fill",
       kind: "enum",
-      choices: () => [
-        { label: "None", value: 0 },
-        { label: "Solid", value: 1 },
-      ],
-      get: (i) => (i.shape!.filled ? 1 : 0),
+      // `UI_FILL_MODE`: None, Solid, Hatch, Reverse Hatch, Cross-hatch (`EDA_SHAPE::GetFillModeProp`), numbered in that order.
+      choices: () => SHAPE_FILL_CHOICES.map((c, n) => ({ label: c.label, value: n })),
+      get: (i) => SHAPE_FILL_CHOICES.findIndex((c) => c.value === fillOf(i.shape!)),
       // `fillAvailable`: polygons, rectangles, circles and Beziers (`PCB_SHAPE_DESC` takes the Bezier away again)
       available: (i) => kindOf(i) === "polygon" || kindOf(i) === "rect" || kindOf(i) === "circle",
-      set: (i, v) => (i.shape!.filled === (num(v) === 1) ? [] : [{ op: "edit_shape", id: i.id, layer: i.shape!.layer, stroke_width: i.shape!.stroke_width, filled: num(v) === 1 }]),
+      set: (i, v) => {
+        const fill = SHAPE_FILL_CHOICES[Math.round(num(v))]?.value;
+        return fill === undefined || fill === fillOf(i.shape!) ? [] : [{ op: "pcb_item", verb: "set_shape_style", ids: [i.id], fill }];
+      },
     },
     SHAPE
   );

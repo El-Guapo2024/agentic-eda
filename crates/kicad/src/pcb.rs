@@ -398,7 +398,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         let mut shapes: Vec<&Shape> = drawings.shapes.iter().collect();
         shapes.sort_by(|a, b| a.id().cmp(b.id()));
         for s in &shapes {
-            let uuid = write_shape(&mut out, s, is_locked(s.id()));
+            let uuid = write_shape(&mut out, s, is_locked(s.id()), drawings.board_items.hatch_of(s.id()));
             written.entry(s.id().to_string()).or_default().push(uuid);
         }
         let mut texts: Vec<&Text> = drawings.texts.iter().collect();
@@ -1246,11 +1246,16 @@ pub(crate) fn write_footprint(
 /// PCB_SHAPE*)`: stroke width and type first, `fill` only for the three
 /// shapes KiCad actually fills (rect/circle/poly -- a line or an arc has no
 /// interior, and KiCad's own writer never emits `fill` for either).
-pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool) -> String {
+pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: Option<eda_model::pcb_items::HatchKind>) -> String {
     let sw = |w: Um| mm(w.max(0));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
     let layer = sexpr_str(shape.layer());
-    let fill = |filled: bool| if filled { "yes" } else { "no" };
+    // `(fill yes)`, `(fill no)` or `(fill hatch)`, `(fill reverse_hatch)`, `(fill cross_hatch)`: a solid fill wins over a hatch.
+    let fill = |filled: bool| match (filled, hatch) {
+        (true, _) => "yes",
+        (false, Some(h)) => h.token(),
+        (false, None) => "no",
+    };
     let lock = if locked { " (locked yes)" } else { "" };
     match shape {
         Shape::Segment { stroke_width, start, end, .. } => {

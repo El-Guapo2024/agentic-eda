@@ -611,6 +611,15 @@ fn handle(
             let r = crate::image_api::sch_image(dir, target);
             respond(stream, r.status, r.kind, &r.body)
         }
+        // The shape of a barcode, as kicad-cli plots it (crates/cli/src/barcode_api.rs): `202 {"status":"pending"}` while the plot runs, the browser asks again.
+        ("GET", "/api/barcode_shape") => {
+            let r = crate::barcode_api::shape_route(dir, target);
+            respond(stream, r.status, "application/json", r.body.as_bytes())
+        }
+        ("POST", "/api/barcode_preview") => {
+            let r = crate::barcode_api::preview_route(dir, &body);
+            respond(stream, r.status, "application/json", r.body.as_bytes())
+        }
         ("GET", "/api/state") => {
             let v = state(dir, job, crate::text_vars_json::clock_of(target)).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -1252,7 +1261,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             "dimension_settings": dimension_settings_json(&d.dimension_settings),
         });
         // The text boxes, reference images and points (`eda_model::pcb_items`).
-        crate::pcb_items_json::extend(&mut drawings, d, &tv);
+        crate::pcb_items_json::extend(&mut drawings, &design, &model, d, &tv);
         drawings
     });
     Ok(json!({
