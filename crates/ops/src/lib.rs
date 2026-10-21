@@ -82,6 +82,7 @@ mod sch_groups;
 mod pcb_paste;
 mod pcb_paste_special;
 mod design_blocks;
+pub mod pcb_items;
 mod pcb_props;
 mod pcb_transform;
 mod tuning;
@@ -679,6 +680,9 @@ pub enum Cmd {
     /// `pcbnew.Control.repairBoard` (`BOARD_EDITOR_CONTROL::RepairBoard`): see [`board_control::repair_board`].
     /// Refused when there is nothing to repair, so no empty undo step is pushed.
     RepairBoard,
+    /// The board items the IR gained with GAPS.md item 24 (package P16): text boxes, reference images, points and the hatch fill of shapes -- one verb family, see
+    /// [`pcb_items::PcbItemCmd`]. On the wire: `{"op": "pcb_item", "verb": "add_text_box", "text_box": {..}}`.
+    PcbItem(pcb_items::PcbItemCmd),
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -2168,6 +2172,7 @@ impl Cmd {
             Cmd::PasteSch { .. } => vec!["paste"],
             Cmd::SchEdit(c) => c.ids(),
             Cmd::SchMove(c) => c.ids(),
+            Cmd::PcbItem(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::ClearErcExclusions => vec!["erc_exclusions"],
             Cmd::SetConnectionGrid { .. } => vec!["connection_grid"],
@@ -2756,6 +2761,7 @@ impl<'a> Board<'a> {
             Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode).map(|_| ()),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
+            Cmd::PcbItem(c) => self.apply_pcb_item(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
             Cmd::InGroup { group, cmd } => self.in_group(group, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
@@ -3872,6 +3878,8 @@ impl<'a> Board<'a> {
             // and the `.kicad_pcb` writer and importer carry both.
             out.extend(dr.dimensions.iter().map(|d| d.id.clone()));
             out.extend(dr.groups.iter().map(|g| g.id.clone()));
+            out.extend(dr.barcodes.iter().map(|b| b.id.clone()));
+            out.extend(dr.board_items.ids().map(String::from));
         }
         out
     }
@@ -3963,6 +3971,7 @@ impl<'a> Board<'a> {
                     d.layer = (*dest).to_string();
                 }
             }
+            dr.board_items.swap_layers(&|l| map.get(l).map(|d| (*d).to_string()));
         }
         Ok(())
     }
@@ -5788,6 +5797,8 @@ mod import_graphics_tests;
 mod import_graphics_sch_tests;
 #[cfg(test)]
 mod pcb_groups_tests;
+#[cfg(test)]
+mod pcb_items_tests;
 #[cfg(test)]
 mod tuning_tests;
 #[cfg(test)]

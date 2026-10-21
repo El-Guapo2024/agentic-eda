@@ -24,6 +24,8 @@ import { shapeToCmd } from "./pcbPointEdit";
 import { circumcircle } from "./trackArc";
 import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
+import type { BoardTextBox } from "../api/pcbItemTypes";
+import { registerExtraItemProperties } from "./pcbItemProperties";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -43,7 +45,8 @@ export type PcbType =
   | "PCB_DIM_RADIAL"
   | "PCB_DIM_LEADER"
   | "PCB_DIM_CENTER"
-  | "PCB_GROUP";
+  | "PCB_GROUP"
+  | "PCB_TEXTBOX";
 
 /** One selected board item: the class, the id the selection holds, and the record of the board state it stands for (only the one of its kind is set). */
 export interface PcbItem {
@@ -60,6 +63,7 @@ export interface PcbItem {
   readonly shape?: Shape;
   readonly dim?: Dimension;
   readonly group?: Group;
+  readonly textBox?: BoardTextBox;
 }
 
 /** What the getters read besides the item (`PCB_PROPERTIES_PANEL::updateLists` and the frame). */
@@ -87,7 +91,7 @@ export function pcbContext(board: BoardState, units: LengthUnit): PcbCtx {
   for (const z of rt?.zones ?? []) if (z.net) nets.add(z.net);
   const copper = board.layers;
   const all = [...copper, ...enabledOptionalLayers(board.board_rules?.layer_setup)];
-  const used = [...(board.drawings?.shapes ?? []).map((s) => s.layer), ...(board.drawings?.texts ?? []).map((t) => t.layer), ...(board.drawings?.dimensions ?? []).map((d) => d.layer)];
+  const used = [...(board.drawings?.shapes ?? []).map((s) => s.layer), ...(board.drawings?.texts ?? []).map((t) => t.layer), ...(board.drawings?.dimensions ?? []).map((d) => d.layer), ...(board.drawings?.text_boxes ?? []).map((t) => t.layer)];
   for (const l of used) if (!all.includes(l)) all.push(l);
   return {
     board,
@@ -127,6 +131,8 @@ export function pcbItemOf(board: BoardState, id: string): PcbItem | null {
   if (dim) return { type: DIM_TYPE[dim.kind], id, dim };
   const group = dr?.groups.find((g) => g.id === id);
   if (group) return { type: "PCB_GROUP", id, group };
+  const textBox = dr?.text_boxes?.find((t) => t.id === id);
+  if (textBox) return { type: "PCB_TEXTBOX", id, textBox };
   const pad = id.includes(".") ? padById(board, id) : null;
   if (pad) return { type: "PAD", id, part: pad.part, pad: pad.pad };
   const field = id.includes(":") ? fieldById(board, id) : null;
@@ -152,6 +158,7 @@ function indexOf(board: BoardState): Map<string, PcbItem> {
   for (const text of dr?.texts ?? []) put({ type: "PCB_TEXT", id: text.id, text });
   for (const dim of dr?.dimensions ?? []) put({ type: DIM_TYPE[dim.kind], id: dim.id, dim });
   for (const group of dr?.groups ?? []) put({ type: "PCB_GROUP", id: group.id, group });
+  for (const textBox of dr?.text_boxes ?? []) put({ type: "PCB_TEXTBOX", id: textBox.id, textBox });
   return out;
 }
 
@@ -193,13 +200,15 @@ export function typeName(item: PcbItem): string {
       return "Leader";
     case "PCB_GROUP":
       return "Group";
+    case "PCB_TEXTBOX":
+      return "Text Box";
     default:
       return "Dimension";
   }
 }
 
 /** Every `KICAD_T` name an item here can have (the choices of the Type property). */
-export const TYPE_NAMES: readonly string[] = ["Dimension", "Footprint", "Graphic", "Group", "Leader", "Pad", "Text", "Track", "Via", "Zone"];
+export const TYPE_NAMES: readonly string[] = ["Dimension", "Footprint", "Graphic", "Group", "Leader", "Pad", "Text", "Text Box", "Track", "Via", "Zone"];
 
 /** `GetFriendlyName()`: the caption of a single selected item (`EDA_ITEM::GetFriendlyName`, `PCB_TRACK::`, `ZONE::`). */
 export function pcbFriendlyName(item: PcbItem): string {
@@ -230,6 +239,8 @@ export function pcbFriendlyName(item: PcbItem): string {
       return "Leader";
     case "PCB_GROUP":
       return "Group";
+    case "PCB_TEXTBOX":
+      return "Text Box";
     default:
       return "Dimension";
   }
@@ -311,6 +322,7 @@ export function positionOf(i: PcbItem): [number, number] {
   if (i.zone) return i.zone.outline[0] ?? [0, 0];
   if (i.text) return [i.text.x, i.text.y];
   if (i.dim) return [i.dim.start[0], i.dim.start[1]];
+  if (i.textBox) return i.textBox.pts[0] ?? i.textBox.start;
   const s = i.shape;
   if (s) {
     if (s.kind === "arc") return arcShapeCenter(s) ?? [s.start[0], s.start[1]];
@@ -1472,6 +1484,9 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     "Group Properties"
   );
+
+  // The text boxes, reference images, points and barcodes (GAPS.md item 24): kicad-port/pcbItemProperties.ts.
+  registerExtraItemProperties(pm, add, (c) => layerChoicesOf(c, c.allLayers));
 
   pm.rebuild();
   return pm;

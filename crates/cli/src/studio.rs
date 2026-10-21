@@ -1217,7 +1217,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         })
     });
     let drawings = design.drawings.as_ref().map(|d| {
-        json!({
+        let mut drawings = json!({
             "shapes": d.shapes.iter().map(shape_json).collect::<Vec<_>>(),
             "texts": d.texts.iter().map(|t| tv.text_json(json!({
                 "id": t.id, "content": t.content, "x": t.at.x, "y": t.at.y, "angle": t.angle,
@@ -1241,7 +1241,10 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // Task item 7 -- see `eda_model::ir::Dimension`'s own doc.
             "dimensions": d.dimensions.iter().map(dimension_json).collect::<Vec<_>>(),
             "dimension_settings": dimension_settings_json(&d.dimension_settings),
-        })
+        });
+        // The text boxes, reference images and points (`eda_model::pcb_items`).
+        crate::pcb_items_json::extend(&mut drawings, d, &tv);
+        drawings
     });
     Ok(json!({
         "name": Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board"),

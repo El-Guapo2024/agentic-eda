@@ -11,6 +11,7 @@
 
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
+import type { BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
 import type { TuningPattern } from "./tuneTypes";
 
 export type Um = number;
@@ -505,6 +506,8 @@ export interface Drawings {
   dimension_settings: DimensionSettings;
   /** The length-tuning patterns of the board (`PCB_TUNING_PATTERN`, crates/model/src/tuning.rs); each is also listed in `groups` with the tracks of its meander as members. */
   tuning_patterns?: TuningPattern[];
+  /** The board's text boxes (`PCB_TEXTBOX`) -- see api/pcbItemTypes.ts. Absent from a backend built before they existed. */
+  text_boxes?: BoardTextBox[];
 }
 
 /** `crates/model/src/ir.rs` `Group` -- `PCB_GROUP` (on the board) and `SCH_GROUP` (on a sheet): a named set of member item ids (a part reference, a track/via/zone/shape/text id, a wire, a label ...) and of other groups' ids, no geometry of its own. */
@@ -1585,6 +1588,8 @@ export type Cmd =
   | ({ op: "sch_edit" } & SchEditCmd)
   /** Move, Drag, Rotate, Mirror and Align of every kind of schematic item (crates/ops/src/sch_move.rs) -- see api/schEditTypes.ts. */
   | ({ op: "sch_move" } & SchMoveCmd)
+  /** The board's text boxes (crates/ops/src/pcb_items.rs) -- see api/pcbItemTypes.ts. */
+  | ({ op: "pcb_item" } & PcbItemCmd)
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }

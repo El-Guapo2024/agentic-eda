@@ -52,6 +52,7 @@
 // and the bottom-side mirror into `pads[].x/y` and `courtyard`.
 import * as THREE from "three";
 import type { BoardState, BoardText, FillZone, Part, Shape, Side } from "../../api/types";
+import { buildTextBoxMesh } from "./pcbItems3d";
 import { layerColor } from "../canvas/layers";
 import { THEME_COLORS, shapeLayerOf, type Rgba } from "../../kicad-port/appearance3d";
 import { circleThrough, normalizeSweep } from "../canvas/painter";
@@ -1065,6 +1066,18 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
       } else if (shown(on.row)) {
         group.add(buildTextMesh(t, techLayerY("top"), inkOf(on.row).color, on.row));
       }
+    }
+    // The text boxes (`PCB_TEXTBOX`), on the same layers as the texts: see pcbItems3d.ts.
+    for (const b of board.drawings.text_boxes ?? []) {
+      const on = shapeLayerOf(b.layer);
+      if (!on) continue;
+      const mesh =
+        on.kind === "silk"
+          ? shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom") && buildTextBoxMesh(b, silkY(on.side))
+          : on.kind === "adhesive"
+            ? shown("adhesive") && buildTextBoxMesh(b, techLayerY(on.side), inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes").color, "adhesive")
+            : shown(on.row) && buildTextBoxMesh(b, techLayerY("top"), inkOf(on.row).color, on.row);
+      if (mesh) group.add(mesh);
     }
   }
 

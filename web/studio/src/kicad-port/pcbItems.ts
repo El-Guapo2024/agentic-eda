@@ -13,8 +13,9 @@ import { circumcircle } from "./trackArc";
 import { fieldAsText, fieldById } from "./fpFields";
 import { footprintBox } from "./footprintBox";
 import { groupLeaves } from "./groupTree";
+import { extraItemById, type ExtraKind } from "./pcbExtraItems";
 
-export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field";
+export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field" | ExtraKind;
 
 /**
  * The id a pad is selected, highlighted and listed under: `REF.NUMBER`, with `#k` after it for the k-th pad (from 2) of the footprint that
@@ -65,6 +66,9 @@ export function itemKind(board: BoardState, id: string): ItemKind | null {
   if (dr?.texts.some((t) => t.id === id)) return "text";
   if (dr?.dimensions.some((d) => d.id === id)) return "dimension";
   if (dr?.groups.some((g) => g.id === id)) return "group";
+  // The text boxes, images, points and barcodes (GAPS.md item 24).
+  const extra = extraItemById(board, id);
+  if (extra) return extra.kind;
   if (id.includes(".") && padById(board, id)) return "pad";
   // A footprint's Reference, Value or user field (`PCB_FIELD`): an item of its own, `REF:Name`.
   if (id.includes(":") && fieldById(board, id)) return "field";
@@ -130,7 +134,7 @@ export function itemPosition(board: BoardState, id: string): [number, number] | 
       return hit ? [hit.field.x, hit.field.y] : null;
     }
     default:
-      return null;
+      return extraItemById(board, id)?.position ?? null;
   }
 }
 
@@ -191,7 +195,7 @@ export function itemBounds(board: BoardState, id: string, opts: { includeText?: 
       return hit && hit.field.text !== "" ? textBounds(fieldAsText(hit.field)) : hit ? [hit.field.x, hit.field.y, hit.field.x, hit.field.y] : null;
     }
     default:
-      return null;
+      return extraItemById(board, id)?.bounds ?? null;
   }
 }
 

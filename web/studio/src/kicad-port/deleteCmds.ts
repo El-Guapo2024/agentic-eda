@@ -7,6 +7,7 @@
 import type { BoardState, Cmd } from "../api/types";
 import { expandGroups } from "./groupTree";
 import { isLocked } from "./pcbTransform";
+import { extraDeleteCmd, extraItems } from "./pcbExtraItems";
 
 /** The tuning patterns (`PCB_GENERATOR`s) among `ids`: deleting one puts the track back as it was before it was tuned, which the tuner's API does (`/api/tune/remove`), not a verb. */
 export function tuningPatternIds(board: BoardState | null | undefined, ids: readonly string[]): string[] {
@@ -39,9 +40,10 @@ export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cm
   const texts = new Set((board.drawings?.texts ?? []).map((t) => t.id));
   const dimensions = new Set((board.drawings?.dimensions ?? []).map((d) => d.id));
   const placed = new Set(board.parts.filter((p) => p.placed).map((p) => p.ref));
+  const extras = new Map(extraItems(board).map((i) => [i.id, i]));
   const cmds: Cmd[] = [];
   for (const id of wanted) {
-    const known = tracks.has(id) || vias.has(id) || zones.has(id) || shapes.has(id) || texts.has(id) || dimensions.has(id) || placed.has(id);
+    const known = tracks.has(id) || vias.has(id) || zones.has(id) || shapes.has(id) || texts.has(id) || dimensions.has(id) || extras.has(id) || placed.has(id);
     if (!known) continue;
     if (tracks.has(id)) cmds.push({ op: "delete_track", id });
     else if (vias.has(id)) cmds.push({ op: "delete_via", id });
@@ -49,6 +51,7 @@ export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cm
     else if (shapes.has(id)) cmds.push({ op: "delete_shape", id });
     else if (texts.has(id)) cmds.push({ op: "delete_text", id });
     else if (dimensions.has(id)) cmds.push({ op: "delete_dimension", id });
+    else if (extras.has(id)) cmds.push(extraDeleteCmd(extras.get(id)!));
     else cmds.push({ op: "rip", part: id });
   }
   return { cmds, skippedLocked };

@@ -2476,6 +2476,10 @@ pub struct DrawingsSection {
     /// for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub barcodes: Vec<crate::barcode::Barcode>,
+    /// The text boxes, reference images and points of the board, and the hatch fill of its shapes (GAPS.md item 24, P16) -- see [`crate::pcb_items`]. Additive: absent in an older
+    /// `design.json` reads as "none". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "crate::pcb_items::BoardItems::is_empty")]
+    pub board_items: crate::pcb_items::BoardItems,
     /// The board setup's tokens the writer does not make from `BoardRules`, as the file wrote them: KiCad 10's defaults for the vias that say nothing of their own,
     /// `(covering (front no) (back no))`, `(plugging ..)`, `(capping no)` and `(filling no)`. Additive: absent reads as "none".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2904,7 +2908,7 @@ impl DrawingsSection {
     /// whose `id` is still empty. See [`RoutingSection::assign_missing_ids`]
     /// -- same contract, same reason for a stable per-kind processing order.
     pub fn assign_missing_ids(&mut self) {
-        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).chain(self.tuning_patterns.iter().map(|t| t.id.as_str())).chain(self.barcodes.iter().map(|b| b.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
+        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).chain(self.tuning_patterns.iter().map(|t| t.id.as_str())).chain(self.barcodes.iter().map(|b| b.id.as_str())).chain(self.board_items.ids()).filter(|s| !s.is_empty()).map(String::from).collect();
 
         for i in 0..self.tuning_patterns.len() {
             if self.tuning_patterns[i].id.is_empty() {
@@ -2963,6 +2967,8 @@ impl DrawingsSection {
                 self.barcodes[i].id = id;
             }
         }
+
+        self.board_items.assign_missing_ids(&mut existing);
     }
 }
 
@@ -4414,6 +4420,7 @@ impl Design {
         if let Some(dr) = &mut d.drawings {
             dr.shapes.sort_by(|a, b| a.id().cmp(b.id()));
             dr.texts.sort_by(|a, b| a.id.cmp(&b.id));
+            dr.board_items.canonicalize();
         }
         if let Some(lib) = &mut d.footprint_library {
             lib.footprints.sort_by(|a, b| a.name.cmp(&b.name));

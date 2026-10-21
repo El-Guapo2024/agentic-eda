@@ -161,6 +161,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let (outline, outline_is_shapes, outline_width_um) = import_outline(root, &mut shapes, &mut refs, &mut notes);
     let dimensions = import_items::import_dimensions(root, &mut refs);
     let barcodes = crate::barcode_io::read_all(root, &mut refs.barcodes);
+    let board_items = crate::pcb_items_io::read_all(root, &mut refs.board_items);
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
     let zones = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
@@ -172,7 +173,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
 
     add_layers_in_use(
         &mut board.layer_setup,
-        shapes.iter().map(|s| s.layer().to_string()).chain(texts.iter().map(|t| t.layer.clone())).chain(dimensions.iter().map(|d| d.layer.clone())).chain(silk_texts.iter().map(|t| t.layer.clone())),
+        shapes.iter().map(|s| s.layer().to_string()).chain(texts.iter().map(|t| t.layer.clone())).chain(dimensions.iter().map(|d| d.layer.clone())).chain(silk_texts.iter().map(|t| t.layer.clone())).chain(board_items.text_boxes.iter().map(|t| t.layer.clone())),
     );
 
     // The outline override lives on `board` too (used when a downstream
@@ -200,7 +201,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() && outline_width_um.is_none() && barcodes.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, outline_width_um, barcodes, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() && outline_width_um.is_none() && barcodes.is_empty() && board_items.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, outline_width_um, barcodes, board_items, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
     if !raw_items.is_empty() {
@@ -285,7 +286,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
 /// `setup`, nets and net classes) and `embedded_fonts`, which is a flag. The other kinds are counted ([`unread_items`]) and kept as text (`DrawingsSection::raw_items`).
 const READ_ITEMS: &[&str] = &[
     "version", "generator", "generator_version", "general", "paper", "page", "title_block", "layers", "setup", "host", "net", "net_class", "footprint", "module", "segment", "arc", "via", "zone", "gr_line", "gr_arc",
-    "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "dimension", "group", "generated", "barcode", "embedded_fonts",
+    "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "gr_text_box", "dimension", "group", "generated", "barcode", "embedded_fonts",
 ];
 
 /// The top-level items of the board whose kind no reader here takes ([`READ_ITEMS`]), counted by kind.
@@ -2367,7 +2368,9 @@ mod tests {
   (gr_line (start 0 0) (end 5 0) (stroke (width 0.1) (type default)) (layer "Edge.Cuts"))
 )"#;
         let (_, _, notes) = import_kicad_pcb(board).unwrap();
-        assert_eq!(notes.unread_items.iter().map(|(k, n)| (k.as_str(), *n)).collect::<Vec<_>>(), [("gr_text_box", 2), ("image", 1), ("property", 1)]);
+        // The text boxes have a reader (`pcb_textbox.rs`); the image and the board-level property are kept as text.
+        assert_eq!(notes.unread_items.iter().map(|(k, n)| (k.as_str(), *n)).collect::<Vec<_>>(), [("image", 1), ("property", 1)]);
+        assert_eq!(import_kicad_pcb(board).unwrap().0.drawings.unwrap().board_items.text_boxes.len(), 2);
         let (_, _, plain) = import_kicad_pcb(r#"(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 "F.Cu" signal)) (net 0 ""))"#).unwrap();
         assert!(plain.unread_items.is_empty());
     }

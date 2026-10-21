@@ -22,6 +22,7 @@ import { drawStrokeWidthUm } from "../../kicad-port/layerDefaults";
 import { activeLayerName } from "../../kicad-port/layerPresets";
 import { carryStart } from "../../kicad-port/pcbTransform";
 import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
+import { EXTRA_KINDS, extraItemLabel } from "../../kicad-port/pcbExtraItems";
 import { fieldById } from "../../kicad-port/fpFields";
 import { isGroup, substituteSelection, topLevelGroup, withinScope } from "../../kicad-port/groupTree";
 import type { ToolId } from "../../state/store";
@@ -91,7 +92,7 @@ function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
  * What a plain drag of a clicked item picks up. Every kind can be: the drop is one `move_items` (kicad-port/pcbTransform.ts `planCarry`), and a pad
  * stands for its footprint (`FilterCollectorForFreePads`) -- dragging a pad drags the footprint, as in pcbnew.
  */
-const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad", "field"]);
+const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad", "field", ...EXTRA_KINDS]);
 
 /** The tools whose clicks go through a grid helper: `BestSnapAnchor` on every event, or the router's `snapToItem`. */
 const PLACING_TOOLS = new Set<string>(["route", "diffpair", "tune", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "measure", "drill_origin", "local_ratsnest", "picker"]);
@@ -538,6 +539,9 @@ export function Canvas() {
           const hit = board ? fieldById(board, c.id) : null;
           return hit ? `${hit.field.name} field of ${hit.part.ref}${hit.field.name === "Reference" ? "" : ` (${hit.field.text})`}` : `Field ${c.id}`;
         }
+        default:
+          // The text boxes, images, points and barcodes (`GetItemDescription`).
+          return extraItemLabel(board, c.id);
       }
     },
     [api]

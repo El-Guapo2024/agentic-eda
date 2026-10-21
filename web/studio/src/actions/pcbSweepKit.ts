@@ -6,6 +6,7 @@ import type { Dispatch } from "react";
 import type { Action, StudioApi, StudioState } from "../state/store";
 import type { BoardState, Cmd } from "../api/types";
 import { fetchState } from "../api/client";
+import { extraItemIds } from "../kicad-port/pcbExtraItems";
 
 export interface SweepCtx {
   state: StudioState;
@@ -24,6 +25,7 @@ export function itemIds(board: BoardState | null): Set<string> {
   for (const t of board.routing?.tracks ?? []) out.add(t.id);
   for (const v of board.routing?.vias ?? []) out.add(v.id);
   for (const z of board.routing?.zones ?? []) out.add(z.id);
+  for (const id of extraItemIds(board)) out.add(id);
   return out;
 }
 

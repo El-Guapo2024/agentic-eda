@@ -30,6 +30,7 @@ import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-po
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { itemKind, padParent } from "../kicad-port/pcbItems";
+import { extraDeleteCmd, extraItemById } from "../kicad-port/pcbExtraItems";
 import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { nextAngleSnapMode } from "../kicad-port/pcbParityState";
 import { cancelEditPattern, cancelTune, finishEditPattern, removeTuningPatterns, startEditPattern, stepTune, updateEditPattern } from "../components/canvas/tuneRouting";
@@ -1661,7 +1662,7 @@ export function useActionRunner() {
       const modifyLock = (mode: "toggle" | "on" | "off") =>
         pcbOnly(() => {
           // A selection that is empty falls back to selectionCursor (the item under the cursor). Free pads are never locked (n/a here: no free pads).
-          const ids = requestSelection().filter((id) => Boolean(api.partByRef(id)?.placed || api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id)));
+          const ids = requestSelection().filter((id) => Boolean(api.partByRef(id)?.placed || api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id) || extraItemById(board, id)));
           if (ids.length === 0) return;
           const locked = mode === "toggle" ? resolveToggleLock(ids, lockedSet) : mode === "on";
           void api.cmd({ op: "set_locked", ids, locked });
@@ -1683,6 +1684,7 @@ export function useActionRunner() {
           else if (api.shapeById(id)) await api.cmd({ op: "delete_shape", id });
           else if (api.textById(id)) await api.cmd({ op: "delete_text", id });
           else if (api.dimensionById(id)) await api.cmd({ op: "delete_dimension", id });
+          else if (extraItemById(board, id)) await api.cmd(extraDeleteCmd(extraItemById(board, id)!));
           else if (api.partByRef(id)?.placed) await api.cmd({ op: "rip", part: id });
         }
       };

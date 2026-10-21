@@ -22,8 +22,9 @@ import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/
 import { objectOn } from "../../kicad-port/appearance";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { zonePickLayer } from "../../kicad-port/zoneLayers";
+import { extraHitDistance, extraItems, type ExtraKind } from "../../kicad-port/pcbExtraItems";
 
-export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field";
+export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | ExtraKind;
 
 export interface SelectionCandidate extends GuessCandidate {
   kind: SelectableKind;
@@ -51,9 +52,12 @@ export interface SelectionFilter {
   text: boolean;
   dimensions: boolean;
   pads: boolean;
+  /** `m_filter.points` (`PCB_POINT`) and `m_filter.otherItems` (a barcode). */
+  points: boolean;
+  otherItems: boolean;
 }
 
-export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true, pads: true };
+export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true, pads: true, points: true, otherItems: true };
 
 function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
   switch (kind) {
@@ -75,6 +79,9 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
       return filter.pads;
     // `PCB_SELECTION_TOOL::itemPassesFilter`: a footprint's field is text (`PCB_FIELD_T` shares `m_filter.text`).
     case "field":
+      return filter.text;
+    // `PCB_TEXTBOX_T` shares `m_filter.text`, `PCB_REFERENCE_IMAGE_T` `m_filter.graphics`, `PCB_POINT_T` has `m_filter.points` and `PCB_BARCODE_T` falls to `m_filter.otherItems`.
+    case "textbox":
       return filter.text;
   }
 }
@@ -261,6 +268,11 @@ export function collectSelectionCandidates(
     const d = inside ? 0 : Math.hypot(xUm - t.x, yUm - t.y) - (x1 - x0) / 2;
     consider("text", t.id, d, Math.max((x1 - x0) * (y1 - y0), 1), t.layer);
   }
+  // The text boxes, images, points and barcodes (GAPS.md item 24): a text box is hit anywhere in its bounding box (`PCB_TEXTBOX::HitTest`).
+  for (const item of extraItems(board)) {
+    const [x0, y0, x1, y1] = item.bounds;
+    consider(item.kind, item.id, extraHitDistance(item, xUm, yUm), Math.max((x1 - x0) * (y1 - y0), 1), item.layer);
+  }
   // Task item 7: `lines` is a set of disconnected segments (extension
   // lines, crossbar/leader pieces, arrow barbs), not one polyline -- the
   // hit distance is the closest approach to any one of them.
@@ -374,6 +386,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   for (const dim of board.drawings?.dimensions ?? []) {
     consider("dimension", dim.id, dimensionHit(dim, dim.text_at[0], dim.text_at[1]).box, dim.layer);
   }
+  for (const item of extraItems(board)) consider(item.kind, item.id, item.bounds, item.layer);
   for (const p of board.parts as Part[]) {
     if (!p.placed || !p.pads?.length || !sideShown(layerVisible, p)) continue;
     const ids = padIds(p);

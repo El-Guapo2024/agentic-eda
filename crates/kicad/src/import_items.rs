@@ -57,6 +57,8 @@ pub(crate) struct Refs {
     pub texts: Vec<ItemRef>,
     pub dimensions: Vec<ItemRef>,
     pub barcodes: Vec<ItemRef>,
+    /// The items of `eda_model::pcb_items` (text boxes, ..).
+    pub board_items: crate::pcb_items_io::ItemRefs,
 }
 
 impl Refs {
@@ -91,6 +93,7 @@ impl Refs {
             note(&self.texts, dr.texts.iter().map(|t| t.id.as_str()).collect());
             note(&self.dimensions, dr.dimensions.iter().map(|d| d.id.as_str()).collect());
             note(&self.barcodes, dr.barcodes.iter().map(|b| b.id.as_str()).collect());
+            note(&self.board_items.text_boxes, dr.board_items.text_boxes.iter().map(|t| t.id.as_str()).collect());
         }
 
         let names = design.drawings.iter().flat_map(|d| d.groups.iter().map(|g| g.id.clone())).collect();

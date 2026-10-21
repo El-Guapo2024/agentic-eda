@@ -34,6 +34,7 @@ import { layerIsVisible, layerStateKey, isCopper } from "../../kicad-port/layerP
 import { zoneCopperLayers, zoneIsOnCopper, zoneLayers } from "../../kicad-port/zoneLayers";
 import { drcMarkerObject } from "../../kicad-port/appearance";
 import { drawFootprintArt } from "./fpArtPaint";
+import { drawPcbItems } from "./pcbItemsPaint";
 import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
 import type { TuneHoverReply } from "../../api/tuneTypes";
 import { copperColor, drawAnchors, drawBoardArea, drawConflicts, drawLockedShadows, drawSheet, footprintShown, on, on as objectOnPaint, opacityOf, ratsnestColor, type PaintAppearance } from "./appearancePaint";
@@ -1324,6 +1325,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawShapes(ctx, view, pass.b, opts);
       drawTexts(ctx, view, pass.b, opts);
       drawDimensions(ctx, view, pass.b, opts);
+      drawPcbItems(ctx, view, pass.b, opts);
     });
   }
   // The overlays of footprints: locked items' shadow, the courtyards a move puts in conflict, and the anchors.
@@ -1343,6 +1345,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     drawShapes(ctx, view, carry.moving, own);
     drawTexts(ctx, view, carry.moving, own);
     drawDimensions(ctx, view, carry.moving, own);
+    drawPcbItems(ctx, view, carry.moving, own);
     drawAnchors(ctx, view, carry.moving, own);
     drawSelectedGroups(ctx, view, carry.moving, own);
     ctx.restore();

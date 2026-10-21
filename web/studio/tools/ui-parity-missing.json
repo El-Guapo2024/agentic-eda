@@ -38,7 +38,6 @@
   "pcbnew.InteractiveDrawing.placePoint": "needs point items (PCB_POINT: reference/snap points stored on the board); the design IR has no point item and the snapping code knows no such anchor",
   "pcbnew.InteractiveDrawing.placeReferenceImage": "needs reference-image items (PCB_REFERENCE_IMAGE: a bitmap on a graphic layer, kept out of every output); the design IR has no image item",
   "pcbnew.InteractiveDrawing.placeStackup": "needs table items (PCB_TABLE): it places the board stackup as a table on a graphic layer; the design IR has no table type",
-  "pcbnew.InteractiveDrawing.textbox": "needs text-box items (PCB_TEXTBOX: wrapped text in a bordered box); the design IR's Text is plain text with no box, border or wrapping",
   "pcbnew.TableEditor.editTable": "needs table items (PCB_TABLE); the design IR has no table type",
   "pcbnew.PadTool.explodePad": "a custom pad is in the IR (its anchor and basic shapes, edited in Pad Properties), but its exploded form -- the shapes as free graphic items of the footprint, `PAD_TOOL::EditPad` -- has no verb",
   "pcbnew.PadTool.recombinePad": "a custom pad is in the IR (its anchor and basic shapes, edited in Pad Properties), but merging the selected graphic items back into the pad being edited -- `PAD_TOOL::recombinePad` -- has no verb",

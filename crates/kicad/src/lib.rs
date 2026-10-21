@@ -22,6 +22,8 @@ use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod barcode_io;
+mod pcb_items_io;
+mod pcb_textbox;
 mod board_text_io;
 mod bold_text;
 mod via_io;

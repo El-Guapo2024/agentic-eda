@@ -31,6 +31,7 @@ pub mod net_pattern;
 pub mod outline;
 pub mod pad_geom;
 pub mod page;
+pub mod pcb_items;
 pub mod reannotate;
 pub mod rules;
 pub mod sch_clipboard;

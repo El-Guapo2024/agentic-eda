@@ -2,6 +2,7 @@
 // `POST /api/clipboard/copy`, crates/kicad/src/clipboard.rs) and keeps the same text here, so a Paste still works where the browser will not let a page
 // read the system clipboard; a Paste takes whichever KiCad text is on the system clipboard first -- a copy made in KiCad itself, or on another
 // board -- else this one (`paste_clipboard`, crates/ops/src/pcb_paste.rs).
+import { extraItemIds } from "../../kicad-port/pcbExtraItems";
 import type { BoardState } from "../../api/types";
 
 export interface ClipboardContents {
@@ -35,6 +36,7 @@ export function allItemIds(board: BoardState): Set<string> {
   for (const t of board.drawings?.texts ?? []) ids.add(t.id);
   for (const d of board.drawings?.dimensions ?? []) ids.add(d.id);
   for (const g of board.drawings?.groups ?? []) ids.add(g.id);
+  for (const id of extraItemIds(board)) ids.add(id);
   return ids;
 }
 

@@ -413,6 +413,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
             let uuid = crate::barcode_io::write(&mut out, b, is_locked(&b.id));
             written.entry(b.id.clone()).or_default().push(uuid);
         }
+        // The text boxes, reference images and points (`eda_model::pcb_items`).
+        crate::pcb_items_io::write_all(&mut out, &drawings.board_items, &is_locked, &mut written);
         // `PCB_DIMENSION_BASE`: the geometry and the text are worked out in one place
         // (`eda_connectivity::dimension`); KiCad recomputes both when it loads the file.
         let mut dims: Vec<&eda_model::ir::Dimension> = drawings.dimensions.iter().collect();
@@ -3057,6 +3059,57 @@ mod tests {
         assert_eq!(derived["component_class_settings"]["sheet_component_classes"]["enabled"], true);
     }
 
+    /// A board's text boxes (`PCB_TEXTBOX`) are read and written back as `format( const PCB_TEXTBOX* )` writes them: the corners (or the polygon of a turned box), the margins, the
+    /// text angle, the layer, the looks of the text, the border with its style, the knockout and the lock; a group may hold one.
+    #[test]
+    fn a_boards_text_boxes_are_written_back_as_kicad_writes_them() {
+        let board = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user) (37 "F.SilkS" user) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (gr_text_box "Rev A\nnotes" (start 20 20) (end 40 30) (margins 1 1.5 2 2.5) (layer "F.SilkS") (uuid "aaaaaaaa-1111-4111-8111-111111111111")
+    (effects (font (size 1 1.2) (thickness 0.15) bold) (justify left top))
+    (border yes) (stroke (width 0.12) (type dash)) (knockout yes))
+  (gr_text_box "turned" (locked yes) (pts (xy 50 20) (xy 55 25) (xy 50 30) (xy 45 25)) (margins 1 1 1 1) (angle 45) (layer "B.SilkS") (uuid "bbbbbbbb-2222-4222-8222-222222222222")
+    (effects (font (size 1 1) (thickness 0.1)) (justify right bottom mirror))
+    (border no) (stroke (width 0.1) (type solid)) (knockout no))
+  (gr_line (start 0 0) (end 5 0) (stroke (width 0.1) (type default)) (layer "Edge.Cuts") (uuid "cccccccc-3333-4333-8333-333333333333"))
+  (group "keep" (uuid "dddddddd-4444-4444-8444-444444444444") (members "aaaaaaaa-1111-4111-8111-111111111111" "cccccccc-3333-4333-8333-333333333333"))
+)"#;
+        let (design, model, notes) = crate::import_kicad_pcb(board).unwrap();
+        assert!(notes.unread_items.is_empty(), "{:?}", notes.unread_items);
+        let dr = design.drawings.as_ref().expect("drawings");
+        assert_eq!(dr.board_items.text_boxes.len(), 2);
+        assert!(dr.board_items.text_boxes.iter().all(|t| t.id.starts_with("tbx_")), "ids of ours");
+        let rev = dr.board_items.text_boxes.iter().find(|t| t.text.starts_with("Rev A")).unwrap();
+        assert_eq!((rev.start, rev.end, rev.layer.as_str()), (Point { x: 20_000, y: 20_000 }, Point { x: 40_000, y: 30_000 }, "F.SilkS"));
+        assert_eq!((rev.margin_left_um, rev.margin_top_um, rev.margin_right_um, rev.margin_bottom_um), (1_000, 1_500, 2_000, 2_500));
+        assert_eq!((rev.size_um, rev.width_um, rev.bold, rev.knockout, rev.border), (1_000, Some(1_200), true, true, true));
+        let turned = dr.board_items.text_boxes.iter().find(|t| t.text == "turned").unwrap();
+        assert_eq!((turned.pts.len(), turned.angle, turned.border, turned.mirror), (4, 45_000, false, true));
+        assert!(dr.locked_ids.contains(&turned.id), "a locked text box comes back locked");
+        assert_eq!(dr.groups.len(), 1, "a group holds the first text box and the line");
+        assert!(dr.groups[0].member_ids.contains(&rev.id));
+
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(gr_text_box \"Rev A\\nnotes\""), "{out}");
+        assert!(out.contains("(gr_text_box \"turned\" (locked yes)"), "{out}");
+        assert_eq!(out.matches("(gr_text_box").count(), 2);
+        let (back, _, back_notes) = crate::import_kicad_pcb(&out).unwrap();
+        assert!(back_notes.unread_items.is_empty());
+        let strip = |d: &Design| -> Vec<eda_model::pcb_items::TextBox> {
+            let mut v: Vec<_> = d.drawings.as_ref().unwrap().board_items.text_boxes.iter().cloned().map(|mut b| { b.id.clear(); b }).collect();
+            v.sort_by(|a, b| a.text.cmp(&b.text));
+            v
+        };
+        assert_eq!(strip(&design), strip(&back), "read again, the same text boxes");
+        let back_dr = back.drawings.as_ref().unwrap();
+        assert_eq!(back_dr.groups.len(), 1, "the group survives with its text box");
+        assert_eq!(back_dr.locked_ids.len(), 1);
+    }
+
     /// A board's barcodes (`api_kitchen_sink` has a QR code and a Data Matrix) are read and written back as `format( const PCB_BARCODE* )` writes them: the layer, the size,
     /// the text and its height, the kind, a QR code's error correction level, the margins and the flags. kicad-cli keeps a barcode a visual separation from the board edge
     /// (`clearance`); a re-export without them lost that finding.
@@ -3339,7 +3392,9 @@ mod tests {
   (target x (at 40 40) (size 5) (width 0.15) (layer "Edge.Cuts") (tstamp 1234))
 )"#;
         let (design, mut model, notes) = crate::import_kicad_pcb(board).unwrap();
-        assert_eq!(notes.unread_items.keys().map(String::as_str).collect::<Vec<_>>(), ["gr_text_box", "target"]);
+        // The text box has a reader now (`pcb_textbox.rs`); the target is still kept as text.
+        assert_eq!(notes.unread_items.keys().map(String::as_str).collect::<Vec<_>>(), ["target"]);
+        assert_eq!(design.drawings.as_ref().unwrap().board_items.text_boxes.len(), 1);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         for want in [
             "(descr \"Jumper, 2 pads \\\"closed\\\"\")",
@@ -3354,7 +3409,9 @@ mod tests {
             "(solder_paste_margin -0.01)",
             "(property \"Datasheet\" \"~\" (at 0 0 0) (unlocked yes) (layer \"F.Fab\") (hide yes) (effects (font (size 1.27 1.27))))",
             "(property \"Description\" \"Jumper\"",
-            "(gr_text_box \"Box\\nof text\" (start 20 20) (end 30 25) (margins 1 1 1 1) (layer \"F.SilkS\") (border yes) (stroke (width 0.12) (type dot)) (effects (font (size 1 1)) (justify top)))",
+            "(gr_text_box \"Box\\nof text\"",
+            "(start 20 20) (end 30 25) (margins 1 1 1 1) (layer \"F.SilkS\")",
+            "(border yes) (stroke (width 0.12) (type dot)) (knockout no)",
             "(target x (at 40 40) (size 5) (width 0.15) (layer \"Edge.Cuts\") (tstamp 1234))",
         ] {
             assert!(out.contains(want), "{want} in {out}");
@@ -3363,7 +3420,8 @@ mod tests {
         assert!(out.trim_end().ends_with("(target x (at 40 40) (size 5) (width 0.15) (layer \"Edge.Cuts\") (tstamp 1234))\n)"), "the unread items close the board: {}", &out[out.len().saturating_sub(300)..]);
         // Read again, the same.
         let (back, _, back_notes) = crate::import_kicad_pcb(&out).unwrap();
-        assert_eq!(back_notes.unread_items.keys().map(String::as_str).collect::<Vec<_>>(), ["gr_text_box", "target"]);
+        assert_eq!(back_notes.unread_items.keys().map(String::as_str).collect::<Vec<_>>(), ["target"]);
+        assert_eq!(back.drawings.as_ref().unwrap().board_items.text_boxes.len(), 1, "the text box is read again");
         let tokens = |d: &Design| d.drawings.as_ref().unwrap().footprint_extras[0].tokens.clone();
         assert_eq!(tokens(&design), tokens(&back));
         // The part exchanged for another footprint is not described by the old one's text.
