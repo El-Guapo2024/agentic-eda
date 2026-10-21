@@ -163,3 +163,22 @@ fn the_sch_table_verb_reads_from_and_writes_to_the_json_the_studio_sends() {
     assert_eq!(cmd.domain(), Domain::Schematic);
     assert!(!cmd.edits_connectivity());
 }
+
+#[test]
+fn a_sheet_cells_background_is_set_by_the_cell_edit_the_panels_background_rows_send() {
+    // `SCH_TABLECELL_DESC`'s "Background Fill" (EDA_SHAPE::SetFillMode) and "Background Fill Color" (SetFillColor), over the wire the studio uses
+    let m = ConstraintModel::default();
+    let mut b = Board::new(design(), &m, 100, 300);
+    let id = add(&mut b, table(1, 2));
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({
+        "op": "sch_table", "verb": "edit_cells", "id": id, "cells": [[0, 1]], "edit": { "fill": "color", "fill_color": { "r": 255, "g": 240, "b": 200, "a": 255 } }
+    }))
+    .unwrap();
+    b.apply(&cmd).unwrap();
+    let (a, c) = on_sheet(&b, |s| (s.extras.tables[0].cells[0].clone(), s.extras.tables[0].cells[1].clone()));
+    assert_eq!((a.fill, a.fill_color), (eda_model::sch_extras::SchFill::None, None), "the other cell is left alone");
+    assert_eq!((c.fill, c.fill_color), (eda_model::sch_extras::SchFill::Color, Some(eda_model::sch_extras::SchColor { r: 255, g: 240, b: 200, a: 255 })));
+    // and the background goes again
+    b.apply(&Cmd::SchTable(TableCmd::EditCells { id, cells: vec![(0, 1)], edit: CellEdit { fill: Some(eda_model::sch_extras::SchFill::None), ..Default::default() } })).unwrap();
+    assert_eq!(on_sheet(&b, |s| s.extras.tables[0].cells[1].fill), eda_model::sch_extras::SchFill::None);
+}

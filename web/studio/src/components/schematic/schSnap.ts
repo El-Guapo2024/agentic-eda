@@ -298,4 +298,4 @@ export function toolCategory(tool: string): GridCategory {
 }
 
 /** The tools whose clicks go through the grid helper: the cursor's marker and snap lines follow them on every move. */
-export const SCH_PLACING_TOOLS: ReadonlySet<string> = new Set(["wire", "bus", "sch_junction", "sch_bus_entry", "sch_break", "sch_line", "sch_rect", "sch_circle", "sch_arc", "sch_bezier", "sch_textbox", "sch_text", "sch_label_local", "sch_label_global", "sch_label_hier", "sch_directive", "sch_power", "sch_no_connect", "sch_sheet", "sch_sheet_pin", "sch_place_symbol", "sch_rule_area"]);
+export const SCH_PLACING_TOOLS: ReadonlySet<string> = new Set(["wire", "bus", "sch_junction", "sch_bus_entry", "sch_break", "sch_line", "sch_rect", "sch_circle", "sch_arc", "sch_bezier", "sch_textbox", "sch_text", "sch_label_local", "sch_label_global", "sch_label_hier", "sch_directive", "sch_power", "sch_no_connect", "sch_sheet", "sch_sheet_pin", "sch_place_symbol", "sch_rule_area", "sch_table"]);

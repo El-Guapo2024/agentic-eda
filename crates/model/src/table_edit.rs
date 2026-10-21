@@ -7,6 +7,7 @@
 //! dialog handles a field several selected cells disagree on (`INDETERMINATE_STATE`).
 
 use crate::ir::{Point, TextJustify, TextVAlign, Um};
+use crate::sch_extras::SchFill;
 use crate::table::{Table, TableColor, TableLineStyle, TableText};
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +66,12 @@ pub struct CellEdit {
     /// `SetRowHeight` ("Row Height").
     #[serde(default)]
     pub row_height_um: Option<Um>,
+    /// A sheet cell's background (`EDA_SHAPE::SetFillMode`, `SCH_TABLECELL_DESC`'s "Background Fill"): none, the outline's colour, the sheet's background or `fill_color`.
+    #[serde(default)]
+    pub fill: Option<SchFill>,
+    /// `EDA_SHAPE::SetFillColor` ("Background Fill Color"): the colour a fill of `color` is drawn with.
+    #[serde(default)]
+    pub fill_color: Option<TableColor>,
 }
 
 impl CellEdit {
@@ -278,6 +285,15 @@ pub fn edit_cells(t: &mut Table, cells: &[(usize, usize)], e: &CellEdit) -> Resu
                 if let Some(m) = m {
                     cell.margins[i] = *m;
                 }
+            }
+        }
+        {
+            let cell = t.cell_mut(row, col).expect("checked above");
+            if let Some(f) = e.fill {
+                cell.fill = f;
+            }
+            if let Some(c) = e.fill_color {
+                cell.fill_color = Some(c);
             }
         }
         if let Some(w) = e.col_width_um {

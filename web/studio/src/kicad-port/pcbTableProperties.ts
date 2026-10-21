@@ -53,7 +53,6 @@ export function tableItemsOf(board: BoardState): ({ type: "PCB_TABLE" | "PCB_TAB
 }
 
 const num = (v: PropValue): number => (typeof v === "number" ? v : Number(v));
-const isTable = (i: Item): boolean => i.type === "PCB_TABLE";
 const isCell = (i: Item): boolean => i.type === "PCB_TABLECELL";
 
 /** The five styles `ENUM_MAP<LINE_STYLE>` has in the table classes (a stroke of the default style is shown as the first). */
@@ -71,49 +70,62 @@ const styleShown = (s: TableLineStyleName): string => (s === "default" ? "solid"
 const colorShown = (c: readonly [number, number, number, number] | null): string => (!c || isUnspecified({ r: c[0], g: c[1], b: c[2], a: c[3] }) ? "" : colorToHex({ r: c[0], g: c[1], b: c[2], a: c[3] }));
 const colorSent = (text: string): { r: number; g: number; b: number; a: number } => (text === "" ? UNSPECIFIED_COLOR : (hexToColor(text) ?? UNSPECIFIED_COLOR));
 
+/** The names a class of table goes by in a panel: the board's (`PCB_TABLE`, sent as `{ op: "table" }`) or the sheet's (`SCH_TABLE`, `{ op: "sch_table" }`; `schTableProperties.ts`). */
+export interface TableClassNames {
+  readonly table: string;
+  /** The class the table inherits (`BOARD_ITEM`, `SCH_ITEM`). */
+  readonly base: string;
+  readonly op: "table" | "sch_table";
+}
+
+const BOARD_TABLE: TableClassNames = { table: "PCB_TABLE", base: "BOARD_ITEM", op: "table" };
+
 /** The command that sets `patch` on a table. */
-const setTable = (id: string, patch: TablePatch): Cmd => ({ op: "table", verb: "set", id, patch });
+const setTable = (id: string, patch: TablePatch, op: TableClassNames["op"] = "table"): Cmd => ({ op, verb: "set", id, patch }) as Cmd;
 /** The command that edits one cell. */
 const editCell = (i: Item, edit: TableCellEdit): Cmd => ({ op: "table", verb: "edit_cells", id: i.table!.id, cells: [[i.cell!.row, i.cell!.col]], edit });
 
-/** `PCB_TABLE_DESC` and `PCB_TABLECELL_DESC`. `Item` is the panel's item type, which carries the table and cell fields of `TableItemParts`. */
-export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I, C, Cmd>, h: TablePropertyHelpers<I, C>): void {
+/**
+ * The table half of `PCB_TABLE_DESC` (pcbnew/pcb_table.cpp) and of `SCH_TABLE_DESC` (eeschema/sch_table.cpp), the same rows in both editors: "Start X" / "Start Y", then "Table
+ * Properties": External Border, Header Border, Border Width / Style / Color, Row Separators, Cell Separators, Separators Width / Style / Color.
+ */
+export function registerTableClass<I extends Item, C>(pm: PropertyManager<I, C, Cmd>, h: TablePropertyHelpers<I, C>, names: TableClassNames): void {
   const add = (def: PropertyDef<I, C, Cmd>, group = ""): void => h.add(def, group);
+  const owner = names.table;
+  const isTable = (i: Item): boolean => i.type === names.table;
+  pm.registerType(owner);
+  pm.inheritsAfter(owner, names.base);
 
-  // ------------------------------------------------------------------------------------------------------------------------- PCB_TABLE
-  pm.registerType("PCB_TABLE");
-  pm.inheritsAfter("PCB_TABLE", "BOARD_ITEM");
-  // A table is on one layer, any layer of the board: `BOARD_ITEM`'s Layer row (pcbProperties.ts) reads and sets it with the rest of the free items'.
-
+  const setT = (id: string, patch: TablePatch): Cmd => setTable(id, patch, names.op);
   add({
-    owner: "PCB_TABLE",
+    owner,
     name: "Start X",
     kind: "int",
     display: "coord",
     get: (i) => i.table!.x,
     available: isTable,
-    set: (i, v) => (i.table!.x === Math.round(num(v)) ? [] : [setTable(i.table!.id, { at: { x: Math.round(num(v)), y: i.table!.y } })]),
+    set: (i, v) => (i.table!.x === Math.round(num(v)) ? [] : [setT(i.table!.id, { at: { x: Math.round(num(v)), y: i.table!.y } })]),
   });
   add({
-    owner: "PCB_TABLE",
+    owner,
     name: "Start Y",
     kind: "int",
     display: "coord",
     get: (i) => i.table!.y,
     available: isTable,
-    set: (i, v) => (i.table!.y === Math.round(num(v)) ? [] : [setTable(i.table!.id, { at: { x: i.table!.x, y: Math.round(num(v)) } })]),
+    set: (i, v) => (i.table!.y === Math.round(num(v)) ? [] : [setT(i.table!.id, { at: { x: i.table!.x, y: Math.round(num(v)) } })]),
   });
 
   const TABLE = "Table Properties";
   const flag = (name: string, key: "external" | "header" | "rows" | "cols", read: (t: BoardTable) => boolean): void => {
     add(
       {
-        owner: "PCB_TABLE",
+        owner,
         name,
         kind: "bool",
         get: (i) => read(i.table!),
         available: isTable,
-        set: (i, v) => (read(i.table!) === Boolean(v) ? [] : [setTable(i.table!.id, { props: { [key]: Boolean(v) } })]),
+        set: (i, v) => (read(i.table!) === Boolean(v) ? [] : [setT(i.table!.id, { props: { [key]: Boolean(v) } })]),
       },
       TABLE
     );
@@ -122,36 +134,36 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
   const strokeRows = (which: "border" | "separators", prefix: string, widthKey: "border_width_um" | "separators_width_um", styleKey: "border_style" | "separators_style", colorKey: "border_color" | "separators_color"): void => {
     add(
       {
-        owner: "PCB_TABLE",
+        owner,
         name: `${prefix} Width`,
         kind: "int",
         display: "size",
         get: (i) => stroke(i.table!, which).width,
         available: isTable,
-        set: (i, v) => (stroke(i.table!, which).width === Math.round(num(v)) ? [] : [setTable(i.table!.id, { props: { [widthKey]: Math.round(num(v)) } })]),
+        set: (i, v) => (stroke(i.table!, which).width === Math.round(num(v)) ? [] : [setT(i.table!.id, { props: { [widthKey]: Math.round(num(v)) } })]),
       },
       TABLE
     );
     add(
       {
-        owner: "PCB_TABLE",
+        owner,
         name: `${prefix} Style`,
         kind: "enum",
         choices: () => LINE_STYLES,
         get: (i) => styleShown(stroke(i.table!, which).style),
         available: isTable,
-        set: (i, v) => (styleShown(stroke(i.table!, which).style) === String(v) ? [] : [setTable(i.table!.id, { props: { [styleKey]: String(v) as TableLineStyleName } })]),
+        set: (i, v) => (styleShown(stroke(i.table!, which).style) === String(v) ? [] : [setT(i.table!.id, { props: { [styleKey]: String(v) as TableLineStyleName } })]),
       },
       TABLE
     );
     add(
       {
-        owner: "PCB_TABLE",
+        owner,
         name: `${prefix} Color`,
         kind: "color",
         get: (i) => colorShown(stroke(i.table!, which).color),
         available: isTable,
-        set: (i, v) => (colorShown(stroke(i.table!, which).color) === String(v) ? [] : [setTable(i.table!.id, { props: { [colorKey]: colorSent(String(v)) } })]),
+        set: (i, v) => (colorShown(stroke(i.table!, which).color) === String(v) ? [] : [setT(i.table!.id, { props: { [colorKey]: colorSent(String(v)) } })]),
       },
       TABLE
     );
@@ -162,6 +174,13 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
   flag("Row Separators", "rows", (t) => t.separators.rows);
   flag("Cell Separators", "cols", (t) => t.separators.cols);
   strokeRows("separators", "Separators", "separators_width_um", "separators_style", "separators_color");
+}
+
+/** `PCB_TABLE_DESC` and `PCB_TABLECELL_DESC`. `Item` is the panel's item type, which carries the table and cell fields of `TableItemParts`. */
+export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I, C, Cmd>, h: TablePropertyHelpers<I, C>): void {
+  const add = (def: PropertyDef<I, C, Cmd>, group = ""): void => h.add(def, group);
+  registerTableClass(pm, h, BOARD_TABLE);
+  // A table is on one layer, any layer of the board: `BOARD_ITEM`'s Layer row (pcbProperties.ts) reads and sets it with the rest of the free items'.
 
   // --------------------------------------------------------------------------------------------------------------------- PCB_TABLECELL
   pm.registerType("PCB_TABLECELL");

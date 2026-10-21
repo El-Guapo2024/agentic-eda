@@ -151,6 +151,7 @@ export interface SchematicLike {
   graphics?: IdItems;
   bus_entries?: IdItems;
   groups?: IdItems;
+  tables?: readonly { id: string; cells?: IdItems }[];
 }
 
 const ids = (items: IdItems): string[] => (items ?? []).flatMap((i) => (i.id ? [i.id] : []));
@@ -202,6 +203,8 @@ export function schematicLists(sch: SchematicLike | null | undefined): ItemLists
     graphic: ids(sch?.graphics),
     bus_entry: ids(sch?.bus_entries),
     group: ids(sch?.groups),
+    // `SCH_TABLE` and its cells (`<table id>:<row>:<col>`), listed only when the sheet has tables.
+    ...tableLists({ drawings: { tables: sch?.tables } }),
   };
 }
 

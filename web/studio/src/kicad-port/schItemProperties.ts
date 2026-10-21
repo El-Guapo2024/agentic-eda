@@ -13,13 +13,14 @@
 // points, a symbol's fields) it is read-only here: the field positions are the overlap fix's, and a wire's end points are dragged (`G`) so what they join follows.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { Cmd, LabelShape, PointXY, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire, PowerSymbol, SchJunction, SchLine, BusEntry, Sheet } from "../api/types";
+import type { BoardTable, BoardTableCell, Cmd, LabelShape, PointXY, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire, PowerSymbol, SchJunction, SchLine, BusEntry, Sheet } from "../api/types";
 import type { SchColor, SchGraphic, SchGraphicShape, SchLineStyle } from "../api/schEditTypes";
 import type { LengthUnit } from "../state/units";
 import { buildGrid, extractValueAndWritability, planEdit, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import { colorToHex, hexToColor, isUnspecified, strokeEditCmd, UNSPECIFIED_COLOR } from "./schProperties";
 import { circumcircle } from "./trackArc";
+import { registerSchTableProperties, schTableItemOf } from "./schTableProperties";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -38,7 +39,9 @@ export type SchType =
   | "SCH_TEXTBOX"
   | "SCH_SHAPE"
   | "SCH_RULE_AREA"
-  | "SCH_SHEET";
+  | "SCH_SHEET"
+  | "SCH_TABLE"
+  | "SCH_TABLECELL";
 
 /** What a `SCH_LINE` is (`GetLayer()`): a wire, a bus, or a graphic line on the notes layer. */
 export type LineKind = "wire" | "bus" | "line";
@@ -58,6 +61,9 @@ export interface SchItem {
   readonly text?: SchematicText;
   readonly graphic?: SchGraphic;
   readonly sheet?: Sheet;
+  /** A table (`SCH_TABLE`), or the table a cell (`SCH_TABLECELL`) is in with the cell. */
+  readonly table?: BoardTable;
+  readonly cell?: BoardTableCell;
 }
 
 /** What the getters read besides the item. */
@@ -86,6 +92,8 @@ interface SchIndex {
   line: Map<string, SchLine>;
   sheet: Map<string, Sheet>;
   graphic: Map<string, SchGraphic>;
+  /** The sheet itself, for the tables and their cells (`schTableItemOf`). */
+  sch: Schematic;
 }
 
 function firstById<T extends { id: string }>(list: readonly T[]): Map<string, T> {
@@ -107,6 +115,7 @@ function indexOf(sch: Schematic): SchIndex {
     line: firstById(sch.lines ?? []),
     sheet: firstById(sch.sheets),
     graphic: firstById(sch.graphics ?? []),
+    sch,
   };
 }
 
@@ -136,7 +145,7 @@ function resolve(idx: SchIndex, id: string): SchItem | null {
     const t = graphic.shape.type;
     return { type: t === "text_box" ? "SCH_TEXTBOX" : t === "rule_area" ? "SCH_RULE_AREA" : t === "directive" ? "SCH_DIRECTIVE_LABEL" : "SCH_SHAPE", id, graphic };
   }
-  return null;
+  return schTableItemOf(idx.sch, id);
 }
 
 /** The item a selection id names, or null. */
@@ -186,6 +195,10 @@ export function schFriendlyName(item: SchItem): string {
       return "Rule Area";
     case "SCH_SHEET":
       return "Sheet";
+    case "SCH_TABLE":
+      return "Table";
+    case "SCH_TABLECELL":
+      return "Table Cell";
   }
 }
 
@@ -836,6 +849,9 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
 
   // A no-connect flag has no registration in KiCad: nothing to show.
   pm.registerType("SCH_NO_CONNECT");
+
+  // The sheet's tables and their cells (`SCH_TABLE_DESC`, `SCH_TABLECELL_DESC`).
+  registerSchTableProperties(pm, { add });
 
   pm.rebuild();
   return pm;

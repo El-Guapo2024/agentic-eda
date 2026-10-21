@@ -66,6 +66,10 @@ export interface TableCellEdit {
   margins?: [Um | null, Um | null, Um | null, Um | null];
   col_width_um?: Um;
   row_height_um?: Um;
+  /** A sheet cell's background (`SCH_TABLECELL_DESC`'s "Background Fill"): none, the outline's colour, the sheet's background or `fill_color`. */
+  fill?: "none" | "outline" | "background" | "color";
+  /** "Background Fill Color". */
+  fill_color?: { r: number; g: number; b: number; a: number };
 }
 
 /** A cell address: `[row, col]`, both from 0. */
