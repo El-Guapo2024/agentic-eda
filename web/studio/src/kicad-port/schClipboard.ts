@@ -66,6 +66,7 @@ export function shiftShape(shape: SchGraphicShape, dx: number, dy: number): SchG
     case "rule_area":
       return { ...shape, pts: shape.pts.map((p) => shiftXY(p, dx, dy)) };
     case "directive":
+    case "image":
       return { ...shape, at: shiftXY(shape.at, dx, dy) };
   }
 }

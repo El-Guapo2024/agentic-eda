@@ -193,6 +193,63 @@ impl TextBox {
     }
 }
 
+/// A reference image: a bitmap on a graphic layer, kept out of every plot and every 3D view (`PCB_REFERENCE_IMAGE`, `(image ..)`).
+///
+/// The pixels are the file the board embeds, held as the base64 text its `(data ..)` token carries, with the line breaks taken out, so a file written back has the bytes
+/// it was read with. The size, in pixels and in pixels per inch, is read from that file's header ([`crate::image_info`]); the size on the board is the pixels at their
+/// definition times `scale_ppm`. `at` is the image's centre (`REFERENCE_IMAGE::GetPosition`), the box it covers is [`RefImage::bounds`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RefImage {
+    /// Stable id (`img_xxxxxxxxxxxx`), made when the image is read or added.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// The layer the image is on; its visibility is the layer's, and the Images object's (`LAYER_DRAW_BITMAPS`).
+    pub layer: String,
+    /// The image's centre, µm.
+    pub at: Point,
+    /// `(scale s)` in millionths (1.0 is 1000000); KiCad's `SetImageScale` refuses a scale that is not a positive number.
+    #[serde(default = "d_scale", skip_serializing_if = "is_unit_scale")]
+    pub scale_ppm: i64,
+    /// The image file, base64, no white space.
+    pub data: String,
+}
+
+fn d_scale() -> i64 {
+    crate::image_info::SCALE_PPM
+}
+fn is_unit_scale(s: &i64) -> bool {
+    *s == crate::image_info::SCALE_PPM
+}
+
+impl RefImage {
+    /// An image on `layer` centred at `at`, shown at its own definition (scale 1.0).
+    pub fn new(layer: &str, at: Point, data: &str) -> RefImage {
+        RefImage { id: String::new(), layer: layer.to_string(), at, scale_ppm: crate::image_info::SCALE_PPM, data: crate::image_info::compact(data) }
+    }
+
+    /// The seed `assign_missing_ids` hashes: the place and the start of the pixels.
+    pub fn id_seed(&self) -> String {
+        format!("img|{},{}|{}|{}|{}", self.at.x, self.at.y, self.layer, self.scale_ppm, &self.data[..self.data.len().min(96)])
+    }
+
+    /// What the file says of itself, `None` when the data is not an image of a kind known.
+    pub fn header(&self) -> Option<crate::image_info::ImageHeader> {
+        crate::image_info::header_of_base64(&self.data)
+    }
+
+    /// The size the image has on the board, µm (`BITMAP_BASE::GetSize`); zero for data that is not an image.
+    pub fn size_um(&self) -> (Um, Um) {
+        self.header().map_or((0, 0), |h| crate::image_info::size_um(&h, self.scale_ppm))
+    }
+
+    /// The box the image covers, `[x0, y0, x1, y1]` (`REFERENCE_IMAGE::GetBoundingBox`: `BOX2I::ByCenter( m_pos, size )`).
+    pub fn bounds(&self) -> [Um; 4] {
+        let (w, h) = self.size_um();
+        [self.at.x - w / 2, self.at.y - h / 2, self.at.x - w / 2 + w, self.at.y - h / 2 + h]
+    }
+}
+
 /// The items this module adds to a board. See the module doc.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -200,34 +257,31 @@ pub struct BoardItems {
     /// The board's text boxes (`gr_text_box`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_boxes: Vec<TextBox>,
+    /// The board's reference images (`image`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<RefImage>,
 }
 
 impl BoardItems {
     pub fn is_empty(&self) -> bool {
-        self.text_boxes.is_empty()
+        self.text_boxes.is_empty() && self.images.is_empty()
     }
 
     /// Every id of the items, for the id sets that name them.
     pub fn ids(&self) -> impl Iterator<Item = &str> {
-        self.text_boxes.iter().map(|t| t.id.as_str())
+        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str()))
     }
 
     /// Give each item without an id the deterministic one the others get (`next_item_id`), in an order that does not depend on how they were listed.
     pub fn assign_missing_ids(&mut self, existing: &mut std::collections::BTreeSet<String>) {
-        let mut order: Vec<usize> = (0..self.text_boxes.len()).collect();
-        order.sort_by(|&a, &b| (&self.text_boxes[a].text, self.text_boxes[a].start, self.text_boxes[a].end).cmp(&(&self.text_boxes[b].text, self.text_boxes[b].start, self.text_boxes[b].end)));
-        for i in order {
-            if self.text_boxes[i].id.is_empty() {
-                let id = crate::ir::next_item_id("tbx", &self.text_boxes[i].id_seed(), existing);
-                existing.insert(id.clone());
-                self.text_boxes[i].id = id;
-            }
-        }
+        assign_ids(&mut self.text_boxes, "tbx", existing, |t| &mut t.id, TextBox::id_seed, |t| (t.text.clone(), t.start, t.end));
+        assign_ids(&mut self.images, "img", existing, |i| &mut i.id, RefImage::id_seed, |i| (i.layer.clone(), i.at, i.data.len() as i64));
     }
 
     /// Sort the collections by id (the canonical form a design is hashed in).
     pub fn canonicalize(&mut self) {
         self.text_boxes.sort_by(|a, b| a.id.cmp(&b.id));
+        self.images.sort_by(|a, b| a.id.cmp(&b.id));
     }
 
     /// Put each item on the layer `map` names for its own, when it names one (Swap Layers, `PCB_EDIT_FRAME::SwapLayers`).
@@ -236,6 +290,24 @@ impl BoardItems {
             if let Some(dest) = map(&t.layer) {
                 t.layer = dest;
             }
+        }
+        for i in &mut self.images {
+            if let Some(dest) = map(&i.layer) {
+                i.layer = dest;
+            }
+        }
+    }
+}
+
+/// Give the items of one kind without an id the deterministic one, taking them in the order `key` gives (not the order they were listed in).
+fn assign_ids<T, K: Ord>(items: &mut [T], prefix: &str, existing: &mut std::collections::BTreeSet<String>, id: impl Fn(&mut T) -> &mut String, seed: impl Fn(&T) -> String, key: impl Fn(&T) -> K) {
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by_key(|&i| key(&items[i]));
+    for i in order {
+        if id(&mut items[i]).is_empty() {
+            let new = crate::ir::next_item_id(prefix, &seed(&items[i]), existing);
+            existing.insert(new.clone());
+            *id(&mut items[i]) = new;
         }
     }
 }
@@ -263,6 +335,46 @@ mod tests {
         assert_eq!(b.effective_pen_um(), 160);
         b.thickness_um = 150;
         assert_eq!(b.effective_pen_um(), 150);
+    }
+
+    #[test]
+    fn a_reference_image_covers_its_pixels_at_their_definition_times_the_scale_around_its_centre() {
+        let png = crate::image_info::base64_encode(&crate::image_info::solid_png(60, 40, [9, 9, 9], 254));
+        let mut img = RefImage::new("Cmts.User", Point { x: 10_000, y: 20_000 }, &png);
+        // 60 x 40 px at 254 ppi: 6 mm x 4 mm
+        assert_eq!(img.size_um(), (6_000, 4_000));
+        assert_eq!(img.bounds(), [7_000, 18_000, 13_000, 22_000]);
+        img.scale_ppm = 2_500_000;
+        assert_eq!(img.bounds(), [2_500, 15_000, 17_500, 25_000]);
+        // data that is no image has no size
+        img.data = "AAAA".into();
+        assert_eq!(img.size_um(), (0, 0));
+        assert!(RefImage::new("F.Cu", Point::default(), "AB\nCD ").data == "ABCD", "white space is taken out of the data");
+    }
+
+    #[test]
+    fn images_get_ids_of_their_own_kind_and_the_scale_one_is_not_written() {
+        let png = crate::image_info::base64_encode(&crate::image_info::solid_png(20, 20, [1, 1, 1], 300));
+        let mut items = BoardItems::default();
+        items.images.push(RefImage::new("Cmts.User", Point { x: 1, y: 2 }, &png));
+        items.images.push(RefImage::new("Cmts.User", Point { x: 1, y: 2 }, &png));
+        assert!(!items.is_empty());
+        let mut existing = std::collections::BTreeSet::new();
+        items.assign_missing_ids(&mut existing);
+        assert!(items.images.iter().all(|i| i.id.starts_with("img_")));
+        assert_ne!(items.images[0].id, items.images[1].id);
+        assert_eq!(items.ids().count(), 2);
+        let json = serde_json::to_value(&items).unwrap();
+        assert!(json["images"][0].get("scale_ppm").is_none(), "{json}");
+        items.images[0].scale_ppm = 500_000;
+        let back: BoardItems = serde_json::from_str(&serde_json::to_string(&items).unwrap()).unwrap();
+        assert_eq!(back, items);
+        let swapped = {
+            let mut s = items.clone();
+            s.swap_layers(&|l| (l == "Cmts.User").then(|| "Dwgs.User".to_string()));
+            s
+        };
+        assert!(swapped.images.iter().all(|i| i.layer == "Dwgs.User"));
     }
 
     #[test]

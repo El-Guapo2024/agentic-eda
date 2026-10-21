@@ -11,7 +11,7 @@
 
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
-import type { BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
+import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
 import type { TuningPattern } from "./tuneTypes";
 
 export type Um = number;
@@ -508,6 +508,11 @@ export interface Drawings {
   tuning_patterns?: TuningPattern[];
   /** The board's text boxes (`PCB_TEXTBOX`) -- see api/pcbItemTypes.ts. Absent from a backend built before they existed. */
   text_boxes?: BoardTextBox[];
+  /** The board's reference images (`PCB_REFERENCE_IMAGE`) -- see api/pcbItemTypes.ts. */
+  images?: BoardRefImage[];
+  /** The board's points (`PCB_POINT`) and barcodes (`PCB_BARCODE`) -- see api/pcbItemTypes.ts. */
+  points?: BoardPoint[];
+  barcodes?: BoardBarcode[];
 }
 
 /** `crates/model/src/ir.rs` `Group` -- `PCB_GROUP` (on the board) and `SCH_GROUP` (on a sheet): a named set of member item ids (a part reference, a track/via/zone/shape/text id, a wire, a label ...) and of other groups' ids, no geometry of its own. */
@@ -1588,7 +1593,7 @@ export type Cmd =
   | ({ op: "sch_edit" } & SchEditCmd)
   /** Move, Drag, Rotate, Mirror and Align of every kind of schematic item (crates/ops/src/sch_move.rs) -- see api/schEditTypes.ts. */
   | ({ op: "sch_move" } & SchMoveCmd)
-  /** The board's text boxes (crates/ops/src/pcb_items.rs) -- see api/pcbItemTypes.ts. */
+  /** The board's text boxes, reference images, points and hatch fills (crates/ops/src/pcb_items.rs) -- see api/pcbItemTypes.ts. */
   | ({ op: "pcb_item" } & PcbItemCmd)
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }

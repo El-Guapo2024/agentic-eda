@@ -20,6 +20,7 @@ pub mod fp_exchange;
 pub mod fp_models;
 pub mod gensym;
 pub mod groups;
+pub mod image_info;
 pub mod tuning;
 pub mod ir;
 pub mod kicad_font;

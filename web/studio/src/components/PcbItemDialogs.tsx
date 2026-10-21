@@ -3,13 +3,16 @@
 // has the look of the Symbol Editor's Text Box Properties (components/symbol/SymbolTextBoxDialog.tsx), with the layer, the glyph width and height, the pen (automatic or not), the
 // orientation (which turns the box about its position, `PCB_TEXTBOX::SetTextAngle`), the border and its style, the margins, knockout and the lock.
 import { useEffect, useRef, useState } from "react";
+import { greyscalePng } from "../actions/imageFiles";
 import { applyCommands } from "../actions/pcbSweepKit";
-import type { BoardTextBox, TextBoxHAlign, TextBoxVAlign } from "../api/pcbItemTypes";
+import type { BoardRefImage, BoardTextBox, TextBoxHAlign, TextBoxVAlign } from "../api/pcbItemTypes";
 import type { SchLineStyle } from "../api/schEditTypes";
 import type { Cmd } from "../api/types";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { autoPenUm, clampPenUm, escapeQuoted, grownToFit, textBoxToCmd, TEXT_MAX_SIZE_UM, TEXT_MIN_SIZE_UM, unescapeQuoted, withTextAngle } from "../kicad-port/pcbTextBox";
-import { closeTextBoxDialog, usePcbItemDialogs } from "../state/pcbItemDialogs";
+import { checkImageScale, imageSizeUm, pcbImageUrl, scaleForHeightUm, scaleForWidthUm, scalePpmOf, scaleText } from "../kicad-port/refImage";
+import { closeRefImageDialog, closeTextBoxDialog, usePcbItemDialogs } from "../state/pcbItemDialogs";
+import { ImageEditorPanel } from "./ImageEditorPanel";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { measureStrokeText } from "./text/strokeFont";
 
@@ -76,7 +79,12 @@ function formOf(b: BoardTextBox, locked: boolean): Form {
 }
 
 export function PcbItemDialogs() {
-  return <PcbTextBoxDialog />;
+  return (
+    <>
+      <PcbTextBoxDialog />
+      <PcbRefImageDialog />
+    </>
+  );
 }
 
 export function PcbTextBoxDialog() {
@@ -283,6 +291,160 @@ export function PcbTextBoxDialog() {
             Cancel
           </button>
           <button className="primary" onClick={() => void ok()} data-testid="ptb-ok">
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------------------------------------------------------------- Reference Image Properties
+
+interface RefImageForm {
+  x: string;
+  y: string;
+  layer: string;
+  locked: boolean;
+  scale: string;
+  width: string;
+  height: string;
+}
+
+function refImageFormOf(i: BoardRefImage, locked: boolean): RefImageForm {
+  return { x: mm(i.x), y: mm(i.y), layer: i.layer, locked, scale: scaleText(i.scale_ppm), width: mm(i.w), height: mm(i.h) };
+}
+
+/**
+ * `DIALOG_REFERENCE_IMAGE_PROPERTIES` (pcbnew/dialogs/dialog_reference_image_properties.cpp): the position, the layer, the lock, the size and, in the panel the schematic's Image Properties
+ * shares, the scale and Convert to Greyscale. Width, height and scale move together (`onWidthChanged`, `onHeightChanged`, `onScaleChanged`); OK checks the scale (`CheckValues`) and applies
+ * everything as one step, Cancel leaves the image as it was.
+ */
+export function PcbRefImageDialog() {
+  const state = useStudioState();
+  const dispatch = useStudioDispatch();
+  const api = useStudioApi();
+  const { refImage: req } = usePcbItemDialogs();
+  const [form, setForm] = useState<RefImageForm | null>(null);
+  const [grey, setGrey] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const image = req ? (state.board?.drawings?.images ?? []).find((i) => i.id === req.id) : undefined;
+
+  useEffect(() => {
+    if (!req || !image) {
+      setForm(null);
+      setGrey(null);
+      return;
+    }
+    setForm(refImageFormOf(image, (state.board?.locked ?? []).includes(image.id)));
+    setGrey(null);
+    setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [req]);
+
+  if (!req || !image || !form || !state.board) return null;
+  const board = state.board;
+  const set = <K extends keyof RefImageForm>(key: K, value: RefImageForm[K]) => {
+    setForm((f) => (f ? { ...f, [key]: value } : f));
+    setError(null);
+  };
+  const close = () => closeRefImageDialog();
+  const sizeAt = (scalePpm: number): [number, number] => imageSizeUm(image.px, image.ppi, scalePpm);
+  /** The scale was typed: the size follows (`onScaleChanged`). */
+  const onScale = (text: string) => {
+    const ppm = scalePpmOf(text);
+    setForm((f) => {
+      if (!f) return f;
+      if (!(ppm > 0)) return { ...f, scale: text };
+      const [w, h] = sizeAt(ppm);
+      return { ...f, scale: text, width: mm(w), height: mm(h) };
+    });
+    setError(null);
+  };
+  /** The width or the height was typed: the scale follows, and the other side (`onWidthChanged`, `onHeightChanged`). */
+  const onSide = (side: "width" | "height", text: string) => {
+    const want = um(text);
+    setForm((f) => {
+      if (!f) return f;
+      if (!(want > 0)) return { ...f, [side]: text };
+      const ppm = side === "width" ? scaleForWidthUm(image.px, image.ppi, want) : scaleForHeightUm(image.px, image.ppi, want);
+      const [w, h] = sizeAt(ppm);
+      return { ...f, scale: scaleText(ppm), width: side === "width" ? text : mm(w), height: side === "height" ? text : mm(h) };
+    });
+    setError(null);
+  };
+  const greyscale = async () => {
+    setBusy(true);
+    try {
+      setGrey(await greyscalePng(pcbImageUrl(image.id, image.hash), image.ppi));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const ok = async () => {
+    const [x, y] = [um(form.x), um(form.y)];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return setError("The position must be numbers.");
+    const scalePpm = scalePpmOf(form.scale);
+    const check = checkImageScale(image.px, scalePpm);
+    if (!check.ok) return setError(check.error);
+    if (check.confirm && !window.confirm(check.confirm)) return;
+    const cmds: Cmd[] = [];
+    if (x !== image.x || y !== image.y || form.layer !== image.layer || scalePpm !== image.scale_ppm) {
+      cmds.push({ op: "pcb_item", verb: "edit_ref_image", id: image.id, layer: form.layer, at: { x, y }, scale_ppm: scalePpm });
+    }
+    if (grey) cmds.push({ op: "pcb_item", verb: "set_ref_image_data", id: image.id, data: grey });
+    if (form.locked !== (board.locked ?? []).includes(image.id)) cmds.push({ op: "set_locked", ids: [image.id], locked: form.locked });
+    if (cmds.length > 0 && !(await applyCommands(api, dispatch, cmds, [], null, { keep: true }))) return setError("The board refused the image.");
+    close();
+  };
+
+  return (
+    <div className="dialog-backdrop" onClick={close}>
+      <div className="dialog" style={{ width: 520 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Reference Image Properties" data-testid="pcb-ref-image-properties">
+        <div className="dialog-header">
+          <span>Reference Image Properties</span>
+        </div>
+        <div className="dialog-body" style={{ maxHeight: "74vh", overflowY: "auto" }}>
+          <div className="kv-grid" style={{ gridTemplateColumns: "130px 1fr" }}>
+            <span>Position X (mm)</span>
+            <input type="number" step="0.01" value={form.x} onChange={(e) => set("x", e.target.value)} style={{ width: 100 }} data-testid="pri-x" />
+            <span>Position Y (mm)</span>
+            <input type="number" step="0.01" value={form.y} onChange={(e) => set("y", e.target.value)} style={{ width: 100 }} data-testid="pri-y" />
+            <span>Width (mm)</span>
+            <input type="number" step="0.01" min="0" value={form.width} onChange={(e) => onSide("width", e.target.value)} style={{ width: 100 }} data-testid="pri-width" />
+            <span>Height (mm)</span>
+            <input type="number" step="0.01" min="0" value={form.height} onChange={(e) => onSide("height", e.target.value)} style={{ width: 100 }} data-testid="pri-height" />
+            <span>Layer</span>
+            <select value={form.layer} onChange={(e) => set("layer", e.target.value)} data-testid="pri-layer">
+              {boardLayerList(board.layers ?? [], board.board_rules?.layer_setup).map((l) => (
+                <option key={l} value={l}>
+                  {layerDisplayName(board.board_rules?.layer_setup, l)}
+                </option>
+              ))}
+            </select>
+            <span>Locked</span>
+            <label>
+              <input type="checkbox" checked={form.locked} onChange={(e) => set("locked", e.target.checked)} data-testid="pri-locked" />
+            </label>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <ImageEditorPanel previewUrl={grey ? `data:image/png;base64,${grey}` : pcbImageUrl(image.id, image.hash)} ppi={image.ppi} scale={form.scale} onScale={onScale} onGreyscale={() => void greyscale()} busy={busy} testid="pri" />
+          </div>
+          {error && (
+            <p style={{ color: "var(--chrome-danger)", margin: "8px 0 0" }} data-testid="pri-error">
+              {error}
+            </p>
+          )}
+        </div>
+        <div className="dialog-footer">
+          <button onClick={close} data-testid="pri-cancel">
+            Cancel
+          </button>
+          <button className="primary" onClick={() => void ok()} data-testid="pri-ok">
             OK
           </button>
         </div>

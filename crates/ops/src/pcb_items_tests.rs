@@ -136,3 +136,123 @@ fn the_command_has_one_wire_form_and_describes_itself() {
     let delete: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "delete_text_box", "id": "tbx_x"})).unwrap();
     assert_eq!(delete.subjects(), vec!["tbx_x"]);
 }
+
+// ----------------------------------------------------------------------------------------------------------------------------- reference images
+
+use eda_model::image_info::{base64_encode, solid_png};
+use eda_model::pcb_items::RefImage;
+
+fn png_text(w: u32, h: u32, rgb: [u8; 3]) -> String {
+    base64_encode(&solid_png(w, h, rgb, 254))
+}
+
+fn images<'a>(b: &'a Board<'_>) -> &'a [RefImage] {
+    &drawings(b).board_items.images
+}
+
+fn add_image(b: &mut Board<'_>, layer: &str, at: Point) -> String {
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddRefImage { image: RefImage::new(layer, at, &png_text(60, 40, [1, 2, 3])) })).unwrap();
+    images(b).last().unwrap().id.clone()
+}
+
+#[test]
+fn a_reference_image_is_added_with_an_id_of_ours_edited_and_deleted() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let mut image = RefImage::new("Cmts.User", p(5_000, 6_000), &png_text(60, 40, [1, 2, 3]));
+    image.id = "caller_id".into();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddRefImage { image })).unwrap();
+    let id = images(&b)[0].id.clone();
+    assert!(id.starts_with("img_"), "{id}");
+    assert_eq!(images(&b)[0].bounds(), [2_000, 4_000, 8_000, 8_000], "60 x 40 px at 254 ppi are 6 mm x 4 mm around the centre");
+
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditRefImage { id: id.clone(), layer: "Dwgs.User".into(), at: p(0, 0), scale_ppm: 2_000_000 })).unwrap();
+    let i = &images(&b)[0];
+    assert_eq!((i.id.as_str(), i.layer.as_str(), i.at, i.scale_ppm), (id.as_str(), "Dwgs.User", p(0, 0), 2_000_000));
+    assert_eq!(i.size_um(), (12_000, 8_000), "the scale doubles the size");
+
+    let greyer = png_text(60, 40, [9, 9, 9]);
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageData { id: id.clone(), data: greyer.clone() })).unwrap();
+    assert_eq!((images(&b)[0].data.as_str(), images(&b)[0].scale_ppm), (greyer.as_str(), 2_000_000), "new pixels keep the place, the layer and the scale");
+
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteRefImage { id: id.clone() })).unwrap();
+    assert!(images(&b).is_empty());
+    for cmd in [
+        pcb_items::PcbItemCmd::DeleteRefImage { id: id.clone() },
+        pcb_items::PcbItemCmd::EditRefImage { id: id.clone(), layer: "Dwgs.User".into(), at: p(0, 0), scale_ppm: 1_000_000 },
+        pcb_items::PcbItemCmd::SetRefImageData { id: id.clone(), data: greyer.clone() },
+    ] {
+        assert_eq!(b.apply(&Cmd::PcbItem(cmd)).unwrap_err()[0].check, "ops_unknown_ref_image");
+    }
+}
+
+#[test]
+fn a_reference_image_that_cannot_be_shown_is_refused() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let try_add = |b: &mut Board<'_>, mutate: &dyn Fn(&mut RefImage)| {
+        let mut i = RefImage::new("Cmts.User", p(0, 0), &png_text(20, 20, [0, 0, 0]));
+        mutate(&mut i);
+        let e = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddRefImage { image: i })).unwrap_err();
+        assert!(images(b).is_empty(), "nothing was added");
+        e[0].check.clone()
+    };
+    assert_eq!(try_add(&mut b, &|i| i.data = "AAAA".into()), "ops_bad_ref_image", "data that is no image");
+    assert_eq!(try_add(&mut b, &|i| i.data = String::new()), "ops_bad_ref_image");
+    assert_eq!(try_add(&mut b, &|i| i.scale_ppm = 0), "ops_bad_ref_image");
+    assert_eq!(try_add(&mut b, &|i| i.scale_ppm = -5), "ops_bad_ref_image");
+    assert_eq!(try_add(&mut b, &|i| i.layer = String::new()), "ops_bad_ref_image");
+    let mut off = model(&["F.Cu", "B.Cu"]);
+    off.board.layer_setup.enabled.retain(|l| l != "Cmts.User");
+    let mut c = Board::new(design(), &off, 100, 300);
+    assert_eq!(c.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddRefImage { image: RefImage::new("Cmts.User", p(0, 0), &png_text(20, 20, [0, 0, 0])) })).unwrap_err()[0].check, "ops_layer_off");
+    // the white space of a pasted text is taken out
+    let spaced = format!("{}\n{}", &png_text(20, 20, [0, 0, 0])[..8], &png_text(20, 20, [0, 0, 0])[8..]);
+    let mut i = RefImage::new("Cmts.User", p(0, 0), "");
+    i.data = spaced;
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddRefImage { image: i })).unwrap();
+    assert_eq!(images(&b)[0].data, png_text(20, 20, [0, 0, 0]));
+}
+
+#[test]
+fn a_reference_image_moves_with_the_verbs_that_take_any_item_and_a_flip_changes_its_side() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let id = add_image(&mut b, "F.SilkS", p(10_000, 20_000));
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: 1_000, dy: -2_000 }).unwrap();
+    assert_eq!(images(&b)[0].at, p(11_000, 18_000));
+    b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    assert_eq!(images(&b)[0].at, p(-18_000, 11_000), "clockwise on the screen about the pivot");
+    b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!((images(&b)[0].layer.as_str(), images(&b)[0].at), ("B.SilkS", p(18_000, 11_000)));
+    b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: true }).unwrap();
+    assert!(drawings(&b).locked_ids.contains(&id));
+    b.apply(&Cmd::Group { ids: ids(&[&id, "shp_seg"]) }).unwrap();
+    let group = drawings(&b).groups.last().unwrap().id.clone();
+    b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: false }).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&[&group]), dx: 500, dy: 0 }).unwrap();
+    assert_eq!(images(&b)[0].at, p(18_500, 11_000), "the group carries the image");
+}
+
+#[test]
+fn the_image_commands_have_one_wire_form() {
+    let data = png_text(20, 20, [0, 0, 0]);
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({
+        "op": "pcb_item", "verb": "add_ref_image",
+        "image": { "layer": "Cmts.User", "at": {"x": 1000, "y": 2000}, "scale_ppm": 500000, "data": data }
+    }))
+    .unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::AddRefImage { image }) = &cmd else { panic!("{cmd:?}") };
+    assert_eq!((image.layer.as_str(), image.at, image.scale_ppm), ("Cmts.User", p(1_000, 2_000), 500_000));
+    assert_eq!(cmd.domain(), Domain::Pcb);
+    // the scale of one is not sent
+    let unit: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "add_ref_image", "image": {"layer": "F.SilkS", "at": {"x": 0, "y": 0}, "data": data}})).unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::AddRefImage { image }) = &unit else { panic!() };
+    assert_eq!(image.scale_ppm, 1_000_000);
+    let edit: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "edit_ref_image", "id": "img_x", "layer": "F.SilkS", "at": {"x": 1, "y": 2}, "scale_ppm": 750000})).unwrap();
+    assert_eq!(edit.subjects(), vec!["img_x"]);
+    let back: Cmd = serde_json::from_value(serde_json::to_value(&cmd).unwrap()).unwrap();
+    assert_eq!(back, cmd);
+    let Cmd::PcbItem(c) = &cmd else { panic!() };
+    assert!(c.describe().starts_with("ref-image add --layer Cmts.User --at 1.000,2.000 --scale 0.5"), "{}", c.describe());
+}

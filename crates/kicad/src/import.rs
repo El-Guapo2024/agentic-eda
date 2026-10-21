@@ -145,7 +145,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
 
     let mut notes = ImportNotes { footprints_scaled, unread_items: unread_items(root), ..ImportNotes::default() };
     // The items nothing here reads are kept as text and written back (`DrawingsSection::raw_items`), except the embedded files, whose data a re-quoting would break.
-    let raw_items: Vec<String> = root.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l).is_some_and(|t| !READ_ITEMS.contains(&t) && t != "embedded_files")).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
+    let raw_items: Vec<String> = root.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l).is_some_and(|t| !is_read(l, t) && t != "embedded_files")).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
 
     let layers = import_layers(root);
     let net_names = import_net_names(root);
@@ -173,7 +173,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
 
     add_layers_in_use(
         &mut board.layer_setup,
-        shapes.iter().map(|s| s.layer().to_string()).chain(texts.iter().map(|t| t.layer.clone())).chain(dimensions.iter().map(|d| d.layer.clone())).chain(silk_texts.iter().map(|t| t.layer.clone())).chain(board_items.text_boxes.iter().map(|t| t.layer.clone())),
+        shapes.iter().map(|s| s.layer().to_string()).chain(texts.iter().map(|t| t.layer.clone())).chain(dimensions.iter().map(|d| d.layer.clone())).chain(silk_texts.iter().map(|t| t.layer.clone())).chain(board_items.text_boxes.iter().map(|t| t.layer.clone())).chain(board_items.images.iter().map(|i| i.layer.clone())),
     );
 
     // The outline override lives on `board` too (used when a downstream
@@ -286,14 +286,20 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
 /// `setup`, nets and net classes) and `embedded_fonts`, which is a flag. The other kinds are counted ([`unread_items`]) and kept as text (`DrawingsSection::raw_items`).
 const READ_ITEMS: &[&str] = &[
     "version", "generator", "generator_version", "general", "paper", "page", "title_block", "layers", "setup", "host", "net", "net_class", "footprint", "module", "segment", "arc", "via", "zone", "gr_line", "gr_arc",
-    "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "gr_text_box", "dimension", "group", "generated", "barcode", "embedded_fonts",
+    "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "gr_text_box", "image", "dimension", "group", "generated", "barcode", "embedded_fonts",
 ];
+
+/// Whether a reader here takes the top-level `item` of kind `tag`: its kind is in [`READ_ITEMS`], and a reference image is one whose data is a file the reader understands
+/// (an image that is not goes on as text, as KiCad would not have loaded the board at all).
+fn is_read(item: &[Sexpr], tag: &str) -> bool {
+    READ_ITEMS.contains(&tag) && (tag != "image" || crate::pcb_image::read(item).is_some())
+}
 
 /// The top-level items of the board whose kind no reader here takes ([`READ_ITEMS`]), counted by kind.
 fn unread_items(root: &[Sexpr]) -> BTreeMap<String, usize> {
     let mut out = BTreeMap::new();
     for item in root.iter().skip(1).filter_map(Sexpr::as_list) {
-        if let Some(tag) = sexpr::tag(item).filter(|t| !READ_ITEMS.contains(t)) {
+        if let Some(tag) = sexpr::tag(item).filter(|t| !is_read(item, t)) {
             *out.entry(tag.to_string()).or_insert(0) += 1;
         }
     }

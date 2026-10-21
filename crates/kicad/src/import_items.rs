@@ -94,6 +94,7 @@ impl Refs {
             note(&self.dimensions, dr.dimensions.iter().map(|d| d.id.as_str()).collect());
             note(&self.barcodes, dr.barcodes.iter().map(|b| b.id.as_str()).collect());
             note(&self.board_items.text_boxes, dr.board_items.text_boxes.iter().map(|t| t.id.as_str()).collect());
+            note(&self.board_items.images, dr.board_items.images.iter().map(|i| i.id.as_str()).collect());
         }
 
         let names = design.drawings.iter().flat_map(|d| d.groups.iter().map(|g| g.id.clone())).collect();

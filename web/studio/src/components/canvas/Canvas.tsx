@@ -79,6 +79,7 @@ import { padAt } from "../../kicad-port/boardControlPick";
 import { canExclude, rcMenu } from "../../kicad-port/rcItems";
 import { drcMarkerAt, drcMenuContext, runMarkerMenu, selectMarkerDrc, showDrcInDialog, toMenuEntries } from "../../actions/checkerOps";
 import { askExclusionComment } from "../../state/checkerView";
+import { useImageVersion } from "./imageCache";
 import "../../styles/canvas.css";
 
 /** `ZONE_SETTINGS << aSrcZone` (zone_create_helper.cpp createZoneFromExisting): the fill + rule-area settings of an existing zone, as `api.addZone` takes them. */
@@ -330,6 +331,8 @@ export function Canvas() {
     dispatch({ type: "MARK_VIEW_INITIALIZED" });
   }, [board, containerSize, dispatch]);
 
+  // The reference images are bitmaps that arrive after the board does: the canvas paints again when one has.
+  const imageVersion = useImageVersion();
   // Render loop: repaint whenever anything visible changes.
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -435,7 +438,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, containerSize, imageVersion]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

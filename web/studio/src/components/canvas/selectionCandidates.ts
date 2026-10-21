@@ -83,6 +83,8 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
     // `PCB_TEXTBOX_T` shares `m_filter.text`, `PCB_REFERENCE_IMAGE_T` `m_filter.graphics`, `PCB_POINT_T` has `m_filter.points` and `PCB_BARCODE_T` falls to `m_filter.otherItems`.
     case "textbox":
       return filter.text;
+    case "image":
+      return filter.graphics;
   }
 }
 

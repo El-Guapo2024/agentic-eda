@@ -34,7 +34,7 @@ import { layerIsVisible, layerStateKey, isCopper } from "../../kicad-port/layerP
 import { zoneCopperLayers, zoneIsOnCopper, zoneLayers } from "../../kicad-port/zoneLayers";
 import { drcMarkerObject } from "../../kicad-port/appearance";
 import { drawFootprintArt } from "./fpArtPaint";
-import { drawPcbItems } from "./pcbItemsPaint";
+import { drawPcbItems, drawRefImages } from "./pcbItemsPaint";
 import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
 import type { TuneHoverReply } from "../../api/tuneTypes";
 import { copperColor, drawAnchors, drawBoardArea, drawConflicts, drawLockedShadows, drawSheet, footprintShown, on, on as objectOnPaint, opacityOf, ratsnestColor, type PaintAppearance } from "./appearancePaint";
@@ -1300,6 +1300,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       // Edge.Cuts is a layer like the others (the Layers tab and the presets switch it); in high contrast it is neither dimmed away nor hidden, only pushed back
       // -- "Graphics on Edge_Cuts layer are not fully dimmed or hidden because they are useful when working on another layer" (`dim_factor_Edge_Cuts`, at least 0.3).
       if (layerIsVisible(opts.layerVisible, "Edge.Cuts")) withAlpha(ctx, opts.highContrast && opts.activeLayer && opts.activeLayer !== "board_edge" ? 0.3 : 1, () => drawOutline(ctx, view, board.outline_is_shapes ? null : board.outline));
+      // The reference images (`LAYER_DRAW_BITMAPS`) lie under every other item.
+      for (const pass of passes) withAlpha(ctx, pass.alpha, () => drawRefImages(ctx, view, pass.b, opts));
     },
     ...Object.fromEntries(Object.keys(copper(board)).map((key) => [key, () => copperPasses.forEach((pass) => withAlpha(ctx, pass.alpha, () => pass.layers[key]?.()))])),
     // pcb_actions.cpp updateLocalRatsnest's non-router equivalent: redraw
@@ -1339,6 +1341,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     ctx.save();
     ctx.transform(a, b, c, d, e, f);
     const moving = copper(carry.moving);
+    drawRefImages(ctx, view, carry.moving, own);
     for (const key of drawOrder()) moving[key]?.();
     for (const part of carry.moving.parts) drawFootprint(ctx, view, part, own);
     drawFields(ctx, view, [...fieldsToDraw(carry.moving.parts), ...carry.fields.map((field) => ({ field }))], own);

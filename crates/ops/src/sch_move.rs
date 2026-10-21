@@ -1093,7 +1093,7 @@ fn map_graphic_points(g: &mut SchGraphic, f: &dyn Fn(Point) -> Point) {
                 *p = f(*p);
             }
         }
-        SchGraphicKind::Directive { at, .. } => *at = f(*at),
+        SchGraphicKind::Directive { at, .. } | SchGraphicKind::Image { at, .. } => *at = f(*at),
     }
 }
 

@@ -10,7 +10,7 @@
 use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
 use eda_model::ir::{DrawingsSection, Millideg, Point, Um};
-use eda_model::pcb_items::TextBox;
+use eda_model::pcb_items::{RefImage, TextBox};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -35,6 +35,15 @@ pub enum PcbItemCmd {
     EditTextBox { id: String, text_box: TextBox },
     /// Remove a text box (`EDIT_TOOL::DeleteItems`).
     DeleteTextBox { id: String },
+    /// `pcbnew.InteractiveDrawing.placeReferenceImage` (`DRAWING_TOOL::PlaceReferenceImage`): the image, its centre and the layer it is on. `image.id` is ignored; `image.data` is the
+    /// PNG, JPEG, GIF or BMP file in base64.
+    AddRefImage { image: RefImage },
+    /// `DIALOG_REFERENCE_IMAGE_PROPERTIES::TransferDataFromWindow`: the image's centre, layer and scale; its pixels, id, lock and groups stay.
+    EditRefImage { id: String, layer: String, at: Point, scale_ppm: i64 },
+    /// The pixels of an image replaced (`BITMAP_BASE::ConvertToGreyscale` and what turns them): the centre, layer and scale stay.
+    SetRefImageData { id: String, data: String },
+    /// Remove a reference image.
+    DeleteRefImage { id: String },
 }
 
 impl PcbItemCmd {
@@ -42,7 +51,8 @@ impl PcbItemCmd {
     pub fn ids(&self) -> Vec<&str> {
         match self {
             PcbItemCmd::AddTextBox { text_box } => vec![text_box.text.as_str()],
-            PcbItemCmd::EditTextBox { id, .. } | PcbItemCmd::DeleteTextBox { id } => vec![id.as_str()],
+            PcbItemCmd::AddRefImage { image } => vec![image.layer.as_str()],
+            PcbItemCmd::EditTextBox { id, .. } | PcbItemCmd::DeleteTextBox { id } | PcbItemCmd::EditRefImage { id, .. } | PcbItemCmd::SetRefImageData { id, .. } | PcbItemCmd::DeleteRefImage { id } => vec![id.as_str()],
         }
     }
 
@@ -53,6 +63,10 @@ impl PcbItemCmd {
             PcbItemCmd::AddTextBox { text_box: t } => format!("text-box add --layer {} --from {},{} --to {},{} --text {:?}", t.layer, mm(t.start.x), mm(t.start.y), mm(t.end.x), mm(t.end.y), t.text),
             PcbItemCmd::EditTextBox { id, text_box: t } => format!("text-box edit {id} --layer {} --text {:?}", t.layer, t.text),
             PcbItemCmd::DeleteTextBox { id } => format!("text-box delete {id}"),
+            PcbItemCmd::AddRefImage { image: i } => format!("ref-image add --layer {} --at {},{} --scale {} ({} bytes of data)", i.layer, mm(i.at.x), mm(i.at.y), i.scale_ppm as f64 / 1e6, i.data.len() / 4 * 3),
+            PcbItemCmd::EditRefImage { id, layer, at, scale_ppm } => format!("ref-image edit {id} --layer {layer} --at {},{} --scale {}", mm(at.x), mm(at.y), *scale_ppm as f64 / 1e6),
+            PcbItemCmd::SetRefImageData { id, data } => format!("ref-image pixels {id} ({} bytes of data)", data.len() / 4 * 3),
+            PcbItemCmd::DeleteRefImage { id } => format!("ref-image delete {id}"),
         }
     }
 
@@ -60,6 +74,7 @@ impl PcbItemCmd {
     pub fn kind(&self) -> &'static str {
         match self {
             PcbItemCmd::AddTextBox { .. } | PcbItemCmd::EditTextBox { .. } | PcbItemCmd::DeleteTextBox { .. } => "text-box",
+            PcbItemCmd::AddRefImage { .. } | PcbItemCmd::EditRefImage { .. } | PcbItemCmd::SetRefImageData { .. } | PcbItemCmd::DeleteRefImage { .. } => "ref-image",
         }
     }
 }
@@ -71,6 +86,10 @@ impl<'a> Board<'a> {
             PcbItemCmd::AddTextBox { text_box } => self.add_text_box(text_box.clone()),
             PcbItemCmd::EditTextBox { id, text_box } => self.edit_text_box(id, text_box.clone()),
             PcbItemCmd::DeleteTextBox { id } => self.delete_text_box(id),
+            PcbItemCmd::AddRefImage { image } => self.add_ref_image(image.clone()),
+            PcbItemCmd::EditRefImage { id, layer, at, scale_ppm } => self.edit_ref_image(id, layer, *at, *scale_ppm),
+            PcbItemCmd::SetRefImageData { id, data } => self.set_ref_image_data(id, data),
+            PcbItemCmd::DeleteRefImage { id } => self.delete_ref_image(id),
         }
     }
 
@@ -123,6 +142,80 @@ impl<'a> Board<'a> {
             return Err(fail("ops_unknown_text_box", id, "no text box with this id"));
         }
         Ok(())
+    }
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------- reference images
+
+impl<'a> Board<'a> {
+    /// What a reference image must be: on a layer the board has on, with a positive scale, and the file of an image of a kind known (`REFERENCE_IMAGE::ReadImageFile`).
+    fn check_ref_image(&self, what: &str, layer: &str, scale_ppm: i64, data: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        if layer.is_empty() {
+            return Err(fail("ops_bad_ref_image", what, "a reference image needs a layer"));
+        }
+        self.layer_is_on(layer, what)?;
+        if scale_ppm <= 0 {
+            return Err(fail("ops_bad_ref_image", what, "the scale must be a positive number"));
+        }
+        if let Some(data) = data {
+            if eda_model::image_info::header_of_base64(data).is_none() {
+                return Err(fail("ops_bad_ref_image", what, "the data is not a PNG, JPEG, GIF or BMP file"));
+            }
+        }
+        Ok(())
+    }
+
+    fn add_ref_image(&mut self, mut image: RefImage) -> Result<(), Vec<CheckResult>> {
+        image.data = eda_model::image_info::compact(&image.data);
+        self.check_ref_image("image", &image.layer, image.scale_ppm, Some(&image.data))?;
+        image.id = String::new();
+        let dr = self.drawings_mut();
+        dr.board_items.images.push(image);
+        dr.assign_missing_ids();
+        Ok(())
+    }
+
+    fn ref_image_mut(&mut self, id: &str) -> Result<&mut RefImage, Vec<CheckResult>> {
+        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_ref_image", id, "the board has no drawings yet"))?;
+        dr.board_items.images.iter_mut().find(|i| i.id == id).ok_or_else(|| fail("ops_unknown_ref_image", id, "no reference image with this id"))
+    }
+
+    fn edit_ref_image(&mut self, id: &str, layer: &str, at: Point, scale_ppm: i64) -> Result<(), Vec<CheckResult>> {
+        self.check_ref_image(id, layer, scale_ppm, None)?;
+        let image = self.ref_image_mut(id)?;
+        image.layer = layer.to_string();
+        image.at = at;
+        image.scale_ppm = scale_ppm;
+        Ok(())
+    }
+
+    fn set_ref_image_data(&mut self, id: &str, data: &str) -> Result<(), Vec<CheckResult>> {
+        let data = eda_model::image_info::compact(data);
+        if eda_model::image_info::header_of_base64(&data).is_none() {
+            return Err(fail("ops_bad_ref_image", id, "the data is not a PNG, JPEG, GIF or BMP file"));
+        }
+        self.ref_image_mut(id)?.data = data;
+        Ok(())
+    }
+
+    fn delete_ref_image(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_ref_image", id, "the board has no drawings yet"))?;
+        let before = dr.board_items.images.len();
+        dr.board_items.images.retain(|i| i.id != id);
+        if dr.board_items.images.len() == before {
+            return Err(fail("ops_unknown_ref_image", id, "no reference image with this id"));
+        }
+        Ok(())
+    }
+}
+
+/// `PCB_REFERENCE_IMAGE::Move` / `::Rotate` / `::Flip` as far as the position and the layer go: the centre goes where the transform puts it, and a flip puts the image on
+/// the other side's layer. The pixels are not turned or mirrored (that takes a decoder: `BITMAP_BASE::Rotate` / `::Mirror`), so a quarter turn of a single image about its own
+/// centre changes nothing -- GAPS.md item 24 lists it.
+pub(crate) fn transform_ref_image(i: &mut RefImage, x: Xform, copper: usize) {
+    i.at = x.point(i.at);
+    if let Xform::Flip { .. } = x {
+        i.layer = flip_layer(&i.layer, copper);
     }
 }
 
@@ -253,6 +346,9 @@ pub(crate) fn transform_text_box(t: &mut TextBox, x: Xform, copper: usize) {
 pub(crate) fn transform_board_items(dr: &mut DrawingsSection, ids: &BTreeSet<String>, x: Xform, copper: usize) {
     for t in dr.board_items.text_boxes.iter_mut().filter(|t| ids.contains(&t.id)) {
         transform_text_box(t, x, copper);
+    }
+    for i in dr.board_items.images.iter_mut().filter(|i| ids.contains(&i.id)) {
+        transform_ref_image(i, x, copper);
     }
 }
 

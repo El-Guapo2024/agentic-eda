@@ -2,13 +2,18 @@
 // `paintBoard` (painter.ts) once for the board and once for the items in the hand, after the dimensions. Ports of `PCB_PAINTER::draw( const PCB_TEXTBOX* )` (pcbnew/pcb_painter.cpp at
 // KiCad 8303b2ad): the border in the layer's colour with its line style, the text in the stroke font wrapped to the box, and, for a knockout box, the box filled with the text cut out.
 import type { BoardState } from "../../api/types";
-import type { BoardTextBox } from "../../api/pcbItemTypes";
-import { layerIsVisible } from "../../kicad-port/layerPresets";
+import type { BoardRefImage, BoardTextBox } from "../../api/pcbItemTypes";
+import { parseCssColor } from "../../kicad-port/appearance";
+import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
+import { refImageBounds } from "../../kicad-port/pcbExtraItems";
 import { layoutBoxText, outlineOf, type BoxTextLayout } from "../../kicad-port/pcbTextBox";
+import { pcbImageUrl } from "../../kicad-port/refImage";
 import { dashPattern } from "../schematic/schGraphicsPainter";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { on, opacityOf } from "./appearancePaint";
+import { imageFor } from "./imageCache";
 import { layerColor } from "./layers";
-import type { PaintOptions } from "./painter";
+import { layerAlpha, withAlpha, type PaintOptions } from "./painter";
 import { hairlineUm } from "./view";
 import type { ViewTransform } from "../../state/store";
 
@@ -25,17 +30,85 @@ function layoutOf(b: BoardTextBox): BoxTextLayout {
   return l;
 }
 
-/** The tool in progress that draws a rubber band of its own (the Draw Text Box tool's rectangle, set by actions/pcbItemActions.ts). */
-export type ToolPreview = { kind: "rect"; from: [number, number]; layer: string };
+/**
+ * The tool in progress that draws something of its own (set by actions/pcbItemActions.ts): the Draw Text Box tool's rubber band, or the image Place Reference Image holds by its
+ * centre at the cursor (`m_view->AddToPreview( image )`), drawn as the image will be, `w` x `h` micrometres on `layer`.
+ */
+export type ToolPreview = { kind: "rect"; from: [number, number]; layer: string } | { kind: "image"; img: HTMLImageElement; w: number; h: number; layer: string };
 let toolPreview: ToolPreview | null = null;
 export function setToolPreview(p: ToolPreview | null): void {
   toolPreview = p;
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------- reference images
+
+/** The alpha of a layer's colour (`COLOR4D::a`): the part of `PCB_PAINTER::draw( PCB_REFERENCE_IMAGE )`'s `imgAlpha` the layer itself gives. */
+function colourAlpha(layer: string): number {
+  return parseCssColor(layerColor(layer.replace(/\./g, "_")))?.a ?? 1;
+}
+
+/**
+ * `PCB_PAINTER::draw( const PCB_REFERENCE_IMAGE* )`: the bitmap at its place and size, at the alpha of its layer's colour times the Images opacity of the Appearance panel;
+ * a selected image has a box drawn round it in the anchor colour and is shown opaque ("Keep reference images opaque when selected").
+ */
+function paintRefImage(ctx: CanvasRenderingContext2D, view: ViewTransform, i: BoardRefImage, alpha: number, selected: boolean): void {
+  const [x0, y0] = refImageBounds(i);
+  const el = imageFor(pcbImageUrl(i.id, i.hash));
+  ctx.save();
+  if (el) {
+    ctx.globalAlpha *= selected ? 1 : alpha;
+    ctx.drawImage(el, x0, y0, i.w, i.h);
+  } else {
+    // not here yet: the box it will fill, so it can be seen and picked
+    ctx.globalAlpha *= alpha;
+    ctx.strokeStyle = layerColor(i.layer.replace(/\./g, "_"));
+    ctx.lineWidth = hairlineUm(view, 1);
+    ctx.setLineDash([hairlineUm(view, 4), hairlineUm(view, 3)]);
+    ctx.strokeRect(x0, y0, i.w, i.h);
+  }
+  ctx.restore();
+  if (selected) {
+    ctx.save();
+    ctx.strokeStyle = layerColor("LAYER_ANCHOR");
+    ctx.lineWidth = hairlineUm(view, 2);
+    ctx.strokeRect(x0, y0, i.w, i.h);
+    ctx.restore();
+  }
+}
+
+/**
+ * The board's reference images, as `LAYER_DRAW_BITMAPS` draws them: below every other item, on their layer when it is shown, and only while the Images object is on and its opacity
+ * is not zero (`PCB_REFERENCE_IMAGE::ViewGetLOD`). In high contrast an image on a layer other than the active one fades with the layer (or is hidden).
+ */
+export function drawRefImages(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
+  const images = board.drawings?.images ?? [];
+  if (images.length === 0 || !on(opts.layerVisible, "bitmaps")) return;
+  const opacity = opacityOf(opts.appearance, "images");
+  if (opacity <= 0) return;
+  for (const i of images) {
+    if (!layerIsVisible(opts.layerVisible, i.layer)) continue;
+    const dim = layerAlpha(opts, layerStateKey(i.layer));
+    withAlpha(ctx, dim, () => paintRefImage(ctx, view, i, colourAlpha(i.layer) * opacity, opts.selection.has(i.id)));
+  }
 }
 
 /** Every item of the kinds this module draws that the board has, and the rubber band of the tool in progress. */
 export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
   drawTextBoxes(ctx, view, board, opts);
   const cursor = opts.snappedCursor ?? (opts.cursorUm ? ([opts.cursorUm.x, opts.cursorUm.y] as const) : null);
+  // The image in the hand follows the cursor, centred on it, at the alpha it will have.
+  if (toolPreview?.kind === "image" && cursor && !opts.movePreview) {
+    const { img, w, h, layer } = toolPreview;
+    ctx.save();
+    ctx.globalAlpha *= colourAlpha(layer) * opacityOf(opts.appearance, "images");
+    ctx.drawImage(img, cursor[0] - Math.trunc(w / 2), cursor[1] - Math.trunc(h / 2), w, h);
+    ctx.restore();
+    ctx.save();
+    ctx.strokeStyle = layerColor("LAYER_ANCHOR");
+    ctx.lineWidth = hairlineUm(view, 2);
+    ctx.strokeRect(cursor[0] - Math.trunc(w / 2), cursor[1] - Math.trunc(h / 2), w, h);
+    ctx.restore();
+  }
   if (toolPreview?.kind === "rect" && cursor && !opts.movePreview) {
     ctx.save();
     ctx.strokeStyle = layerColor("selection");

@@ -12,11 +12,12 @@ use crate::sexpr::Sexpr;
 #[derive(Debug, Default)]
 pub(crate) struct ItemRefs {
     pub text_boxes: Vec<ItemRef>,
+    pub images: Vec<ItemRef>,
 }
 
 /// Every item of the kinds [`BoardItems`] holds that the board `root` has.
 pub(crate) fn read_all(root: &[Sexpr], refs: &mut ItemRefs) -> BoardItems {
-    BoardItems { text_boxes: crate::pcb_textbox::read_all(root, &mut refs.text_boxes) }
+    BoardItems { text_boxes: crate::pcb_textbox::read_all(root, &mut refs.text_boxes), images: crate::pcb_image::read_all(root, &mut refs.images) }
 }
 
 /// Write the items, one after another in id order, and note their uuids in `written` for the groups that name them.
@@ -26,5 +27,11 @@ pub(crate) fn write_all(out: &mut String, items: &BoardItems, is_locked: &dyn Fn
     for t in boxes {
         let uuid = crate::pcb_textbox::write(out, t, is_locked(&t.id));
         written.entry(t.id.clone()).or_default().push(uuid);
+    }
+    let mut images: Vec<&eda_model::pcb_items::RefImage> = items.images.iter().collect();
+    images.sort_by(|a, b| a.id.cmp(&b.id));
+    for img in images {
+        let uuid = crate::pcb_image::write(out, img, is_locked(&img.id));
+        written.entry(img.id.clone()).or_default().push(uuid);
     }
 }

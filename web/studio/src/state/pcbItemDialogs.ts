@@ -12,11 +12,17 @@ export interface TextBoxDialog {
   onClose?: () => void;
 }
 
-export interface PcbItemDialogsState {
-  textBox: TextBoxDialog | null;
+/** `DIALOG_REFERENCE_IMAGE_PROPERTIES`: the image it edits (always one the board has). */
+export interface RefImageDialog {
+  id: string;
 }
 
-const CLOSED: PcbItemDialogsState = { textBox: null };
+export interface PcbItemDialogsState {
+  textBox: TextBoxDialog | null;
+  refImage: RefImageDialog | null;
+}
+
+const CLOSED: PcbItemDialogsState = { textBox: null, refImage: null };
 
 let current: PcbItemDialogsState = CLOSED;
 const listeners = new Set<() => void>();
@@ -47,4 +53,12 @@ export function closeTextBoxDialog(): void {
   const done = current.textBox?.onClose;
   set({ ...current, textBox: null });
   done?.();
+}
+
+export function openRefImageDialog(dialog: RefImageDialog): void {
+  set({ ...current, refImage: dialog });
+}
+
+export function closeRefImageDialog(): void {
+  set({ ...current, refImage: null });
 }

@@ -149,6 +149,27 @@ fn effects_str(size_um: Um, bold: bool, italic: bool, h: SchHAlign, v: SchVAlign
     }
 }
 
+/// `(scale s)` in millionths as the decimal a file holds: no trailing zeros (`{:g}` writes six significant digits; this writes them all).
+pub(crate) fn scale_str(scale_ppm: i64) -> String {
+    let whole = scale_ppm / 1_000_000;
+    let frac = scale_ppm.rem_euclid(1_000_000);
+    if frac == 0 {
+        whole.to_string()
+    } else {
+        format!("{whole}.{}", format!("{frac:06}").trim_end_matches('0'))
+    }
+}
+
+/// `(data ..)` of an image: the base64 in lines of 76 characters, each its own quoted string (`FormatStreamData`), indented `indent`.
+pub(crate) fn data_str(data: &str, indent: &str) -> String {
+    let mut out = format!("{indent}(data");
+    for line in data.as_bytes().chunks(76) {
+        let _ = write!(out, "\n{indent}\t\"{}\"", std::str::from_utf8(line).unwrap_or(""));
+    }
+    let _ = write!(out, "\n{indent})\n");
+    out
+}
+
 /// Write every graphic of `sch` (drawing order), each with its `(locked yes)` when locked.
 pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
     for g in &sch.extras.graphics {
@@ -202,6 +223,11 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                     effects_str(*size_um, *bold, *italic, *h_align, *v_align),
                     m = mm(margin)
                 );
+            }
+            SchGraphicKind::Image { at, scale_ppm, data } => {
+                // `SCH_IO_KICAD_SEXPR::saveBitmap`: the position, the scale when it is not 1, the uuid, the lock and the file in lines of 76 characters.
+                let scale = if *scale_ppm != eda_model::image_info::SCALE_PPM { format!("\n\t\t(scale {})", scale_str(*scale_ppm)) } else { String::new() };
+                let _ = writeln!(out, "\t(image\n\t\t(at {} {}){scale}\n\t\t(uuid \"{uuid}\"){locked}\n{}\t)", mm(at.x), mm(at.y), data_str(data, "\t\t"));
             }
             SchGraphicKind::Directive { at, orientation, shape, pin_length_um, netclass, component_class } => {
                 // `SCH_DIRECTIVE_LABEL::AutoplaceFields`: the fields stack along the flag's pole.
@@ -330,6 +356,7 @@ fn styled(shape: SchGraphicKind, node: &[Sexpr]) -> SchGraphic {
 /// Read every graphic out of a `(kicad_sch ...)` root. A top-level `(polyline ...)` with no fill is an
 /// open notes-layer line (`SchLine`, read elsewhere) and is skipped here; a filled one is a polygon.
 pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
+    let version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let mut out: Vec<ReadGraphic> = Vec::new();
     let locked_of = |n: &[Sexpr]| parse_bool(n, "locked").unwrap_or(false);
     for item in root.iter().filter_map(|n| n.as_list()) {
@@ -407,6 +434,21 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 let shape = SchGraphicKind::TextBox { start, end, text, angle, size_um, bold: flag("bold"), italic: flag("italic"), h_align, v_align, margin_um };
                 out.push(ReadGraphic::new(styled(shape, item), locked_of(item)));
             }
+            Some("image") => {
+                // `SCH_IO_KICAD_SEXPR_PARSER::parseImage`
+                let Some(at) = sexpr::find(item, "at").and_then(pt) else { continue };
+                let data: String = sexpr::find(item, "data").map(|d| d.iter().skip(1).filter_map(Sexpr::text).collect()).unwrap_or_default();
+                let data = eda_model::image_info::compact(&data);
+                let Some(header) = eda_model::image_info::header_of_base64(&data) else { continue };
+                // `refImage.SetImageScale( std::isnormal( scale ) ? scale : 1.0 )`, and `SetImageScale` ignores a scale that is not positive
+                let mut scale = sexpr::find(item, "scale").and_then(|s| sexpr::num(s, 1)).filter(|v| v.is_normal() && *v > 0.0).unwrap_or(1.0);
+                // "20230121 or older file format versions assumed 300 image PPI at load/save"
+                if version <= 20230121 {
+                    scale *= header.ppi as f64 / eda_model::image_info::DEFAULT_PPI as f64;
+                }
+                let scale_ppm = (scale * eda_model::image_info::SCALE_PPM as f64).round() as i64;
+                out.push(ReadGraphic::new(SchGraphic::new(SchGraphicKind::Image { at, scale_ppm: scale_ppm.max(1), data }), locked_of(item)));
+            }
             Some("netclass_flag") => {
                 let Some(at) = sexpr::find(item, "at") else { continue };
                 let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
@@ -457,11 +499,12 @@ mod tests {
             SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 0), p(20_000, 0), p(20_000, 10_000), p(0, 10_000)], exclude_from_sim: true, exclude_from_bom: false, exclude_from_board: true, dnp: true }),
             SchGraphic::new(SchGraphicKind::TextBox { start: p(0, 0), end: p(40_000, 10_000), text: "Hello\nworld".into(), angle: 90_000, size_um: 1_270, bold: true, italic: false, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_um: 0 }),
             SchGraphic::new(SchGraphicKind::Directive { at: p(50_800, 25_400), orientation: 90_000, shape: DirectiveShape::Diamond, pin_length_um: 2_540, netclass: "HV".into(), component_class: "Power".into() }),
+            SchGraphic::new(SchGraphicKind::Image { at: p(60_000, 40_000), scale_ppm: 750_000, data: eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, [10, 20, 30], 254)) }),
         ]
     }
 
     fn read_back(sch: &SchematicSection) -> Vec<ReadGraphic> {
-        let mut text = String::from("(kicad_sch\n");
+        let mut text = String::from("(kicad_sch (version 20250114)\n");
         write_graphics(&mut text, sch);
         text.push_str(")\n");
         let tree = sexpr::parse(&text).expect("the written graphics parse");
@@ -522,6 +565,49 @@ mod tests {
         assert_eq!(got.len(), 1, "only the filled polyline is a polygon graphic");
         assert!(matches!(got[0].graphic.shape, SchGraphicKind::Polygon { .. }));
         assert_eq!(got[0].graphic.fill, SchFill::Background);
+    }
+
+    /// `saveBitmap` writes `(image (at ..) (scale s) (uuid ..) [(locked yes)] (data ..))` with the data in lines of 76 characters, scale one left out; `parseImage` reads it back,
+    /// and in a file of version 20230121 or older multiplies the scale by the image's definition over 300 ("older versions assumed 300 PPI").
+    #[test]
+    fn an_image_is_written_as_save_bitmap_writes_it_and_read_back_with_the_old_versions_scale_rule() {
+        let data = eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, [10, 20, 30], 254));
+        let mut sch = SchematicSection::default();
+        sch.extras.graphics = vec![SchGraphic::new(SchGraphicKind::Image { at: p(60_000, 40_000), scale_ppm: 1_000_000, data: data.clone() }), SchGraphic::new(SchGraphicKind::Image { at: p(1_000, 2_000), scale_ppm: 2_250_000, data: data.clone() })];
+        sch.assign_missing_ids();
+        let ids: Vec<String> = sch.extras.graphics.iter().map(|g| g.id.clone()).collect();
+        sch.extras.set_locked(&ids[1], true);
+        let mut text = String::from("(kicad_sch (version 20250114)\n");
+        write_graphics(&mut text, &sch);
+        text.push_str(")\n");
+        assert!(text.contains("(image\n\t\t(at 60 40)\n\t\t(uuid"), "scale one is not written: {text}");
+        assert!(text.contains("(at 1 2)\n\t\t(scale 2.25)\n\t\t(uuid"), "{text}");
+        assert_eq!(text.matches("(locked yes)").count(), 1);
+        assert!(text.lines().filter(|l| l.trim_start().starts_with('"')).all(|l| l.trim().len() <= 78), "lines of at most 76 characters");
+        let back = read_graphics(sexpr::parse(&text).unwrap().as_list().unwrap());
+        assert_eq!(back.len(), 2);
+        assert!(matches!(&back[0].graphic.shape, SchGraphicKind::Image { at, scale_ppm: 1_000_000, data: d } if *at == p(60_000, 40_000) && *d == data));
+        assert!(matches!(&back[1].graphic.shape, SchGraphicKind::Image { scale_ppm: 2_250_000, .. }));
+        assert!(!back[0].locked && back[1].locked);
+        // an old file: the scale is of a 300 ppi image
+        let old = text.replace("(version 20250114)", "(version 20230121)");
+        let back = read_graphics(sexpr::parse(&old).unwrap().as_list().unwrap());
+        assert!(matches!(&back[0].graphic.shape, SchGraphicKind::Image { scale_ppm, .. } if *scale_ppm == 846_667), "254 / 300: {:?}", back[0].graphic.shape);
+        // data that is no image, a scale that is not a number
+        let junk = sexpr::parse("(kicad_sch (image (at 1 1) (data \"AAAA\")) (image (at 1 1)))").unwrap();
+        assert!(read_graphics(junk.as_list().unwrap()).is_empty());
+        let odd = text.replace("(scale 2.25)", "(scale 0)");
+        let back = read_graphics(sexpr::parse(&odd).unwrap().as_list().unwrap());
+        assert!(matches!(&back[1].graphic.shape, SchGraphicKind::Image { scale_ppm: 1_000_000, .. }));
+    }
+
+    #[test]
+    fn scale_text_has_no_trailing_zeros() {
+        assert_eq!(scale_str(1_000_000), "1");
+        assert_eq!(scale_str(500_000), "0.5");
+        assert_eq!(scale_str(2_250_000), "2.25");
+        assert_eq!(scale_str(333_333), "0.333333");
+        assert_eq!(scale_str(1_000_001), "1.000001");
     }
 
     #[test]

@@ -112,7 +112,7 @@ pub fn parse_clipboard(text: &str) -> Result<SchFragment, String> {
     if imported.unresolved_symbols > 0 {
         notes.push(format!("{} symbol(s) had no library symbol in the clipboard and were left out", imported.unresolved_symbols));
     }
-    for (tag, what) in [("table", "tables"), ("image", "images")] {
+    for (tag, what) in [("table", "tables")] {
         if sexpr::find_all(root, tag).next().is_some() {
             notes.push(format!("{what} are not pasted"));
         }

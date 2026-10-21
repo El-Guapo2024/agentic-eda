@@ -4,7 +4,8 @@
 // `SCH_DIRECTIVE_LABEL::CreateGraphicShape` (eeschema at 8303b2ad). Pure: no DOM, no fonts (a text box's text
 // does not take part in hit-testing, only its border, like any unfilled shape).
 import { bezierPolyline } from "./bezierPoly";
-import type { SchGraphic } from "../api/schEditTypes";
+import { DEFAULT_PPI, imageBoxHitDistance, imageBoxUm, SCALE_PPM } from "./refImage";
+import type { SchGraphic, SchGraphicShape } from "../api/schEditTypes";
 
 export type P = readonly [number, number];
 
@@ -204,6 +205,11 @@ function strokeSlack(g: SchGraphic): number {
   return Math.max(g.width_um ?? 0, 152.4) / 2;
 }
 
+/** `[x0, y0, x1, y1]` of an image on the sheet (`SCH_BITMAP::GetBoundingBox`): its pixels at their definition times the scale, centred on `at`. */
+export function schImageBox(s: Extract<SchGraphicShape, { type: "image" }>): [number, number, number, number] {
+  return imageBoxUm([s.at.x, s.at.y], s.px ?? [0, 0], s.ppi ?? DEFAULT_PPI, s.scale_ppm ?? SCALE_PPM);
+}
+
 /** The shape's outline as a polyline: `closed` for shapes that enclose an area. */
 export function graphicOutline(g: SchGraphic): { pts: P[]; closed: boolean } {
   const s = g.shape;
@@ -231,10 +237,19 @@ export function graphicOutline(g: SchGraphic): { pts: P[]; closed: boolean } {
       const d = directiveShape(pt(s.at), (s.orientation ?? 0) / 1000, s.shape ?? "round", s.pin_length_um);
       return { pts: d.outline, closed: false };
     }
+    case "image": {
+      const [x0, y0, x1, y1] = schImageBox(s);
+      return { pts: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], closed: true };
+    }
   }
 }
 
 export function graphicBounds(g: SchGraphic): Box {
+  // An image is its box: no stroke to widen it.
+  if (g.shape.type === "image") {
+    const [minX, minY, maxX, maxY] = schImageBox(g.shape);
+    return { minX, minY, maxX, maxY };
+  }
   const slack = strokeSlack(g);
   const { pts } = graphicOutline(g);
   const b = boxOfPoints(pts) ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
@@ -249,6 +264,8 @@ export function graphicBounds(g: SchGraphic): Box {
 export function graphicHit(g: SchGraphic, p: P, tol: number): boolean {
   const slack = tol + strokeSlack(g);
   const s = g.shape;
+  // `SCH_BITMAP::HitTest`: anywhere in the box, or within the accuracy of it (`KIGEOM::BoxHitTest`).
+  if (s.type === "image") return imageBoxHitDistance(schImageBox(s), p[0], p[1]) <= tol;
   if (s.type === "directive") {
     const d = directiveShape(pt(s.at), (s.orientation ?? 0) / 1000, s.shape ?? "round", s.pin_length_um);
     if (distToPolyline(p, d.outline, false) <= slack + DIRECTIVE_SYMBOL_SIZE_UM / 2) return true;

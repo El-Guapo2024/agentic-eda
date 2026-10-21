@@ -705,7 +705,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       name: "Shape",
       kind: "string",
       get: (i) =>
-        ({ rectangle: "Rectangle", circle: "Circle", arc: "Arc", bezier: "Bezier", polygon: "Polygon", text_box: "Rectangle", rule_area: "Polygon", directive: "Polygon" })[shapeOf(i).type],
+        ({ rectangle: "Rectangle", circle: "Circle", arc: "Arc", bezier: "Bezier", polygon: "Polygon", text_box: "Rectangle", rule_area: "Polygon", directive: "Polygon", image: "Rectangle" })[shapeOf(i).type],
     },
     SHAPE_PROPS
   );

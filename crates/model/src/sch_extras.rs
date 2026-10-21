@@ -654,6 +654,24 @@ pub enum SchGraphicKind {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         component_class: String,
     },
+    /// `SCH_BITMAP`: an image on the sheet, drawn under everything else and plotted. `at` is its centre (`REFERENCE_IMAGE::GetPosition`); its size is the pixels of the file at
+    /// their definition times `scale_ppm` ([`crate::image_info::size_um`]). The file is held as the base64 text a `(data ..)` token carries, no white space, so a sheet written
+    /// back has the bytes it was read with. The stroke and fill of the graphic do not apply to it.
+    Image {
+        at: Point,
+        /// `(scale s)` in millionths (1.0 is 1000000).
+        #[serde(default = "d_image_scale", skip_serializing_if = "is_unit_image_scale")]
+        scale_ppm: i64,
+        data: String,
+    },
+}
+
+fn d_image_scale() -> i64 {
+    crate::image_info::SCALE_PPM
+}
+
+fn is_unit_image_scale(s: &i64) -> bool {
+    *s == crate::image_info::SCALE_PPM
 }
 
 impl SchGraphicKind {
@@ -663,6 +681,7 @@ impl SchGraphicKind {
             SchGraphicKind::TextBox { .. } => "tbox",
             SchGraphicKind::RuleArea { .. } => "rarea",
             SchGraphicKind::Directive { .. } => "dirl",
+            SchGraphicKind::Image { .. } => "img",
             _ => "shp",
         }
     }
@@ -715,6 +734,7 @@ impl SchGraphic {
             SchGraphicKind::TextBox { start, end, text, .. } => format!("tbox|{}|{}|{text}", p(start), p(end)),
             SchGraphicKind::RuleArea { pts, .. } => format!("rarea|{}", pts.iter().map(p).collect::<Vec<_>>().join(";")),
             SchGraphicKind::Directive { at, netclass, .. } => format!("dirl|{}|{netclass}", p(at)),
+            SchGraphicKind::Image { at, scale_ppm, data } => format!("img|{}|{scale_ppm}|{}", p(at), &data[..data.len().min(96)]),
         }
     }
 }

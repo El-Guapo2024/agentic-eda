@@ -3404,7 +3404,7 @@ mod tests {
     /// independently of `reconcile_schematic`'s own. Two references, R1
     /// and R2, each starting on their own singleton net (so a later merge
     /// is unambiguous), no placement/routing section.
-    fn setup_schematic(dir: &Path) {
+    pub(super) fn setup_schematic(dir: &Path) {
         let part = |r: &str| Part {
             reference: r.into(),
             mpn: None,

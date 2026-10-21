@@ -4,12 +4,13 @@
 // the whole box (`edit_text_box`) -- the free text's setters are the text's own verbs and a field's the footprint's.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardTextBox } from "../api/pcbItemTypes";
+import type { BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
 import type { Cmd } from "../api/types";
 import type { PcbCtx, PcbItem } from "./pcbProperties";
 import { tooSmall } from "./propertyGrid";
 import type { Choice, PropValue, PropertyDef, PropertyManager } from "./propertyManager";
 import { autoPenUm, clampPenUm, textBoxToCmd, TEXT_MAX_SIZE_UM, TEXT_MIN_SIZE_UM, withTextAngle } from "./pcbTextBox";
+import { SCALE_PPM, scaleForHeightUm, scaleForWidthUm } from "./refImage";
 
 type PM = PropertyManager<PcbItem, PcbCtx, Cmd>;
 type Add = (def: PropertyDef<PcbItem, PcbCtx, Cmd>, group?: string) => void;
@@ -23,8 +24,61 @@ function boxCmd(b: BoardTextBox, patch: Partial<BoardTextBox>): Cmd[] {
   return [{ op: "pcb_item", verb: "edit_text_box", id: b.id, text_box: textBoxToCmd(next) }];
 }
 
-/** Register `PCB_TEXTBOX` and its properties. */
+/** The cmd that puts image `i` on `layer`, with `scale_ppm`: its centre and pixels stay. */
+function imageCmd(i: BoardRefImage, patch: { layer?: string; scale_ppm?: number }): Cmd[] {
+  return [{ op: "pcb_item", verb: "edit_ref_image", id: i.id, layer: patch.layer ?? i.layer, at: { x: i.x, y: i.y }, scale_ppm: patch.scale_ppm ?? i.scale_ppm }];
+}
+
+/** Register `PCB_REFERENCE_IMAGE` and its properties (`PCB_REFERENCE_IMAGE_DESC`, pcbnew/pcb_reference_image.cpp). */
+function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
+  pm.registerType("PCB_REFERENCE_IMAGE");
+  pm.inheritsAfter("PCB_REFERENCE_IMAGE", "BOARD_ITEM");
+  const own = (i: PcbItem): BoardRefImage => i.image!;
+  // `ReplaceProperty( BOARD_ITEM, "Layer", .. "Associated Layer" )`
+  pm.replaceProperty("BOARD_ITEM", "Layer", {
+    owner: "PCB_REFERENCE_IMAGE",
+    name: "Associated Layer",
+    kind: "enum",
+    choices: (_i, c) => layerChoices(c),
+    get: (i) => own(i).layer,
+    set: (i, v) => (own(i).layer === String(v) ? [] : imageCmd(own(i), { layer: String(v) })),
+  });
+  const IMAGE = "Image Properties";
+  const row = (def: Omit<PropertyDef<PcbItem, PcbCtx, Cmd>, "owner">): void => add({ owner: "PCB_REFERENCE_IMAGE", ...def } as PropertyDef<PcbItem, PcbCtx, Cmd>, IMAGE);
+  // `SetImageScale( aScale )` is ignored for a scale that is not positive; the image grows or shrinks about its centre (no transform origin offset).
+  row({
+    name: "Scale",
+    kind: "double",
+    get: (i) => own(i).scale_ppm / SCALE_PPM,
+    validate: (v) => (num(v) <= 0 ? "Scale must be a positive number." : null),
+    set: (i, v) => {
+      const ppm = Math.round(num(v) * SCALE_PPM);
+      return ppm <= 0 || ppm === own(i).scale_ppm ? [] : imageCmd(own(i), { scale_ppm: ppm });
+    },
+  });
+  // `SetWidth` / `SetHeight`: `scaleBy( width / current width )`.
+  const side = (name: "Width" | "Height"): void =>
+    row({
+      name,
+      kind: "int",
+      display: "size",
+      get: (i) => (name === "Width" ? own(i).w : own(i).h),
+      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+      set: (i, v) => {
+        const image = own(i);
+        const want = Math.round(num(v));
+        if (want <= 0 || want === (name === "Width" ? image.w : image.h)) return [];
+        const ppm = name === "Width" ? scaleForWidthUm(image.px, image.ppi, want) : scaleForHeightUm(image.px, image.ppi, want);
+        return ppm <= 0 || ppm === image.scale_ppm ? [] : imageCmd(image, { scale_ppm: ppm });
+      },
+    });
+  side("Width");
+  side("Height");
+}
+
+/** Register `PCB_TEXTBOX` and its properties, and the other classes of the family. */
 export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
+  registerReferenceImage(pm, add, layerChoices);
   pm.registerType("PCB_TEXTBOX");
   pm.inheritsAfter("PCB_TEXTBOX", "BOARD_ITEM");
   // A text box is on any layer (`BOARD_ITEM`'s row would read the layer off a text or a dimension).
