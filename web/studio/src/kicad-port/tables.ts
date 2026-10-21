@@ -8,10 +8,10 @@
 // conditions `cellBlockSelection` and `mergedCellsSelection`, `getCellBlockBounds`) and pcbnew/tools/pcb_edit_table_tool.cpp (`ExportTableToCSV`).
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardTable, BoardTableCell } from "../api/types";
+import type { BoardStatsReply, BoardTable, BoardTableCell } from "../api/types";
 import { isBackLayer, lineThicknessUm, textStyleOf } from "./layerDefaults";
 import { activeLayerName } from "./layerPresets";
-import type { TableBorderEdit, TableCellEdit, TableHAlign, TableLineStyleName, TablePatch, TableSeparatorsEdit, TableVAlign } from "../api/tableTypes";
+import type { TableBoardNumbers, TableBorderEdit, TableCellEdit, TableHAlign, TableLineStyleName, TablePatch, TableSeparatorsEdit, TableVAlign } from "../api/tableTypes";
 
 /** The id of a cell as an item of the editor: `<table id>:<row>:<col>` (`eda_model::table::cell_item_id`). */
 export function cellItemId(table: string, row: number, col: number): string {
@@ -484,4 +484,25 @@ export function rowsOf(cells: readonly BoardTableCell[]): number[] {
 /** The columns the cells are in, sorted. */
 export function colsOf(cells: readonly BoardTableCell[]): number[] {
   return [...new Set(cells.map((c) => c.col))].sort((a, b) => a - b);
+}
+
+/**
+ * What Place Board Characteristics prints that `ComputeBoardStatistics` measures, from kicad-cli's statistics (`POST /api/board_stats`), in the nanometres of the board file:
+ * the thickness, the overall dimensions, the smallest track, clearance and hole, and whether a pad is castellated or press-fit. Null when kicad-cli gave no statistics.
+ */
+export function boardNumbersOf(stats: BoardStatsReply): TableBoardNumbers | null {
+  const b = stats.board;
+  if (!stats.ok || !b) return null;
+  const nm = (um: number): number => Math.round(um * 1000);
+  const count = (title: string): number => (stats.pad_properties ?? []).find((e) => e.title === title)?.qty ?? 0;
+  return {
+    thickness_nm: nm(b.thickness_um),
+    width_nm: nm(b.width_um),
+    height_nm: nm(b.height_um),
+    min_track_nm: nm(b.min_track_width_um),
+    min_clearance_nm: nm(b.min_clearance_um),
+    min_drill_nm: nm(b.min_drill_um),
+    castellated_pads: count("Castellated:"),
+    press_fit_pads: count("Press-fit:"),
+  };
 }

@@ -83,6 +83,7 @@ mod pcb_paste;
 mod pcb_paste_special;
 mod design_blocks;
 mod pcb_props;
+mod pcb_table_builders;
 mod pcb_tables;
 pub use pcb_tables::TableCmd;
 mod pcb_transform;

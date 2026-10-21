@@ -69,6 +69,9 @@ mod lib_editors_tests;
 #[cfg(test)]
 #[path = "review_tests.rs"]
 mod review_tests;
+#[cfg(test)]
+#[path = "table_tests.rs"]
+mod table_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]

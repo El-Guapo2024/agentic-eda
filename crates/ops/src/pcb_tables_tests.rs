@@ -194,6 +194,67 @@ fn draw_table_makes_a_grid_with_kicads_cell_defaults_and_what_its_dialog_set() {
     assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(0, 0), cols: 1, rows: 1, cell_w_um: 0, cell_h_um: 5_000, line_width_um: 100, locked: false, patch: TablePatch::default() })).is_err());
 }
 
+fn numbers() -> crate::pcb_table_builders::BoardNumbers {
+    crate::pcb_table_builders::BoardNumbers { thickness_nm: 1_600_000, width_nm: 80_000_000, height_nm: 60_000_000, min_track_nm: 150_000, min_clearance_nm: 180_000, min_drill_nm: 300_000, castellated_pads: 2, press_fit_pads: 0 }
+}
+
+#[test]
+fn place_stackup_table_builds_the_boards_stackup_at_the_point_in_the_users_units() {
+    let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Table(TableCmd::PlaceStackup { layer: "F.SilkS".into(), at: p(10_000, 20_000), units: Some("mil".into()) })).unwrap();
+    let t = b.design().drawings.as_ref().unwrap().tables[0].clone();
+    assert!(!t.id.is_empty(), "the table has an id of its own");
+    assert_eq!((t.col_count(), t.layer.as_str(), t.at), (7, "F.SilkS", p(10_000, 20_000)));
+    // a header row and a row for each of the 13 layers of a four layer board
+    assert_eq!(t.row_count(), 14);
+    assert_eq!(t.cell(4, 0).unwrap().text, "F.Cu");
+    assert_eq!(t.cell(4, 3).unwrap().text, "1.37795 mils", "0.035 mm in the user's units");
+    assert_eq!(t.cell(5, 0).unwrap().text, "Dielectric 1");
+    // what the board setup says wins over the default: a thicker front copper shows
+    let mut settings = eda_model::rules::StackupSettings::new(4, 1_600);
+    settings.stackup.layers.iter_mut().find(|l| l.name == "F.Cu").unwrap().thickness_mm = Some(0.07);
+    settings.stackup.copper_finish = Some("ENIG".into());
+    b.apply(&Cmd::SetStackup { settings }).unwrap();
+    b.apply(&Cmd::Table(TableCmd::PlaceStackup { layer: "Dwgs.User".into(), at: p(0, 0), units: None })).unwrap();
+    let second = b.design().drawings.as_ref().unwrap().tables[1].clone();
+    assert_eq!(second.cell(4, 3).unwrap().text, "0.07 mm");
+    assert_ne!(second.id, t.id);
+    // a layer the board does not have is refused
+    assert!(b.apply(&Cmd::Table(TableCmd::PlaceStackup { layer: "In9.Cu".into(), at: p(0, 0), units: None })).is_err());
+}
+
+#[test]
+fn place_board_characteristics_builds_the_table_from_the_stackup_and_the_numbers_it_is_given() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let mut settings = eda_model::rules::StackupSettings::new(2, 1_600);
+    settings.stackup.copper_finish = Some("HASL".into());
+    settings.stackup.edge_plating = true;
+    b.apply(&Cmd::SetStackup { settings }).unwrap();
+    b.apply(&Cmd::Table(TableCmd::PlaceCharacteristics { layer: "Dwgs.User".into(), at: p(-5_000, 7_000), units: None, numbers: numbers() })).unwrap();
+    let t = b.design().drawings.as_ref().unwrap().tables[0].clone();
+    assert_eq!((t.col_count(), t.row_count(), t.at, t.layer.as_str()), (4, 7, p(-5_000, 7_000), "Dwgs.User"));
+    let row = |r: usize| (0..4).map(|c| t.cell(r, c).unwrap().text.clone()).collect::<Vec<_>>();
+    assert_eq!(row(1), ["Copper layer count: ", "2", "Board thickness: ", "1.6000 mm"]);
+    assert_eq!(row(2)[1], "80.0000 mm x 60.0000 mm");
+    assert_eq!(row(3), ["Min track/spacing: ", "0.1500 mm / 0.1800 mm", "Min hole diameter: ", "0.3000 mm"]);
+    assert_eq!(row(4), ["Copper finish: ", "HASL", "Impedance control: ", "No"]);
+    assert_eq!(row(5), ["Castellated pads: ", "Yes", "Press-fit pads: ", "No"]);
+    assert_eq!(row(6), ["Plated board edge: ", "Yes", "Edge card connectors: ", "No"]);
+    assert!(!t.border.external && !t.separators.cols);
+}
+
+#[test]
+fn the_place_verbs_read_from_and_write_to_the_json_the_studio_sends() {
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "table", "verb": "place_stackup", "layer": "F.SilkS", "at": { "x": 100, "y": 200 }, "units": "in" })).unwrap();
+    assert_eq!(cmd, Cmd::Table(TableCmd::PlaceStackup { layer: "F.SilkS".into(), at: p(100, 200), units: Some("in".into()) }));
+    let text = r#"{"op":"table","verb":"place_characteristics","layer":"Dwgs.User","at":{"x":0,"y":0},"numbers":{"thickness_nm":1600000,"width_nm":1,"height_nm":2,"min_track_nm":3,"min_clearance_nm":4,"min_drill_nm":5,"castellated_pads":1}}"#;
+    let value: serde_json::Value = serde_json::from_str(text).unwrap();
+    let cmd: Cmd = serde_json::from_value(value).unwrap();
+    assert!(matches!(&cmd, Cmd::Table(TableCmd::PlaceCharacteristics { units: None, numbers, .. }) if numbers.castellated_pads == 1 && numbers.press_fit_pads == 0 && numbers.min_drill_nm == 5));
+}
+
 #[test]
 fn the_verbs_read_from_and_write_to_the_json_the_studio_sends() {
     let cmd = Cmd::Table(TableCmd::AddRow { id: "tbl_x".into(), row: 2, above: true });

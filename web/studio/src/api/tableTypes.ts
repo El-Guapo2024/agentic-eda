@@ -71,8 +71,22 @@ export interface TableCellEdit {
 /** A cell address: `[row, col]`, both from 0. */
 export type TableCellAddr = [number, number];
 
+/** `BoardNumbers` (crates/ops/src/pcb_table_builders.rs): what the characteristics table prints that kicad-cli measures (`pcb export stats`), in nanometres. */
+export interface TableBoardNumbers {
+  thickness_nm: number;
+  width_nm: number;
+  height_nm: number;
+  min_track_nm: number;
+  min_clearance_nm: number;
+  min_drill_nm: number;
+  castellated_pads?: number;
+  press_fit_pads?: number;
+}
+
 export type TableCmdWire =
   | { verb: "draw"; layer: string; at: PointXY; cols: number; rows: number; cell_w_um: Um; cell_h_um: Um; line_width_um: Um; locked?: boolean; patch?: TablePatch }
+  | { verb: "place_stackup"; layer: string; at: PointXY; units?: string }
+  | { verb: "place_characteristics"; layer: string; at: PointXY; units?: string; numbers: TableBoardNumbers }
   | { verb: "delete"; id: string }
   | { verb: "set"; id: string; layer?: string; locked?: boolean; patch?: TablePatch }
   | { verb: "edit_cells"; id: string; cells: TableCellAddr[]; edit: TableCellEdit }

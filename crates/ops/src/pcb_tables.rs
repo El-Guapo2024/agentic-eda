@@ -10,9 +10,12 @@
 //! Moving, turning, flipping, deleting, locking and grouping a table are the generic verbs' (`move_items`, `rotate_items`, `flip_items`, `set_locked`, `group`), which
 //! know tables as items of the board (`pcb_transform::transform_table`).
 
+use super::pcb_table_builders::{characteristics_table, effective_stackup, stackup_table, BoardNumbers};
 use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
+use eda_drc::constraints::Units;
 use eda_model::ir::{Point, Um};
+use eda_model::Stackup;
 use eda_model::table::Table;
 use eda_model::table_edit::{edit_cells, patch_table, CellEdit, TablePatch};
 use eda_model::CheckResult;
@@ -39,6 +42,23 @@ pub enum TableCmd {
         locked: bool,
         #[serde(default)]
         patch: TablePatch,
+    },
+    /// Place Board Stackup Table (`PCB_CONTROL::PlaceStackup`, `Build_Board_Stackup_Table`): the stackup of Board Setup as a table of seven columns, its first corner at
+    /// `at`, on `layer`, with the thicknesses in `units` (`mm`, `mil` or `in`; millimetres when left out).
+    PlaceStackup {
+        layer: String,
+        at: Point,
+        #[serde(default)]
+        units: Option<String>,
+    },
+    /// Place Board Characteristics (`PCB_CONTROL::PlaceCharacteristics`, `Build_Board_Characteristics_Table`): the board's numbers as label and value pairs, its first corner
+    /// at `at`, on `layer`. `numbers` are what kicad-cli measured (`pcb export stats`): nothing here measures a board.
+    PlaceCharacteristics {
+        layer: String,
+        at: Point,
+        #[serde(default)]
+        units: Option<String>,
+        numbers: BoardNumbers,
     },
     /// Delete the table (`DoDelete` of a table, or of every row or every column of it).
     Delete { id: String },
@@ -82,7 +102,7 @@ impl TableCmd {
     /// The table the verb is about, for the log and the credit assignment.
     pub fn ids(&self) -> Vec<&str> {
         match self {
-            TableCmd::Add { .. } | TableCmd::Draw { .. } => vec!["table"],
+            TableCmd::Add { .. } | TableCmd::Draw { .. } | TableCmd::PlaceStackup { .. } | TableCmd::PlaceCharacteristics { .. } => vec!["table"],
             TableCmd::Delete { id }
             | TableCmd::Set { id, .. }
             | TableCmd::EditCells { id, .. }
@@ -100,6 +120,8 @@ impl TableCmd {
         match self {
             TableCmd::Add { table } => format!("table add --layer {} --size {}x{}", table.layer, table.col_count(), table.row_count()),
             TableCmd::Draw { layer, cols, rows, .. } => format!("table draw --layer {layer} --size {cols}x{rows}"),
+            TableCmd::PlaceStackup { layer, .. } => format!("table place-stackup --layer {layer}"),
+            TableCmd::PlaceCharacteristics { layer, .. } => format!("table place-characteristics --layer {layer}"),
             TableCmd::Delete { id } => format!("table delete {id}"),
             TableCmd::Set { id, layer, locked, .. } => format!("table set {id}{}{}", layer.as_ref().map(|l| format!(" --layer {l}")).unwrap_or_default(), locked.map(|l| format!(" --locked {l}")).unwrap_or_default()),
             TableCmd::EditCells { id, cells, .. } => format!("table edit-cells {id} ({} cell(s))", cells.len()),
@@ -162,6 +184,18 @@ impl Board<'_> {
                     dr.locked_ids.dedup();
                 }
                 Ok(())
+            }
+            TableCmd::PlaceStackup { layer, at, units } => {
+                let (_, stackup) = self.effective_stackup();
+                let mut t = stackup_table(layer, &stackup, Units::parse(units.as_deref().unwrap_or("mm")));
+                t.at = *at;
+                self.add_table(t)
+            }
+            TableCmd::PlaceCharacteristics { layer, at, units, numbers } => {
+                let (copper, stackup) = self.effective_stackup();
+                let mut t = characteristics_table(layer, copper, &stackup, numbers, Units::parse(units.as_deref().unwrap_or("mm")));
+                t.at = *at;
+                self.add_table(t)
             }
             TableCmd::Delete { id } => self.delete_table(id),
             TableCmd::Set { id, layer, locked, patch } => self.set_table(id, layer.as_deref(), *locked, patch),
@@ -254,6 +288,21 @@ impl Board<'_> {
     fn table_mut(&mut self, id: &str) -> Result<&mut Table, Vec<CheckResult>> {
         let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_table", id, "the board has no tables"))?;
         dr.tables.iter_mut().find(|t| t.id == id).ok_or_else(|| fail("ops_unknown_table", id, "no table with this id"))
+    }
+
+    /// The stackup of the board and its copper layer count: Board Setup's (`GetStackupDescriptor`, which `SynchronizeWithBoard` brings up to date), else the one the
+    /// board was brought with, else KiCad's default for its copper layers and thickness.
+    fn effective_stackup(&self) -> (usize, Stackup) {
+        let copper = self.model.board.layers.iter().filter(|l| l.ends_with(".Cu")).count().max(2);
+        let setup = self
+            .design
+            .drawings
+            .as_ref()
+            .and_then(|d| d.rules.as_ref())
+            .and_then(|r| r.stackup.as_ref())
+            .map(|s| (s.copper_layers as usize, s.stackup.clone()))
+            .or_else(|| self.model.stackup.as_ref().map(|s| (copper, s.clone())));
+        effective_stackup(setup, copper, self.model.board.board_thickness_um)
     }
 
     fn add_table(&mut self, mut table: Table) -> Result<(), Vec<CheckResult>> {

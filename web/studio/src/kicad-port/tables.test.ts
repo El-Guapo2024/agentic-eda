@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { BoardTable } from "../api/types";
+import type { BoardStatsReply, BoardTable } from "../api/types";
 import { fixtureTable as table } from "./tableFixture";
 import { allItemIds } from "../components/canvas/clipboard";
-import { extremeCell, rowsOf, colsOf, shiftColsAfterInsert, shiftRowsAfterInsert, autoPenFor, blockBounds, tableCellIds, canMerge, canUnmerge, cellAddress, cellById, cellDialogValues, cellEditOf, cellHitDistance, cellItemId, csvFileName, drawTableBox, drawTableGrid, escapeCsv, gridColumn, parseCellItemId, polygonDistance, selectColumns, selectRows, selectTables, tableCsv, tableDialogValues, tablePatchOf, widthAfterToggle } from "./tables";
+import { extremeCell, rowsOf, colsOf, shiftColsAfterInsert, shiftRowsAfterInsert, autoPenFor, blockBounds, boardNumbersOf, tableCellIds, canMerge, canUnmerge, cellAddress, cellById, cellDialogValues, cellEditOf, cellHitDistance, cellItemId, csvFileName, drawTableBox, drawTableGrid, escapeCsv, gridColumn, parseCellItemId, polygonDistance, selectColumns, selectRows, selectTables, tableCsv, tableDialogValues, tablePatchOf, widthAfterToggle } from "./tables";
 
 
 const boardOf = (...tables: BoardTable[]) => ({ drawings: { shapes: [], texts: [], groups: [], dimensions: [], dimension_settings: {} as never, tables } });
@@ -169,4 +169,19 @@ test("a table is an item of the board (it is picked up by a Paste or a Duplicate
   assert.ok(!items.has("tbl_a:0:0"), "a cell is not an item of its own to paste");
   assert.deepEqual(tableCellIds(b), ["tbl_a:0:0", "tbl_a:0:1", "tbl_a:1:0", "tbl_a:1:1", "tbl_b:0:0"]);
   assert.deepEqual(tableCellIds(null), []);
+});
+
+test("the board's numbers for Place Board Characteristics are kicad-cli's statistics in nanometres, and there are none without them", () => {
+  const stats = {
+    ok: true,
+    board: { has_outline: true, width_um: 26385, height_um: 25181, area_um2: 0, front_copper_area_um2: 0, back_copper_area_um2: 0, front_courtyard_area_um2: 0, back_courtyard_area_um2: 0, front_density_pct: 0, back_density_pct: 0, min_track_width_um: 200, min_clearance_um: 203.5, min_drill_um: 300, thickness_um: 1600 },
+    pad_properties: [
+      { title: "Castellated:", qty: 0 },
+      { title: "Press-fit:", qty: 3 },
+    ],
+  } as BoardStatsReply;
+  assert.deepEqual(boardNumbersOf(stats), { thickness_nm: 1_600_000, width_nm: 26_385_000, height_nm: 25_181_000, min_track_nm: 200_000, min_clearance_nm: 203_500, min_drill_nm: 300_000, castellated_pads: 0, press_fit_pads: 3 });
+  assert.equal(boardNumbersOf({ ok: false, message: "no kicad-cli" } as BoardStatsReply), null);
+  assert.equal(boardNumbersOf({ ok: true } as BoardStatsReply), null);
+  assert.equal(boardNumbersOf({ ...stats, pad_properties: undefined })!.press_fit_pads, 0, "no pad property entries is none");
 });
