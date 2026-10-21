@@ -457,6 +457,7 @@ impl<'m> Scene<'m> {
                 }
             }
             Item::Graphic(i) => crate::sch_move::move_graphic(&mut self.sch.extras.graphics[i], d),
+            Item::Table(i) => self.sch.extras.tables[i].translate(d.x, d.y),
             Item::Text(i) => self.sch.texts[i].at = add(self.sch.texts[i].at),
             Item::Label(i) => self.sch.labels[i].at = add(self.sch.labels[i].at),
             Item::Power(i) => self.sch.power_symbols[i].at = add(self.sch.power_symbols[i].at),

@@ -253,6 +253,12 @@ impl SchShown {
         SchShown { sheet, by_key }
     }
 
+    /// One variable as the sheet in view resolves it (`SCH_SHEET::ResolveTextVar` for each sheet of the path, then `SCHEMATIC::ResolveTextVar`): what a table cell's own
+    /// variables (`${ROW}`, `${CELL(..)}`) fall back on.
+    pub(crate) fn resolve(&self, token: &str) -> Option<String> {
+        self.sheet.resolve_level(self.sheet.levels.len().saturating_sub(1), token, 0)
+    }
+
     /// `SCH_TEXT::GetShownText` of a free text on the sheet in view.
     pub(crate) fn text_shown(&self, raw: &str) -> String {
         if !eda_model::text_vars::has_text_vars(raw) && !raw.contains('{') {

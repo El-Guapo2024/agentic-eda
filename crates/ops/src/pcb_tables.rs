@@ -21,6 +21,13 @@ use eda_model::table_edit::{edit_cells, patch_table, CellEdit, TablePatch};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
 
+/// Which tables a verb works on: the board's (`design.drawings.tables`) or those of the sheet in view (`SchExtras::tables`, through [`Cmd::SchTable`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scope {
+    Board,
+    Sheet,
+}
+
 /// One table verb -- see the module doc.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "verb", rename_all = "snake_case")]
@@ -164,8 +171,18 @@ pub(crate) fn transform_table(t: &mut Table, x: Xform, copper: usize) {
 impl Board<'_> {
     /// Apply one table verb to the board.
     pub(crate) fn apply_table(&mut self, cmd: &TableCmd) -> Result<(), Vec<CheckResult>> {
+        self.apply_table_in(Scope::Board, cmd)
+    }
+
+    /// Apply one table verb to the sheet in view (`Cmd::SchTable`): the same edits of the same `eda_model::table::Table`, on the sheet's tables. A sheet's table has no
+    /// layer (the layer in a verb is ignored) and no stackup to build from.
+    pub(crate) fn apply_sch_table(&mut self, cmd: &TableCmd) -> Result<(), Vec<CheckResult>> {
+        self.apply_table_in(Scope::Sheet, cmd)
+    }
+
+    fn apply_table_in(&mut self, scope: Scope, cmd: &TableCmd) -> Result<(), Vec<CheckResult>> {
         match cmd {
-            TableCmd::Add { table } => self.add_table(table.clone()),
+            TableCmd::Add { table } => self.add_table_in(scope, table.clone()),
             TableCmd::Draw { layer, at, cols, rows, cell_w_um, cell_h_um, line_width_um, locked, patch } => {
                 if *cols == 0 || *rows == 0 || *cols > 100 || *rows > 1000 {
                     return Err(fail("ops_bad_table", "table", "a table has from 1 to 100 columns and from 1 to 1000 rows"));
@@ -173,38 +190,43 @@ impl Board<'_> {
                 if *cell_w_um <= 0 || *cell_h_um <= 0 {
                     return Err(fail("ops_bad_table", "table", "a cell has a size"));
                 }
-                let mut t = Table::new_grid(layer, *at, *cols, *rows, *cell_w_um, *cell_h_um, *line_width_um);
+                let mut t = match scope {
+                    Scope::Board => Table::new_grid(layer, *at, *cols, *rows, *cell_w_um, *cell_h_um, *line_width_um),
+                    // `SCH_TABLE( 0 )` and cells of the sheet's default text size (`SCH_DRAWING_TOOLS::DrawTable`).
+                    Scope::Sheet => Table::new_sch_grid(*at, *cols, *rows, *cell_w_um, *cell_h_um, eda_model::ir::DEFAULT_FIELD_SIZE_UM),
+                };
                 patch_table(&mut t, patch).map_err(|m| fail("ops_bad_table", "table", m))?;
-                self.add_table(t)?;
+                self.add_table_in(scope, t)?;
                 if *locked {
-                    let id = self.design.drawings.as_ref().and_then(|d| d.tables.last()).map(|t| t.id.clone()).unwrap_or_default();
-                    let dr = self.drawings_mut();
-                    dr.locked_ids.push(id);
-                    dr.locked_ids.sort();
-                    dr.locked_ids.dedup();
+                    let id = match scope {
+                        Scope::Board => self.design.drawings.as_ref().and_then(|d| d.tables.last()).map(|t| t.id.clone()),
+                        Scope::Sheet => self.schematic()?.extras.tables.last().map(|t| t.id.clone()),
+                    };
+                    self.lock_table(scope, &id.unwrap_or_default(), true)?;
                 }
                 Ok(())
             }
+            TableCmd::PlaceStackup { .. } | TableCmd::PlaceCharacteristics { .. } if scope == Scope::Sheet => Err(fail("ops_bad_table", "table", "the stackup and the board characteristics are tables of the board, not of a sheet")),
             TableCmd::PlaceStackup { layer, at, units } => {
                 let (_, stackup) = self.effective_stackup();
                 let mut t = stackup_table(layer, &stackup, Units::parse(units.as_deref().unwrap_or("mm")));
                 t.at = *at;
-                self.add_table(t)
+                self.add_table_in(scope, t)
             }
             TableCmd::PlaceCharacteristics { layer, at, units, numbers } => {
                 let (copper, stackup) = self.effective_stackup();
                 let mut t = characteristics_table(layer, copper, &stackup, numbers, Units::parse(units.as_deref().unwrap_or("mm")));
                 t.at = *at;
-                self.add_table(t)
+                self.add_table_in(scope, t)
             }
-            TableCmd::Delete { id } => self.delete_table(id),
-            TableCmd::Set { id, layer, locked, patch } => self.set_table(id, layer.as_deref(), *locked, patch),
+            TableCmd::Delete { id } => self.delete_table_in(scope, id),
+            TableCmd::Set { id, layer, locked, patch } => self.set_table_in(scope, id, layer.as_deref(), *locked, patch),
             TableCmd::EditCells { id, cells, edit } => {
-                let t = self.table_mut(id)?;
+                let t = self.table_mut_in(scope, id)?;
                 edit_cells(t, cells, edit).map_err(|m| fail("ops_bad_table", id, m))
             }
             TableCmd::AddRow { id, row, above } => {
-                let t = self.table_mut(id)?;
+                let t = self.table_mut_in(scope, id)?;
                 if t.add_row(*row, *above) {
                     Ok(())
                 } else {
@@ -212,7 +234,7 @@ impl Board<'_> {
                 }
             }
             TableCmd::AddColumn { id, col, before } => {
-                let t = self.table_mut(id)?;
+                let t = self.table_mut_in(scope, id)?;
                 if t.add_column(*col, *before) {
                     Ok(())
                 } else {
@@ -220,38 +242,38 @@ impl Board<'_> {
                 }
             }
             TableCmd::DeleteRows { id, rows } => {
-                let t = self.table_mut(id)?;
+                let t = self.table_mut_in(scope, id)?;
                 if rows.is_empty() || rows.iter().any(|r| *r >= t.row_count()) {
                     return Err(fail("ops_bad_table", id, "no such row"));
                 }
                 // Every row of the table: `commit.Remove( table )`.
                 let all = (0..t.row_count()).all(|r| rows.contains(&r));
                 if all {
-                    return self.delete_table(id);
+                    return self.delete_table_in(scope, id);
                 }
-                if self.table_mut(id)?.delete_rows(rows) {
+                if self.table_mut_in(scope, id)?.delete_rows(rows) {
                     Ok(())
                 } else {
                     Err(fail("ops_bad_table", id, "nothing to delete"))
                 }
             }
             TableCmd::DeleteColumns { id, cols } => {
-                let t = self.table_mut(id)?;
+                let t = self.table_mut_in(scope, id)?;
                 if cols.is_empty() || cols.iter().any(|c| *c >= t.col_count()) {
                     return Err(fail("ops_bad_table", id, "no such column"));
                 }
                 let all = (0..t.col_count()).all(|c| cols.contains(&c));
                 if all {
-                    return self.delete_table(id);
+                    return self.delete_table_in(scope, id);
                 }
-                if self.table_mut(id)?.delete_columns(cols) {
+                if self.table_mut_in(scope, id)?.delete_columns(cols) {
                     Ok(())
                 } else {
                     Err(fail("ops_bad_table", id, "nothing to delete"))
                 }
             }
             TableCmd::MergeCells { id, cells } => {
-                let t = self.table_mut(id)?;
+                let t = self.table_mut_in(scope, id)?;
                 let Some((_, _, _, _, exact)) = t.block_bounds(cells) else { return Err(fail("ops_bad_table", id, "no cells given")) };
                 if cells.len() < 2 || !exact {
                     return Err(fail("ops_bad_table", id, "the selected cells are not a block of two cells or more"));
@@ -263,7 +285,7 @@ impl Board<'_> {
                 }
             }
             TableCmd::UnmergeCells { id, cells } => {
-                let t = self.table_mut(id)?;
+                let t = self.table_mut_in(scope, id)?;
                 if !cells.iter().any(|&(r, c)| t.cell(r, c).is_some_and(|x| x.col_span > 1 || x.row_span > 1)) {
                     return Err(fail("ops_bad_table", id, "none of the cells is merged"));
                 }
@@ -285,9 +307,12 @@ impl Board<'_> {
         }
     }
 
-    fn table_mut(&mut self, id: &str) -> Result<&mut Table, Vec<CheckResult>> {
-        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_table", id, "the board has no tables"))?;
-        dr.tables.iter_mut().find(|t| t.id == id).ok_or_else(|| fail("ops_unknown_table", id, "no table with this id"))
+    fn table_mut_in(&mut self, scope: Scope, id: &str) -> Result<&mut Table, Vec<CheckResult>> {
+        let tables = match scope {
+            Scope::Board => &mut self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_table", id, "the board has no tables"))?.tables,
+            Scope::Sheet => &mut self.schematic_mut()?.extras.tables,
+        };
+        tables.iter_mut().find(|t| t.id == id).ok_or_else(|| fail("ops_unknown_table", id, "no table with this id"))
     }
 
     /// The stackup of the board and its copper layer count: Board Setup's (`GetStackupDescriptor`, which `SynchronizeWithBoard` brings up to date), else the one the
@@ -305,52 +330,85 @@ impl Board<'_> {
         effective_stackup(setup, copper, self.model.board.board_thickness_um)
     }
 
-    fn add_table(&mut self, mut table: Table) -> Result<(), Vec<CheckResult>> {
+    fn add_table_in(&mut self, scope: Scope, mut table: Table) -> Result<(), Vec<CheckResult>> {
         if !table.is_well_formed() {
             return Err(fail("ops_bad_table", "table", "a table needs at least one cell, and as many cells as rows times columns"));
         }
-        if table.layer.is_empty() {
-            return Err(fail("ops_bad_table", "table", "a table needs a layer"));
-        }
-        self.table_layer_ok(&table.layer, "table")?;
         forget_uuids(&mut table);
-        let dr = self.drawings_mut();
-        dr.tables.push(table);
-        dr.assign_missing_ids();
+        match scope {
+            Scope::Board => {
+                if table.layer.is_empty() {
+                    return Err(fail("ops_bad_table", "table", "a table needs a layer"));
+                }
+                self.table_layer_ok(&table.layer, "table")?;
+                let dr = self.drawings_mut();
+                dr.tables.push(table);
+                dr.assign_missing_ids();
+            }
+            Scope::Sheet => {
+                table.layer.clear();
+                let sch = self.schematic_mut_or_create();
+                sch.extras.tables.push(table);
+                sch.assign_missing_ids();
+            }
+        }
         Ok(())
     }
 
-    pub(crate) fn delete_table(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
-        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_table", id, "the board has no tables"))?;
-        let before = dr.tables.len();
-        dr.tables.retain(|t| t.id != id);
-        if dr.tables.len() == before {
+    fn delete_table_in(&mut self, scope: Scope, id: &str) -> Result<(), Vec<CheckResult>> {
+        let tables = match scope {
+            Scope::Board => &mut self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_table", id, "the board has no tables"))?.tables,
+            Scope::Sheet => &mut self.schematic_mut()?.extras.tables,
+        };
+        let before = tables.len();
+        tables.retain(|t| t.id != id);
+        if tables.len() == before {
             return Err(fail("ops_unknown_table", id, "no table with this id"));
         }
+        // A table that is gone is no longer locked (a group that held it is tidied by the editor's own upkeep).
+        if scope == Scope::Sheet {
+            self.schematic_mut()?.extras.set_locked(id, false);
+        }
         Ok(())
     }
 
-    fn set_table(&mut self, id: &str, layer: Option<&str>, locked: Option<bool>, patch: &TablePatch) -> Result<(), Vec<CheckResult>> {
+    /// Lock or unlock the table (`BOARD_ITEM::SetLocked` / `SCH_ITEM::SetLocked`).
+    fn lock_table(&mut self, scope: Scope, id: &str, lock: bool) -> Result<(), Vec<CheckResult>> {
+        match scope {
+            Scope::Board => {
+                let dr = self.drawings_mut();
+                let mut set: std::collections::BTreeSet<String> = dr.locked_ids.iter().cloned().collect();
+                if lock {
+                    set.insert(id.to_string());
+                } else {
+                    set.remove(id);
+                }
+                dr.locked_ids = set.into_iter().collect();
+            }
+            Scope::Sheet => {
+                self.schematic_mut()?.extras.set_locked(id, lock);
+            }
+        }
+        Ok(())
+    }
+
+    fn set_table_in(&mut self, scope: Scope, id: &str, layer: Option<&str>, locked: Option<bool>, patch: &TablePatch) -> Result<(), Vec<CheckResult>> {
         if let Some(l) = layer {
+            if scope == Scope::Sheet {
+                return Err(fail("ops_bad_table", id, "a table of a sheet has no layer"));
+            }
             if l.is_empty() {
                 return Err(fail("ops_bad_table", id, "a table needs a layer"));
             }
             self.table_layer_ok(l, id)?;
         }
-        let t = self.table_mut(id)?;
+        let t = self.table_mut_in(scope, id)?;
         patch_table(t, patch).map_err(|m| fail("ops_bad_table", id, m))?;
         if let Some(l) = layer {
             t.layer = l.to_string();
         }
         if let Some(lock) = locked {
-            let dr = self.drawings_mut();
-            let mut set: std::collections::BTreeSet<String> = dr.locked_ids.iter().cloned().collect();
-            if lock {
-                set.insert(id.to_string());
-            } else {
-                set.remove(id);
-            }
-            dr.locked_ids = set.into_iter().collect();
+            self.lock_table(scope, id, lock)?;
         }
         Ok(())
     }

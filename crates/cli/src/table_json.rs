@@ -5,8 +5,8 @@
 //! column), because an edit starts from the raw one, as KiCad's dialogs do.
 
 use eda_model::table::{cell_item_id, Table, TableLineStyle, TableStroke};
-use eda_model::table_text::pcb_cell_draw;
-use eda_model::text_vars::PcbBoard;
+use eda_model::table_text::{pcb_cell_draw, sch_cell_draw, CellDraw};
+use eda_model::text_vars::{PcbBoard, Resolver};
 use serde_json::{json, Value};
 
 fn color_json(c: Option<eda_model::table::TableColor>) -> Value {
@@ -43,6 +43,19 @@ fn valign(v: eda_model::ir::TextVAlign) -> &'static str {
 
 /// One board table as the studio's state holds it.
 pub(crate) fn table_json(t: &Table, board: &PcbBoard) -> Value {
+    table_value(t, &|row, col| pcb_cell_draw(t, row, col, board), false)
+}
+
+/// One table of the sheet in view as the studio's state holds it: the same shape as a board's, with what only a sheet's cell has (`fill`, `fill_color`,
+/// `exclude_from_sim`) and a stroke of width 0 sent as the sheet's default width. `sheet` resolves the sheet's variables.
+pub(crate) fn sch_table_json(t: &Table, sheet: &Resolver) -> Value {
+    table_value(t, &|row, col| sch_cell_draw(t, row, col, sheet), true)
+}
+
+/// The width a stroke of width 0 draws with on a sheet: 6 mils (`DEFAULT_LINE_WIDTH_MILS`), micrometres.
+const SCH_DEFAULT_LINE_UM: f64 = 152.4;
+
+fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: bool) -> Value {
     if !t.is_well_formed() {
         return json!({ "id": t.id, "layer": t.layer, "x": t.at.x, "y": t.at.y, "angle": t.angle, "rows": 0, "cols": 0, "cells": [], "borders": [] });
     }
@@ -51,7 +64,7 @@ pub(crate) fn table_json(t: &Table, board: &PcbBoard) -> Value {
         .map(|i| {
             let (row, col) = t.row_col(i);
             let c = &t.cells[i];
-            let draw = pcb_cell_draw(t, row, col, board);
+            let draw = draw_of(row, col);
             let corners = t.cell_corners(row, col);
             let mut v = json!({
                 "id": cell_item_id(&t.id, row, col),
@@ -79,9 +92,15 @@ pub(crate) fn table_json(t: &Table, board: &PcbBoard) -> Value {
             if draw.shown != c.text {
                 v["shown"] = json!(draw.shown);
             }
+            if sheet {
+                v["fill"] = json!(c.fill.token());
+                v["fill_color"] = color_json(c.fill_color);
+                v["exclude_from_sim"] = json!(c.exclude_from_sim);
+            }
             v
         })
         .collect();
+    let border_width = |w: i64| if sheet && w == 0 { json!(SCH_DEFAULT_LINE_UM) } else { json!(w) };
     json!({
         "id": t.id,
         "layer": t.layer,
@@ -95,7 +114,7 @@ pub(crate) fn table_json(t: &Table, board: &PcbBoard) -> Value {
         "border": { "external": t.border.external, "header": t.border.header, "stroke": stroke_json(&t.border.stroke) },
         "separators": { "rows": t.separators.rows, "cols": t.separators.cols, "stroke": stroke_json(&t.separators.stroke) },
         "bbox": [bbox.x0, bbox.y0, bbox.x1, bbox.y1],
-        "borders": t.borders().iter().map(|l| json!({ "a": pt(l.a), "b": pt(l.b), "width": l.stroke.width_um, "style": style_token(l.stroke.drawn_style()), "color": color_json(l.stroke.color) })).collect::<Vec<_>>(),
+        "borders": t.borders().iter().map(|l| json!({ "a": pt(l.a), "b": pt(l.b), "width": border_width(l.stroke.width_um), "style": style_token(l.stroke.drawn_style()), "color": color_json(l.stroke.color) })).collect::<Vec<_>>(),
         "cells": cells,
     })
 }
@@ -131,5 +150,25 @@ mod tests {
         assert_eq!(c["corners"], json!([[1_000, 2_000], [21_000, 2_000], [21_000, 8_000], [1_000, 8_000]]));
         assert_eq!(c["shown"], "R1 A1");
         assert_eq!(c["lines"][0]["text"], "R1 A1");
+    }
+
+    #[test]
+    fn a_sheets_table_counts_from_zero_resolves_the_sheets_variables_and_draws_a_stroke_of_width_zero_at_the_default_width() {
+        let mut t = Table::new_sch_grid(Point { x: 10_000, y: 20_000 }, 2, 1, 30_000, 5_000, 1_270);
+        t.cells[0].text = "${ADDR} ${ROW}/${COL}".into();
+        t.cells[1].text = "${TITLE}".into();
+        t.cells[1].fill = eda_model::sch_extras::SchFill::Color;
+        t.cells[1].fill_color = Some(eda_model::sch_extras::SchColor { r: 1, g: 2, b: 3, a: 255 });
+        t.id = "tbl_s".into();
+        let v = sch_table_json(&t, &|tok: &str| (tok == "TITLE").then(|| "My sheet".to_string()));
+        assert_eq!(v["layer"], "");
+        assert_eq!(v["cells"][0]["shown"], "A0 0/0");
+        assert_eq!(v["cells"][1]["shown"], "My sheet");
+        assert_eq!((v["cells"][1]["fill"].as_str(), &v["cells"][1]["fill_color"]), (Some("color"), &json!([1, 2, 3, 255])));
+        assert_eq!(v["cells"][0]["fill"], "none");
+        assert_eq!(v["cells"][0]["exclude_from_sim"], false);
+        assert!(v["borders"].as_array().unwrap().iter().all(|b| b["width"] == 152.4), "a stroke of width 0 is the sheet's default width");
+        // the placed text uses the sheet's pen, not an eighth of the glyph
+        assert_eq!(v["cells"][0]["pen"], 152.4);
     }
 }

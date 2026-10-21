@@ -340,6 +340,7 @@ fn find_items(scene: &Scene, id: &str) -> Vec<Item> {
     out.extend(scene.sch.junctions.iter().enumerate().filter(|(_, j)| j.id == id).map(|(i, _)| Item::Junction(i)));
     out.extend(scene.sch.lines.iter().enumerate().filter(|(_, l)| l.id == id).map(|(i, _)| Item::NoteLine(i)));
     out.extend(scene.sch.extras.graphics.iter().enumerate().filter(|(_, g)| g.id == id).map(|(i, _)| Item::Graphic(i)));
+    out.extend(scene.sch.extras.tables.iter().enumerate().filter(|(_, t)| t.id == id).map(|(i, _)| Item::Table(i)));
     for (si, s) in scene.sch.sheets.iter().enumerate() {
         if s.id == id {
             out.push(Item::Sheet(si));
@@ -790,6 +791,8 @@ fn rotate_item(scene: &mut Scene, it: Item, c: Point, ccw: bool, grid: Um) {
             rotate_text90(scene, i, false);
         }
         Item::Graphic(i) => rotate_graphic(&mut scene.sch.extras.graphics[i], c, ccw),
+        // `SCH_TABLE::Rotate`: every cell turns a quarter about the centre and the text angle toggles; the grid is laid out again from cell (0, 0).
+        Item::Table(i) => scene.sch.extras.tables[i].rotate_sch(c, ccw),
         Item::Sheet(i) => {
             let old = scene.sch.sheets[i].clone();
             rotate_sheet(&mut scene.sch.sheets[i], &old, c, ccw);
@@ -960,6 +963,8 @@ fn mirror_item(scene: &mut Scene, it: Item, c: Point, vertical: bool, grid: Um) 
             set_text_lie(scene, i, |j, text_vertical| if vertical { j.mirrored_vertically(text_vertical) } else { j.mirrored_horizontally(text_vertical) });
         }
         Item::Graphic(i) => mirror_graphic(&mut scene.sch.extras.graphics[i], c, vertical),
+        // `SCH_TABLE::MirrorHorizontally` / `MirrorVertically`: "We could mirror all the cells, but it doesn't seem useful....": nothing.
+        Item::Table(_) => {}
         Item::Sheet(i) => {
             let old = scene.sch.sheets[i].clone();
             let s = &mut scene.sch.sheets[i];
