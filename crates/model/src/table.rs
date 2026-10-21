@@ -178,6 +178,11 @@ pub struct TableText {
 }
 
 impl TableText {
+    /// A sheet's text box until something sets it (`SCH_TEXTBOX`): glyphs `size_um` high (the sheet's default text size, 50 mil), automatic thickness, left and top.
+    pub fn sch_default(size_um: Um) -> Self {
+        TableText { height_um: size_um, width_um: size_um, v_align: TextVAlign::Top, ..TableText::pcb_default() }
+    }
+
     /// What an `EDA_TEXT` is until something sets it: 50 mil glyphs (`DEFAULT_SIZE_TEXT`), automatic thickness, and the justification a text box starts with
     /// (`PCB_TEXTBOX`: left, centre).
     pub fn pcb_default() -> Self {
@@ -255,6 +260,13 @@ impl TableCell {
         style.mirror = back;
         let margin = Self::legacy_margin_um(&style, 100);
         TableCell { uuid: String::new(), text: String::new(), col_span: 1, row_span: 1, margins: [margin; 4], style, fill: SchFill::None, fill_color: None, exclude_from_sim: false }
+    }
+
+    /// A new sheet cell (`new SCH_TABLECELL()`, then `SetTextSize` to the sheet's default text size, as Draw Table does): empty, no fill, left and top, and the margin the
+    /// constructor gave it -- the legacy margin of 50 mil text on a stroke 0 wide.
+    pub fn sch_new(text_size_um: Um) -> Self {
+        let margin = Self::legacy_margin_um(&TableText::sch_default(1_270), 0);
+        TableCell { uuid: String::new(), text: String::new(), col_span: 1, row_span: 1, margins: [margin; 4], style: TableText::sch_default(text_size_um), fill: SchFill::None, fill_color: None, exclude_from_sim: false }
     }
 
     /// Is this cell covered by a merged one?
@@ -375,6 +387,25 @@ impl Table {
             col_widths: vec![cell_w; cols],
             row_heights: vec![cell_h; rows],
             cells: (0..cols * rows).map(|_| TableCell::pcb_new(back)).collect(),
+            border: TableBorder { external: true, header: true, stroke },
+            separators: TableSeparators { rows: true, cols: true, stroke },
+        }
+    }
+
+    /// The table `SCH_DRAWING_TOOLS::DrawTable` makes: `cols` x `rows` empty sheet cells of `cell_w` x `cell_h`, the first corner at `at`, drawn with a border and separators
+    /// of the default width (`SCH_TABLE( 0 )`: width 0, the style the default one).
+    pub fn new_sch_grid(at: Point, cols: usize, rows: usize, cell_w: Um, cell_h: Um, text_size_um: Um) -> Table {
+        let (cols, rows) = (cols.max(1), rows.max(1));
+        let stroke = TableStroke { width_um: 0, style: TableLineStyle::Default, color: None };
+        Table {
+            id: String::new(),
+            uuid: String::new(),
+            layer: String::new(),
+            at,
+            angle: 0,
+            col_widths: vec![cell_w; cols],
+            row_heights: vec![cell_h; rows],
+            cells: (0..cols * rows).map(|_| TableCell::sch_new(text_size_um)).collect(),
             border: TableBorder { external: true, header: true, stroke },
             separators: TableSeparators { rows: true, cols: true, stroke },
         }
@@ -591,6 +622,15 @@ impl Table {
         let (_, _, w, h) = self.cell_local_rect(0, 0);
         let (ox, oy) = rotate_point(w / 2, h / 2, self.angle);
         self.at = Point { x: c0.x - ox, y: c0.y - oy };
+    }
+
+    /// `SCH_TABLE::Rotate( aCenter, aRotateCCW )`: every cell's rectangle is turned a quarter about `centre` and its text angle toggles between lying and standing
+    /// (`SCH_TEXTBOX::Rotate`), then `Normalize()` lays the grid out again from where cell (0, 0) went, turned by that angle: a sheet's table has the two attitudes, and a
+    /// second quarter does not continue the first.
+    pub fn rotate_sch(&mut self, centre: Point, ccw: bool) {
+        let (rx, ry) = rotate_point(self.at.x - centre.x, self.at.y - centre.y, if ccw { 90_000 } else { 270_000 });
+        self.at = Point { x: centre.x + rx, y: centre.y + ry };
+        self.angle = if self.angle == 90_000 { 0 } else { 90_000 };
     }
 
     /// `PCB_TABLE::Flip( aCentre, aFlipDirection )`: the table is turned over to `layer`. Its columns (`left_right`) or rows run the other way, the text of its cells

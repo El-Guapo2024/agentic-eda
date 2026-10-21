@@ -79,6 +79,7 @@ pub use bus::expand_bus_members;
 mod sch_clipboard;
 pub use sch_clipboard::{fragment_as_sheet_file, parse_clipboard, write_clipboard, CopyInput, CopyOutput};
 mod sch_extras_io;
+mod sch_table_io;
 pub mod sch_overlap;
 mod sch_import;
 mod sch_crossref;
@@ -534,6 +535,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
 
     // Shapes, text boxes, rule areas and directive labels (`SchGraphic`).
     sch_extras_io::write_graphics(&mut out, sch);
+    // Its tables (`SCH_TABLE`).
+    sch_table_io::write_all(&mut out, sch);
 
     // ---- no-connect flags ----
     for nc in &no_connects {

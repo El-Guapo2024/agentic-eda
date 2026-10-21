@@ -14,7 +14,7 @@
 use crate::ir::{Point, TextJustify, TextVAlign, Um};
 use crate::kicad_font::{advance, kiround};
 use crate::table::{rotate_point, Table, TableCell};
-use crate::text_vars::{shown_text, PcbBoard};
+use crate::text_vars::{has_text_vars, resolve_text_vars, shown_text, unescape_string, PcbBoard, Resolver, ESC_AT, ESC_DOLLAR};
 
 /// One line of a cell's text, placed: the point its first glyph's origin is at once the cell's turn and mirror are applied, µm on the board (fractions kept:
 /// KiCad's own are nanometres).
@@ -257,9 +257,14 @@ pub fn wrap_to_cell(t: &Table, row: usize, col: usize, resolved: &str) -> String
 /// mirrored, mirrored about it.
 pub fn place_lines(t: &Table, row: usize, col: usize, shown: &str) -> Vec<PlacedLine> {
     let Some(cell) = t.cell(row, col) else { return Vec::new() };
-    let style = &cell.style;
+    place_lines_at(&cell.style, nm(cell.style.pen_um()) as f64, draw_pos_nm(t, row, col), t.angle, shown)
+}
+
+/// [`place_lines`] for any text box: `style` is its text, `pen_nm` the stroke width the glyphs are drawn with, `origin` its `GetDrawPos()` (nanometres) and `angle` the
+/// angle the lines are turned about it (millidegrees, counter-clockwise on the screen).
+pub fn place_lines_at(style: &crate::table::TableText, pen_nm: f64, origin: (i64, i64), angle: u32, shown: &str) -> Vec<PlacedLine> {
     let (size_w, size_h) = (nm(style.width_um) as f64, nm(style.height_um) as f64);
-    let pen = nm(style.pen_um()) as f64;
+    let pen = pen_nm;
     let lines: Vec<&str> = shown.split('\n').collect();
     // `GetInterline( size.y ) * m_LineSpacing`, with the stroke font's legacy factor, as an int.
     let interline = (size_h * 1.68 * 0.9583 * style.line_spacing()) as i64;
@@ -276,7 +281,6 @@ pub fn place_lines(t: &Table, row: usize, col: usize, shown: &str) -> Vec<Placed
         TextVAlign::Center => off.1 -= height / 2,
         TextVAlign::Bottom => off.1 -= height,
     }
-    let origin = draw_pos_nm(t, row, col);
     lines
         .iter()
         .enumerate()
@@ -292,7 +296,7 @@ pub fn place_lines(t: &Table, row: usize, col: usize, shown: &str) -> Vec<Placed
             let line_y = off.1 + i as i64 * interline;
             // Mirror about the draw position's x, then turn about it (`STROKE_GLYPH::Transform`).
             let mx = if style.mirror { -line_x } else { line_x };
-            let (rx, ry) = rotate_point(mx, line_y, t.angle);
+            let (rx, ry) = rotate_point(mx, line_y, angle);
             PlacedLine { text: (*line).to_string(), x_um: (origin.0 + rx) as f64 / 1000.0, y_um: (origin.1 + ry) as f64 / 1000.0 }
         })
         .collect()
@@ -305,6 +309,153 @@ pub fn pcb_cell_draw(t: &Table, row: usize, col: usize, board: &PcbBoard) -> Cel
     let shown = wrap_to_cell(t, row, col, &resolved);
     let lines = if cell.is_covered() { Vec::new() } else { place_lines(t, row, col, &shown) };
     CellDraw { shown, lines, angle: t.angle, mirror: cell.style.mirror, pen_um: cell.style.pen_um() as f64 }
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------------ a sheet's table
+
+/// The stroke width a sheet's text is drawn with when it has none of its own: the sheet's default line width, 6 mils (`DEFAULT_LINE_WIDTH_MILS`), nanometres.
+pub const SCH_DEFAULT_PEN_NM: i64 = 152_400;
+
+/// `EDA_TEXT::GetEffectiveTextPenWidth( aDefaultPenWidth )`, nanometres: the thickness the text has, else the default pen (a fifth of the glyph width when bold), at most a
+/// quarter of the smaller glyph dimension (`ClampTextPenSize`). A sheet draws its text with the default pen where a board's is an eighth of the glyph.
+pub fn effective_pen_nm(style: &crate::table::TableText, default_pen_nm: i64) -> i64 {
+    let mut pen = nm(style.thickness_um);
+    if pen <= 1 {
+        pen = default_pen_nm;
+        if style.bold {
+            pen = kiround(nm(style.width_um) as f64 / 5.0);
+        } else if pen <= 1 {
+            pen = kiround(nm(style.width_um) as f64 / 8.0);
+        }
+    }
+    let size = nm(style.width_um).abs().min(nm(style.height_um).abs());
+    pen.min(kiround(size as f64 * 0.25))
+}
+
+/// `SCH_TABLECELL::GetAddr`: the column's letter and the row, which a sheet counts from 0 (`A0`, `B3`).
+pub fn sch_cell_addr(row: usize, col: usize) -> String {
+    format!("{}{}", column_letter(col), row)
+}
+
+/// `parseCellAddress`: `A0`, `b12`, `AA3` as the row and the column, both from 0.
+fn parse_cell_address(addr: &str) -> Option<(usize, usize)> {
+    let letters: String = addr.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    if letters.is_empty() {
+        return None;
+    }
+    let col = letters.to_uppercase().chars().fold(0usize, |n, c| n * 26 + (c as usize - 'A' as usize + 1)) - 1;
+    let row: i64 = addr[letters.len()..].parse().ok()?;
+    (row >= 0).then_some((row as usize, col))
+}
+
+/// `SCH_TABLECELL::GetShownText` of the cell at (`row`, `col`): `${ROW}` and `${COL}` (from 0), `${ADDR}`, `${CELL("A0")}` / `${CELL(row, col)}` (the shown text of another
+/// cell, `<Unresolved: ..>` when it has none, `<Circular reference>` past [`crate::text_vars::MAX_DEPTH`]), then the sheet's own variables (`sheet`), the lines broken to the
+/// width of the cell, and the markers of a literal `\${..}` turned back at the top level (`depth` 0) only. `@{..}` expressions are not evaluated (`text_vars.rs`).
+pub fn sch_cell_shown(t: &Table, row: usize, col: usize, sheet: &Resolver, depth: usize) -> String {
+    let Some(cell) = t.cell(row, col) else { return String::new() };
+    let resolver = |token: &str| -> Option<String> {
+        match token {
+            "ROW" => return Some(row.to_string()),
+            "COL" => return Some(col.to_string()),
+            "ADDR" => return Some(sch_cell_addr(row, col)),
+            _ => {}
+        }
+        if let Some(args) = token.strip_prefix("CELL(").and_then(|s| s.strip_suffix(')')) {
+            let args = args.trim();
+            let (target_row, target_col) = if args.len() >= 2 && args.starts_with('"') && args.ends_with('"') {
+                let addr = &args[1..args.len() - 1];
+                match parse_cell_address(addr) {
+                    Some(rc) => rc,
+                    None => return Some(format!("<Unresolved: Invalid cell address: {addr}>")),
+                }
+            } else if let Some((r, c)) = args.split_once(',') {
+                match (r.trim().parse::<i64>(), c.trim().parse::<i64>()) {
+                    (Ok(r), Ok(c)) if r >= 0 && c >= 0 => (r as usize, c as usize),
+                    (Ok(r), Ok(c)) => {
+                        return Some(format!("<Unresolved: Cell {} not found>", if r >= 0 && c >= 0 { sch_cell_addr(r as usize, c as usize) } else { args.to_string() }));
+                    }
+                    _ => return Some(format!("<Unresolved: Invalid cell coordinates: {args}>")),
+                }
+            } else {
+                return Some(format!("<Unresolved: Invalid CELL() syntax: {args}>"));
+            };
+            if target_row >= t.row_count() || target_col >= t.col_count() {
+                return Some(format!("<Unresolved: Cell {} not found>", sch_cell_addr(target_row, target_col)));
+            }
+            if depth >= crate::text_vars::MAX_DEPTH {
+                return Some("<Circular reference>".to_string());
+            }
+            return Some(sch_cell_shown(t, target_row, target_col, sheet, depth + 1));
+        }
+        sheet(token)
+    };
+    let mut text = unescape_string(&cell.text);
+    if has_text_vars(&text) {
+        let mut passes = 0usize;
+        text = resolve_text_vars(&text, &resolver, &mut passes);
+    }
+    let mut shown = sch_wrap_to_cell(t, row, col, &text);
+    if depth == 0 {
+        shown = shown.replace(ESC_DOLLAR, "${").replace(ESC_AT, "@{");
+    }
+    shown
+}
+
+/// The width the text of a sheet's cell is broken to: the cell's extent along the text (`abs( size.x )` less the left and right margins; `abs( size.y )` less the top and
+/// bottom ones for a text that stands), the stroke being the one `GetEffectiveTextPenWidth()` gives (an eighth of the glyph: the breaking does not know the sheet's pen).
+pub fn sch_wrap_to_cell(t: &Table, row: usize, col: usize, resolved: &str) -> String {
+    let Some(cell) = t.cell(row, col) else { return resolved.to_string() };
+    let c = t.cell_corners(row, col);
+    let (sx, sy) = ((c[2].x - c[0].x).abs(), (c[2].y - c[0].y).abs());
+    let vertical = t.angle % 180_000 == 90_000;
+    let width = if vertical { nm(sy) - nm(cell.margins[1] + cell.margins[3]) } else { nm(sx) - nm(cell.margins[0] + cell.margins[2]) };
+    linebreak_text(resolved, width, nm(cell.style.width_um), nm(cell.style.pen_um()))
+}
+
+/// `SCH_TEXTBOX::GetDrawPos()`, nanometres: the box of the cell (`start` and `end`, normalised), and the corner or middle of it its justification names, moved in by the
+/// margin of that side. A text that stands (a table turned a quarter) is anchored by its horizontal justification along the box's height and by its vertical one along
+/// its width, with the margins of the sides those are.
+pub fn sch_draw_pos_nm(t: &Table, row: usize, col: usize) -> (i64, i64) {
+    let cell = t.cell(row, col).expect("a cell of the table");
+    let c = t.cell_corners(row, col).map(|p| (nm(p.x), nm(p.y)));
+    let (left, right) = (c[0].0.min(c[2].0), c[0].0.max(c[2].0));
+    let (top, bottom) = (c[0].1.min(c[2].1), c[0].1.max(c[2].1));
+    let m = cell.margins.map(nm);
+    let (h, v) = (cell.style.h_align, cell.style.v_align);
+    let mut pos = (left + m[0], bottom - m[3]);
+    if t.angle % 180_000 == 90_000 {
+        pos.1 = match h {
+            TextJustify::Left => bottom - m[3],
+            TextJustify::Center => (top + bottom) / 2,
+            TextJustify::Right => top + m[1],
+        };
+        pos.0 = match v {
+            TextVAlign::Top => left + m[0],
+            TextVAlign::Center => (left + right) / 2,
+            TextVAlign::Bottom => right - m[2],
+        };
+    } else {
+        pos.0 = match h {
+            TextJustify::Left => left + m[0],
+            TextJustify::Center => (left + right) / 2,
+            TextJustify::Right => right - m[2],
+        };
+        pos.1 = match v {
+            TextVAlign::Top => top + m[1],
+            TextVAlign::Center => (top + bottom) / 2,
+            TextVAlign::Bottom => bottom - m[3],
+        };
+    }
+    pos
+}
+
+/// A cell of a sheet's table ready to draw. `sheet` resolves the sheet's variables.
+pub fn sch_cell_draw(t: &Table, row: usize, col: usize, sheet: &Resolver) -> CellDraw {
+    let cell: &TableCell = t.cell(row, col).expect("a cell of the table");
+    let shown = sch_cell_shown(t, row, col, sheet, 0);
+    let pen_nm = effective_pen_nm(&cell.style, SCH_DEFAULT_PEN_NM);
+    let lines = if cell.is_covered() { Vec::new() } else { place_lines_at(&cell.style, pen_nm as f64, sch_draw_pos_nm(t, row, col), t.angle, &shown) };
+    CellDraw { shown, lines, angle: t.angle, mirror: false, pen_um: pen_nm as f64 / 1000.0 }
 }
 
 /// `Point` of a placed line, rounded to the micrometre (for a hit test).
@@ -420,5 +571,130 @@ mod tests {
         let mut t = one_cell("x", 20_000, 6_000, style(1_500, 200));
         t.cells[0].col_span = 0;
         assert!(pcb_cell_draw(&t, 0, 0, &PcbBoard::default()).lines.is_empty());
+    }
+
+    // ------------------------------------------------------------------------------------------------------------------------------ a sheet's table
+
+    /// A `rows` x `cols` sheet table of 20 x 5 mm cells at (100, 50) mm: text `A0`..., left and top, a 1 mm margin, 1.27 mm glyphs.
+    fn sheet(rows: usize, cols: usize) -> Table {
+        let mut t = Table::new_sch_grid(Point { x: 100_000, y: 50_000 }, cols, rows, 20_000, 5_000, 1_270);
+        for (i, c) in t.cells.iter_mut().enumerate() {
+            c.margins = [1_000; 4];
+            c.text = format!("t{}", i);
+        }
+        t
+    }
+
+    fn no_vars(_: &str) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn a_sheets_cell_addresses_and_rows_and_columns_count_from_zero() {
+        assert_eq!(sch_cell_addr(0, 0), "A0");
+        assert_eq!(sch_cell_addr(3, 1), "B3");
+        let mut t = sheet(2, 2);
+        t.cells[3].text = "${ADDR} ${ROW},${COL}".into();
+        assert_eq!(sch_cell_shown(&t, 1, 1, &no_vars, 0), "B1 1,1");
+        // the sheet's own variables come after the cell's
+        let sheet_vars = |tok: &str| (tok == "TITLE").then(|| "My sheet".to_string());
+        t.cells[0].text = "${TITLE} ${NOPE}".into();
+        assert_eq!(sch_cell_shown(&t, 0, 0, &sheet_vars, 0), "My sheet ${NOPE}");
+    }
+
+    #[test]
+    fn a_cell_can_show_another_cells_text() {
+        let mut t = sheet(2, 2);
+        t.cells[1].text = "total".into();
+        t.cells[2].text = "${CELL(\"B0\")}!".into();
+        t.cells[3].text = "${CELL(0, 1)} and ${CELL( 1 , 0 )} and ${CELL(\"c9\")} ${CELL(7,7)} ${CELL(x)} ${CELL(\"??\")}".into();
+        assert_eq!(sch_cell_shown(&t, 1, 0, &no_vars, 0), "total!");
+        // (the answers are long and the column is 20 mm: the lines are broken, as KiCad breaks them)
+        let text = sch_cell_shown(&t, 1, 1, &no_vars, 0).replace('\n', " ");
+        assert!(text.contains("total and total!"), "{text}");
+        assert!(text.contains("<Unresolved: Cell C9 not found>"), "{text}");
+        assert!(text.contains("<Unresolved: Cell H7 not found>"), "{text}");
+        assert!(text.contains("<Unresolved: Invalid CELL() syntax: x>"), "{text}");
+        assert!(text.contains("<Unresolved: Invalid cell address: ??>"), "{text}");
+        // a cell that shows itself ends at the depth limit
+        let mut loopy = sheet(1, 2);
+        loopy.cells[0].text = "${CELL(\"A0\")}".into();
+        assert!(sch_cell_shown(&loopy, 0, 0, &no_vars, 0).replace('\n', " ").contains("<Circular reference>"));
+    }
+
+    #[test]
+    fn a_sheet_cell_anchors_its_text_by_its_justification_with_the_margin_of_that_side() {
+        let mut t = sheet(1, 1);
+        // left, top: a margin in from the top left corner of the box (100, 50) mm
+        assert_eq!(sch_draw_pos_nm(&t, 0, 0), (101_000_000, 51_000_000));
+        t.cells[0].style.h_align = TextJustify::Right;
+        t.cells[0].style.v_align = TextVAlign::Bottom;
+        t.cells[0].margins = [1_000, 2_000, 3_000, 4_000];
+        assert_eq!(sch_draw_pos_nm(&t, 0, 0), (120_000_000 - 3_000_000, 55_000_000 - 4_000_000));
+        t.cells[0].style.h_align = TextJustify::Center;
+        t.cells[0].style.v_align = TextVAlign::Center;
+        assert_eq!(sch_draw_pos_nm(&t, 0, 0), (110_000_000, 52_500_000));
+    }
+
+    #[test]
+    fn a_table_that_stands_anchors_along_its_height_and_breaks_to_its_width() {
+        let mut t = sheet(1, 1);
+        t.angle = 90_000;
+        t.cells[0].margins = [1_000, 2_000, 3_000, 4_000];
+        // the box of the cell is turned a quarter about the corner: 5 mm wide and 20 mm high now, above and to the right of the corner? (the grid runs up the sheet)
+        let c = t.cell_corners(0, 0);
+        let (x0, x1) = (c[0].x.min(c[2].x), c[0].x.max(c[2].x));
+        let (y0, y1) = (c[0].y.min(c[2].y), c[0].y.max(c[2].y));
+        assert_eq!((x1 - x0, y1 - y0), (5_000, 20_000));
+        // left justified: along the text, which now runs up, from the bottom less the bottom margin; top justified: across, from the left plus the left margin
+        let (px, py) = sch_draw_pos_nm(&t, 0, 0);
+        assert_eq!((px, py), (x0 * 1000 + 1_000_000, y1 * 1000 - 4_000_000));
+        // the column the text is broken to is the 20 mm of the cell less the top and bottom margins
+        let long = "alpha beta gamma delta epsilon zeta eta theta";
+        let wrapped = sch_wrap_to_cell(&t, 0, 0, long);
+        assert_eq!(wrapped, linebreak_text(long, 20_000_000 - 6_000_000, 1_270_000, 159_000));
+    }
+
+    #[test]
+    fn the_text_of_a_sheet_is_drawn_with_the_sheets_default_pen_where_a_boards_is_an_eighth_of_the_glyph() {
+        let plain = TableText::sch_default(1_270);
+        assert_eq!(effective_pen_nm(&plain, SCH_DEFAULT_PEN_NM), 152_400);
+        let bold = TableText { bold: true, ..plain.clone() };
+        assert_eq!(effective_pen_nm(&bold, SCH_DEFAULT_PEN_NM), 254_000, "a fifth of the glyph");
+        let own = TableText { thickness_um: 200, ..plain.clone() };
+        assert_eq!(effective_pen_nm(&own, SCH_DEFAULT_PEN_NM), 200_000);
+        let huge = TableText { thickness_um: 900, ..plain.clone() };
+        assert_eq!(effective_pen_nm(&huge, SCH_DEFAULT_PEN_NM), 317_500, "at most a quarter of the glyph");
+        assert_eq!(effective_pen_nm(&plain, 0), 158_750, "with no default pen it is the board's eighth");
+    }
+
+    #[test]
+    fn a_sheet_cell_is_placed_like_the_first_cell_of_the_qa_sheet() {
+        // BusAndVectors.kicad_sch: 1.27 mm text, left and top, margin 0.9525, a cell at (122.555, 29.21) mm: kicad-cli draws the text a margin in from the corner.
+        let mut t = Table::new_sch_grid(Point { x: 122_555, y: 29_210 }, 2, 1, 26_670, 2_540, 1_270);
+        t.cells[0].text = "LED pin (by VectorIndex)".into();
+        let draw = sch_cell_draw(&t, 0, 0, &no_vars);
+        assert_eq!(draw.shown, "LED pin (by VectorIndex)", "the 26.67 mm column holds it whole");
+        assert_eq!(draw.lines.len(), 1);
+        // x: the anchor plus thickness / 1.52 (152.4 um pen); y: the anchor plus the glyph height less 0.052 of the pen
+        let l = &draw.lines[0];
+        assert!((l.x_um - (123_508.0 + 152.4 / 1.52)).abs() < 1.5, "{}", l.x_um);
+        assert!((l.y_um - (30_163.0 + 1_270.0 - 152.4 * 0.052)).abs() < 1.5, "{}", l.y_um);
+        assert!((draw.pen_um - 152.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rotating_a_sheet_table_toggles_its_attitude_about_the_origin_the_turn_puts_cell_zero_at() {
+        let mut t = sheet(2, 2);
+        let centre = Point { x: 110_000, y: 50_000 };
+        t.rotate_sch(centre, true);
+        // (100, 50) turned a quarter counter-clockwise about (110, 50): 10 mm to the left becomes 10 mm down the screen? rotate_point(-10, 0, 90) = (0, 10)
+        assert_eq!((t.at, t.angle), (Point { x: 110_000, y: 60_000 }, 90_000));
+        t.rotate_sch(centre, true);
+        // the second quarter does not continue the first: the attitude is lying again, from where cell zero went
+        assert_eq!(t.angle, 0);
+        assert_eq!(t.at, Point { x: 120_000, y: 50_000 });
+        t.rotate_sch(centre, false);
+        assert_eq!(t.angle, 90_000);
     }
 }

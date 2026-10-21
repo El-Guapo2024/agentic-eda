@@ -11,4 +11,6 @@ eda-kicad = { path = "../kicad" }
 
 [dev-dependencies]
 eda-engine = { path = "../engine" }
+# The stroke font (`kicad_text_segments`): where the ink of a cell's text should be, against kicad-cli's plot of it (tests/tables_sch.rs).
+eda-drc = { path = "../drc" }
 serde_yaml = { workspace = true }
