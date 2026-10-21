@@ -59,6 +59,7 @@ pub use array::ArrayGeometry;
 mod array_numbering;
 pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingAxes, NumberingType, PadNumberProvider, PadNumbering};
 mod fp_array;
+mod pad_edit;
 mod fp_lib_fields;
 mod sym_derive;
 mod fix_shapes;
@@ -1643,6 +1644,13 @@ pub enum Cmd {
         #[serde(default)]
         numbering: Option<PadNumbering>,
     },
+    /// `pcbnew.PadTool.explodePad` (Edit Pad as Graphic Shapes, Ctrl+E), `PAD_TOOL::EditPad` with a pad selected -- see [`pad_edit`]: a custom pad's basic shapes
+    /// become free graphics of the footprint on the pad's layer, the pad is left as its anchor and the footprint is in pad edit mode
+    /// ([`eda_model::ir::PadEditMode`]), until the pad is recombined. One undo step. Refused while a pad is being edited.
+    ExplodePad { footprint: String, id: String },
+    /// `pcbnew.PadTool.recombinePad` (Finish Pad Edit, Ctrl+E), `PAD_TOOL::EditPad` with a pad being edited -- see [`pad_edit`]: every graphic on the pad's layer
+    /// that touches the pad goes back into it as a basic shape. One undo step. Refused when no pad is being edited.
+    RecombinePad { footprint: String },
 
     // ----------------------------------------------------- symbol editor
     //
@@ -1967,7 +1975,9 @@ impl Cmd {
             | Cmd::EditFootprintText { .. }
             | Cmd::DeleteFootprintText { .. }
             | Cmd::MoveFootprintText { .. }
-            | Cmd::CreateFootprintArray { .. } => Domain::FootprintEditor,
+            | Cmd::CreateFootprintArray { .. }
+            | Cmd::ExplodePad { .. }
+            | Cmd::RecombinePad { .. } => Domain::FootprintEditor,
             Cmd::OpenSymbolForEdit { .. }
             | Cmd::NewSymbol { .. }
             | Cmd::DeleteLibrarySymbol { .. }
@@ -2230,7 +2240,9 @@ impl Cmd {
             | Cmd::EditFootprintText { footprint, .. }
             | Cmd::DeleteFootprintText { footprint, .. }
             | Cmd::MoveFootprintText { footprint, .. }
-            | Cmd::CreateFootprintArray { footprint, .. } => vec![footprint.as_str()],
+            | Cmd::CreateFootprintArray { footprint, .. }
+            | Cmd::ExplodePad { footprint, .. }
+            | Cmd::RecombinePad { footprint } => vec![footprint.as_str()],
 
             Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
             Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
@@ -2833,6 +2845,8 @@ impl<'a> Board<'a> {
             }
             Cmd::SetPadNumbers { footprint, numbers } => self.set_pad_numbers(footprint, numbers),
             Cmd::RenumberPads { footprint, start, prefix, step } => self.renumber_pads(footprint, *start, prefix, *step),
+            Cmd::ExplodePad { footprint, id } => self.explode_pad(footprint, id),
+            Cmd::RecombinePad { footprint } => self.recombine_pad(footprint),
 
             Cmd::AddFootprintGraphic { footprint, shape } => self.add_footprint_graphic(footprint, shape.clone()),
             Cmd::DeleteFootprintGraphic { footprint, id } => self.delete_footprint_graphic(footprint, id),
@@ -5165,6 +5179,10 @@ impl<'a> Board<'a> {
     }
 
     fn update_footprint_on_board(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
+        // `FOOTPRINT_EDIT_FRAME::SaveFootprint`: a pad being edited as shapes is recombined before the footprint is saved.
+        if self.library_footprint_mut(name)?.pad_edit.is_some() {
+            self.recombine_pad(name)?;
+        }
         self.library_footprint_mut(name)?.published = true;
         Ok(())
     }
@@ -5220,6 +5238,10 @@ impl<'a> Board<'a> {
         fp.pads.retain(|p| p.id != id);
         if fp.pads.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_pad", id, "no pad with this id")]);
+        }
+        // `PAD_TOOL::Reset`: a deleted pad leaves pad edit mode.
+        if fp.pad_edit.as_ref().is_some_and(|m| m.pad == id) {
+            fp.pad_edit = None;
         }
         Ok(())
     }
@@ -5798,6 +5820,8 @@ mod pcb_transform_tests;
 mod array_tests;
 #[cfg(test)]
 mod fp_array_tests;
+#[cfg(test)]
+mod pad_edit_tests;
 #[cfg(test)]
 mod sym_derive_tests;
 #[cfg(test)]

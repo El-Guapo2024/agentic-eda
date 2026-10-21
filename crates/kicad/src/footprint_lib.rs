@@ -691,6 +691,7 @@ mod tests {
             anchor: eda_model::ir::Point { x: 0, y: 0 },
             published: false,
             zone_connection: None,
+            pad_edit: None,
         };
 
         let text = export_kicad_mod(&fp);

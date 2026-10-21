@@ -3302,6 +3302,24 @@ impl LibraryPad {
     }
 }
 
+/// `PAD_TOOL::m_editPad` and the `ENTERED` flag of its pad (`pcbnew/tools/pad_tool.cpp`): the pad of a library footprint that is being edited as
+/// graphic shapes ("Edit Pad as Graphic Shapes", Ctrl+E) until "Finish Pad Edit" recombines them. While it lasts the pad is its anchor and its
+/// basic shapes are free graphics of the footprint on the pad's layer. Part of the footprint, so undo and redo bring the mode back with the pad as
+/// `PAD_TOOL::OnUndoRedo` does by looking for the flagged pad. What the explode could not leave as graphics is kept here for the recombine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PadEditMode {
+    /// The id of the pad being edited.
+    pub pad: String,
+    /// The custom pad's zone option (`CUSTOM_SHAPE_ZONE_MODE`), which the pad being its anchor has no place for.
+    #[serde(default)]
+    pub zone: crate::footprint::CustomZoneMode,
+    /// The proxy items of the custom pad (`gr_bbox`, the box the pad number sits in, and `gr_vector`, a thermal spoke template): not copper, so not
+    /// graphics to draw; set aside in the footprint's frame (as the explode placed them) and given back to the pad by the recombine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proxies: Vec<crate::footprint::PadPrimitive>,
+}
+
 /// A footprint definition as the Footprint Editor shows/edits it --
 /// GAPS.md #8's "project footprint library section in the IR". Local
 /// frame: micrometers, origin at `anchor` (KiCad's "Place Footprint
@@ -3399,6 +3417,9 @@ pub struct LibraryFootprint {
     /// every pad of this footprint that does not set its own. `None` is `INHERITED`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_connection: Option<PadConnection>,
+    /// The pad being edited as graphic shapes, if one is (`PAD_TOOL::InPadEditMode`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_edit: Option<PadEditMode>,
 }
 
 impl Default for LibraryFootprint {
@@ -3422,6 +3443,7 @@ impl Default for LibraryFootprint {
             anchor: Point { x: 0, y: 0 },
             published: false,
             zone_connection: None,
+            pad_edit: None,
         }
     }
 }

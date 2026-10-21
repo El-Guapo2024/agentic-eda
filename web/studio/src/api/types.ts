@@ -838,6 +838,15 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
   courtyard: [Um, Um] | null;
   anchor: PointXY;
   published: boolean;
+  /** `PAD_TOOL::InPadEditMode`: the pad being edited as graphic shapes (Edit Pad as Graphic Shapes), until Finish Pad Edit recombines it (kicad-port/padEditMode.ts). Absent when none is. */
+  pad_edit?: PadEditMode | null;
+}
+
+/** `crates/model/src/ir.rs` `PadEditMode`: the pad flagged `ENTERED`, and what its explode set aside (the custom pad's zone option and proxy items, which the recombine gives back). */
+export interface PadEditMode {
+  pad: string;
+  zone?: "outline" | "convex_hull";
+  proxies?: unknown[];
 }
 
 /** `GET /api/footprint_library`'s one field: every footprint name available to open (already-opened library entries plus intent/real-library-resolved ones), sorted. */
@@ -1761,6 +1770,9 @@ export type Cmd =
   | { op: "move_footprint_text"; footprint: string; id: string; x: Um; y: Um }
   /** `pcbnew.Array.createArray` in the Footprint Editor (`ARRAY_TOOL::CreateArray`, `m_isFootprintEditor`): `numbering` renumbers the pads of the array; left out, the copies keep their source's number. */
   | { op: "create_footprint_array"; footprint: string; ids: string[]; geometry: ArrayGeometry; arrange?: boolean; numbering?: PadNumbering | null }
+  /** `pcbnew.PadTool.explodePad` / `recombinePad` (Ctrl+E), `PAD_TOOL::EditPad`: a custom pad's basic shapes as free graphics of the footprint on the pad's layer, and the way back. One undo step each. */
+  | { op: "explode_pad"; footprint: string; id: string }
+  | { op: "recombine_pad"; footprint: string }
 
   // ----------------------------------------------------------- symbol editor
   //
