@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardTable } from "../api/types";
 import { fixtureTable as table } from "./tableFixture";
-import { extremeCell, rowsOf, colsOf, shiftColsAfterInsert, shiftRowsAfterInsert, autoPenFor, blockBounds, canMerge, canUnmerge, cellAddress, cellById, cellDialogValues, cellEditOf, cellHitDistance, cellItemId, csvFileName, drawTableBox, drawTableGrid, escapeCsv, gridColumn, parseCellItemId, polygonDistance, selectColumns, selectRows, selectTables, tableCsv, tableDialogValues, tablePatchOf, widthAfterToggle } from "./tables";
+import { allItemIds } from "../components/canvas/clipboard";
+import { extremeCell, rowsOf, colsOf, shiftColsAfterInsert, shiftRowsAfterInsert, autoPenFor, blockBounds, tableCellIds, canMerge, canUnmerge, cellAddress, cellById, cellDialogValues, cellEditOf, cellHitDistance, cellItemId, csvFileName, drawTableBox, drawTableGrid, escapeCsv, gridColumn, parseCellItemId, polygonDistance, selectColumns, selectRows, selectTables, tableCsv, tableDialogValues, tablePatchOf, widthAfterToggle } from "./tables";
 
 
 const boardOf = (...tables: BoardTable[]) => ({ drawings: { shapes: [], texts: [], groups: [], dimensions: [], dimension_settings: {} as never, tables } });
@@ -158,4 +159,14 @@ test("the edge cells of a selection and the rows and columns it covers", () => {
   assert.deepEqual(rowsOf(sel), [0, 1, 2]);
   assert.deepEqual(colsOf(pick([0, 2], [1, 2])), [2]);
   assert.equal(extremeCell([], "top"), undefined);
+});
+
+test("a table is an item of the board (it is picked up by a Paste or a Duplicate), and every cell id of its is listed so a refresh keeps the selected cells", () => {
+  const second = { ...table(1, 1), id: "tbl_b", cells: table(1, 1).cells.map((c) => ({ ...c, id: cellItemId("tbl_b", c.row, c.col) })) };
+  const b = boardOf(table(2, 2), second);
+  const items = allItemIds({ ...b, parts: [] } as never);
+  assert.ok(items.has("tbl_a") && items.has("tbl_b"));
+  assert.ok(!items.has("tbl_a:0:0"), "a cell is not an item of its own to paste");
+  assert.deepEqual(tableCellIds(b), ["tbl_a:0:0", "tbl_a:0:1", "tbl_a:1:0", "tbl_a:1:1", "tbl_b:0:0"]);
+  assert.deepEqual(tableCellIds(null), []);
 });

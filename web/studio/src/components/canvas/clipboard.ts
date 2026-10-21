@@ -21,7 +21,7 @@ export function isKicadPcbText(text: string | null | undefined): boolean {
 }
 
 /**
- * Every id of an item on the board -- footprints (their references), tracks, vias, zones, shapes, texts, dimensions and groups -- used to diff
+ * Every id of an item on the board -- footprints (their references), tracks, vias, zones, shapes, texts, tables, dimensions and groups -- used to diff
  * before/after a duplicate or paste to find out what is new (neither command's reply says so directly; see state/store.tsx). Pads are not
  * in it: a pad is never created on its own.
  */
@@ -35,6 +35,7 @@ export function allItemIds(board: BoardState): Set<string> {
   for (const t of board.drawings?.texts ?? []) ids.add(t.id);
   for (const d of board.drawings?.dimensions ?? []) ids.add(d.id);
   for (const g of board.drawings?.groups ?? []) ids.add(g.id);
+  for (const t of board.drawings?.tables ?? []) ids.add(t.id);
   return ids;
 }
 

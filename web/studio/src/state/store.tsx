@@ -22,6 +22,7 @@ import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "../components/canvas/clipboard";
 import { subItemIds } from "../kicad-port/pcbItems";
+import { tableCellIds } from "../kicad-port/tables";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
@@ -1243,6 +1244,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       for (const g of action.board.drawings?.groups ?? []) live.add(g.id);
       // A pad and a footprint's field are items too (`REF.NUMBER`, `REF:Name`): they stay selected while their footprint has them, hidden or not.
       for (const id of subItemIds(action.board)) live.add(id);
+      // So is a table's cell (`TABLE:ROW:COL`): selected through its table, it lasts as long as the table has it.
+      for (const id of tableCellIds(action.board)) live.add(id);
       const selection = state.tab === "schematic" ? state.selection : new Set([...state.selection].filter((r) => refs.has(r) || live.has(r)));
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
       // A group that was dissolved or emptied is no longer the one worked in (`EDIT_TOOL::DeleteItems`: "If the entered group has been emptied then leave it").

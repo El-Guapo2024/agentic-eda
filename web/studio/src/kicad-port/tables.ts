@@ -33,6 +33,11 @@ export function tablesOf(board: HasTables | null | undefined): readonly BoardTab
   return board?.drawings?.tables ?? [];
 }
 
+/** The id of every cell of every table (`TABLE:ROW:COL`): the items a click on a table picks. */
+export function tableCellIds(board: HasTables | null | undefined): string[] {
+  return tablesOf(board).flatMap((t) => t.cells.map((c) => c.id));
+}
+
 export function tableById(board: HasTables | null | undefined, id: string): BoardTable | undefined {
   return tablesOf(board).find((t) => t.id === id);
 }

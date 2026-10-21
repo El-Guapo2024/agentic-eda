@@ -443,6 +443,10 @@ test("table cells: Select Columns / Rows / Table and the table editing entries (
   assert.ok(merged.includes(A.unmergeCells) && !merged.includes(A.mergeCells));
 });
 
+test("a table or its cells are not connectable: no Net Inspection Tools", () => {
+  for (const s of [sel({ tables: 1 }), sel({ tableCells: 2, cellBlock: true })]) assert.ok(!pcbSelectionMenu(s).some((n) => n.type === "submenu" && n.label === "Net Inspection Tools"));
+});
+
 test("a table (not its cells), or cells with something else selected, get none of the table entries; a cell in the hand gets no structure edit", () => {
   for (const s of [sel({ tables: 1 }), sel({ tableCells: 1, texts: 1 }), sel({ footprints: 1 })]) {
     const a = actions(s);

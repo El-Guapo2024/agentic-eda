@@ -8,6 +8,7 @@
 // Not ported: the syntax help window and the text-variable autocomplete of the cell editors (a plain text area is the cell's editor, and `${ROW}`, `${COL}`, `${ADDR}`, `${LAYER}`
 // and the board's variables are resolved as they are anywhere else).
 import { useEffect, useState, type CSSProperties } from "react";
+import { fetchState } from "../api/client";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { closeTableCellDialog, closeTableDialog, openTableDialog, useTableDialogs } from "../state/tableDialogs";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
@@ -143,7 +144,9 @@ export function TablePropertiesDialog() {
         });
         if (ok) {
           closeTableDialog();
-          const made = tablesOf(api.getState().board).find((t) => !before.has(t.id));
+          // `selectItem( table )`: the table just made. The board as the backend has it now: `stateRef` only catches up on the next render, so it is not in `getState()` yet.
+          const after = await fetchState().catch(() => null);
+          const made = after ? tablesOf(after).find((t) => !before.has(t.id)) : undefined;
           if (made) dispatch({ type: "SET_SELECTION", refs: [made.id] });
         }
       } else if (table) {

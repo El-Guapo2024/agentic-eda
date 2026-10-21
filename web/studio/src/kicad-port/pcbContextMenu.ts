@@ -20,7 +20,7 @@
 // and the menus of the tools that take over the right click: pcbnew/router/router_tool.cpp (ROUTER_TOOL::Init, while routing) and
 // pcbnew/tools/drawing_tool.cpp (DRAWING_TOOL::Init, while a graphic, zone, text, dimension or via is being drawn).
 //
-// Not built, because the IR has nothing for them: table cells (Select Column(s), Row(s), Table), gate swap, generators (Update All Tuning Patterns). An entry
+// Not built, because the IR has nothing for them: gate swap, generators (Update All Tuning Patterns). An entry
 // KiCad offers that this studio has not wired is still listed, disabled, as the schematic's menu does (`MenuNodeView` knows which actions have a handler).
 //
 // The entries of the Zoom and Grid submenus, the Track/Via Width list and the like are data, handed in by the caller (`PcbMenuContext`). Pure: no store, no
@@ -777,7 +777,7 @@ export function buildSelectionMenu(): ConditionalMenu {
   menu.addMenu("Zones", zoneMenu, whenOnly("zone"), 100);
 
   // ---- BOARD_INSPECTION_TOOL::Init: "Only show the net menu if all items in the selection are connectable"
-  const showNetMenu: Cond = (s) => s.total > 0 && s.footprints === 0 && s.texts === 0 && s.dimensions === 0 && s.groups === 0 && s.shapes.segment + s.shapes.rect + s.shapes.circle + s.shapes.arc + s.shapes.polygon + s.shapes.bezier === s.copperShapes;
+  const showNetMenu: Cond = (s) => s.total > 0 && s.footprints === 0 && s.texts === 0 && s.tables === 0 && s.tableCells === 0 && s.dimensions === 0 && s.groups === 0 && s.shapes.segment + s.shapes.rect + s.shapes.circle + s.shapes.arc + s.shapes.polygon + s.shapes.bezier === s.copperShapes;
   menu.addMenu("Net Inspection Tools", netMenu, showNetMenu, 100);
 
   // ---- ALIGN_DISTRIBUTE_TOOL::Init
