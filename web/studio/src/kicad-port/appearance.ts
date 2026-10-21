@@ -13,8 +13,7 @@
 //                              only in the "All" net colour mode
 //   color4d.cpp                ToCSSString / SetFromWxString (the colour text of a project file)
 //
-// What the panel does not list, with the reason: Points (`LAYER_POINTS`) -- the board model has no snap points yet, so a toggle would switch nothing. It stays in the
-// model (`OBJECT_IDS`) so a preset or a project file that names it keeps it. Images (`LAYER_DRAW_BITMAPS`) has its row since the board has reference images (GAPS.md item 24).
+// Every row of `s_objectSettings` is listed: Images (`LAYER_DRAW_BITMAPS`) and Points (`LAYER_POINTS`) have theirs since the board has reference images and points (GAPS.md item 24).
 
 import { brighten, darken, HIGHLIGHT_FACTOR } from "./netHighlight";
 
@@ -175,7 +174,7 @@ export interface ObjectRow {
   checkbox: boolean;
 }
 
-/** The rows, in `s_objectSettings`' order, minus Points (see the header). */
+/** The rows, in `s_objectSettings`' order. */
 export const OBJECT_ROWS: readonly ObjectRow[] = [
   { id: "tracks", label: "Tracks", tooltip: "Show tracks", opacity: "tracks", checkbox: true },
   { id: "vias", label: "Vias", tooltip: "Show all vias", opacity: "vias", checkbox: true },
@@ -195,6 +194,7 @@ export const OBJECT_ROWS: readonly ObjectRow[] = [
   { id: "drc_errors", label: "DRC Errors", tooltip: "DRC violations with an Error severity", checkbox: true },
   { id: "drc_exclusions", label: "DRC Exclusions", tooltip: "DRC violations which have been individually excluded", checkbox: true },
   { id: "footprint_anchors", label: "Anchors", tooltip: "Show footprint and text origins as a cross", checkbox: true },
+  { id: "ly_points", label: "Points", tooltip: "Show explicit snap points as crosses", checkbox: true },
   { id: "locked_item_shadows", label: "Locked Item Shadow", tooltip: "Show a shadow on locked items", checkbox: true },
   { id: "conflict_shadows", label: "Colliding Courtyards", tooltip: "Show colliding footprint courtyards", checkbox: true },
   { id: "board_outline_area", label: "Board Area Shadow", tooltip: "Show board area shadow", checkbox: true },

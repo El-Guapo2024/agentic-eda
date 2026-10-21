@@ -8,6 +8,8 @@
 //   1  the text box: Draw Text Box (two corners, Text Box Properties, OK adds, Cancel does not), the box grown to hold its text, the variables in its text, the drawn look (border,
 //      wrapped text, knockout), Text Box Properties on a box that is there (E: layer, border style, margins, knockout), the Properties panel rows, selecting it by a click, moving it
 //      with the pointer, Move / Rotate / Flip / Delete / Lock, every edit one undo step, and the file kicad-cli reads (`/api/export`'s derived board).
+//   3  the point and the hatch fill: Place Point (each click a point on the active layer, repeating until Escape, snapping to the points that are there), the X and ring painted, a click that
+//      picks it, the Properties rows (Size; the lock is not writeable), Flip, the Points row of the Appearance panel and the `(point ..)` of the derived board.
 //   2  the reference image and the schematic's image: Place Reference Image (the file in the hand follows the cursor, a click puts it on the active layer, Escape drops it), the picture
 //      painted on the canvas, Reference Image Properties (position, layer, lock, size and scale move together, the scale is checked, Convert to Greyscale), the Properties panel rows, a
 //      click that picks it and a drag that carries it, the Images row of the Appearance panel, and the `(image ..)` of the derived board; on the schematic Place Image, the drop of a
@@ -772,6 +774,127 @@
       await toBoard();
       await drop("dropped.png", bytes, "image/png");
       t(E.state().picker == null && (await myImages()).length === 0, "the board editor takes no image drop (its table has no png)");
+    });
+
+    // ------------------------------------------------------------------------------------------------------------------ 3. the point
+    await toBoard();
+    toScreen = (await screenOf()) ?? toScreen;
+    const points = async () => (await board()).drawings?.points ?? [];
+    const pointsBefore = new Set((await points()).map((p) => p.id));
+    const myPoints = async () => (await points()).filter((p) => !pointsBefore.has(p.id));
+    const deletePoints = async () => { for (const p of await myPoints()) await cmd({ op: "pcb_item", verb: "delete_point", id: p.id }); };
+    /** Pixels of the colour of the Points object (`LAYER_POINTS`, #ff26e2): the cross of a point. A footprint's anchor is the same colour, so a test compares counts. */
+    const crossPixels = () => {
+      const c = pcbCanvas();
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] > 20 && d[i + 1] < 90 && d[i + 2] > 180) n++;
+      return n;
+    };
+
+    await scenario("Place Point: each click puts a point on the active layer as one undo step and the tool repeats until Escape; the points that are there are snapped to", async (t) => {
+      await deletePoints();
+      toScreen = (await screenOf()) ?? toScreen;
+      t((await E.actions()).some((a) => a.id === "pcbnew.InteractiveDrawing.placePoint" && a.enabled !== false), "Place Point is an action of the board editor");
+      await E.run("pcbnew.InteractiveDrawing.placePoint");
+      await sleep(300);
+      t(/Place point/i.test(E.state().picker ?? ""), `the tool is running (${E.state().picker})`);
+      await click(toScreen, ...at(8, 8));
+      await waitFor(async () => (await myPoints()).length === 1);
+      let list = await myPoints();
+      t(list.length === 1 && near(list[0].x, (bx0 + 8) * 1000, 1500) && near(list[0].y, (by0 + 8) * 1000, 1500), `the first click puts a point there (${JSON.stringify(list[0])})`);
+      t(list[0].size === 1000 && typeof list[0].layer === "string" && list[0].layer.length > 0, `of 1 mm on the active layer (${list[0]?.layer})`);
+      t(E.state().picker != null, "the tool goes on (IPO_REPEAT)");
+      await click(toScreen, ...at(14, 8));
+      await waitFor(async () => (await myPoints()).length === 2);
+      t((await myPoints()).length === 2, "a second click puts a second point");
+      // the next click lands on the first point's own position even a little off it: the point is an anchor
+      const first = list[0];
+      const [fx, fy] = [first.x / 1000, first.y / 1000];
+      await click(toScreen, fx + 0.06, fy + 0.05);
+      await waitFor(async () => (await myPoints()).length === 3);
+      const third = (await myPoints()).find((p) => p.id !== first.id && p.id !== (list[1] ?? {}).id) ?? (await myPoints()).at(-1);
+      const all = await myPoints();
+      t(all.filter((p) => p.x === first.x && p.y === first.y).length === 2, `a click near a point snaps onto it (${JSON.stringify(all.map((p) => [p.x, p.y]))})`);
+      await escape();
+      t(E.state().picker == null, "Escape ends the tool");
+      await undo();
+      t((await myPoints()).length === 2, "one undo takes the last point away");
+      await undo();
+      await undo();
+      t((await myPoints()).length === 0, "and one each of the others");
+      await redo();
+      t((await myPoints()).length === 1, "one redo brings one back");
+      await undo();
+    });
+
+    await scenario("a point is drawn as an X and a ring, picked by a click on them, listed with a Size and no lock, flipped, hidden by the Points row; the derived board has it", async (t) => {
+      await deletePoints();
+      toScreen = (await screenOf()) ?? toScreen;
+      const base = crossPixels();
+      const rev0 = E.state().revision;
+      await cmd({ op: "pcb_item", verb: "add_point", point: { layer: "F.SilkS", at: { x: (bx0 + 12) * 1000, y: (by0 + 12) * 1000 }, size_um: 10000 } });
+      await waitFor(() => E.state().revision !== rev0, 8000);
+      await sleep(500);
+      const p = (await myPoints())[0];
+      t(!!p && p.size === 10000, "a 10 mm point was added");
+      if (!p) return;
+      await waitFor(() => crossPixels() > base + 150);
+      t(crossPixels() > base + 150, `the board paints its X in the colour of the Points object (${base} -> ${crossPixels()} pixels)`);
+      // a click on a bar of the X, off its centre, picks it
+      await E.run("common.InteractiveSelection.clear");
+      await escape();
+      await click(toScreen, p.x / 1000 + 2.5, p.y / 1000 + 2.5);
+      t(E.state().selection.some((s) => s.id === p.id && s.kind === "point"), `a click on a bar of the X picks the point (${JSON.stringify(E.state().selection)})`);
+      // the Properties panel: a Size row and a lock that cannot be set
+      if (!document.querySelector(".prop-row")) { document.querySelector('button[aria-label="Show Properties"]')?.click(); await sleep(500); }
+      const row = (name) => document.querySelector(`.prop-row[data-prop="${name}"]`);
+      t(!!row("Size") && !!row("Layer") && !!row("Position X"), "the panel has the Size, Layer and Position rows of a PCB_POINT");
+      t(row("Locked")?.classList.contains("readonly") || row("Locked")?.querySelector("[data-prop-input]")?.disabled === true, "and a Locked row that cannot be written (the file form of a point has no lock)");
+      const size = row("Size")?.querySelector("[data-prop-input]");
+      if (size) {
+        setValue(size, "4");
+        size.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        size.dispatchEvent(new Event("blur", { bubbles: true }));
+        await sleep(900);
+        t((await myPoints())[0].size === 4000, "a size typed in the panel is the point's");
+        await undo();
+        t((await myPoints())[0].size === 10000, "one undo takes it back");
+      } else t(false, "the Size row has an input");
+      // Flip and Move
+      await select([p.id]);
+      await E.run("pcbnew.InteractiveEdit.flip");
+      await sleep(700);
+      t((await myPoints())[0].layer === "B.SilkS", `F puts it on the back layer (${(await myPoints())[0].layer})`);
+      await undo();
+      await drag(toScreen, [p.x / 1000 + 2.5, p.y / 1000 + 2.5], [p.x / 1000 + 4.5, p.y / 1000 + 4.5]);
+      const moved = (await myPoints())[0];
+      t(near(moved.x - p.x, 2000, 700) && near(moved.y - p.y, 2000, 700), `a drag carries it (${moved.x - p.x}, ${moved.y - p.y})`);
+      await undo();
+      // `L` does nothing to it: no lock
+      await select([p.id]);
+      await E.run("pcbnew.EditorControl.toggleLock");
+      await sleep(500);
+      t(!((await board()).locked ?? []).includes(p.id), "L does not lock a point");
+      // the Points row of the Appearance panel
+      await E.run("common.InteractiveSelection.clear");
+      await sleep(300);
+      const shown = crossPixels();
+      await E.run("studio.Appearance.op", { op: "object", id: "ly_points", visible: false });
+      await sleep(500);
+      t(crossPixels() < shown - 100, `Points off hides it (${shown} -> ${crossPixels()})`);
+      await E.run("studio.Appearance.op", { op: "object", id: "ly_points", visible: true });
+      await sleep(400);
+      t(crossPixels() >= shown - 40, `and on shows it again (${crossPixels()} against ${shown})`);
+      const text = await fetch("/api/board.kicad_pcb").then((r) => r.text());
+      t(/\(point \(at [\d.-]+ [\d.-]+\) \(size 10\) \(layer "F\.SilkS"\)/.test(text), "the derived board has the (point ..) with its size and layer");
+      await select([p.id]);
+      await E.run("common.Interactive.delete");
+      await sleep(700);
+      t((await myPoints()).length === 0, "Delete removes it");
+      await undo();
+      t((await myPoints()).length === 1, "one undo brings it back");
+      await deletePoints();
     });
 
     await toBoard();

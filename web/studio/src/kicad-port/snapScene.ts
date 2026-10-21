@@ -13,7 +13,7 @@ import { outlineContains } from "./padOutline";
 import { footprintBox } from "./footprintBox";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 
-export type SnapItemType = "footprint" | "pad" | "track" | "via" | "shape" | "zone" | "dimension" | "text";
+export type SnapItemType = "footprint" | "pad" | "track" | "via" | "shape" | "zone" | "dimension" | "text" | "point";
 
 export interface SnapItemBase {
   /** Unique within the scene: the board id of the item, with `#k` after it for the k-th segment of a polyline track. */
@@ -87,7 +87,13 @@ export interface TextItem extends SnapItemBase {
   at: Pt;
 }
 
-export type SnapItem = FootprintItem | PadItem | TrackItem | ViaItem | ShapeItem | ZoneItem | DimensionItem | TextItem;
+/** A `PCB_POINT`: an anchor of its own (`computeAnchors`: `ORIGIN | SNAPPABLE`). */
+export interface PointItem extends SnapItemBase {
+  type: "point";
+  at: Pt;
+}
+
+export type SnapItem = FootprintItem | PadItem | TrackItem | ViaItem | ShapeItem | ZoneItem | DimensionItem | TextItem | PointItem;
 
 export interface SnapScene {
   items: readonly SnapItem[];
@@ -98,7 +104,7 @@ export interface SceneBoard {
   layers?: readonly string[];
   parts: ReadonlyArray<Pick<Part, "ref" | "placed"> & Partial<Pick<Part, "at" | "side" | "pads" | "courtyard" | "body">>>;
   routing?: { tracks: readonly Track[]; vias: readonly Via[]; zones: readonly Zone[] } | null;
-  drawings?: { shapes: readonly Shape[]; texts: readonly BoardText[]; dimensions: readonly Dimension[] } | null;
+  drawings?: { shapes: readonly Shape[]; texts: readonly BoardText[]; dimensions: readonly Dimension[]; points?: readonly { id: string; layer: string; x: number; y: number; size: number }[] } | null;
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------- hit tests
@@ -348,6 +354,12 @@ export function buildScene(board: SceneBoard): SnapScene {
   for (const t of board.drawings?.texts ?? []) {
     const b = textBoundingBox(t);
     items.push({ id: t.id, owner: t.id, type: "text", layers: [t.layer], bbox: box(b.x0, b.y0, b.x1, b.y1), hit: (p) => p[0] >= b.x0 && p[0] <= b.x1 && p[1] >= b.y0 && p[1] <= b.y1, at: [t.x, t.y] });
+  }
+
+  // The points (`PCB_POINT`): `HitTest` is its box here, which is all a snap query needs of it.
+  for (const p of board.drawings?.points ?? []) {
+    const half = p.size / 2;
+    items.push({ id: p.id, owner: p.id, type: "point", layers: [p.layer], bbox: box(p.x - half, p.y - half, p.x + half, p.y + half), hit: (q) => Math.abs(q[0] - p.x) <= half && Math.abs(q[1] - p.y) <= half, at: [p.x, p.y] });
   }
 
   return { items };

@@ -147,3 +147,29 @@ test("the scale, the size and the layer of an image are one edit_ref_image that 
   const refused = pcbEdit(b, ["img_a"], "Scale", 0, "mm");
   assert.equal(refused.ok, false);
 });
+
+// ------------------------------------------------------------------------------------------------------------------------------- points
+
+test("a point is a PCB_POINT with the rows of PCB_POINT_DESC: position, lock, layer and a Size; its lock is not writeable", () => {
+  const b = board();
+  b.drawings!.points = [{ id: "pnt_a", layer: "F.SilkS", x: 10_000, y: 20_000, size: 1_000 }];
+  const item = pcbItemOf(b, "pnt_a")!;
+  assert.equal(item.type, "PCB_POINT");
+  assert.equal(pcbFriendlyName(item), "Point");
+  const grid = pcbGrid(b, ["pnt_a"], "mm");
+  const rows = grid.groups.flatMap((g) => g.rows);
+  assert.deepEqual(rows.map((r) => r.name), ["Position X", "Position Y", "Locked", "Layer", "Size"]);
+  assert.equal(rows.find((r) => r.name === "Locked")?.writable, false, "the file form of a point has no lock");
+  const sentPoint = (cmds: Cmd[]) => {
+    assert.equal(cmds.length, 1);
+    const c = cmds[0]! as Extract<Cmd, { op: "pcb_item" }>;
+    assert.equal(c.verb, "edit_point");
+    return c as Extract<typeof c, { verb: "edit_point" }>;
+  };
+  const size = sentPoint(edit(b, ["pnt_a"], "Size", 2_500));
+  assert.deepEqual([size.id, size.layer, size.at, size.size_um], ["pnt_a", "F.SilkS", { x: 10_000, y: 20_000 }, 2_500]);
+  assert.equal(sentPoint(edit(b, ["pnt_a"], "Layer", "F.Fab")).layer, "F.Fab");
+  assert.deepEqual(edit(b, ["pnt_a"], "Size", 1_000), [], "the same size sends nothing");
+  assert.deepEqual(edit(b, ["pnt_a"], "Position Y", 21_000), [{ op: "move_items", ids: ["pnt_a"], dx: 0, dy: 1_000 }]);
+  assert.equal(pcbEdit(b, ["pnt_a"], "Size", 0, "mm").ok, false, "a mark of no size is refused");
+});

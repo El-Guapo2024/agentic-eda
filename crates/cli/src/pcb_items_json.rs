@@ -3,7 +3,7 @@
 
 use eda_model::ir::{DrawingsSection, TextJustify, TextVAlign};
 use eda_model::image_info::{content_hash, DEFAULT_PPI};
-use eda_model::pcb_items::{RefImage, TextBox};
+use eda_model::pcb_items::{PcbPoint, RefImage, TextBox};
 use serde_json::{json, Value};
 
 use crate::text_vars_json::PcbShown;
@@ -82,8 +82,14 @@ pub(crate) fn image_json(i: &RefImage) -> Value {
     })
 }
 
+/// One point as the canvas and the Properties panel read it: its centre and the size of its mark.
+pub(crate) fn point_json(p: &PcbPoint) -> Value {
+    json!({ "id": p.id, "layer": p.layer, "x": p.at.x, "y": p.at.y, "size": p.size_um })
+}
+
 /// Add the new item kinds to the `drawings` object of the state.
 pub(crate) fn extend(drawings: &mut Value, d: &DrawingsSection, tv: &PcbShown) {
     drawings["text_boxes"] = Value::Array(d.board_items.text_boxes.iter().map(|t| text_box_json(t, tv)).collect());
     drawings["images"] = Value::Array(d.board_items.images.iter().map(image_json).collect());
+    drawings["points"] = Value::Array(d.board_items.points.iter().map(point_json).collect());
 }

@@ -4,9 +4,11 @@
 //
 //   pcbnew.InteractiveDrawing.textbox               DRAWING_TOOL::DrawRectangle with PCB_ACTIONS::drawTextBox, then DIALOG_TEXTBOX_PROPERTIES (OK adds the box, Cancel throws it away)
 //   pcbnew.InteractiveDrawing.placeReferenceImage   DRAWING_TOOL::PlaceReferenceImage: a file chooser, the image follows the cursor by its centre, a click drops it on the active layer
+//   pcbnew.InteractiveDrawing.placePoint            DRAWING_TOOL::PlacePoint (`IPO_REPEAT | IPO_SINGLE_CLICK`): each click puts a point of the default size on the active layer, until Escape
 import { newTextBox } from "../kicad-port/pcbTextBox";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import { imageSizeUm, SCALE_PPM } from "../kicad-port/refImage";
+import { DEFAULT_POINT_SIZE_UM } from "../kicad-port/pcbExtraItems";
 import { asPickedImage, chooseImageFile, loadPickedImage, readImageFile, type LoadedImage, type PickedImage } from "./imageFiles";
 import { picker } from "./pcbPicker";
 import { applyCommands, createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
@@ -20,6 +22,25 @@ export function registerPcbItemActions(m: Map<string, (param?: unknown) => void>
   // A parameter that is a picked image ({ name, data }) is the file already chosen: no chooser (a test, or a file handed over by something other than the chooser).
   m.set("pcbnew.InteractiveDrawing.placeReferenceImage", (param) => {
     if (ctx.state.tab === "pcb") startPlaceImageTool(ctx, asPickedImage(param));
+  });
+  m.set("pcbnew.InteractiveDrawing.placePoint", pcbOnly(() => startPlacePointTool(ctx)));
+}
+
+/**
+ * `DRAWING_TOOL::PlacePoint` through `doInteractiveItemPlacement( .., IPO_REPEAT | IPO_SINGLE_CLICK )`: every click puts a point on the active layer where the grid helper holds the
+ * cursor (`BestSnapAnchor`, the picker's point), as one undo step ("Place point"), selected; the tool goes on until Escape.
+ */
+function startPlacePointTool(ctx: SweepCtx): void {
+  const { api, dispatch } = ctx;
+  const layer = () => activeLayerName(api.getState().activeLayer, "F.SilkS");
+  dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+  picker.start({
+    kind: "point",
+    prompt: "Place point: click to put a point down (Escape ends the tool)",
+    onPoint: (at) => {
+      void applyCommands(api, dispatch, [{ op: "pcb_item", verb: "add_point", point: { layer: layer(), at: { x: at.x, y: at.y }, size_um: DEFAULT_POINT_SIZE_UM } }]);
+      return true;
+    },
   });
 }
 

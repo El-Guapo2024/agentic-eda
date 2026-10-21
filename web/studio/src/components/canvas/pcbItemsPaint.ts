@@ -92,9 +92,44 @@ export function drawRefImages(ctx: CanvasRenderingContext2D, view: ViewTransform
   }
 }
 
+// ------------------------------------------------------------------------------------------------------------------------------------ points
+
+/**
+ * `PCB_PAINTER::draw( const PCB_POINT* )`: a cross -- two bars from corner to corner of a box of the point's size -- in the colour of the Points object (`LAYER_POINTS`) and a ring of a quarter of the
+ * size in radius in the colour of the point's own layer, both a pixel wide whatever the zoom ("just draw in pixels"); a selected point is drawn in the selection colour. Shown while the Points
+ * object is on and the point's layer is.
+ */
+export function drawPoints(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
+  const points = board.drawings?.points ?? [];
+  if (points.length === 0 || !on(opts.layerVisible, "ly_points")) return;
+  for (const p of points) {
+    if (!layerIsVisible(opts.layerVisible, p.layer)) continue;
+    const half = p.size / 2;
+    const selected = opts.selection.has(p.id);
+    withAlpha(ctx, layerAlpha(opts, layerStateKey(p.layer)), () => {
+      ctx.save();
+      ctx.lineWidth = hairlineUm(view, selected ? 2 : 1);
+      ctx.lineCap = "round";
+      ctx.strokeStyle = selected ? layerColor("selection") : layerColor("LAYER_POINTS");
+      ctx.beginPath();
+      ctx.moveTo(p.x - half, p.y - half);
+      ctx.lineTo(p.x + half, p.y + half);
+      ctx.moveTo(p.x + half, p.y - half);
+      ctx.lineTo(p.x - half, p.y + half);
+      ctx.stroke();
+      ctx.strokeStyle = selected ? layerColor("selection") : layerColor(layerKeyOf(p.layer));
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, half / 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    });
+  }
+}
+
 /** Every item of the kinds this module draws that the board has, and the rubber band of the tool in progress. */
 export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
   drawTextBoxes(ctx, view, board, opts);
+  drawPoints(ctx, view, board, opts);
   const cursor = opts.snappedCursor ?? (opts.cursorUm ? ([opts.cursorUm.x, opts.cursorUm.y] as const) : null);
   // The image in the hand follows the cursor, centred on it, at the alpha it will have.
   if (toolPreview?.kind === "image" && cursor && !opts.movePreview) {

@@ -352,3 +352,90 @@ fn kicad_cli_plots_the_schematic_image_this_studio_writes() {
     assert_eq!((attr("x"), attr("y"), attr("width"), attr("height")), (97.0, 78.0, 6.0, 4.0), "{tag:.200}");
     assert_eq!(svg.matches("<image").count(), 1);
 }
+
+// ----------------------------------------------------------------------------------------------------------------------------- points
+
+use eda_model::pcb_items::PcbPoint;
+
+fn points(dir: &Path) -> Vec<PcbPoint> {
+    load(dir).unwrap().1.drawings.map(|d| d.board_items.points).unwrap_or_default()
+}
+
+fn add_point(dir: &Path, layer: &str, at: Point, size_um: i64) {
+    let mut point = PcbPoint::new(layer, at);
+    point.size_um = size_um;
+    step(dir, Cmd::PcbItem(PcbItemCmd::AddPoint { point }), false, "test").unwrap();
+}
+
+/// A point is one undo step of the board; the state describes it; the derived board has `(point ..)` as `format( const PCB_POINT* )` writes it.
+#[test]
+fn a_point_is_one_undo_step_described_by_the_state_and_written_to_the_board() {
+    let dir = scratch("p16_point");
+    setup(&dir);
+    assert!(points(&dir).is_empty());
+    add_point(&dir, "F.SilkS", Point { x: 30_000, y: 20_000 }, 2_000);
+    let id = points(&dir)[0].id.clone();
+    assert!(id.starts_with("pnt_"));
+    let s = state(&dir);
+    let shown = &s["drawings"]["points"][0];
+    assert_eq!((shown["id"].as_str(), shown["layer"].as_str(), shown["x"].as_i64(), shown["y"].as_i64(), shown["size"].as_i64()), (Some(id.as_str()), Some("F.SilkS"), Some(30_000), Some(20_000), Some(2_000)));
+
+    let (_, design, model) = load(&dir).unwrap();
+    let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-21", title: "t" }).unwrap();
+    assert!(text.contains("(point (at 30 20) (size 2) (layer \"F.SilkS\") (uuid \""), "{text}");
+    assert!(!text.contains("(point (at 30 20) (size 2) (layer \"F.SilkS\") (locked"), "no lock in the file form");
+    let (back, _, notes) = eda_kicad::import_kicad_pcb(&text).unwrap();
+    assert!(!notes.unread_items.contains_key("point"), "the importer reads it");
+    let read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_um)).collect();
+    assert_eq!(read, vec![("F.SilkS".to_string(), Point { x: 30_000, y: 20_000 }, 2_000)]);
+
+    step(&dir, Cmd::PcbItem(PcbItemCmd::EditPoint { id: id.clone(), layer: "B.SilkS".into(), at: Point { x: 0, y: 0 }, size_um: 3_000 }), false, "test").unwrap();
+    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_um), ("B.SilkS", 3_000));
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_um), ("F.SilkS", 2_000), "one undo takes the edit back");
+    step(&dir, Cmd::PcbItem(PcbItemCmd::DeletePoint { id }), false, "test").unwrap();
+    assert!(points(&dir).is_empty());
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!(points(&dir).len(), 1, "undo brings it back");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert!(points(&dir).is_empty());
+}
+
+/// kicad-cli loads the board with its points, its `pcb upgrade --force` writes them back with the place, size and layer as written, and a point is in no plot (the SVG of the
+/// layer is the same with and without it).
+#[test]
+fn kicad_cli_loads_the_points_this_studio_writes_keeps_them_and_does_not_plot_them() {
+    if !slow() {
+        return;
+    }
+    let Some(cli) = eda_kicad_engine::find_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let dir = scratch("p16_point_cli");
+    setup(&dir);
+    let args: Vec<String> = ["--layers", "F.SilkS"].iter().map(|s| s.to_string()).collect();
+    let derived_of = |dir: &Path| std::fs::read_dir(dir.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).expect("the derived board file");
+    crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
+    let without = body(&plot(&cli, &derived_of(&dir), "F.SilkS", &dir.join("without.svg")));
+    // inside the board's own extent: the plot's page is the board's extent, points included
+    add_point(&dir, "F.SilkS", Point { x: 10_000, y: 12_000 }, 2_000);
+    add_point(&dir, "B.Cu", Point { x: 5_000, y: 6_000 }, 1_000);
+    crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
+    let derived = derived_of(&dir);
+    let text = std::fs::read_to_string(&derived).unwrap();
+    assert_eq!(text.matches("(point (at").count(), 2, "{text}");
+
+    let copy = dir.join("upgraded.kicad_pcb");
+    std::fs::copy(&derived, &copy).unwrap();
+    let rewrite = eda_kicad_engine::cli_command(&cli, None).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+    assert!(rewrite.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&rewrite.stdout), String::from_utf8_lossy(&rewrite.stderr));
+    let upgraded = std::fs::read_to_string(&copy).unwrap();
+    assert_eq!(upgraded.matches("(point").count(), 2, "kicad-cli kept both points: {upgraded}");
+    let (back, _, _) = eda_kicad::import_kicad_pcb(&upgraded).unwrap();
+    let mut read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_um)).collect();
+    read.sort_by_key(|p| p.1.x);
+    assert_eq!(read, vec![("B.Cu".to_string(), Point { x: 5_000, y: 6_000 }, 1_000), ("F.SilkS".to_string(), Point { x: 10_000, y: 12_000 }, 2_000)], "kicad-cli read the place, size and layer as written");
+    let with = body(&plot(&cli, &derived, "F.SilkS", &dir.join("with.svg")));
+    assert_eq!(with, without, "a point is in no plot");
+}

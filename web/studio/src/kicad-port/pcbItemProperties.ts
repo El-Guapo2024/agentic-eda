@@ -4,7 +4,7 @@
 // the whole box (`edit_text_box`) -- the free text's setters are the text's own verbs and a field's the footprint's.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import type { BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
 import type { Cmd } from "../api/types";
 import type { PcbCtx, PcbItem } from "./pcbProperties";
 import { tooSmall } from "./propertyGrid";
@@ -76,9 +76,43 @@ function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => C
   side("Height");
 }
 
+/** The cmd that puts point `p` on `layer`, at `at`, at `size`. */
+function pointCmd(p: BoardPoint, patch: { layer?: string; size?: number }): Cmd[] {
+  return [{ op: "pcb_item", verb: "edit_point", id: p.id, layer: patch.layer ?? p.layer, at: { x: p.x, y: p.y }, size_um: patch.size ?? p.size }];
+}
+
+/** Register `PCB_POINT` and its properties (`PCB_POINT_DESC`, pcbnew/pcb_point.cpp): the ones of a board item and a Size. The lock is not the point's: the file form has none. */
+function registerPoint(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
+  pm.registerType("PCB_POINT");
+  pm.inheritsAfter("PCB_POINT", "BOARD_ITEM");
+  const own = (i: PcbItem): BoardPoint => i.point!;
+  pm.replaceProperty("BOARD_ITEM", "Layer", {
+    owner: "PCB_POINT",
+    name: "Layer",
+    kind: "enum",
+    choices: (_i, c) => layerChoices(c),
+    get: (i) => own(i).layer,
+    set: (i, v) => (own(i).layer === String(v) ? [] : pointCmd(own(i), { layer: String(v) })),
+  });
+  pm.overrideWriteability("PCB_POINT", "BOARD_ITEM", "Locked", () => false);
+  add({
+    owner: "PCB_POINT",
+    name: "Size",
+    kind: "int",
+    display: "size",
+    get: (i) => own(i).size,
+    validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+    set: (i, v) => {
+      const size = Math.round(num(v));
+      return size <= 0 || size === own(i).size ? [] : pointCmd(own(i), { size });
+    },
+  });
+}
+
 /** Register `PCB_TEXTBOX` and its properties, and the other classes of the family. */
 export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
   registerReferenceImage(pm, add, layerChoices);
+  registerPoint(pm, add, layerChoices);
   pm.registerType("PCB_TEXTBOX");
   pm.inheritsAfter("PCB_TEXTBOX", "BOARD_ITEM");
   // A text box is on any layer (`BOARD_ITEM`'s row would read the layer off a text or a dimension).

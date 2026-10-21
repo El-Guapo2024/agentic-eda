@@ -70,6 +70,8 @@ export class PcbGridHelper extends GridHelper {
 
   private visibleItem = (item: SnapItem): boolean => {
     const { layerVisible, highContrastLayers } = this.visibility;
+    // `PCB_POINT::ViewGetLOD`: "All points hidden"
+    if (item.type === "point" && this.visibility.pointsVisible === false) return false;
     if (!item.layers.some(layerVisible)) return false;
     if (highContrastLayers && !item.layers.some((l) => highContrastLayers.has(l))) return false;
     return true;

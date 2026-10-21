@@ -3879,7 +3879,8 @@ impl<'a> Board<'a> {
             out.extend(dr.dimensions.iter().map(|d| d.id.clone()));
             out.extend(dr.groups.iter().map(|g| g.id.clone()));
             out.extend(dr.barcodes.iter().map(|b| b.id.clone()));
-            out.extend(dr.board_items.ids().map(String::from));
+            // A point has no lock in the file (`parsePCB_POINT` takes none), so it is not lockable.
+            out.extend(dr.board_items.lockable_ids().map(String::from));
         }
         out
     }

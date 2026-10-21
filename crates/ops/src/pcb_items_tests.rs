@@ -256,3 +256,90 @@ fn the_image_commands_have_one_wire_form() {
     let Cmd::PcbItem(c) = &cmd else { panic!() };
     assert!(c.describe().starts_with("ref-image add --layer Cmts.User --at 1.000,2.000 --scale 0.5"), "{}", c.describe());
 }
+
+// ----------------------------------------------------------------------------------------------------------------------------- points
+
+use eda_model::pcb_items::PcbPoint;
+
+fn points<'a>(b: &'a Board<'_>) -> &'a [PcbPoint] {
+    &drawings(b).board_items.points
+}
+
+fn add_point(b: &mut Board<'_>, layer: &str, at: Point) -> String {
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: PcbPoint::new(layer, at) })).unwrap();
+    points(b).last().unwrap().id.clone()
+}
+
+#[test]
+fn a_point_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let mut p = PcbPoint::new("F.SilkS", p(5_000, 6_000));
+    p.id = "caller_id".into();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: p })).unwrap();
+    let id = points(&b)[0].id.clone();
+    assert!(id.starts_with("pnt_"), "{id}");
+    assert_eq!((points(&b)[0].size_um, points(&b)[0].bounds()), (1_000, [4_500, 5_500, 5_500, 6_500]), "a new point is 1 mm");
+
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id: id.clone(), layer: "F.Fab".into(), at: p_at(1_000, 2_000), size_um: 2_500 })).unwrap();
+    let q = &points(&b)[0];
+    assert_eq!((q.id.as_str(), q.layer.as_str(), q.at, q.size_um), (id.as_str(), "F.Fab", p_at(1_000, 2_000), 2_500), "an edit keeps the id");
+
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeletePoint { id: id.clone() })).unwrap();
+    assert!(points(&b).is_empty());
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeletePoint { id: id.clone() })).unwrap_err()[0].check, "ops_unknown_point");
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id, layer: "F.Fab".into(), at: p_at(0, 0), size_um: 1_000 })).unwrap_err()[0].check, "ops_unknown_point");
+}
+
+fn p_at(x: i64, y: i64) -> Point {
+    p(x, y)
+}
+
+#[test]
+fn a_point_that_cannot_be_drawn_is_refused() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let refused = |b: &mut Board<'_>, mutate: &dyn Fn(&mut PcbPoint)| {
+        let mut q = PcbPoint::new("F.SilkS", p_at(0, 0));
+        mutate(&mut q);
+        let e = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: q })).unwrap_err();
+        assert!(points(b).is_empty(), "nothing was added");
+        e[0].check.clone()
+    };
+    assert_eq!(refused(&mut b, &|q| q.size_um = 0), "ops_bad_point");
+    assert_eq!(refused(&mut b, &|q| q.size_um = -5), "ops_bad_point");
+    assert_eq!(refused(&mut b, &|q| q.layer = String::new()), "ops_bad_point");
+    let mut off = model(&["F.Cu", "B.Cu"]);
+    off.board.layer_setup.enabled.retain(|l| l != "F.Fab");
+    let mut c = Board::new(design(), &off, 100, 300);
+    assert_eq!(c.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: PcbPoint::new("F.Fab", p_at(0, 0)) })).unwrap_err()[0].check, "ops_layer_off");
+}
+
+#[test]
+fn a_point_moves_turns_and_flips_with_the_verbs_that_take_any_item_but_cannot_be_locked() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let id = add_point(&mut b, "F.SilkS", p_at(10_000, 20_000));
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: 1_000, dy: -2_000 }).unwrap();
+    assert_eq!(points(&b)[0].at, p_at(11_000, 18_000));
+    b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p_at(0, 0), angle_millideg: 90_000 }).unwrap();
+    assert_eq!(points(&b)[0].at, p_at(-18_000, 11_000), "clockwise on the screen about the pivot");
+    b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p_at(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!((points(&b)[0].layer.as_str(), points(&b)[0].at), ("B.SilkS", p_at(18_000, 11_000)));
+    // the file has no lock for a point
+    assert_eq!(b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: true }).unwrap_err()[0].check, "ops_unknown_item");
+}
+
+#[test]
+fn the_point_commands_have_one_wire_form() {
+    let add: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "add_point", "point": {"layer": "F.SilkS", "at": {"x": 1000, "y": 2000}}})).unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point }) = &add else { panic!("{add:?}") };
+    assert_eq!((point.layer.as_str(), point.at, point.size_um), ("F.SilkS", p_at(1_000, 2_000), 1_000), "the size left out is 1 mm");
+    assert_eq!(add.domain(), Domain::Pcb);
+    let edit: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "edit_point", "id": "pnt_x", "layer": "F.Cu", "at": {"x": 1, "y": 2}, "size_um": 3000})).unwrap();
+    assert_eq!(edit.subjects(), vec!["pnt_x"]);
+    let Cmd::PcbItem(c) = &edit else { panic!() };
+    assert_eq!(c.describe(), "point edit pnt_x --layer F.Cu --at 0.001,0.002 --size 3.000");
+    let back: Cmd = serde_json::from_value(serde_json::to_value(&add).unwrap()).unwrap();
+    assert_eq!(back, add);
+}

@@ -66,7 +66,7 @@
 
   // ------------------------------------------------------------------------------------------------------------------------------ objects
   const eyes = [...document.querySelectorAll(".ap-row[data-object]")].map((r) => r.getAttribute("data-object"));
-  check("the Objects tab lists the 21 rows", eyes.length === 21, eyes.join(","));
+  check("the Objects tab lists the 22 rows", eyes.length === 22, eyes.join(","));
   const bg = canvas().getContext("2d").getImageData(2, 2, 1, 1).data;
   const inked = () => count((r, g, b) => Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]) > 90);
   const all = inked();

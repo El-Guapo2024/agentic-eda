@@ -68,11 +68,11 @@ test("the 22 objects, and what a new project has on (GAL_SET::DefaultVisible): a
   assert.deepEqual(off, ["drc_exclusions", "board_outline_area", "drawing_sheet"]);
 });
 
-test("the Objects rows are s_objectSettings' without Points, Filled Shapes has a slider and no checkbox and Images has both", () => {
+test("the Objects rows are s_objectSettings', Filled Shapes has a slider and no checkbox and Images has both", () => {
   const ids = OBJECT_ROWS.filter((r) => r.id !== null).map((r) => r.id);
   assert.deepEqual(ids, [
     "tracks", "vias", "pads", "zones", "shapes", "bitmaps", "footprints_front", "footprints_back", "footprint_values", "footprint_references", "footprint_text",
-    "ratsnest", "drc_warnings", "drc_errors", "drc_exclusions", "footprint_anchors", "locked_item_shadows", "conflict_shadows", "board_outline_area", "drawing_sheet", "grid",
+    "ratsnest", "drc_warnings", "drc_errors", "drc_exclusions", "footprint_anchors", "ly_points", "locked_item_shadows", "conflict_shadows", "board_outline_area", "drawing_sheet", "grid",
   ]);
   const shapes = OBJECT_ROWS.find((r) => r.id === "shapes")!;
   assert.equal(shapes.checkbox, false);

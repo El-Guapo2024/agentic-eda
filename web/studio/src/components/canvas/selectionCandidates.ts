@@ -85,6 +85,8 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
       return filter.text;
     case "image":
       return filter.graphics;
+    case "point":
+      return filter.points;
   }
 }
 

@@ -10,7 +10,7 @@
 use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
 use eda_model::ir::{DrawingsSection, Millideg, Point, Um};
-use eda_model::pcb_items::{RefImage, TextBox};
+use eda_model::pcb_items::{PcbPoint, RefImage, TextBox};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -44,6 +44,12 @@ pub enum PcbItemCmd {
     SetRefImageData { id: String, data: String },
     /// Remove a reference image.
     DeleteRefImage { id: String },
+    /// `pcbnew.InteractiveDrawing.placePoint` (`DRAWING_TOOL::PlacePoint`): a point on the board. `point.id` is ignored.
+    AddPoint { point: PcbPoint },
+    /// Point Properties / the Properties panel: the point's layer, place and size, in place.
+    EditPoint { id: String, layer: String, at: Point, size_um: Um },
+    /// Remove a point.
+    DeletePoint { id: String },
 }
 
 impl PcbItemCmd {
@@ -52,7 +58,14 @@ impl PcbItemCmd {
         match self {
             PcbItemCmd::AddTextBox { text_box } => vec![text_box.text.as_str()],
             PcbItemCmd::AddRefImage { image } => vec![image.layer.as_str()],
-            PcbItemCmd::EditTextBox { id, .. } | PcbItemCmd::DeleteTextBox { id } | PcbItemCmd::EditRefImage { id, .. } | PcbItemCmd::SetRefImageData { id, .. } | PcbItemCmd::DeleteRefImage { id } => vec![id.as_str()],
+            PcbItemCmd::AddPoint { point } => vec![point.layer.as_str()],
+            PcbItemCmd::EditTextBox { id, .. }
+            | PcbItemCmd::DeleteTextBox { id }
+            | PcbItemCmd::EditRefImage { id, .. }
+            | PcbItemCmd::SetRefImageData { id, .. }
+            | PcbItemCmd::DeleteRefImage { id }
+            | PcbItemCmd::EditPoint { id, .. }
+            | PcbItemCmd::DeletePoint { id } => vec![id.as_str()],
         }
     }
 
@@ -67,6 +80,9 @@ impl PcbItemCmd {
             PcbItemCmd::EditRefImage { id, layer, at, scale_ppm } => format!("ref-image edit {id} --layer {layer} --at {},{} --scale {}", mm(at.x), mm(at.y), *scale_ppm as f64 / 1e6),
             PcbItemCmd::SetRefImageData { id, data } => format!("ref-image pixels {id} ({} bytes of data)", data.len() / 4 * 3),
             PcbItemCmd::DeleteRefImage { id } => format!("ref-image delete {id}"),
+            PcbItemCmd::AddPoint { point: p } => format!("point add --layer {} --at {},{} --size {}", p.layer, mm(p.at.x), mm(p.at.y), mm(p.size_um)),
+            PcbItemCmd::EditPoint { id, layer, at, size_um } => format!("point edit {id} --layer {layer} --at {},{} --size {}", mm(at.x), mm(at.y), mm(*size_um)),
+            PcbItemCmd::DeletePoint { id } => format!("point delete {id}"),
         }
     }
 
@@ -75,6 +91,7 @@ impl PcbItemCmd {
         match self {
             PcbItemCmd::AddTextBox { .. } | PcbItemCmd::EditTextBox { .. } | PcbItemCmd::DeleteTextBox { .. } => "text-box",
             PcbItemCmd::AddRefImage { .. } | PcbItemCmd::EditRefImage { .. } | PcbItemCmd::SetRefImageData { .. } | PcbItemCmd::DeleteRefImage { .. } => "ref-image",
+            PcbItemCmd::AddPoint { .. } | PcbItemCmd::EditPoint { .. } | PcbItemCmd::DeletePoint { .. } => "point",
         }
     }
 }
@@ -90,6 +107,9 @@ impl<'a> Board<'a> {
             PcbItemCmd::EditRefImage { id, layer, at, scale_ppm } => self.edit_ref_image(id, layer, *at, *scale_ppm),
             PcbItemCmd::SetRefImageData { id, data } => self.set_ref_image_data(id, data),
             PcbItemCmd::DeleteRefImage { id } => self.delete_ref_image(id),
+            PcbItemCmd::AddPoint { point } => self.add_point(point.clone()),
+            PcbItemCmd::EditPoint { id, layer, at, size_um } => self.edit_point(id, layer, *at, *size_um),
+            PcbItemCmd::DeletePoint { id } => self.delete_point(id),
         }
     }
 
@@ -206,6 +226,59 @@ impl<'a> Board<'a> {
             return Err(fail("ops_unknown_ref_image", id, "no reference image with this id"));
         }
         Ok(())
+    }
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------- points
+
+impl<'a> Board<'a> {
+    /// What a point must be to be drawn: on a layer the board has on, and with a size that is a length (`PCB_POINT::SetSize` takes any `int`; a mark of no size is nothing to see).
+    fn check_point(&self, what: &str, layer: &str, size_um: Um) -> Result<(), Vec<CheckResult>> {
+        if layer.is_empty() {
+            return Err(fail("ops_bad_point", what, "a point needs a layer"));
+        }
+        self.layer_is_on(layer, what)?;
+        if size_um <= 0 {
+            return Err(fail("ops_bad_point", what, "the size of a point must be greater than zero"));
+        }
+        Ok(())
+    }
+
+    fn add_point(&mut self, mut point: PcbPoint) -> Result<(), Vec<CheckResult>> {
+        self.check_point("point", &point.layer, point.size_um)?;
+        point.id = String::new();
+        let dr = self.drawings_mut();
+        dr.board_items.points.push(point);
+        dr.assign_missing_ids();
+        Ok(())
+    }
+
+    fn edit_point(&mut self, id: &str, layer: &str, at: Point, size_um: Um) -> Result<(), Vec<CheckResult>> {
+        self.check_point(id, layer, size_um)?;
+        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_point", id, "the board has no drawings yet"))?;
+        let p = dr.board_items.points.iter_mut().find(|p| p.id == id).ok_or_else(|| fail("ops_unknown_point", id, "no point with this id"))?;
+        p.layer = layer.to_string();
+        p.at = at;
+        p.size_um = size_um;
+        Ok(())
+    }
+
+    fn delete_point(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_point", id, "the board has no drawings yet"))?;
+        let before = dr.board_items.points.len();
+        dr.board_items.points.retain(|p| p.id != id);
+        if dr.board_items.points.len() == before {
+            return Err(fail("ops_unknown_point", id, "no point with this id"));
+        }
+        Ok(())
+    }
+}
+
+/// `PCB_POINT::Rotate` / `::Flip`: the position goes where the transform puts it (`RotatePoint`, `MIRROR`) and a flip puts the point on the other side's layer.
+pub(crate) fn transform_point(p: &mut PcbPoint, x: Xform, copper: usize) {
+    p.at = x.point(p.at);
+    if let Xform::Flip { .. } = x {
+        p.layer = flip_layer(&p.layer, copper);
     }
 }
 
@@ -349,6 +422,9 @@ pub(crate) fn transform_board_items(dr: &mut DrawingsSection, ids: &BTreeSet<Str
     }
     for i in dr.board_items.images.iter_mut().filter(|i| ids.contains(&i.id)) {
         transform_ref_image(i, x, copper);
+    }
+    for p in dr.board_items.points.iter_mut().filter(|p| ids.contains(&p.id)) {
+        transform_point(p, x, copper);
     }
 }
 

@@ -250,6 +250,48 @@ impl RefImage {
     }
 }
 
+/// `DEFAULT_PT_SIZE_MM` of `pcbnew/pcb_point.cpp`: the size of a point the Place Point tool makes.
+pub const DEFAULT_POINT_SIZE_UM: Um = 1_000;
+
+fn d_point_size() -> Um {
+    DEFAULT_POINT_SIZE_UM
+}
+
+/// A point: a mark on a layer that the grid helper snaps to (`PCB_POINT`, `(point (at x y) (size s) (layer ..) (uuid ..))`). Its only geometry is its position and the size of the mark
+/// it is drawn as -- a cross whose bars reach `size / 2` from the centre, with a ring of a quarter of the size round it -- which says nothing about the board: no plot, no 3D view, no DRC.
+/// The file has no lock for it, so it has none here either.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PcbPoint {
+    /// Stable id (`pnt_xxxxxxxxxxxx`), made when the point is read or added.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// The layer the point is on: its ring is drawn in the layer's colour, and it is shown while the layer is.
+    pub layer: String,
+    pub at: Point,
+    /// The size of the mark, µm.
+    #[serde(default = "d_point_size")]
+    pub size_um: Um,
+}
+
+impl PcbPoint {
+    /// A point of the default size on `layer`.
+    pub fn new(layer: &str, at: Point) -> PcbPoint {
+        PcbPoint { id: String::new(), layer: layer.to_string(), at, size_um: DEFAULT_POINT_SIZE_UM }
+    }
+
+    /// The seed `assign_missing_ids` hashes.
+    pub fn id_seed(&self) -> String {
+        format!("pnt|{},{}|{}|{}", self.at.x, self.at.y, self.layer, self.size_um)
+    }
+
+    /// `PCB_POINT::GetBoundingBox`: `BOX2I::ByCenter( m_pos, { m_size, m_size } )`, `[x0, y0, x1, y1]`.
+    pub fn bounds(&self) -> [Um; 4] {
+        let (x0, y0) = (self.at.x - self.size_um / 2, self.at.y - self.size_um / 2);
+        [x0, y0, x0 + self.size_um, y0 + self.size_um]
+    }
+}
+
 /// The items this module adds to a board. See the module doc.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -260,15 +302,23 @@ pub struct BoardItems {
     /// The board's reference images (`image`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<RefImage>,
+    /// The board's points (`point`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<PcbPoint>,
 }
 
 impl BoardItems {
     pub fn is_empty(&self) -> bool {
-        self.text_boxes.is_empty() && self.images.is_empty()
+        self.text_boxes.is_empty() && self.images.is_empty() && self.points.is_empty()
     }
 
     /// Every id of the items, for the id sets that name them.
     pub fn ids(&self) -> impl Iterator<Item = &str> {
+        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.points.iter().map(|p| p.id.as_str()))
+    }
+
+    /// The ids of the items the lock (`(locked yes)`) applies to: every kind but the point, whose file form has no lock.
+    pub fn lockable_ids(&self) -> impl Iterator<Item = &str> {
         self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str()))
     }
 
@@ -276,12 +326,14 @@ impl BoardItems {
     pub fn assign_missing_ids(&mut self, existing: &mut std::collections::BTreeSet<String>) {
         assign_ids(&mut self.text_boxes, "tbx", existing, |t| &mut t.id, TextBox::id_seed, |t| (t.text.clone(), t.start, t.end));
         assign_ids(&mut self.images, "img", existing, |i| &mut i.id, RefImage::id_seed, |i| (i.layer.clone(), i.at, i.data.len() as i64));
+        assign_ids(&mut self.points, "pnt", existing, |p| &mut p.id, PcbPoint::id_seed, |p| (p.layer.clone(), p.at, p.size_um));
     }
 
     /// Sort the collections by id (the canonical form a design is hashed in).
     pub fn canonicalize(&mut self) {
         self.text_boxes.sort_by(|a, b| a.id.cmp(&b.id));
         self.images.sort_by(|a, b| a.id.cmp(&b.id));
+        self.points.sort_by(|a, b| a.id.cmp(&b.id));
     }
 
     /// Put each item on the layer `map` names for its own, when it names one (Swap Layers, `PCB_EDIT_FRAME::SwapLayers`).
@@ -294,6 +346,11 @@ impl BoardItems {
         for i in &mut self.images {
             if let Some(dest) = map(&i.layer) {
                 i.layer = dest;
+            }
+        }
+        for p in &mut self.points {
+            if let Some(dest) = map(&p.layer) {
+                p.layer = dest;
             }
         }
     }
@@ -375,6 +432,27 @@ mod tests {
             s
         };
         assert!(swapped.images.iter().all(|i| i.layer == "Dwgs.User"));
+    }
+
+    #[test]
+    fn a_point_is_a_mark_of_a_size_on_a_layer_with_no_lock_of_its_own() {
+        let p = PcbPoint::new("F.SilkS", Point { x: 10_000, y: 20_000 });
+        assert_eq!((p.size_um, p.bounds()), (1_000, [9_500, 19_500, 10_500, 20_500]), "the default is 1 mm and the box is centred on the point");
+        let mut items = BoardItems::default();
+        items.points.push(p.clone());
+        items.points.push(p);
+        items.images.push(RefImage::new("Cmts.User", Point::default(), &crate::image_info::base64_encode(&crate::image_info::solid_png(20, 20, [0, 0, 0], 300))));
+        let mut existing = std::collections::BTreeSet::new();
+        items.assign_missing_ids(&mut existing);
+        assert!(items.points.iter().all(|p| p.id.starts_with("pnt_")) && items.points[0].id != items.points[1].id);
+        assert_eq!(items.ids().count(), 3);
+        assert_eq!(items.lockable_ids().count(), 1, "a point is not lockable: only the image is");
+        let json = serde_json::to_string(&items).unwrap();
+        let back: BoardItems = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, items);
+        // a size left out is the default
+        let p: PcbPoint = serde_json::from_str(r#"{"layer": "F.Cu", "at": {"x": 1, "y": 2}}"#).unwrap();
+        assert_eq!(p.size_um, 1_000);
     }
 
     #[test]
