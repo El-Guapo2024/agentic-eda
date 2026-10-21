@@ -49,7 +49,7 @@ import { unitLetter } from "../../kicad-port/unitLetter";
 import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from "./displayOptions";
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
-import { dashPattern, drawSelectionBox, paintGraphics, rgba } from "./schGraphicsPainter";
+import { dashPattern, drawSelectionBox, paintGraphics, paintImages, rgba } from "./schGraphicsPainter";
 import { drawGroups } from "./schGroupPainter";
 import type { SchStroke } from "../../api/schEditTypes";
 import { allItems, itemBounds } from "./schItems";
@@ -972,6 +972,9 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   const display = opts.display ?? DEFAULT_SCH_DISPLAY;
   paintedSelection = opts.selection;
   paintedShowHiddenFields = display.showHiddenFields;
+
+  // The images lie under everything else on the sheet (`LAYER_DRAW_BITMAPS`).
+  paintImages(ctx, view, sch.graphics ?? [], opts.selection, (sch.sheet_path ?? []).map((c) => c.id).join("/"));
 
   // Wires. `on`: net-highlighted (click a wire with no modifier), or
   // box/modified-click *selected* (new this session -- `opts.selection`

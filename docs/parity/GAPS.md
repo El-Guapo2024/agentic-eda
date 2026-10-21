@@ -533,9 +533,18 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`aIncludeNPTHAsOutlines`, item 27); the Extruded 3D Body of a footprint (item 30).
 
 ### 24. Item kinds the IR does not have
-**Open, deferred.** Backlog; package P16 for the PCB items.
-- Tables (PCB and schematic, 18 rows of `ui-parity-missing.json`), PCB text boxes, barcodes, points, reference images, hatch fills, schematic images, the symbol text box, derived symbols, alternate pin
-  functions, design variants, generators, padstacks, component classes, tuning profiles, embedded files (blocked by the no-new-dependency rule: KiCad uses zstd), each with its reason in
+**Partly done (2026-10-21, `task-pcb-items`, package P16i, not merged yet): the board's text box, the board's reference image and the schematic's image are real items; points, hatch fills and barcodes are still to do (below).**
+- Done (`PARITY-pcb.md` section 38, `PARITY-sch.md` section 35; `crates/model/src/{pcb_items,image_info}.rs`, `crates/kicad/src/{pcb_items_io,pcb_textbox,pcb_image}.rs`, `crates/ops/src/pcb_items.rs`, `crates/cli/src/{pcb_items_json,image_api}.rs`, `kicad-port/{pcbTextBox,pcbExtraItems,pcbItemProperties,refImage}.ts`, `components/canvas/pcbItemsPaint.ts`):
+  one additive field of `DrawingsSection`, `board_items`, holds the board's new kinds, with one `Cmd` variant for their verbs (`{"op": "pcb_item", "verb": "add_text_box" | "add_ref_image" | ...}`).
+  Step 1, the text box (`gr_text_box`): read and written as KiCad does (margins, border and stroke type, knockout, angle, a polygon when turned off the quarter turns), drawn on its layer and in the 3D silkscreen, Draw Text Box and Text Box Properties,
+  the Properties rows, every verb that takes any item. Step 2, the images: `(image ..)` of a board and of a sheet are read and written with their pixels byte for byte (kicad-cli's rewrite keeps them), the size read from the header without a decoder;
+  Place Reference Image, Place Image and the drop of an image file (`ddAddImage`) take a file from the browser, Reference Image Properties and Image Properties set the position, layer, lock, scale and size and Convert to Greyscale (the
+  browser converts), the board draws an image under everything at its layer's alpha times the Images row of the Appearance panel (a new row), the sheet draws it opaque; a reference image is in no plot and kicad-cli's SVG plot of a sheet has the
+  image where this studio puts it (slow tier). Every step has Rust tests, `node --test` cases and scenarios of `web/studio/e2e/pcb-items.check.js` through `window.__eda`.
+- Missing: points (`PCB_POINT`), hatch fills and Rehatch Shapes, barcodes (steps 3 and 4 of the package; the list below is what is left of the original item); an image's pixels turned or mirrored by Rotate and Flip (a decoder is needed; the position
+  and the layer follow); Duplicate, Paste and Create Array of a text box or an image; a text box or an image of a footprint (`fp_text_box`: part of the footprint, kept as its tokens); outline fonts and `render_cache` of a text box.
+- Still open from the original list: tables (PCB and schematic, 18 rows of `ui-parity-missing.json`), points, barcodes, hatch fills, the symbol text box (done in P17), derived symbols (done in P17), alternate pin
+  functions (done in P17), design variants, generators, padstacks, component classes, tuning profiles, embedded files (blocked by the no-new-dependency rule: KiCad uses zstd), each with its reason in
   `ui-parity-missing.json`. Add one when a work package needs it. Custom-shape pads left this list: they are item 31.
 
 ### 25. Footprints on the board carry no graphics
@@ -1021,7 +1030,10 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `eeschema/sch_marker.cpp`, `eeschema/schematic.cpp` (`ResolveERCExclusions`), `eeschema/erc/erc_settings.cpp`, `dialogs/dialog_erc.cpp`, `pcbnew/dialogs/dialog_drc.cpp`, `common/rc_item.cpp`.
 - Conflicts: P9 (the project writer: a hunk).
 
-### P16. PCB item kinds the IR lacks (item 24). Size L. Rank 16. Deferred.
+### P16. PCB item kinds the IR lacks (item 24). Size L. Rank 16. **Partly done 2026-10-21 on `task-pcb-items` (P16i: the board's text box, the board's and the schematic's images; points, hatch fills and barcodes next), waiting for its merge; tables are not in that task; item 24 lists what is left.**
+- Done there, one commit per step: the text box (step 1) and the reference image and the schematic's image (step 2), each with a reader, a writer, a painter, a hit test, Properties rows and undoable verbs, Rust tests, `node --test` cases, a kicad-cli proof (slow tier) and scenarios of
+  `web/studio/e2e/pcb-items.check.js`; the 12 QA boards still re-export as the originals do. `PARITY-pcb.md` section 38, `PARITY-sch.md` section 35.
+- The plan was:
 - Text box first (`PCB_TEXTBOX`), tables (`PCB_TABLE`, Place Stackup, Place Board Characteristics: the fab drawing tables) with the schematic's, barcodes, points, reference images, hatch fills, the schematic image. Each is an IR item, a reader and a writer, a painter,
   a hit test, Properties rows and verbs.
 - Files: `crates/model/src/ir.rs`, `crates/kicad/src/{pcb,pcb_items,import_items}.rs`, new files in `crates/ops/src/`, `canvas/painter.ts`, `kicad-port/{pcbItems,pcbProperties}.ts`.

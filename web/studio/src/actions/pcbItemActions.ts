@@ -1,19 +1,98 @@
-// The board editor's tools for the item kinds GAPS.md item 24 (package P16) added: Draw Text Box today; Place Reference Image, Place Point, Add Barcode and Rehatch Shapes as
+// The board editor's tools for the item kinds GAPS.md item 24 (package P16) added: Draw Text Box and Place Reference Image today; Place Point, Add Barcode and Rehatch Shapes as
 // their steps land. Called from `registerPcbEditSweep`. Each tool is a run of picker sessions (kicad-port/pickerHost.ts: the next canvas click answers the session, Escape
 // ends it) -- `DRAWING_TOOL`'s own loop of clicks is a loop of picks here -- and ends in the item's dialog.
 //
-//   pcbnew.InteractiveDrawing.textbox   DRAWING_TOOL::DrawRectangle with PCB_ACTIONS::drawTextBox, then DIALOG_TEXTBOX_PROPERTIES (OK adds the box, Cancel throws it away)
+//   pcbnew.InteractiveDrawing.textbox               DRAWING_TOOL::DrawRectangle with PCB_ACTIONS::drawTextBox, then DIALOG_TEXTBOX_PROPERTIES (OK adds the box, Cancel throws it away)
+//   pcbnew.InteractiveDrawing.placeReferenceImage   DRAWING_TOOL::PlaceReferenceImage: a file chooser, the image follows the cursor by its centre, a click drops it on the active layer
 import { newTextBox } from "../kicad-port/pcbTextBox";
 import { activeLayerName } from "../kicad-port/layerPresets";
+import { imageSizeUm, SCALE_PPM } from "../kicad-port/refImage";
+import { asPickedImage, chooseImageFile, loadPickedImage, readImageFile, type LoadedImage, type PickedImage } from "./imageFiles";
 import { picker } from "./pcbPicker";
-import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
+import { applyCommands, createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 import { setToolPreview } from "../components/canvas/pcbItemsPaint";
 import { openTextBoxDialog } from "../state/pcbItemDialogs";
 
-export function registerPcbItemActions(m: Map<string, () => void>, ctx: SweepCtx): void {
+export function registerPcbItemActions(m: Map<string, (param?: unknown) => void>, ctx: SweepCtx): void {
   const { pcbOnly } = createSweepHelpers(ctx);
 
   m.set("pcbnew.InteractiveDrawing.textbox", pcbOnly(() => startTextBoxTool(ctx)));
+  // A parameter that is a picked image ({ name, data }) is the file already chosen: no chooser (a test, or a file handed over by something other than the chooser).
+  m.set("pcbnew.InteractiveDrawing.placeReferenceImage", (param) => {
+    if (ctx.state.tab === "pcb") startPlaceImageTool(ctx, asPickedImage(param));
+  });
+}
+
+/**
+ * `DRAWING_TOOL::PlaceReferenceImage`. Choosing the tool asks for the file at once (the "immediate actions" setting KiCad starts with: the tool is primed with a click); the image then
+ * follows the cursor by its centre, drawn as it will be, and a click puts it on the active layer (`image->SetLayer( m_frame->GetActiveLayer() )`) as one undo step and selects it.
+ * The tool goes on: the next click asks for another file; Escape drops an image in the hand, Escape again ends the tool. A file that is no image says so
+ * (`_( "Could not load image from '%s'." )`) and the tool waits.
+ */
+function startPlaceImageTool(ctx: SweepCtx, given: PickedImage | null): void {
+  const { api, dispatch } = ctx;
+  const toast = (message: string, kind: "info" | "error" = "info") => dispatch({ type: "TOAST", message, kind });
+  const layer = () => activeLayerName(api.getState().activeLayer, "Cmts.User");
+  const end = () => setToolPreview(null);
+
+  /** The tool waiting for a click that will ask for a file. */
+  const armed = (): void =>
+    picker.start({
+      kind: "point",
+      prompt: "Place Reference Image: click to choose an image file (Escape ends the tool)",
+      onPoint: () => {
+        void choose();
+        return false;
+      },
+    });
+
+  /** An image in the hand: the next click drops it. */
+  const hold = (loaded: LoadedImage): void => {
+    const [w, h] = imageSizeUm(loaded.header.px, loaded.header.ppi, SCALE_PPM);
+    setToolPreview({ kind: "image", img: loaded.img, w, h, layer: layer() });
+    picker.start({
+      kind: "point",
+      prompt: `Place Image: click to put ${loaded.name} down (Escape drops it)`,
+      onPoint: (at) => {
+        end();
+        void applyCommands(api, dispatch, [{ op: "pcb_item", verb: "add_ref_image", image: { layer: layer(), at: { x: at.x, y: at.y }, data: loaded.data } }]).then((ok) => {
+          if (!ok) toast("The board refused the image.", "error");
+          armed();
+        });
+        return false;
+      },
+      onCancel: (activated) => {
+        end();
+        // Escape throws the image away and the tool waits for the next file (`cleanup()`); another tool taking over ends it.
+        if (!activated) armed();
+      },
+    });
+  };
+
+  const load = async (picked: PickedImage): Promise<void> => {
+    try {
+      hold(await loadPickedImage(picked));
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "error");
+      armed();
+    }
+  };
+
+  /** The browser's file chooser, then the file. Cancelling it leaves the tool waiting. */
+  const choose = async (): Promise<void> => {
+    const file = await chooseImageFile();
+    if (!file) return armed();
+    try {
+      await load(await readImageFile(file));
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "error");
+      armed();
+    }
+  };
+
+  dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+  if (given) void load(given);
+  else void choose();
 }
 
 /**

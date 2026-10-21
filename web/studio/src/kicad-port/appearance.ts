@@ -13,8 +13,8 @@
 //                              only in the "All" net colour mode
 //   color4d.cpp                ToCSSString / SetFromWxString (the colour text of a project file)
 //
-// What the panel does not list, with the reason: Images (`LAYER_DRAW_BITMAPS`) and Points (`LAYER_POINTS`) -- the board model has no reference images
-// and no snap points, so a toggle would switch nothing. Both stay in the model (`OBJECT_IDS`) so a preset or a project file that names them keeps them.
+// What the panel does not list, with the reason: Points (`LAYER_POINTS`) -- the board model has no snap points yet, so a toggle would switch nothing. It stays in the
+// model (`OBJECT_IDS`) so a preset or a project file that names it keeps it. Images (`LAYER_DRAW_BITMAPS`) has its row since the board has reference images (GAPS.md item 24).
 
 import { brighten, darken, HIGHLIGHT_FACTOR } from "./netHighlight";
 
@@ -175,13 +175,14 @@ export interface ObjectRow {
   checkbox: boolean;
 }
 
-/** The rows, in `s_objectSettings`' order, minus Images and Points (see the header). */
+/** The rows, in `s_objectSettings`' order, minus Points (see the header). */
 export const OBJECT_ROWS: readonly ObjectRow[] = [
   { id: "tracks", label: "Tracks", tooltip: "Show tracks", opacity: "tracks", checkbox: true },
   { id: "vias", label: "Vias", tooltip: "Show all vias", opacity: "vias", checkbox: true },
   { id: "pads", label: "Pads", tooltip: "Show all pads", opacity: "pads", checkbox: true },
   { id: "zones", label: "Zones", tooltip: "Show copper zones", opacity: "zones", checkbox: true },
   { id: "shapes", label: "Filled Shapes", tooltip: "Opacity of filled shapes", opacity: "shapes", checkbox: false },
+  { id: "bitmaps", label: "Images", tooltip: "Show user images", opacity: "images", checkbox: true },
   { id: null, label: "", tooltip: "", checkbox: false },
   { id: "footprints_front", label: "Footprints Front", tooltip: "Show footprints that are on board's front", checkbox: true },
   { id: "footprints_back", label: "Footprints Back", tooltip: "Show footprints that are on board's back", checkbox: true },

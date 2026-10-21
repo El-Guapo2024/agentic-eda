@@ -8,6 +8,10 @@
 //   1  the text box: Draw Text Box (two corners, Text Box Properties, OK adds, Cancel does not), the box grown to hold its text, the variables in its text, the drawn look (border,
 //      wrapped text, knockout), Text Box Properties on a box that is there (E: layer, border style, margins, knockout), the Properties panel rows, selecting it by a click, moving it
 //      with the pointer, Move / Rotate / Flip / Delete / Lock, every edit one undo step, and the file kicad-cli reads (`/api/export`'s derived board).
+//   2  the reference image and the schematic's image: Place Reference Image (the file in the hand follows the cursor, a click puts it on the active layer, Escape drops it), the picture
+//      painted on the canvas, Reference Image Properties (position, layer, lock, size and scale move together, the scale is checked, Convert to Greyscale), the Properties panel rows, a
+//      click that picks it and a drag that carries it, the Images row of the Appearance panel, and the `(image ..)` of the derived board; on the schematic Place Image, the drop of a
+//      PNG file (ddAddImage), Image Properties and the sheet drawn with the picture.
 //
 // It answers through `window.__pcbItemsCheck`:
 //   { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }
@@ -79,8 +83,8 @@
     (box.querySelector("canvas") || box).dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 7, pointerType: "mouse", isPrimary: true, clientX: rect.left + x, clientY: rect.top + y, button: 0, buttons: type === "pointerdown" || type === "pointermove" ? extra.buttons ?? 0 : 0, ...extra }));
   };
   const readout = () => { const m = /Z [\d.]+ (-?[\d.]+), (-?[\d.]+) mm/.exec(document.querySelector(".status-bar")?.innerText.replace(/\s+/g, " ") ?? ""); return m ? [Number(m[1]), Number(m[2])] : null; };
-  const screenOf = async () => {
-    await E.run("common.Control.zoomFitObjects");
+  const screenOf = async (fit = true) => {
+    if (fit) await E.run("common.Control.zoomFitObjects");
     await sleep(300);
     fire("pointermove", 100, 100); await sleep(150); const a = readout();
     fire("pointermove", 500, 400); await sleep(150); const b = readout();
@@ -114,6 +118,45 @@
   const before = new Set((await textBoxes()).map((b) => b.id));
   const mine = async () => (await textBoxes()).filter((b) => !before.has(b.id));
   const deleteAll = async () => { for (const b of await mine()) await cmd({ op: "pcb_item", verb: "delete_text_box", id: b.id }); };
+  // The reference images the board had before the run are left alone too.
+  const images = async () => (await board()).drawings?.images ?? [];
+  const imagesBefore = new Set((await images()).map((i) => i.id));
+  const myImages = async () => (await images()).filter((i) => !imagesBefore.has(i.id));
+  const deleteImages = async () => { for (const i of await myImages()) await cmd({ op: "pcb_item", verb: "delete_ref_image", id: i.id }); };
+  /** A PNG the page makes: `w` x `h` pixels of `fill` with a white block in the top left quarter; the picked image the actions take ({ name, data: base64 }). No resolution: it is read at 300 pixels per inch. */
+  const makePng = async (w, h, fill, name = "ref.png") => {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const g = c.getContext("2d");
+    g.fillStyle = fill;
+    g.fillRect(0, 0, w, h);
+    g.fillStyle = "#ffffff";
+    g.fillRect(0, 0, w / 2, h / 2);
+    const bytes = new Uint8Array(await (await new Promise((r) => c.toBlob(r, "image/png"))).arrayBuffer());
+    let bin = "";
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return { name, data: btoa(bin), bytes: bytes.length };
+  };
+  const pcbCanvas = () => document.querySelector(".pcb-canvas-container canvas");
+  /** How many pixels of the canvas are the magenta (255, 0, 255) an image paints at 60 % opacity over the black background: (153, 0, 153) -- nothing else of a board is this colour. */
+  const magentaPixels = () => {
+    const c = pcbCanvas();
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] > 60 && d[i + 2] > 60 && d[i + 1] < 45 && Math.abs(d[i] - d[i + 2]) < 40) n++;
+    return n;
+  };
+  const MAGENTA = "#ff00ff";
+  /** A command sent behind the studio's back is in its state after its next refresh: wait for that (the design revision moves) before something needs the studio to know the item. */
+  const addImage = async (image) => {
+    const rev0 = E.state().revision;
+    await cmd({ op: "pcb_item", verb: "add_ref_image", image });
+    await waitFor(() => E.state().revision !== rev0, 8000);
+    await sleep(400);
+    return (await myImages()).at(-1);
+  };
+  const waitFor = async (cond, ms = 6000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await cond()) return true; await sleep(150); } return false; };
 
   // --------------------------------------------------------------------------------------------------------------------------- run
   const strict = [...document.querySelectorAll("label.toggle")].find((l) => /strict/i.test(l.textContent))?.querySelector("input");
@@ -207,8 +250,7 @@
       await select([box.id]);
       await sleep(400);
       // the Properties panel
-      document.querySelector('button[aria-label="Show Properties"]')?.click();
-      await sleep(500);
+      if (!document.querySelector(".prop-row")) { document.querySelector('button[aria-label="Show Properties"]')?.click(); await sleep(500); }
       const row = (name) => document.querySelector(`.prop-row[data-prop="${name}"]`);
       t(!!row("Margin Left") && !!row("Border Style") && !!row("Knockout") && !!row("Orientation"), "the panel has the margin, border, knockout and orientation rows of a text box");
       t(row("Margin Left")?.querySelector("[data-prop-input]")?.value.replace(/[^\d.]/g, "").startsWith("0.8"), "the Margin Left row says 0.8 mm");
@@ -319,6 +361,422 @@
       await deleteAll();
     });
 
+    // ------------------------------------------------------------------------------------------------------------------ 2. the reference image
+    await scenario("Place Reference Image: the file in the hand follows the cursor, a click puts it on the active layer as one undo step and selects it, Escape drops it, the picture is painted", async (t) => {
+      await deleteAll();
+      await deleteImages();
+      toScreen = (await screenOf()) ?? toScreen;
+      t((await E.actions()).some((a) => a.id === "pcbnew.InteractiveDrawing.placeReferenceImage" && a.enabled !== false), "Place Reference Image is an action of the board editor");
+      const png = await makePng(240, 160, MAGENTA);
+      const base = magentaPixels();
+      await E.run("pcbnew.InteractiveDrawing.placeReferenceImage", png);
+      await waitFor(() => /put .* down/i.test(E.state().picker ?? ""));
+      t(/put ref\.png down/i.test(E.state().picker ?? ""), `the file is in the hand (${E.state().picker})`);
+      await hover(toScreen, ...at(10, 10));
+      await sleep(400);
+      t(magentaPixels() > base + 800, `the image follows the cursor, painted as it will be (${base} -> ${magentaPixels()} magenta pixels)`);
+      // a click puts it down
+      await click(toScreen, ...at(10, 10));
+      await waitFor(async () => (await myImages()).length === 1);
+      const list = await myImages();
+      t(list.length === 1, "the click adds the image");
+      const im = list[0];
+      if (!im) return;
+      t(near(im.x, (bx0 + 10) * 1000, 1500) && near(im.y, (by0 + 10) * 1000, 1500), `at the click (${im.x}, ${im.y}) um`);
+      t(im.w === 20320 && im.h === 13547 && im.px[0] === 240 && im.ppi === 300 && im.scale_ppm === 1000000, `240 x 160 pixels at 300 ppi are 20.32 x 13.55 mm at scale 1 (${im.w} x ${im.h})`);
+      t(typeof im.layer === "string" && im.layer.length > 0, `it is on the active layer (${im.layer})`);
+      t(E.state().selection.some((s) => s.id === im.id && s.kind === "image"), "the new image is selected");
+      const r = await fetch(`/api/pcb_image?id=${im.id}&h=${im.hash}`);
+      const got = new Uint8Array(await r.arrayBuffer());
+      t(r.headers.get("content-type") === "image/png" && got.length === png.bytes && got[1] === 0x50, "GET /api/pcb_image gives the PNG file that was placed, byte for byte in size");
+      // the tool goes on: the next click asks for another file
+      t(/choose an image file/i.test(E.state().picker ?? ""), `the tool waits for the next file (${E.state().picker})`);
+      await E.run("common.InteractiveSelection.clear");
+      await waitFor(() => magentaPixels() > base + 800);
+      t(magentaPixels() > base + 800, `the board paints the picture (${magentaPixels()} magenta pixels against ${base})`);
+      await escape();
+      t(E.state().picker == null, "Escape ends the tool");
+      await undo();
+      t((await myImages()).length === 0, "one undo takes the image away");
+      await waitFor(() => magentaPixels() <= base + 100);
+      t(magentaPixels() <= base + 100, "and the picture with it");
+      await redo();
+      t((await myImages()).length === 1, "one redo brings it back");
+      await undo();
+
+      // Escape with an image in the hand drops it and leaves the tool waiting; a second Escape ends it
+      await E.run("pcbnew.InteractiveDrawing.placeReferenceImage", png);
+      await waitFor(() => /put .* down/i.test(E.state().picker ?? ""));
+      await escape();
+      t(/choose an image file/i.test(E.state().picker ?? ""), `Escape drops the image and the tool waits (${E.state().picker})`);
+      await escape();
+      t(E.state().picker == null && (await myImages()).length === 0, "the second Escape ends the tool, and no image was added");
+      // a file that is no image is refused in KiCad's words
+      await E.run("pcbnew.InteractiveDrawing.placeReferenceImage", { name: "x.png", data: btoa("this is not an image at all, just text") });
+      await sleep(600);
+      t(/Could not load image from 'x\.png'/.test(document.body.innerText), "a file that is not an image says so");
+      await escape();
+      await escape();
+    });
+
+    await scenario("Reference Image Properties (E): the size and the scale move together, the scale is checked, layer and lock, Convert to Greyscale; one undo step each", async (t) => {
+      await deleteImages();
+      const png = await makePng(240, 160, MAGENTA);
+      const im = await addImage({ layer: "Cmts.User", at: { x: (bx0 + 20) * 1000, y: (by0 + 20) * 1000 }, data: png.data });
+      if (!im) { t(false, "the image was added"); return; }
+      await select([im.id]);
+      await E.run("pcbnew.InteractiveEdit.properties");
+      await sleep(600);
+      t(!!tid("pcb-ref-image-properties"), "E opens Reference Image Properties");
+      t(tid("pri-ppi")?.textContent === "300" && Number(tid("pri-width")?.value) === 20.32 && Number(tid("pri-height")?.value) === 13.547 && tid("pri-scale")?.value === "1", "with the image's definition, size and scale");
+      t(tid("pri-layer")?.value === "Cmts.User" && !tid("pri-locked")?.checked, "its layer, and not locked");
+      setValue(tid("pri-width"), "10.16");
+      await sleep(150);
+      t(tid("pri-scale").value === "0.5" && Number(tid("pri-height").value) === 6.773, `a width of 10.16 mm is half the scale and the height follows (${tid("pri-scale").value}, ${tid("pri-height").value})`);
+      setValue(tid("pri-height"), "13.547");
+      await sleep(150);
+      // (a height typed to the micrometre is 13.547 mm, 0.3 um more than 160 pixels at 300 ppi: the scale is 1.000025)
+      t(near(Number(tid("pri-scale").value), 1, 1e-3) && near(Number(tid("pri-width").value), 20.32, 0.002), `a height back to 13.547 mm is scale 1 again (${tid("pri-scale").value}, ${tid("pri-width").value})`);
+      setValue(tid("pri-scale"), "0.01");
+      await sleep(150);
+      tid("pri-ok").click();
+      await sleep(500);
+      t(/too small/i.test(tid("pri-error")?.textContent ?? "") && !!tid("pcb-ref-image-properties"), `a scale that makes the image under 15 pixels is refused (${tid("pri-error")?.textContent})`);
+      setValue(tid("pri-scale"), "0.5");
+      setValue(tid("pri-x"), String(bx0 + 25));
+      setValue(tid("pri-layer"), "Dwgs.User");
+      check_(tid("pri-locked"), true);
+      await sleep(150);
+      tid("pri-ok").click();
+      await sleep(1000);
+      const after = (await myImages())[0];
+      t(after.id === im.id && after.scale_ppm === 500000 && after.layer === "Dwgs.User" && near(after.x, (bx0 + 25) * 1000, 2), `OK applies scale, layer and position (${after.scale_ppm}, ${after.layer}, ${after.x})`);
+      t(((await board()).locked ?? []).includes(im.id), "and the lock");
+      t(after.w === 10160 && after.hash === im.hash, "the size follows the scale and the pixels are the same");
+      await undo();
+      const back = (await myImages())[0];
+      t(back.scale_ppm === 1000000 && back.layer === "Cmts.User" && back.x === im.x && !((await board()).locked ?? []).includes(im.id), "one undo puts the whole edit back");
+
+      // Convert to Greyscale: the working copy is shown, OK keeps it, one undo step
+      await select([im.id]);
+      await E.run("pcbnew.InteractiveEdit.properties");
+      await sleep(500);
+      tid("pri-greyscale").click();
+      await waitFor(() => (tid("pri-preview")?.getAttribute("src") ?? "").startsWith("data:image/png;base64,"));
+      t((tid("pri-preview")?.getAttribute("src") ?? "").startsWith("data:image/png;base64,"), "Convert to Greyscale shows the converted picture");
+      tid("pri-ok").click();
+      await sleep(1000);
+      const grey = (await myImages())[0];
+      t(grey.hash !== im.hash && grey.w === im.w && grey.ppi === 300 && grey.scale_ppm === im.scale_ppm, "the pixels changed and nothing else did (same size and definition)");
+      const pic = new Image();
+      pic.src = `/api/pcb_image?id=${grey.id}&h=${grey.hash}`;
+      await pic.decode();
+      const c = document.createElement("canvas");
+      c.width = pic.naturalWidth;
+      c.height = pic.naturalHeight;
+      const g = c.getContext("2d");
+      g.drawImage(pic, 0, 0);
+      const [pr, pg, pb] = g.getImageData(c.width - 4, c.height - 4, 1, 1).data;
+      t(pr === pg && pg === pb && pr > 90 && pr < 120, `a pixel of the magenta part is grey (${pr}, ${pg}, ${pb}; 0.299 R + 0.587 G + 0.114 B of (255, 0, 255) is 105)`);
+      await undo();
+      t((await myImages())[0].hash === im.hash, "one undo brings the colours back");
+      // Cancel changes nothing
+      await select([im.id]);
+      await E.run("pcbnew.InteractiveEdit.properties");
+      await sleep(400);
+      setValue(tid("pri-scale"), "2");
+      tid("pri-cancel").click();
+      await sleep(400);
+      t((await myImages())[0].scale_ppm === 1000000, "Cancel leaves the image as it was");
+      await deleteImages();
+    });
+
+    await scenario("a reference image is picked anywhere in its box and carried by the pointer; Move, Flip, Lock and Delete take it; the Properties panel and the Appearance panel know it", async (t) => {
+      await deleteImages();
+      const png = await makePng(240, 160, MAGENTA);
+      // outside the board, where nothing else is, on a layer that has a back
+      const im = await addImage({ layer: "F.SilkS", at: { x: (bx0 - 20) * 1000, y: (by0 + 10) * 1000 }, data: png.data });
+      await select([im.id]);
+      await E.run("common.Control.zoomFitSelection");
+      await sleep(700);
+      toScreen = (await screenOf(false)) ?? toScreen;
+      await E.run("common.InteractiveSelection.clear");
+      await escape();
+      const cx = im.x / 1000;
+      const cy = im.y / 1000;
+      await click(toScreen, cx + 7, cy + 4); // inside the box, off its centre
+      t(E.state().selection.some((s) => s.id === im.id && s.kind === "image"), "a click in the box picks the image (PCB_REFERENCE_IMAGE::HitTest is its bounding box)");
+      await drag(toScreen, [cx + 7, cy + 4], [cx + 9, cy + 6]);
+      const moved = (await myImages())[0];
+      t(near(moved.x - im.x, 2000, 600) && near(moved.y - im.y, 2000, 600), `a drag carries it (${moved.x - im.x}, ${moved.y - im.y})`);
+      await undo();
+      t((await myImages())[0].x === im.x, "one undo puts it back");
+
+      // the Properties panel
+      await select([im.id]);
+      if (!document.querySelector(".prop-row")) { document.querySelector('button[aria-label="Show Properties"]')?.click(); await sleep(500); }
+      const row = (name) => document.querySelector(`.prop-row[data-prop="${name}"]`);
+      t(!!row("Scale") && !!row("Width") && !!row("Height") && !!row("Associated Layer"), "the panel has the Scale, Width, Height and Associated Layer rows");
+      const input = row("Width")?.querySelector("[data-prop-input]");
+      if (input) {
+        setValue(input, "10.16");
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        input.dispatchEvent(new Event("blur", { bubbles: true }));
+        await sleep(900);
+        const w = (await myImages())[0];
+        t(w.scale_ppm === 500000 && w.w === 10160 && w.x === im.x, `a width typed in the panel is a scale about the centre (${w.scale_ppm}, ${w.w})`);
+        await undo();
+        t((await myImages())[0].scale_ppm === 1000000, "one undo");
+      } else t(false, "the Width row has an input");
+
+      // Flip puts it on the other side's layer; Lock; Delete
+      await select([im.id]);
+      await E.run("pcbnew.InteractiveEdit.flip");
+      await sleep(700);
+      t((await myImages())[0].layer === "B.SilkS", `F puts it on the back layer (${(await myImages())[0].layer})`);
+      await undo();
+      await select([im.id]);
+      await E.run("pcbnew.EditorControl.toggleLock");
+      await sleep(500);
+      t(((await board()).locked ?? []).includes(im.id), "L locks it");
+      await E.run("pcbnew.EditorControl.toggleLock");
+      await sleep(400);
+      await cmd({ op: "move_items", ids: [im.id], dx: 1000, dy: 0 });
+      t((await myImages())[0].x === im.x + 1000, "Move Exactly takes it");
+      await undo();
+
+      // the Images row of the Appearance panel: off, the picture is gone; opacity 0 too
+      await select([im.id]);
+      await E.run("common.Control.zoomFitSelection");
+      await sleep(300);
+      await E.run("common.InteractiveSelection.clear");
+      await sleep(500);
+      const shown = magentaPixels();
+      t(shown > 800, `the picture is painted (${shown})`);
+      await E.run("studio.Appearance.op", { op: "object", id: "bitmaps", visible: false });
+      await sleep(500);
+      t(magentaPixels() < 100, `Images off hides it (${magentaPixels()})`);
+      await E.run("studio.Appearance.op", { op: "object", id: "bitmaps", visible: true });
+      await E.run("studio.Appearance.op", { op: "opacity", key: "images", value: 0 });
+      await sleep(500);
+      t(magentaPixels() < 100, `an opacity of 0 hides it too (${magentaPixels()})`);
+      await E.run("studio.Appearance.op", { op: "opacity", key: "images", value: 0.6 });
+      await sleep(400);
+      t(magentaPixels() > 800, "and 60 % shows it again");
+      await select([im.id]);
+      await E.run("common.Interactive.delete");
+      await sleep(700);
+      t((await myImages()).length === 0, "Delete removes it");
+      await undo();
+      t((await myImages()).length === 1, "one undo brings it back");
+      // the file kicad-cli reads
+      const text = await fetch("/api/board.kicad_pcb").then((r) => r.text());
+      t(/\(image\s+\(at [\d.-]+ [\d.-]+\)\s*\(layer "F\.SilkS"\)/.test(text) && text.includes('(data'), "the derived board has the (image ..) with its layer and data");
+      await deleteImages();
+    });
+
+    // ------------------------------------------------------------------------------------------------------------------ 2. the schematic's image
+    const schematic = () => json("/api/schematic");
+    const schImages = async () => ((await schematic()).graphics ?? []).filter((g) => g.shape.type === "image");
+    const schBefore = new Set((await schImages()).map((g) => g.id));
+    const mySchImages = async () => (await schImages()).filter((g) => !schBefore.has(g.id));
+    const deleteSchImages = async () => { for (const g of await mySchImages()) await cmd({ op: "sch_edit", verb: "delete_graphic", id: g.id }); };
+    const sheetCanvas = () => document.querySelector(".pcb-canvas-container canvas");
+    /** The pixels of the sheet that are the magenta (255, 0, 255) a schematic image paints opaque, whatever lies over them. */
+    const sheetMagenta = () => {
+      const c = sheetCanvas();
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] > 235 && d[i + 2] > 235 && d[i + 1] < 25) n++;
+      return n;
+    };
+    const sheetScreen = (x, y) => { const v = E.state().view; return [v.x + x * v.scale, v.y + y * v.scale]; };
+    const sheetHover = async (x, y) => { const [px, py] = sheetScreen(x, y); fire("pointermove", px, py); await sleep(200); };
+    const sheetClick = async (x, y) => { const [px, py] = sheetScreen(x, y); fire("pointermove", px, py); await sleep(150); fire("pointerdown", px, py, { buttons: 1 }); await sleep(60); fire("pointerup", px, py); await sleep(700); };
+    /** A spot of the root sheet with nothing within `margin` um of a box `w` x `h` around it: a sheet, a wire, a label, a symbol. */
+    const freeSpot = (sch, w, h, margin = 9000) => {
+      const dots = [...sch.sheets.map((x) => [x.at[0], x.at[1], x.at[0] + x.size[0], x.at[1] + x.size[1]]), ...sch.wires.flatMap((x) => x.pts.map((p) => [p[0], p[1], p[0], p[1]])), ...sch.labels.map((l) => [l.at[0], l.at[1], l.at[0], l.at[1]]), ...sch.symbols.map((q) => [q.at[0] - 15000, q.at[1] - 15000, q.at[0] + 15000, q.at[1] + 15000]), ...sch.texts.map((q) => [q.at[0], q.at[1], q.at[0], q.at[1]])];
+      for (let y = 45000; y < 150000; y += 10000) for (let x = 45000; x < 260000; x += 10000) {
+        const box = [x - w / 2 - margin, y - h / 2 - margin, x + w / 2 + margin, y + h / 2 + margin];
+        if (!dots.some((b) => b[0] <= box[2] && b[2] >= box[0] && b[1] <= box[3] && b[3] >= box[1])) return [x, y];
+      }
+      return null;
+    };
+    const toSchematic = async () => {
+      if (E.state().tab !== "schematic") { [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Schematic")?.click(); await waitFor(() => E.state().tab === "schematic"); await sleep(900); }
+      await E.run("common.Control.zoomFitScreen");
+      await sleep(500);
+    };
+    const toBoard = async () => { if (E.state().tab !== "pcb") { [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "PCB")?.click(); await waitFor(() => E.state().tab === "pcb"); await sleep(700); } };
+    const dialogButton = (label) => [...document.querySelectorAll(".dialog-footer button")].find((b) => b.textContent.trim() === label);
+
+    await scenario("Place Image on the schematic: the file in the hand follows the cursor, a click puts it on the grid as one undo step and selects it, Escape drops it, the sheet paints the picture", async (t) => {
+      await toSchematic();
+      await deleteSchImages();
+      t((await E.actions()).some((a) => a.id === "eeschema.InteractiveDrawing.placeImage" && a.enabled !== false), "Place Image is an action of the schematic editor");
+      const png = await makePng(240, 160, MAGENTA);
+      const base = sheetMagenta();
+      await E.run("eeschema.InteractiveDrawing.placeImage", png);
+      await waitFor(() => /put .* down/i.test(E.state().picker ?? ""));
+      t(/put ref\.png down/i.test(E.state().picker ?? ""), `the file is in the hand (${E.state().picker})`);
+      const spot = freeSpot(await schematic(), 20320, 13547);
+      if (!spot) { t(false, "the sheet has a free spot"); return; }
+      await sheetHover(spot[0] + 300, spot[1] + 200);
+      await sleep(400);
+      t(sheetMagenta() > base + 500, `the image follows the cursor, painted as it will be (${base} -> ${sheetMagenta()} magenta pixels)`);
+      await sheetClick(spot[0] + 300, spot[1] + 200);
+      await waitFor(async () => (await mySchImages()).length === 1);
+      const list = await mySchImages();
+      t(list.length === 1, "the click adds the image");
+      const g = list[0];
+      if (!g) return;
+      const sh = g.shape;
+      const grid = E.state().grid ?? 1270;
+      t(near(sh.at.x, spot[0] + 300, grid) && near(sh.at.y, spot[1] + 200, grid), `at the click, on the grid (${sh.at.x}, ${sh.at.y})`);
+      t(grid === 0 || (sh.at.x % grid === 0 && sh.at.y % grid === 0), `the position is a multiple of the grid (${grid})`);
+      t(sh.px[0] === 240 && sh.px[1] === 160 && sh.ppi === 300 && (sh.scale_ppm ?? 1000000) === 1000000 && typeof sh.hash === "string" && !("data" in sh), "the state describes the image (pixels, definition, hash) and does not carry them");
+      t(E.state().selection.some((x) => x.id === g.id), "the new image is selected");
+      const r = await fetch(`/api/sch_image?id=${g.id}&h=${sh.hash}`);
+      const got = new Uint8Array(await r.arrayBuffer());
+      t(r.headers.get("content-type") === "image/png" && got.length === png.bytes, "GET /api/sch_image gives the PNG");
+      await E.run("common.InteractiveSelection.clear");
+      await waitFor(() => sheetMagenta() > base + 500);
+      t(sheetMagenta() > base + 500, `the sheet paints the picture (${sheetMagenta()} against ${base})`);
+      await escape();
+      t(E.state().picker == null, "Escape ends the tool");
+      const text = (await json("/api/schematic.kicad_sch")).files.map((f) => f.text).join("\n");
+      t(/\(image\s+\(at [\d.-]+ [\d.-]+\)[\s\S]*?\(data/.test(text), "the derived sheet has the (image ..) with its data");
+      await undo();
+      t((await mySchImages()).length === 0, "one undo takes the image away");
+      await waitFor(() => sheetMagenta() <= base + 50);
+      t(sheetMagenta() <= base + 50, "and the picture with it");
+      await redo();
+      t((await mySchImages()).length === 1, "one redo brings it back");
+      await undo();
+      // Escape with an image in the hand drops it; a second one ends the tool
+      await E.run("eeschema.InteractiveDrawing.placeImage", png);
+      await waitFor(() => /put .* down/i.test(E.state().picker ?? ""));
+      await escape();
+      t(/choose an image file/i.test(E.state().picker ?? ""), `Escape drops the image and the tool waits (${E.state().picker})`);
+      await escape();
+      t(E.state().picker == null && (await mySchImages()).length === 0, "the second Escape ends the tool");
+    });
+
+    await scenario("Image Properties on the schematic (E): position and scale are one edit, the scale is checked, Convert to Greyscale; the Properties panel; a click picks it, Move and Delete take it", async (t) => {
+      await toSchematic();
+      await deleteSchImages();
+      const png = await makePng(240, 160, MAGENTA);
+      const spot = freeSpot(await schematic(), 20320, 13547);
+      if (!spot) { t(false, "the sheet has a free spot"); return; }
+      const rev0 = E.state().revision;
+      await cmd({ op: "sch_edit", verb: "add_graphic", graphic: { shape: { type: "image", at: { x: spot[0], y: spot[1] }, scale_ppm: 1000000, data: png.data } } });
+      await waitFor(() => E.state().revision !== rev0, 8000);
+      await sleep(500);
+      const g = (await mySchImages())[0];
+      if (!g) { t(false, "the image was added"); return; }
+      // a click on the picture picks it
+      await E.run("common.InteractiveSelection.clear");
+      await sheetClick(spot[0] + 5000, spot[1] + 3000);
+      t(E.state().selection.some((x) => x.id === g.id), `a click in the picture picks it (${JSON.stringify(E.state().selection)})`);
+      // E: the dialog
+      await E.run("eeschema.InteractiveEdit.properties");
+      await sleep(600);
+      t(!!tid("sch-image-properties"), "E opens Image Properties");
+      t(tid("sim-ppi")?.textContent === "300" && tid("sim-scale")?.value === "1" && Number(tid("sim-x")?.value) === spot[0] / 1000, "with the image's definition, scale and position");
+      setValue(tid("sim-scale"), "0.01");
+      dialogButton("OK")?.click();
+      await sleep(500);
+      t(/too small/i.test(tid("sim-error")?.textContent ?? "") && !!tid("sch-image-properties"), `a scale that makes the image under 15 pixels is refused (${tid("sim-error")?.textContent})`);
+      setValue(tid("sim-scale"), "0.5");
+      setValue(tid("sim-x"), String((spot[0] + 5000) / 1000));
+      await sleep(150);
+      dialogButton("OK")?.click();
+      await sleep(1000);
+      const after = (await mySchImages())[0];
+      t(after.id === g.id && after.shape.scale_ppm === 500000 && after.shape.at.x === spot[0] + 5000 && after.shape.hash === g.shape.hash, `OK applies the scale and the position and keeps the pixels (${after.shape.scale_ppm}, ${after.shape.at.x})`);
+      await undo();
+      const back = (await mySchImages())[0];
+      t((back.shape.scale_ppm ?? 1000000) === 1000000 && back.shape.at.x === spot[0], "one undo puts both back");
+      // Convert to Greyscale
+      await E.run("eeschema.InteractiveEdit.properties");
+      await sleep(500);
+      tid("sim-greyscale").click();
+      await waitFor(() => (tid("sim-preview")?.getAttribute("src") ?? "").startsWith("data:image/png;base64,"));
+      t((tid("sim-preview")?.getAttribute("src") ?? "").startsWith("data:image/png;base64,"), "Convert to Greyscale shows the converted picture");
+      dialogButton("OK")?.click();
+      await sleep(1000);
+      const grey = (await mySchImages())[0];
+      t(grey.shape.hash !== g.shape.hash && grey.shape.px[0] === 240 && grey.shape.ppi === 300, "the pixels changed and nothing else did");
+      await undo();
+      t((await mySchImages())[0].shape.hash === g.shape.hash, "one undo brings the colours back");
+      // Cancel changes nothing
+      await E.run("eeschema.InteractiveEdit.properties");
+      await sleep(400);
+      setValue(tid("sim-scale"), "2");
+      dialogButton("Cancel")?.click();
+      await sleep(400);
+      t(((await mySchImages())[0].shape.scale_ppm ?? 1000000) === 1000000, "Cancel leaves the image as it was");
+      // the Properties panel
+      await select([g.id]);
+      if (!document.querySelector(".prop-row")) { document.querySelector('button[aria-label="Show Properties"]')?.click(); await sleep(500); }
+      const row = (name) => document.querySelector(`.prop-row[data-prop="${name}"]`);
+      t(!!row("Scale") && !!row("Width") && !!row("Height") && !!row("Position X"), "the panel has the Position, Scale, Width and Height rows of a SCH_BITMAP");
+      const input = row("Width")?.querySelector("[data-prop-input]");
+      if (input) {
+        setValue(input, "10.16");
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        input.dispatchEvent(new Event("blur", { bubbles: true }));
+        await sleep(1000);
+        const w = (await mySchImages())[0];
+        t(w.shape.scale_ppm === 500000 && w.shape.at.x === spot[0], `a width typed in the panel is a scale about the centre (${w.shape.scale_ppm})`);
+        await undo();
+      } else t(false, "the Width row has an input");
+      // Move Exactly, a drag, Delete
+      await cmd({ op: "sch_move", verb: "move", ids: [g.id], dx: 2540, dy: 1270 });
+      t((await mySchImages())[0].shape.at.x === spot[0] + 2540, "Move takes it by its centre");
+      await undo();
+      await E.run("common.InteractiveSelection.clear");
+      await sheetClick(spot[0] + 5000, spot[1] + 3000);
+      await E.run("common.Interactive.delete");
+      await sleep(800);
+      t((await mySchImages()).length === 0, "Delete removes it");
+      await undo();
+      t((await mySchImages()).length === 1, "one undo brings it back");
+      await deleteSchImages();
+    });
+
+    await scenario("a PNG dropped on the sheet is in the hand and one click places it (ddAddImage); a file that is no image is refused; the board takes no image drop", async (t) => {
+      await toSchematic();
+      await deleteSchImages();
+      const png = await makePng(120, 80, MAGENTA, "dropped.png");
+      const bytes = Uint8Array.from(atob(png.data), (c) => c.charCodeAt(0));
+      const drop = async (name, content, type) => {
+        const dt = new DataTransfer();
+        dt.items.add(new File([content], name, { type }));
+        window.dispatchEvent(new DragEvent("dragenter", { dataTransfer: dt, bubbles: true, cancelable: true }));
+        window.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+        await sleep(900);
+      };
+      await drop("dropped.png", bytes, "image/png");
+      t(/put dropped\.png down/i.test(E.state().picker ?? ""), `the dropped file is in the hand (${E.state().picker})`);
+      const spot = freeSpot(await schematic(), 10160, 6773);
+      await sheetClick(spot[0], spot[1]);
+      await waitFor(async () => (await mySchImages()).length === 1);
+      const list = await mySchImages();
+      t(list.length === 1 && list[0].shape.px[0] === 120, "one click places it");
+      t(E.state().picker == null, "and the tool ends (immediate mode: a dropped file is placed once)");
+      await undo();
+      t((await mySchImages()).length === 0, "one undo");
+      await drop("bad.png", new TextEncoder().encode("this is not an image, only text"), "image/png");
+      t(/Could not load image from 'bad\.png'/.test(document.body.innerText) && (E.state().picker ?? "") === "", "a file that is no image says so and places nothing");
+      await toBoard();
+      await drop("dropped.png", bytes, "image/png");
+      t(E.state().picker == null && (await myImages()).length === 0, "the board editor takes no image drop (its table has no png)");
+    });
+
+    await toBoard();
+    await deleteImages();
+    await deleteSchImages();
     await deleteAll();
     check.ok = results.every((r) => r.ok);
     check.done = true;

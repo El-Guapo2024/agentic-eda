@@ -107,3 +107,43 @@ test("a size sets the glyph, the orientation turns the box about its position an
   assert.deepEqual(edit(b, ["tbx_a"], "Position X", 11_000), [{ op: "move_items", ids: ["tbx_a"], dx: 1_000, dy: 0 }]);
   assert.deepEqual(edit(b, ["tbx_a"], "Locked", true), [{ op: "set_locked", ids: ["tbx_a"], locked: true }]);
 });
+
+// ------------------------------------------------------------------------------------------------------------------------- reference images
+
+const refImage = { id: "img_a", layer: "Cmts.User", x: 50_000, y: 40_000, w: 12_000, h: 8_000, scale_ppm: 1_000_000, px: [120, 80] as [number, number], ppi: 254, hash: "h" };
+const withImage = (): BoardState => {
+  const b = board();
+  b.drawings!.images = [refImage];
+  return b;
+};
+const sentImage = (cmds: Cmd[]) => {
+  assert.equal(cmds.length, 1);
+  const c = cmds[0]! as Extract<Cmd, { op: "pcb_item" }>;
+  assert.equal(c.verb, "edit_ref_image");
+  return c as Extract<typeof c, { verb: "edit_ref_image" }>;
+};
+
+test("a reference image is a PCB_REFERENCE_IMAGE with the rows of PCB_REFERENCE_IMAGE_DESC: position, lock, Associated Layer, then Image Properties", () => {
+  const item = pcbItemOf(withImage(), "img_a")!;
+  assert.equal(item.type, "PCB_REFERENCE_IMAGE");
+  assert.equal(pcbFriendlyName(item), "Reference Image");
+  const groups = names(withImage(), ["img_a"]);
+  assert.deepEqual(groups.map((g) => g[0]), ["Basic Properties", "Image Properties"]);
+  assert.deepEqual(groups[0]![1], ["Position X", "Position Y", "Locked", "Associated Layer"]);
+  assert.deepEqual(groups[1]![1], ["Scale", "Width", "Height"]);
+});
+
+test("the scale, the size and the layer of an image are one edit_ref_image that keeps its centre; a size is a scale about the centre", () => {
+  const b = withImage();
+  const half = sentImage(edit(b, ["img_a"], "Scale", 0.5));
+  assert.deepEqual([half.id, half.layer, half.at, half.scale_ppm], ["img_a", "Cmts.User", { x: 50_000, y: 40_000 }, 500_000]);
+  // 120 px at 254 ppi are 12 mm: 6 mm wide is half the scale, 16 mm high (80 px are 8 mm) is twice
+  assert.equal(sentImage(edit(b, ["img_a"], "Width", 6_000)).scale_ppm, 500_000);
+  assert.equal(sentImage(edit(b, ["img_a"], "Height", 16_000)).scale_ppm, 2_000_000);
+  assert.equal(sentImage(edit(b, ["img_a"], "Associated Layer", "Dwgs.User")).layer, "Dwgs.User");
+  assert.deepEqual(edit(b, ["img_a"], "Scale", 1), [], "the same scale sends nothing");
+  assert.deepEqual(edit(b, ["img_a"], "Position X", 51_000), [{ op: "move_items", ids: ["img_a"], dx: 1_000, dy: 0 }]);
+  // a scale that is not a number above zero is refused
+  const refused = pcbEdit(b, ["img_a"], "Scale", 0, "mm");
+  assert.equal(refused.ok, false);
+});

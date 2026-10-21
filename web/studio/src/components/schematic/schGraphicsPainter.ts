@@ -4,7 +4,9 @@
 // lengths of `RENDER_SETTINGS::GetDashLength/GetGapLength/GetDotLength`.
 import type { SchColor, SchGraphic, SchLineStyle } from "../../api/schEditTypes";
 import type { ViewTransform } from "../../state/store";
-import { arcFromThreePoints, directiveShape, pt, rectCorners } from "../../kicad-port/schItemGeom";
+import { schImageUrl } from "../../kicad-port/refImage";
+import { arcFromThreePoints, directiveShape, pt, rectCorners, schImageBox } from "../../kicad-port/schItemGeom";
+import { imageFor } from "../canvas/imageCache";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { defaultTextBoxMargin, layoutTextBox } from "../../kicad-port/schTextBox";
 import { layerColor } from "../canvas/layers";
@@ -148,6 +150,8 @@ function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: st
 export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform, graphics: readonly SchGraphic[], selection: ReadonlySet<string>): void {
   const hair = 1 / view.scale;
   for (const g of graphics) {
+    // An image is painted under everything else (`paintImages`).
+    if (g.shape.type === "image") continue;
     const selected = selection.has(g.id);
     const color = strokeColor(g, selected);
     ctx.save();
@@ -179,6 +183,36 @@ export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform
     ctx.stroke();
     ctx.setLineDash([]);
     if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : layerColor("LAYER_NOTES"));
+    ctx.restore();
+  }
+}
+
+/**
+ * `SCH_PAINTER::draw( const SCH_BITMAP* )` on `LAYER_DRAW_BITMAPS`, the lowest layer of the sheet: each image at its place and size, opaque, and while it is selected a rectangle round it in the
+ * selection colour. `sheet` is the `/`-joined path of the sheet in view, which `GET /api/sch_image` needs to find the file. Until the bitmap has arrived its box is drawn dashed so it can be picked.
+ */
+export function paintImages(ctx: CanvasRenderingContext2D, view: ViewTransform, graphics: readonly SchGraphic[], selection: ReadonlySet<string>, sheet: string): void {
+  const hair = 1 / view.scale;
+  for (const g of graphics) {
+    const s = g.shape;
+    if (s.type !== "image") continue;
+    const [x0, y0, x1, y1] = schImageBox(s);
+    const el = imageFor(schImageUrl(g.id, s.hash ?? "", sheet));
+    ctx.save();
+    if (el) {
+      ctx.drawImage(el, x0, y0, x1 - x0, y1 - y0);
+    } else {
+      ctx.strokeStyle = layerColor("LAYER_NOTES");
+      ctx.lineWidth = Math.max(hair, 100);
+      ctx.setLineDash([4 / view.scale, 3 / view.scale]);
+      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    }
+    if (selection.has(g.id)) {
+      ctx.setLineDash([]);
+      ctx.strokeStyle = layerColor("LAYER_SELECTION_SHADOWS");
+      ctx.lineWidth = Math.max(hair * 2.5, 300);
+      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    }
     ctx.restore();
   }
 }

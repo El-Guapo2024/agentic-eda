@@ -662,6 +662,8 @@ pub enum SchGraphicKind {
         /// `(scale s)` in millionths (1.0 is 1000000).
         #[serde(default = "d_image_scale", skip_serializing_if = "is_unit_image_scale")]
         scale_ppm: i64,
+        /// Absent (empty) in a command that edits an image without sending its pixels again (`edit_graphic` keeps the old ones); never so in a sheet.
+        #[serde(default)]
         data: String,
     },
 }
@@ -766,6 +768,16 @@ mod tests {
         assert_eq!(serde_json::to_string(&e).unwrap(), "{}");
         let back: SchExtras = serde_json::from_str("{}").unwrap();
         assert!(back.is_empty());
+    }
+
+    #[test]
+    fn an_image_command_may_leave_its_pixels_out_and_its_scale_is_not_written_when_it_is_one() {
+        let edit: SchGraphic = serde_json::from_str(r#"{"shape": {"type": "image", "at": {"x": 5, "y": 6}, "scale_ppm": 500000}}"#).unwrap();
+        assert!(matches!(&edit.shape, SchGraphicKind::Image { at, scale_ppm: 500_000, data } if *at == p(5, 6) && data.is_empty()));
+        let unit: SchGraphic = serde_json::from_str(r#"{"shape": {"type": "image", "at": {"x": 5, "y": 6}, "data": "AAAA"}}"#).unwrap();
+        assert!(matches!(&unit.shape, SchGraphicKind::Image { scale_ppm: 1_000_000, .. }));
+        let json = serde_json::to_value(&unit).unwrap();
+        assert!(json["shape"].get("scale_ppm").is_none() && json["shape"]["data"] == "AAAA", "{json}");
     }
 
     #[test]
