@@ -11,6 +11,7 @@
 
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
+import type { TableCmdWire } from "./tableTypes";
 import type { TuningPattern } from "./tuneTypes";
 
 export type Um = number;
@@ -1655,6 +1656,8 @@ export type Cmd =
   | ({ op: "sch_edit" } & SchEditCmd)
   /** Move, Drag, Rotate, Mirror and Align of every kind of schematic item (crates/ops/src/sch_move.rs) -- see api/schEditTypes.ts. */
   | ({ op: "sch_move" } & SchMoveCmd)
+  /** The board's tables (crates/ops/src/pcb_tables.rs): Draw Table, the Table Properties and Table Cell Properties dialogs, rows, columns, merged cells -- see api/tableTypes.ts. */
+  | ({ op: "table" } & TableCmdWire)
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }

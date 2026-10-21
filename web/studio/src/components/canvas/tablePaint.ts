@@ -13,6 +13,7 @@ import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { dashPattern } from "../../kicad-port/fpArt";
 import { layerColor } from "./layers";
 import { layerAlpha, realLayerKey, withAlpha, type PaintOptions } from "./painter";
+import { drawTableSession } from "../../kicad-port/tables";
 import { hairlineUm } from "./view";
 
 /** The tables of `board` that are drawn: those whose layer is on. */
@@ -81,4 +82,34 @@ function drawTable(ctx: CanvasRenderingContext2D, view: ViewTransform, t: BoardT
     ctx.fill();
     ctx.restore();
   }
+}
+
+/**
+ * `DRAWING_TOOL::DrawTable`'s preview: the grid the cursor sizes, from the first corner -- its border in the layer's colour and the cell lines dashed, so it reads as a table that is not
+ * there yet.
+ */
+export function drawTablePreview(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Pick<BoardState, "board_rules">, origin: readonly [number, number], opts: PaintOptions): void {
+  const cursor = opts.cursorUm;
+  if (!cursor) return;
+  const at: [number, number] = opts.snappedCursor ? [opts.snappedCursor[0], opts.snappedCursor[1]] : [cursor.x, cursor.y];
+  const { layer, grid, lineWidth } = drawTableSession(board.board_rules?.text_graphics, opts.activeLayer, origin, at, opts.gridUm);
+  const color = layerColor(realLayerKey(layer));
+  const [x0, y0] = origin;
+  const w = Math.max(lineWidth, hairlineUm(view, 1));
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = w;
+  ctx.lineCap = "butt";
+  ctx.beginPath();
+  ctx.rect(x0, y0, grid.cols * grid.cellW, grid.rows * grid.cellH);
+  for (let c = 1; c < grid.cols; c++) {
+    ctx.moveTo(x0 + c * grid.cellW, y0);
+    ctx.lineTo(x0 + c * grid.cellW, y0 + grid.rows * grid.cellH);
+  }
+  for (let r = 1; r < grid.rows; r++) {
+    ctx.moveTo(x0, y0 + r * grid.cellH);
+    ctx.lineTo(x0 + grid.cols * grid.cellW, y0 + r * grid.cellH);
+  }
+  ctx.stroke();
+  ctx.restore();
 }

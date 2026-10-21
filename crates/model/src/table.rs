@@ -354,7 +354,32 @@ pub struct BorderLine {
     pub stroke: TableStroke,
 }
 
+/// `IsBackLayer`: the layers KiCad mirrors a text on.
+pub fn is_back_layer(layer: &str) -> bool {
+    matches!(layer, "B.Cu" | "B.Adhes" | "B.Paste" | "B.SilkS" | "B.Mask" | "B.CrtYd" | "B.Fab")
+}
+
 impl Table {
+    /// The table `DRAWING_TOOL::DrawTable` makes: `cols` x `rows` empty cells of `cell_w` x `cell_h` with KiCad's cell defaults (`PCB_TABLECELL`), its first corner at
+    /// `at`, drawn with a border and separators of `line_width` (`PCB_TABLE( aParent, bds.GetLineThickness( layer ) )`: the style is the default one, which draws solid).
+    pub fn new_grid(layer: &str, at: Point, cols: usize, rows: usize, cell_w: Um, cell_h: Um, line_width: Um) -> Table {
+        let (cols, rows) = (cols.max(1), rows.max(1));
+        let back = is_back_layer(layer);
+        let stroke = TableStroke { width_um: line_width, style: TableLineStyle::Default, color: None };
+        Table {
+            id: String::new(),
+            uuid: String::new(),
+            layer: layer.to_string(),
+            at,
+            angle: 0,
+            col_widths: vec![cell_w; cols],
+            row_heights: vec![cell_h; rows],
+            cells: (0..cols * rows).map(|_| TableCell::pcb_new(back)).collect(),
+            border: TableBorder { external: true, header: true, stroke },
+            separators: TableSeparators { rows: true, cols: true, stroke },
+        }
+    }
+
     pub fn col_count(&self) -> usize {
         self.col_widths.len()
     }

@@ -168,10 +168,14 @@ export function boardLists(board: BoardLike | null | undefined): ItemLists {
     text: ids(board?.drawings?.texts),
     dimension: ids(board?.drawings?.dimensions),
     group: ids(board?.drawings?.groups),
-    // `PCB_TABLE` and its cells (`<table id>:<row>:<col>`): a click selects a cell, a window a table.
-    table: ids(board?.drawings?.tables),
-    tablecell: (board?.drawings?.tables ?? []).flatMap((t) => ids(t.cells)),
+    // `PCB_TABLE` and its cells (`<table id>:<row>:<col>`): a click selects a cell, a window a table. Listed only when the board has tables.
+    ...tableLists(board),
   };
+}
+
+function tableLists(board: BoardLike | null | undefined): ItemLists {
+  const tables = board?.drawings?.tables ?? [];
+  return tables.length === 0 ? {} : { table: ids(tables), tablecell: tables.flatMap((t) => ids(t.cells)) };
 }
 
 export function schematicLists(sch: SchematicLike | null | undefined): ItemLists {

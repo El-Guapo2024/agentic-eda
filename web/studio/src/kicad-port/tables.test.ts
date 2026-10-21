@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardTable, BoardTableCell } from "../api/types";
-import { blockBounds, canMerge, canUnmerge, cellAddress, cellById, cellHitDistance, cellItemId, csvFileName, escapeCsv, gridColumn, parseCellItemId, polygonDistance, selectColumns, selectRows, selectTables, tableCsv } from "./tables";
+import { extremeCell, rowsOf, colsOf, shiftColsAfterInsert, shiftRowsAfterInsert, autoPenFor, blockBounds, canMerge, canUnmerge, cellAddress, cellById, cellDialogValues, cellEditOf, cellHitDistance, cellItemId, csvFileName, drawTableBox, drawTableGrid, escapeCsv, gridColumn, parseCellItemId, polygonDistance, selectColumns, selectRows, selectTables, tableCsv, tableDialogValues, tablePatchOf, widthAfterToggle } from "./tables";
 
 /** A `rows` x `cols` table of 10 x 5 mm cells at the origin, as the server sends it. */
 function table(rows: number, cols: number, layer = "F.SilkS"): BoardTable {
@@ -135,4 +135,80 @@ test("Export Table to CSV writes the shown text of each cell, quoting what needs
 test("a table on a back layer is shown to the Table Properties grid from the other side", () => {
   assert.equal(gridColumn({ cols: 4, layer: "F.SilkS" }, 1), 1);
   assert.equal(gridColumn({ cols: 4, layer: "B.SilkS" }, 1), 2);
+});
+
+test("Draw Table sizes its grid from the cursor as the tool's motion handler does", () => {
+  // 1.27 mm glyphs, a 1.27 mm grid: a column per 15 glyph widths (19.05 mm), a row per 3 glyph heights (3.81 mm)
+  const g = drawTableGrid([0, 0], [60_000, 20_000], [1_270, 1_270], [1_270, 1_270]);
+  assert.deepEqual([g.cols, g.rows], [3, 5]);
+  // the cells are at least 5 glyphs wide and 3 high, and land on the grid
+  assert.equal(g.cellW % 1_270, 0);
+  assert.equal(g.cellH % 1_270, 0);
+  assert.ok(g.cellW >= 1_270 * 5 && g.cellH >= 1_270 * 3);
+  // a cursor up and to the left of the first click is a table of one cell of the smallest size
+  const back = drawTableGrid([10_000, 10_000], [0, 0], [1_270, 1_270], [1_270, 1_270]);
+  assert.deepEqual(back, { cols: 1, rows: 1, cellW: 6_350, cellH: 3_810 });
+  assert.deepEqual(drawTableBox([100, 200], { cols: 2, rows: 3, cellW: 10, cellH: 20 }), [100, 200, 120, 260]);
+});
+
+test("the Table Properties dialog starts from the table and sends back a patch in the table's own column order", () => {
+  const t = table(2, 3, "B.SilkS");
+  t.border.stroke.width = -1;
+  t.border.external = false;
+  t.border.header = false;
+  const v = tableDialogValues(t, false, 150);
+  assert.equal(v.borderWidth, 150, "a border the table does not have starts at the layer's line width");
+  assert.deepEqual(v.grid[0], ["r0c2", "r0c1", "r0c0"], "a back-layer table is shown from the other side");
+  assert.equal(v.rowSeparators && v.colSeparators, true);
+  v.grid[0]![0] = "changed";
+  v.borderExternal = true;
+  v.borderWidth = 200.4;
+  const patch = tablePatchOf(t, v);
+  assert.deepEqual(patch.texts![0], ["r0c0", "r0c1", "changed"]);
+  assert.deepEqual(patch.border, { external: true, header: false, width_um: 200, style: "solid" });
+  assert.equal(widthAfterToggle(-1, true, 150), 150);
+  assert.equal(widthAfterToggle(300, true, 150), 300);
+  assert.equal(widthAfterToggle(-1, false, 150), -1);
+});
+
+test("the Table Cell Properties dialog leaves alone what the selected cells disagree on", () => {
+  const t = table(1, 3);
+  t.cells[1]!.bold = true;
+  t.cells[1]!.size_w = 2_000;
+  t.cells[2]!.h_align = "right";
+  t.cells[2]!.margins = [1_000, 500, 1_000, 1_000];
+  const v = cellDialogValues(t.cells);
+  assert.equal(v.text, null);
+  assert.equal(v.width, null);
+  assert.equal(v.height, 1_270);
+  assert.equal(v.hAlign, null);
+  assert.equal(v.autoThickness, true);
+  assert.deepEqual(v.margins, [1_000, null, 1_000, 1_000]);
+  const e = cellEditOf(v);
+  assert.deepEqual(e, { bold: false, italic: false, face: "", height_um: 1_270, thickness_um: 0, v_align: "center", margins: [1_000, null, 1_000, 1_000] });
+  // one cell: everything is set
+  const one = cellEditOf(cellDialogValues([t.cells[0]!]));
+  assert.equal(one.text, "r0c0");
+  assert.equal(one.h_align, "left");
+  assert.equal(autoPenFor(1_270, 1_270, false), 159);
+  assert.equal(autoPenFor(1_270, 2_000, true), 254);
+  assert.equal(autoPenFor(null, 2_000, true), null);
+});
+
+test("a row or column put into a table pushes the selected cells it is before one step on", () => {
+  assert.deepEqual(shiftRowsAfterInsert(["tbl_a:0:1", "tbl_a:2:0", "tbl_b:2:0", "U1"], "tbl_a", 1), ["tbl_a:0:1", "tbl_a:3:0", "tbl_b:2:0", "U1"]);
+  assert.deepEqual(shiftColsAfterInsert(["tbl_a:0:1", "tbl_a:2:0"], "tbl_a", 1), ["tbl_a:0:2", "tbl_a:2:0"]);
+});
+
+test("the edge cells of a selection and the rows and columns it covers", () => {
+  const t = table(3, 3);
+  const pick = (...rc: [number, number][]) => rc.map(([r, c]) => t.cells[r * 3 + c]!);
+  const sel = pick([2, 0], [0, 2], [1, 1]);
+  assert.equal(extremeCell(sel, "top")!.id, "tbl_a:0:2");
+  assert.equal(extremeCell(sel, "bottom")!.id, "tbl_a:2:0");
+  assert.equal(extremeCell(sel, "left")!.id, "tbl_a:2:0");
+  assert.equal(extremeCell(sel, "right")!.id, "tbl_a:0:2");
+  assert.deepEqual(rowsOf(sel), [0, 1, 2]);
+  assert.deepEqual(colsOf(pick([0, 2], [1, 2])), [2]);
+  assert.equal(extremeCell([], "top"), undefined);
 });

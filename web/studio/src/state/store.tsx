@@ -115,6 +115,8 @@ export type ToolId =
    * dimension kinds `state.nextDimensionKind` names -- see `DrawState`'s
    * own `"dimension"` kind. */
   | "dimension"
+  /** `pcbnew.InteractiveDrawing.drawTable` (`DRAWING_TOOL::DrawTable`): the first click is the table's first corner, the cursor sizes the grid (`DrawState`'s `"table"` kind), the second opens Table Properties. */
+  | "table"
   // ---------------------------------------------------- eeschema placement
   // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp TwoClickPlace/
   // SingleClickPlace) -- SchematicView.tsx's own doc has the full
@@ -185,6 +187,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   bus: "Bus: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   measure: "Measure: click a start point, click again for the end point. Click anywhere to start a new measurement, Esc to clear",
   dimension: "Dimension: click the first feature point, then the second",
+  table: "Table: click the first corner, move to size the grid, click again to set it (Esc to cancel)",
   sch_label_local: "Label: click where to place it",
   sch_label_global: "Global Label: click where to place it",
   sch_label_hier: "Hierarchical Label: click where to place it",
@@ -333,6 +336,8 @@ export type DrawState =
    * second click commits it (same one-shot-flag convention as zones' own
    * `nextZoneIsRuleArea`), not stored per-draw here. */
   | { kind: "dimension"; pts: [Um, Um][] }
+  /** Draw Table (`DRAWING_TOOL::DrawTable`): the first corner, once it is clicked; the grid follows the cursor (kicad-port/tables.ts `drawTableGrid`). */
+  | { kind: "table"; origin: [Um, Um] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
   | { kind: "wire"; pts: [Um, Um][] }
   /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */

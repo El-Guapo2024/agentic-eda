@@ -5,7 +5,7 @@ import { ConditionalMenu, defaultMenuContext, drawingMenu, emptyPcbSummary, empt
 
 const sel = (over: Omit<Partial<PcbSelectionSummary>, "shapes"> & { shapes?: Partial<PcbSelectionSummary["shapes"]> }): PcbSelectionSummary => {
   const s = { ...emptyPcbSummary(), ...over, shapes: { ...emptyShapes(), ...(over.shapes ?? {}) } };
-  const kinds = s.footprints + s.pads + s.tracks + s.arcTracks + s.vias + s.zones + s.texts + s.dimensions + s.groups + Object.values(s.shapes).reduce((a, b) => a + b, 0);
+  const kinds = s.footprints + s.pads + s.tracks + s.arcTracks + s.vias + s.zones + s.texts + s.tableCells + s.tables + s.dimensions + s.groups + Object.values(s.shapes).reduce((a, b) => a + b, 0);
   if (over.total === undefined) s.total = kinds;
   if (over.locked === undefined && over.unlocked === undefined) s.unlocked = s.total;
   return s;
@@ -40,6 +40,8 @@ test("a single footprint: Select, then the edit tool's entries, the submenus, th
     "-",
     "Routing >",
     "Position >",
+    // PCB_EDIT_TABLE_TOOL::Init adds `AddSeparator( 100 )` after the edit tool's submenus (order 100), then its items, which a footprint does not show: the one separator stays
+    "-",
     "Locking >",
     "Create from Selection >",
     "Grouping >",
@@ -427,4 +429,25 @@ test("a drawing tool's menu: Cancel, what the tool offers (Close Outline for a p
 
 test("a picking tool's menu is Cancel, Zoom and Grid", () => {
   assert.deepEqual(outline(pickerMenu(ctx())), [A.cancel, "-", "Zoom >", "Grid >"]);
+});
+
+// ------------------------------------------------------------------------------------------------------------------- the table tool's entries
+
+test("table cells: Select Columns / Rows / Table and the table editing entries (EDIT_TABLE_TOOL_BASE::addMenus), Merge only for a block, Unmerge only for merged cells", () => {
+  const one = actions(sel({ tableCells: 1 }));
+  for (const a of [A.selectColumns, A.selectRows, A.selectTable, A.addRowAbove, A.addRowBelow, A.addColBefore, A.addColAfter, A.deleteRows, A.deleteColumns, A.editTable, A.exportTableCSV]) assert.ok(one.includes(a), a);
+  assert.ok(!one.includes(A.mergeCells) && !one.includes(A.unmergeCells), "one cell is no block, and not merged");
+  const block = actions(sel({ tableCells: 2, cellBlock: true }));
+  assert.ok(block.includes(A.mergeCells) && !block.includes(A.unmergeCells));
+  const merged = actions(sel({ tableCells: 1, cellBlock: false, mergedCells: true }));
+  assert.ok(merged.includes(A.unmergeCells) && !merged.includes(A.mergeCells));
+});
+
+test("a table (not its cells), or cells with something else selected, get none of the table entries; a cell in the hand gets no structure edit", () => {
+  for (const s of [sel({ tables: 1 }), sel({ tableCells: 1, texts: 1 }), sel({ footprints: 1 })]) {
+    const a = actions(s);
+    for (const gone of [A.selectColumns, A.addRowAbove, A.deleteRows, A.mergeCells, A.editTable, A.exportTableCSV]) assert.ok(!a.includes(gone), gone);
+  }
+  const hand = actions(sel({ tableCells: 1 }), ctx({ moving: true }));
+  assert.ok(hand.includes(A.selectColumns) && !hand.includes(A.addRowAbove) && !hand.includes(A.deleteColumns) && !hand.includes(A.exportTableCSV));
 });

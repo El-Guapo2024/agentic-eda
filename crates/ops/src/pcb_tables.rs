@@ -12,6 +12,7 @@
 
 use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
+use eda_model::ir::{Point, Um};
 use eda_model::table::Table;
 use eda_model::table_edit::{edit_cells, patch_table, CellEdit, TablePatch};
 use eda_model::CheckResult;
@@ -24,6 +25,21 @@ pub enum TableCmd {
     /// `BOARD_COMMIT::Add( table )` of Draw Table, Place Board Stackup Table and Place Board Characteristics: a new table. Its id and its uuids are made here, whatever
     /// the table brings; it is refused when it is not a grid (no cell, a cell count that is not rows times columns) or its layer is not one the board has on.
     Add { table: Table },
+    /// `DRAWING_TOOL::DrawTable` and its Table Properties dialog, as one step ("Draw Table"): a grid of `cols` x `rows` empty cells of `cell_w_um` x `cell_h_um`, its
+    /// first corner at `at`, on `layer`, drawn with a border and separators `line_width_um` wide; then what the dialog set (`patch`, `locked`).
+    Draw {
+        layer: String,
+        at: Point,
+        cols: usize,
+        rows: usize,
+        cell_w_um: Um,
+        cell_h_um: Um,
+        line_width_um: Um,
+        #[serde(default)]
+        locked: bool,
+        #[serde(default)]
+        patch: TablePatch,
+    },
     /// Delete the table (`DoDelete` of a table, or of every row or every column of it).
     Delete { id: String },
     /// `DIALOG_TABLE_PROPERTIES::TransferDataFromWindow` and the table rows of the Properties panel: the layer, the lock, and the table's own fields.
@@ -66,7 +82,7 @@ impl TableCmd {
     /// The table the verb is about, for the log and the credit assignment.
     pub fn ids(&self) -> Vec<&str> {
         match self {
-            TableCmd::Add { .. } => vec!["table"],
+            TableCmd::Add { .. } | TableCmd::Draw { .. } => vec!["table"],
             TableCmd::Delete { id }
             | TableCmd::Set { id, .. }
             | TableCmd::EditCells { id, .. }
@@ -83,6 +99,7 @@ impl TableCmd {
     pub fn describe(&self) -> String {
         match self {
             TableCmd::Add { table } => format!("table add --layer {} --size {}x{}", table.layer, table.col_count(), table.row_count()),
+            TableCmd::Draw { layer, cols, rows, .. } => format!("table draw --layer {layer} --size {cols}x{rows}"),
             TableCmd::Delete { id } => format!("table delete {id}"),
             TableCmd::Set { id, layer, locked, .. } => format!("table set {id}{}{}", layer.as_ref().map(|l| format!(" --layer {l}")).unwrap_or_default(), locked.map(|l| format!(" --locked {l}")).unwrap_or_default()),
             TableCmd::EditCells { id, cells, .. } => format!("table edit-cells {id} ({} cell(s))", cells.len()),
@@ -127,6 +144,25 @@ impl Board<'_> {
     pub(crate) fn apply_table(&mut self, cmd: &TableCmd) -> Result<(), Vec<CheckResult>> {
         match cmd {
             TableCmd::Add { table } => self.add_table(table.clone()),
+            TableCmd::Draw { layer, at, cols, rows, cell_w_um, cell_h_um, line_width_um, locked, patch } => {
+                if *cols == 0 || *rows == 0 || *cols > 100 || *rows > 1000 {
+                    return Err(fail("ops_bad_table", "table", "a table has from 1 to 100 columns and from 1 to 1000 rows"));
+                }
+                if *cell_w_um <= 0 || *cell_h_um <= 0 {
+                    return Err(fail("ops_bad_table", "table", "a cell has a size"));
+                }
+                let mut t = Table::new_grid(layer, *at, *cols, *rows, *cell_w_um, *cell_h_um, *line_width_um);
+                patch_table(&mut t, patch).map_err(|m| fail("ops_bad_table", "table", m))?;
+                self.add_table(t)?;
+                if *locked {
+                    let id = self.design.drawings.as_ref().and_then(|d| d.tables.last()).map(|t| t.id.clone()).unwrap_or_default();
+                    let dr = self.drawings_mut();
+                    dr.locked_ids.push(id);
+                    dr.locked_ids.sort();
+                    dr.locked_ids.dedup();
+                }
+                Ok(())
+            }
             TableCmd::Delete { id } => self.delete_table(id),
             TableCmd::Set { id, layer, locked, patch } => self.set_table(id, layer.as_deref(), *locked, patch),
             TableCmd::EditCells { id, cells, edit } => {

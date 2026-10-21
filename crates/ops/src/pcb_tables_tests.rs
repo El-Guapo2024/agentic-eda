@@ -172,6 +172,29 @@ fn a_table_moves_turns_and_flips_with_the_generic_verbs_and_is_lockable_and_grou
 }
 
 #[test]
+fn draw_table_makes_a_grid_with_kicads_cell_defaults_and_what_its_dialog_set() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let patch = TablePatch { texts: Some(vec![vec!["a".into(), "b".into(), "c".into()], vec!["d".into(), "e".into(), "f".into()]]), ..TablePatch::default() };
+    b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(5_000, 6_000), cols: 3, rows: 2, cell_w_um: 12_000, cell_h_um: 4_000, line_width_um: 150, locked: true, patch })).unwrap();
+    let t = b.design().drawings.as_ref().unwrap().tables[0].clone();
+    assert_eq!((t.col_count(), t.row_count(), t.at), (3, 2, p(5_000, 6_000)));
+    assert_eq!(t.col_widths, vec![12_000; 3]);
+    assert_eq!(t.texts()[1], vec!["d", "e", "f"]);
+    // the cells are `new PCB_TABLECELL`: 50 mil text, automatic thickness, left and centred, a margin of the legacy formula, not mirrored on a front layer
+    let c = t.cell(0, 0).unwrap();
+    assert_eq!((c.style.height_um, c.style.thickness_um, c.margins, c.style.mirror), (1_270, 0, [1_003; 4], false));
+    assert_eq!((t.border.stroke.width_um, t.separators.stroke.width_um), (150, 150));
+    assert!(b.design().drawings.as_ref().unwrap().locked_ids.contains(&t.id));
+    // on a back layer the cells are mirrored
+    b.apply(&Cmd::Table(TableCmd::Draw { layer: "B.SilkS".into(), at: p(0, 0), cols: 1, rows: 1, cell_w_um: 5_000, cell_h_um: 5_000, line_width_um: 100, locked: false, patch: TablePatch::default() })).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().tables.iter().any(|t| t.layer == "B.SilkS" && t.cells[0].style.mirror));
+    // refused: no size, no columns
+    assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(0, 0), cols: 0, rows: 1, cell_w_um: 5_000, cell_h_um: 5_000, line_width_um: 100, locked: false, patch: TablePatch::default() })).is_err());
+    assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(0, 0), cols: 1, rows: 1, cell_w_um: 0, cell_h_um: 5_000, line_width_um: 100, locked: false, patch: TablePatch::default() })).is_err());
+}
+
+#[test]
 fn the_verbs_read_from_and_write_to_the_json_the_studio_sends() {
     let cmd = Cmd::Table(TableCmd::AddRow { id: "tbl_x".into(), row: 2, above: true });
     let value = serde_json::to_value(&cmd).unwrap();

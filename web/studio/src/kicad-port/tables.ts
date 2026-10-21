@@ -8,8 +8,10 @@
 // conditions `cellBlockSelection` and `mergedCellsSelection`, `getCellBlockBounds`) and pcbnew/tools/pcb_edit_table_tool.cpp (`ExportTableToCSV`).
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardTable, BoardTableCell } from "../api/types";
-import { isBackLayer } from "./layerDefaults";
+import type { BoardTable, BoardTableCell } from "../api/types";
+import { isBackLayer, lineThicknessUm, textStyleOf } from "./layerDefaults";
+import { activeLayerName } from "./layerPresets";
+import type { TableBorderEdit, TableCellEdit, TableHAlign, TableLineStyleName, TablePatch, TableSeparatorsEdit, TableVAlign } from "../api/tableTypes";
 
 /** The id of a cell as an item of the editor: `<table id>:<row>:<col>` (`eda_model::table::cell_item_id`). */
 export function cellItemId(table: string, row: number, col: number): string {
@@ -22,16 +24,21 @@ export function parseCellItemId(id: string): { table: string; row: number; col: 
   return m ? { table: m[1]!, row: Number(m[2]), col: Number(m[3]) } : null;
 }
 
-export function tablesOf(board: Pick<BoardState, "drawings"> | null | undefined): readonly BoardTable[] {
+/** Anything that holds tables the way the board's state does (and the sheet's: `drawings.tables`). */
+export interface HasTables {
+  drawings?: { tables?: readonly BoardTable[] } | null;
+}
+
+export function tablesOf(board: HasTables | null | undefined): readonly BoardTable[] {
   return board?.drawings?.tables ?? [];
 }
 
-export function tableById(board: Pick<BoardState, "drawings"> | null | undefined, id: string): BoardTable | undefined {
+export function tableById(board: HasTables | null | undefined, id: string): BoardTable | undefined {
   return tablesOf(board).find((t) => t.id === id);
 }
 
 /** The cell a cell id names, with its table. */
-export function cellById(board: Pick<BoardState, "drawings"> | null | undefined, id: string): { table: BoardTable; cell: BoardTableCell } | undefined {
+export function cellById(board: HasTables | null | undefined, id: string): { table: BoardTable; cell: BoardTableCell } | undefined {
   const p = parseCellItemId(id);
   if (!p) return undefined;
   const table = tableById(board, p.table);
@@ -98,7 +105,7 @@ export function cellAt(t: BoardTable, row: number, col: number): BoardTableCell 
 // --------------------------------------------------------------------------------------------------------------------------------------------- selections
 
 /** The cells among `ids`, grouped by table. */
-export function selectedCells(board: Pick<BoardState, "drawings">, ids: Iterable<string>): { table: BoardTable; cells: BoardTableCell[] }[] {
+export function selectedCells(board: HasTables, ids: Iterable<string>): { table: BoardTable; cells: BoardTableCell[] }[] {
   const by = new Map<string, { table: BoardTable; cells: BoardTableCell[] }>();
   for (const id of ids) {
     const found = cellById(board, id);
@@ -111,7 +118,7 @@ export function selectedCells(board: Pick<BoardState, "drawings">, ids: Iterable
 }
 
 /** `SelectColumns`: the cells of the columns the selected cells are in, the selection kept. */
-export function selectColumns(board: Pick<BoardState, "drawings">, selection: readonly string[]): string[] {
+export function selectColumns(board: HasTables, selection: readonly string[]): string[] {
   const out = new Set(selection);
   for (const { table, cells } of selectedCells(board, selection)) {
     for (const col of new Set(cells.map((c) => c.col))) {
@@ -125,7 +132,7 @@ export function selectColumns(board: Pick<BoardState, "drawings">, selection: re
 }
 
 /** `SelectRows`. */
-export function selectRows(board: Pick<BoardState, "drawings">, selection: readonly string[]): string[] {
+export function selectRows(board: HasTables, selection: readonly string[]): string[] {
   const out = new Set(selection);
   for (const { table, cells } of selectedCells(board, selection)) {
     for (const row of new Set(cells.map((c) => c.row))) {
@@ -139,7 +146,7 @@ export function selectRows(board: Pick<BoardState, "drawings">, selection: reado
 }
 
 /** `SelectTable`: the selection is cleared and the tables the cells belong to are what is selected. */
-export function selectTables(board: Pick<BoardState, "drawings">, selection: readonly string[]): string[] {
+export function selectTables(board: HasTables, selection: readonly string[]): string[] {
   return selectedCells(board, selection).map(({ table }) => table.id);
 }
 
@@ -212,4 +219,264 @@ export function csvFileName(t: BoardTable): string {
  */
 export function gridColumn(t: Pick<BoardTable, "cols" | "layer">, gridCol: number): number {
   return isBackLayer(t.layer) ? t.cols - 1 - gridCol : gridCol;
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------------------- Draw Table
+
+/** The size of the cells and the grid a Draw Table preview makes: how many columns and rows, and each cell's size. */
+export interface DrawTableGrid {
+  cols: number;
+  rows: number;
+  cellW: number;
+  cellH: number;
+}
+
+/** C's `int / int`: the quotient cut toward zero. */
+const idiv = (a: number, b: number): number => Math.trunc(a / b);
+
+/** KiCad's `KiROUND`: half away from zero. */
+const kiround = (v: number): number => (v < 0 ? -Math.round(-v) : Math.round(v));
+
+/**
+ * `DRAWING_TOOL::DrawTable`'s motion handler: from the first click `origin` to the `cursor`, as many columns as hold 15 glyph widths of the layer's text and as many rows as hold 3
+ * glyph heights (at least one of each), cells at least 5 glyph widths wide and 3 high, each cell's size rounded to the grid.
+ */
+export function drawTableGrid(origin: readonly [number, number], cursor: readonly [number, number], fontSize: readonly [number, number], gridSize: readonly [number, number]): DrawTableGrid {
+  const requestedX = cursor[0] - origin[0];
+  const requestedY = cursor[1] - origin[1];
+  const cols = Math.max(1, idiv(requestedX, fontSize[0] * 15));
+  const rows = Math.max(1, idiv(requestedY, fontSize[1] * 3));
+  let cellW = Math.max(fontSize[0] * 5, idiv(requestedX, cols));
+  let cellH = Math.max(fontSize[1] * 3, idiv(requestedY, rows));
+  const gx = Math.max(gridSize[0], 1);
+  const gy = Math.max(gridSize[1], 1);
+  cellW = kiround(cellW / gx) * gx;
+  cellH = kiround(cellH / gy) * gy;
+  return { cols, rows, cellW, cellH };
+}
+
+/** What a Draw Table session works out from the board and the cursor: the layer it draws on, the grid the cursor sizes and the width of the lines the new table starts with. */
+export interface DrawTableSession {
+  layer: string;
+  grid: DrawTableGrid;
+  /** `bds.GetLineThickness( layer )`. */
+  lineWidth: number;
+}
+
+/**
+ * `DrawTable`'s numbers for the first corner `origin`, the `cursor` and the editing `gridUm`: the active layer (silkscreen when none is), the layer's text size
+ * (`bds.GetTextSize( layer )`, which sizes the cells) and its line width. `textGraphics` is Board Setup's Text & Graphics defaults.
+ */
+export function drawTableSession(textGraphics: Parameters<typeof textStyleOf>[0], activeLayer: string | null | undefined, origin: readonly [number, number], cursor: readonly [number, number], gridUm: number): DrawTableSession {
+  const layer = activeLayerName(activeLayer, "F.SilkS");
+  const st = textStyleOf(textGraphics, layer);
+  return { layer, grid: drawTableGrid(origin, cursor, [st.widthUm, st.heightUm], [gridUm, gridUm]), lineWidth: lineThicknessUm(textGraphics, layer) };
+}
+
+/** The box of the grid a Draw Table preview shows. */
+export function drawTableBox(origin: readonly [number, number], g: DrawTableGrid): [number, number, number, number] {
+  return [origin[0], origin[1], origin[0] + g.cols * g.cellW, origin[1] + g.rows * g.cellH];
+}
+
+// ------------------------------------------------------------------------------------------------------------------------ Table Properties dialog
+
+
+/** The five line styles of the dialog's combos (`lineTypeNames`); a `default` stroke is shown as the first. */
+export const TABLE_LINE_STYLES: readonly { value: TableLineStyleName; label: string }[] = [
+  { value: "solid", label: "Solid" },
+  { value: "dash", label: "Dashed" },
+  { value: "dot", label: "Dotted" },
+  { value: "dash_dot", label: "Dash-Dot" },
+  { value: "dash_dot_dot", label: "Dash-Dot-Dot" },
+];
+
+export function dialogLineStyle(s: TableLineStyleName): TableLineStyleName {
+  return s === "default" ? "solid" : s;
+}
+
+/** The fields of `DIALOG_TABLE_PROPERTIES` as the dialog holds them. The grid is as the dialog shows it: a table on a back layer has its columns in the other order. */
+export interface TableDialogValues {
+  layer: string;
+  locked: boolean;
+  borderExternal: boolean;
+  borderHeader: boolean;
+  /** um; the field keeps a value while no border is on (the table's own is -1 then), so switching one on has something to start from. */
+  borderWidth: number;
+  borderStyle: TableLineStyleName;
+  rowSeparators: boolean;
+  colSeparators: boolean;
+  separatorsWidth: number;
+  separatorsStyle: TableLineStyleName;
+  grid: string[][];
+}
+
+/** `TransferDataToWindow`: the dialog's values for `t`. `defaultLineUm` is what a width field starts at when the table has no such stroke (`bds.GetLineThickness( layer )`). */
+export function tableDialogValues(t: BoardTable, locked: boolean, defaultLineUm: number): TableDialogValues {
+  const grid: string[][] = [];
+  for (let row = 0; row < t.rows; row++) {
+    const line: string[] = [];
+    for (let gcol = 0; gcol < t.cols; gcol++) {
+      const c = cellAt(t, row, gridColumn(t, gcol));
+      line.push(c && isSelectableCell(c) ? c.text : "");
+    }
+    grid.push(line);
+  }
+  const rows = t.separators.rows && t.separators.stroke.width >= 0;
+  const cols = t.separators.cols && t.separators.stroke.width >= 0;
+  return {
+    layer: t.layer,
+    locked,
+    borderExternal: t.border.external,
+    borderHeader: t.border.header,
+    borderWidth: t.border.stroke.width >= 0 ? t.border.stroke.width : defaultLineUm,
+    borderStyle: dialogLineStyle(t.border.stroke.style),
+    rowSeparators: rows,
+    colSeparators: cols,
+    separatorsWidth: t.separators.stroke.width >= 0 ? t.separators.stroke.width : defaultLineUm,
+    separatorsStyle: dialogLineStyle(t.separators.stroke.style),
+    grid,
+  };
+}
+
+/** `onBorderChecked` / `onHeaderChecked`: switching a border or its header on gives a width that was not set the layer's line width (`m_borderWidth.SetValue( defaultLineThickness )`). */
+export function widthAfterToggle(current: number, on: boolean, defaultLineUm: number): number {
+  return on && current < 0 ? defaultLineUm : current;
+}
+
+/** `TransferDataFromWindow`: the patch the values make (the layer and the lock are sent beside it). The grid goes back to the table's own column order. */
+export function tablePatchOf(t: Pick<BoardTable, "cols" | "layer">, v: TableDialogValues): TablePatch {
+  const border: TableBorderEdit = { external: v.borderExternal, header: v.borderHeader, width_um: Math.round(v.borderWidth), style: v.borderStyle };
+  const separators: TableSeparatorsEdit = { rows: v.rowSeparators, cols: v.colSeparators, width_um: Math.round(v.separatorsWidth), style: v.separatorsStyle };
+  const texts = v.grid.map((line) => {
+    // The grid was laid out for the table's own layer; a layer change in the dialog does not turn the cells round (KiCad reads each cell from the same place it wrote it).
+    const out = new Array<string>(t.cols).fill("");
+    line.forEach((text, gcol) => {
+      out[isBackLayer(t.layer) ? t.cols - 1 - gcol : gcol] = text;
+    });
+    return out;
+  });
+  return { border, separators, texts };
+}
+
+// ------------------------------------------------------------------------------------------------------------------ Table Cell Properties dialog
+
+/** A field of the cell dialog that several selected cells may disagree on (`INDETERMINATE_STATE`): `null` is "differs", and the dialog leaves it alone. */
+export interface CellDialogValues {
+  text: string | null;
+  bold: boolean;
+  italic: boolean;
+  face: string | null;
+  width: number | null;
+  height: number | null;
+  /** 0 with `autoThickness` on is KiCad's automatic width; `null` differs. */
+  thickness: number | null;
+  autoThickness: boolean;
+  hAlign: TableHAlign | null;
+  vAlign: TableVAlign | null;
+  /** left, top, right, bottom. */
+  margins: [number | null, number | null, number | null, number | null];
+}
+
+/** `GetPenSizeForNormal` / `GetPenSizeForBold`. */
+export const penForNormal = (size: number): number => kiround(size / 8);
+export const penForBold = (size: number): number => kiround(size / 5);
+
+/** `DIALOG_TABLECELL_PROPERTIES::TransferDataToWindow`: the first cell sets every field, each later cell makes the ones it differs in indeterminate. */
+export function cellDialogValues(cells: readonly BoardTableCell[]): CellDialogValues {
+  const first = cells[0]!;
+  const v: CellDialogValues = {
+    text: first.text,
+    bold: first.bold,
+    italic: first.italic,
+    face: first.face ?? "",
+    width: first.size_w,
+    height: first.size_h,
+    thickness: first.thickness,
+    autoThickness: first.thickness === 0,
+    hAlign: first.h_align,
+    vAlign: first.v_align,
+    margins: [first.margins[0], first.margins[1], first.margins[2], first.margins[3]],
+  };
+  for (const c of cells.slice(1)) {
+    if (c.text !== v.text) v.text = null;
+    if ((c.face ?? "") !== v.face) v.face = null;
+    if (c.size_w !== v.width) v.width = null;
+    if (c.size_h !== v.height) v.height = null;
+    if (c.thickness !== v.thickness) {
+      v.thickness = null;
+      v.autoThickness = false;
+    }
+    if (c.h_align !== v.hAlign) v.hAlign = null;
+    if (c.v_align !== v.vAlign) v.vAlign = null;
+    for (let i = 0; i < 4; i++) if (c.margins[i] !== v.margins[i]) v.margins[i] = null;
+  }
+  return v;
+}
+
+/** `onBoldToggle` / `onTextSize`: the pen the thickness field takes when bold or the size changes while the width is automatic. */
+export function autoPenFor(width: number | null, height: number | null, bold: boolean): number | null {
+  if (width == null || height == null) return null;
+  const size = Math.min(width, height);
+  return bold ? penForBold(size) : penForNormal(size);
+}
+
+/** `TransferDataFromWindow`: what the dialog sets, leaving out what the cells disagree on. Bold and italic are every cell's from the boxes, as in KiCad. */
+export function cellEditOf(v: CellDialogValues): TableCellEdit {
+  const e: TableCellEdit = { bold: v.bold, italic: v.italic };
+  if (v.text !== null) e.text = v.text;
+  if (v.face !== null) e.face = v.face;
+  if (v.width !== null) e.width_um = Math.round(v.width);
+  if (v.height !== null) e.height_um = Math.round(v.height);
+  if (v.autoThickness) e.thickness_um = 0;
+  else if (v.thickness !== null) e.thickness_um = Math.round(v.thickness);
+  if (v.hAlign !== null) e.h_align = v.hAlign;
+  if (v.vAlign !== null) e.v_align = v.vAlign;
+  if (v.margins.some((m) => m !== null)) e.margins = v.margins.map((m) => (m === null ? null : Math.round(m))) as [number | null, number | null, number | null, number | null];
+  return e;
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------ edits keep the selection
+
+/** A cell id's table, row and column as numbers, or null. */
+function cellParts(id: string): { table: string; row: number; col: number } | null {
+  return parseCellItemId(id);
+}
+
+/**
+ * A row was put in `table` at index `at` (Add Row Above puts it at the row of the topmost selected cell, Add Row Below one under the bottommost): the cells of the selection from that row
+ * on are the same cells, one row further down. (KiCad's selection holds the cells themselves, which the new row only pushes down.)
+ */
+export function shiftRowsAfterInsert(ids: readonly string[], table: string, at: number): string[] {
+  return ids.map((id) => {
+    const p = cellParts(id);
+    return p && p.table === table && p.row >= at ? cellItemId(table, p.row + 1, p.col) : id;
+  });
+}
+
+/** The same for a column put in at index `at`. */
+export function shiftColsAfterInsert(ids: readonly string[], table: string, at: number): string[] {
+  return ids.map((id) => {
+    const p = cellParts(id);
+    return p && p.table === table && p.col >= at ? cellItemId(table, p.row, p.col + 1) : id;
+  });
+}
+
+/** The topmost, bottommost, leftmost and rightmost of `cells` (the first of equals): the cell Add Row Above / Below and Add Column Before / After work from. */
+export function extremeCell(cells: readonly BoardTableCell[], which: "top" | "bottom" | "left" | "right"): BoardTableCell | undefined {
+  let best: BoardTableCell | undefined;
+  for (const c of cells) {
+    if (!best) best = c;
+    else if (which === "top" ? c.row < best.row : which === "bottom" ? c.row > best.row : which === "left" ? c.col < best.col : c.col > best.col) best = c;
+  }
+  return best;
+}
+
+/** The rows the cells are in, sorted. */
+export function rowsOf(cells: readonly BoardTableCell[]): number[] {
+  return [...new Set(cells.map((c) => c.row))].sort((a, b) => a - b);
+}
+
+/** The columns the cells are in, sorted. */
+export function colsOf(cells: readonly BoardTableCell[]): number[] {
+  return [...new Set(cells.map((c) => c.col))].sort((a, b) => a - b);
 }

@@ -24,6 +24,7 @@ import { boardDeleteCmds, tuningPatternIds } from "../kicad-port/deleteCmds";
 import { removeTuningPatterns } from "../components/canvas/tuneRouting";
 import { topLevelGroup } from "../kicad-port/groupTree";
 import { pickFootprintItem, pickSymbolItem } from "../kicad-port/libEditorHit";
+import { cellAddress, cellById } from "../kicad-port/tables";
 
 /** The four editors that have a canvas (the 3D viewer has its own camera and none of these tools). */
 export type CanvasTab = "pcb" | "schematic" | "footprint" | "symbol";
@@ -127,6 +128,11 @@ export function describeBoardItem(board: StudioState["board"], item: PickedItem)
   if (dim) return `${dim.kind} dimension on ${dim.layer}`;
   const group = board.drawings?.groups.find((g) => g.id === item.id);
   if (group) return `Group ${group.name || item.id}`;
+  // `PCB_TABLE::GetItemDescription`, `PCB_TABLECELL::GetItemDescription`
+  const table = board.drawings?.tables?.find((t) => t.id === item.id);
+  if (table) return `${table.cols} column table`;
+  const cell = cellById(board, item.id);
+  if (cell) return `Table cell ${cellAddress(cell.cell.row, cell.cell.col)}`;
   return item.kind;
 }
 
