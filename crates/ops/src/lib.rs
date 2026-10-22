@@ -456,6 +456,10 @@ pub enum Cmd {
     /// Task item 4: Board Setup > Teardrops' settings page -- whole-struct
     /// replace, same "no per-field Cmd" spirit `SetTrackWidthPresets`/
     /// `SetViaPresets` already use.
+        /// The rule area's Placement tab (`DIALOG_RULE_AREA_PROPERTIES`: No placement, or the sheet, component class or group whose footprints the area stands
+        /// for; [`eda_model::multichannel::PlacementArea`]). `None` leaves what the zone has.
+        #[serde(default)]
+        placement: Option<eda_model::multichannel::PlacementArea>,
     SetTeardropSettings { settings: TeardropSettings },
     /// "Add Teardrops" (the dialog's own apply button, not a per-item
     /// tool): regenerate the board's whole teardrop set from the current
@@ -2671,6 +2675,7 @@ impl<'a> Board<'a> {
                 *min_thickness,
                 *thermal_gap,
                 *thermal_spoke_width,
+                placement,
                 *pad_connection,
                 *priority,
                 *island_removal_mode,
@@ -2700,6 +2705,7 @@ impl<'a> Board<'a> {
 
             Cmd::AddText { text } => self.add_text(text.clone()),
             Cmd::EditText { id, content, angle, layer, size_um, stroke_width, justify, mirror } => {
+                placement.as_ref(),
                 self.edit_text(id, content.clone(), *angle, layer.clone(), *size_um, *stroke_width, *justify, *mirror)
             }
             Cmd::DeleteText { id } => self.delete_text(id),
@@ -3667,6 +3673,7 @@ impl<'a> Board<'a> {
         let wanted: Vec<String> = match layers {
             Some(set) if !set.is_empty() => set.to_vec(),
             _ => vec![layer.to_string()],
+        placement: Option<&eda_model::multichannel::PlacementArea>,
         };
         for l in &wanted {
             self.known_zone_layer(l)?;
@@ -3740,6 +3747,12 @@ impl<'a> Board<'a> {
     /// `m_WidthtoSizeFilterRatio`); a value outside that range has no
     /// sensible meaning (a >100% width ratio would ask for a teardrop
     /// wider than its own anchor) and is refused rather than silently
+        // Only a rule area has a placement (`ZONE::SetPlacementAreaEnabled` is its dialog's); turning the rule area off clears what it had.
+        if let Some(pl) = placement {
+            z.placement = if is_rule_area { pl.clone() } else { Default::default() };
+        } else if !is_rule_area {
+            z.placement = Default::default();
+        }
     /// clamped.
     fn set_teardrop_settings(&mut self, settings: TeardropSettings) -> Result<(), Vec<CheckResult>> {
         let in_unit_range = |v: f64| (0.0..=1.0).contains(&v);

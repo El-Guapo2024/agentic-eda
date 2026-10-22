@@ -1214,6 +1214,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
             // the Board Setup "Track Widths & Vias" panel's editable
             // preset lists (`eda_ops::Cmd::SetTrackWidthPresets`/
+                // The rule area's placement source (`ZONE::GetPlacementAreaEnabled` and the source type and name): the Placement tab of Zone Properties and what Repeat Layout reads.
+                "placement": z.placement,
             // `SetViaPresets`), driving the W/Shift+W and via-size-cycle
             // hotkeys. The board's own default (board_rules.track_width/
             // via_diameter/via_drill below) is always the implicit first

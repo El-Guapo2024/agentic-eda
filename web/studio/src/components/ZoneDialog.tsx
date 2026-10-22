@@ -33,6 +33,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { Cmd, FillMode, IslandRemovalMode, PadConnection, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
+import { fetchPlacementSources } from "../api/multichannelClient";
+import { chooseMode, NO_CHOICES, placementFormOf, placementOf, placementOptions, placementSelection, type PlacementChoices, type PlacementForm } from "../kicad-port/multichannel";
 import { duplicatedZoneOutline } from "../kicad-port/boardControl";
 import { enabledOptionalLayers, layerDisplayName } from "../kicad-port/boardLayers";
 import { activeLayerName, isCopper } from "../kicad-port/layerPresets";
@@ -42,7 +44,7 @@ type ZoneFormSettings = ZoneSettingsFields & RuleAreaFields;
 const DEFAULT_FORM_SETTINGS: ZoneFormSettings = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
 
 /** `ZONE::GetDoNotAllow*` -- task item 3's five keepout restrictions. */
-const KEEPOUT_OPTIONS: { key: keyof RuleAreaFields; label: string }[] = [
+const KEEPOUT_OPTIONS: { key: Exclude<keyof RuleAreaFields, "is_rule_area" | "placement">; label: string }[] = [
   { key: "keepout_tracks", label: "Tracks" },
   { key: "keepout_vias", label: "Vias" },
   { key: "keepout_pads", label: "Pads" },
@@ -116,6 +118,9 @@ export function ZoneDialog() {
   const [name, setName] = useState("");
   const [locked, setLocked] = useState(false);
   const [settings, setSettings] = useState<ZoneFormSettings>(DEFAULT_FORM_SETTINGS);
+  // The Placement tab of a rule area (`DIALOG_RULE_AREA_PROPERTIES`): the sheets, component classes and groups the board offers, and what is chosen among them.
+  const [sources, setSources] = useState<PlacementChoices | null>(null);
+  const [placement, setPlacement] = useState<PlacementForm>(() => placementFormOf(undefined, NO_CHOICES));
 
   const copperLayers = state.board?.layers ?? [];
   const optionalLayers = enabledOptionalLayers(state.board?.board_rules?.layer_setup);
@@ -148,6 +153,25 @@ export function ZoneDialog() {
       setSettings({ ...DEFAULT_FORM_SETTINGS, is_rule_area: state.nextZoneIsRuleArea });
       dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editId, dupId]);
+
+  // What the Placement tab offers is read from the board when the dialog opens; the form starts from the zone's own placement once it has them.
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    setSources(null);
+    void fetchPlacementSources()
+      .then((r) => {
+        if (!live) return;
+        const found: PlacementChoices = r.ok ? { sheets: r.sheets, classes: r.classes, groups: r.groups } : NO_CHOICES;
+        setSources(found);
+        setPlacement(placementFormOf((editZone ?? dupZone)?.placement, found));
+      })
+      .catch(() => live && setSources(NO_CHOICES));
+    return () => {
+      live = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editId, dupId]);
 
@@ -189,7 +213,7 @@ export function ZoneDialog() {
   const submit = async () => {
     if (!canSubmit) return;
     // The zone's net is the form's own; the settings carry the rest (a spread of the zone being edited would bring its old net and layer back over the form's).
-    const form = { ...settings };
+    const form = { ...settings, ...(settings.is_rule_area ? { placement: placementOf(placement) } : {}) };
     if (editZone) {
       const cmds: Cmd[] = [{ op: "edit_zone", ...form, id: editZone.id, net: effectiveNet, layer: firstLayer, layers }];
       if ((editZone.name ?? "") !== name && !settings.is_rule_area) cmds.push({ op: "set_zone_name", id: editZone.id, name });
@@ -282,6 +306,40 @@ export function ZoneDialog() {
                   <input type="checkbox" checked={settings[o.key]} onChange={(e) => set(o.key, e.target.checked)} /> {o.label}
                 </label>
               ))}
+              <p style={SECTION}>Placement</p>
+              <div data-testid="zone-placement" role="radiogroup" aria-label="Placement">
+                <label className="filter-row" style={{ display: "block" }}>
+                  <input type="radio" name="zone-placement" data-testid="zone-placement-none" checked={placement.mode === "none"} onChange={() => setPlacement((f) => chooseMode(f, "none"))} /> No placement
+                </label>
+                {(
+                  [
+                    ["sheetname", "Place items from sheet:"],
+                    ["component_class", "Place items matching component class:"],
+                    ["group", "Place items in group:"],
+                  ] as const
+                ).map(([type, label]) => (
+                  <div key={type} style={{ display: "flex", gap: 8, alignItems: "center", margin: "4px 0" }}>
+                    <label className="filter-row" style={{ flex: "0 0 auto" }}>
+                      <input type="radio" name="zone-placement" data-testid={`zone-placement-${type}`} checked={placement.mode === type} onChange={() => setPlacement((f) => chooseMode(f, type))} /> {label}
+                    </label>
+                    <select
+                      data-testid={`zone-placement-source-${type}`}
+                      value={placementSelection(placement, type)}
+                      style={{ flex: 1, minWidth: 0 }}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setPlacement((f) => ({ ...f, [type === "sheetname" ? "sheet" : type]: value }));
+                      }}
+                    >
+                      {placementOptions(placement, sources ?? NO_CHOICES, type).map((o) => (
+                        <option key={`${type}:${o.value}`} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
             </>
           ) : (
             <>

@@ -28,6 +28,7 @@ pub mod kicad_geom;
 pub mod layers;
 pub mod model_subst;
 pub mod modules;
+pub mod multichannel;
 pub mod net_pattern;
 pub mod outline;
 pub mod pad_geom;
