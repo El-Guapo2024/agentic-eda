@@ -978,6 +978,30 @@ pub(crate) fn write_footprint(
             writeln!(out, "\t\t(sheetfile {})", sexpr_str(file)).unwrap();
         }
     }
+    // The footprint's gates (`format( FOOTPRINT )` writes `(units ..)` after the sheet): the ones the file gave it, else the symbol's when it has two or more -- what the
+    // netlist hands a footprint updated from the schematic -- so that KiCad's Swap Gate Nets finds them on a board made here.
+    let units = own_extra
+        .filter(|e| !e.units.is_empty())
+        .map(|e| e.units.clone())
+        .unwrap_or_else(|| {
+            let derived = eda_model::fp_units::unit_info(design, model, &fp.id);
+            if derived.len() >= 2 {
+                derived
+            } else {
+                Vec::new()
+            }
+        });
+    if !units.is_empty() {
+        write!(out, "\t\t(units").unwrap();
+        for u in &units {
+            write!(out, " (unit (name {}) (pins", sexpr_str(&u.name)).unwrap();
+            for pin in &u.pins {
+                write!(out, " {}", sexpr_str(pin)).unwrap();
+            }
+            write!(out, "))").unwrap();
+        }
+        writeln!(out, ")").unwrap();
+    }
     write_attr(out, &extra.attrs);
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).

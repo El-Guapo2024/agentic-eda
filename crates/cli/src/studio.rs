@@ -830,6 +830,8 @@ fn handle(
         ("POST", "/api/design_blocks/save") => respond(stream, "200 OK", "application/json", crate::design_block_api::save(dir, &body).to_string().as_bytes()),
         ("POST", "/api/design_blocks/properties") => respond(stream, "200 OK", "application/json", crate::design_block_api::properties(dir, &body).to_string().as_bytes()),
         ("POST", "/api/design_blocks/delete") => respond(stream, "200 OK", "application/json", crate::design_block_api::delete(dir, &body).to_string().as_bytes()),
+        // What Swap Pad Nets / Swap Gate Nets would ask first: the unselected pads the copper connected to the swapped pads reaches (`PromptConnectedPadDecision`).
+        ("POST", "/api/swap_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
@@ -1109,6 +1111,11 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 p["fields"] = json!(crate::fp_json::fields_json(&design, part, fp, footprint));
                 tv.annotate_fields(&part.reference, &mut p["fields"]);
                 p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
+                // A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`), for Swap Gate Nets' menu: absent for fewer than two.
+                let units = eda_model::fp_units::unit_info(&design, &model, &part.reference);
+                if units.len() >= 2 {
+                    p["units"] = json!(units);
+                }
                 // Its silkscreen, fab drawings and texts (`graphics`, `texts`), board space.
                 crate::fp_art_json::add_art(&mut p, part, fp, footprint);
             }

@@ -61,6 +61,7 @@ pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingA
 mod fp_array;
 mod pad_edit;
 mod unused_pads;
+mod pad_nets;
 mod fp_lib_fields;
 mod sym_derive;
 mod fix_shapes;
@@ -757,6 +758,24 @@ pub enum Cmd {
         #[serde(default)]
         keep_outside: bool,
         remove: bool,
+    },
+    /// `pcbnew.InteractiveEdit.swapPadNets` (Swap Pad Nets), `EDIT_TOOL::SwapPadNets` -- see `pad_nets.rs`: the nets of the pads `ids` (two or more, in selection order) rotate,
+    /// the pad `i` taking the net of the pad `i + 1`, and the tracks, vias and pads the copper connected to them reaches follow. `connected_pads` is the answer to "N unselected pad(s)
+    /// are connected to these nets": `false` ignores them, `true` swaps them too; left out, such a swap is refused with `ops_swap_unselected_pads` (the pads in its `detail`)
+    /// so that the studio can ask. One undo step.
+    SwapPadNets {
+        ids: Vec<String>,
+        #[serde(default)]
+        connected_pads: Option<bool>,
+    },
+    /// `pcbnew.InteractiveEdit.swapGateNets` (Swap Gate Nets), `EDIT_TOOL::SwapGateNets`: the pads `ids` are in two or more units of one multi-gate footprint (`FOOTPRINT::GetUnitInfo`),
+    /// whose nets rotate unit to unit, position by position -- or in one unit, which swaps with the unit called `target`. `connected_pads` as for [`Cmd::SwapPadNets`].
+    SwapGateNets {
+        ids: Vec<String>,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        connected_pads: Option<bool>,
     },
 
     /// `EDIT_TOOL::Duplicate` (the studio's Cmd+D): exact copies of the named items in place, under fresh ids -- placed footprints,
@@ -2076,6 +2095,8 @@ impl Cmd {
             Cmd::ReannotateBoard { .. } => true,
             // a board that comes in has its own nets: the netlist the schematic's drawing had set goes (`design.nets`)
             Cmd::ReplaceBoard { .. } => true,
+            // a swap of nets moves pins between the nets of `design.nets` -- the netlist the schematic's half of the design owns -- and the nets of the board's copper with them
+            Cmd::SwapPadNets { .. } | Cmd::SwapGateNets { .. } => true,
             // Replace All renames a reference when it is asked to look at them
             Cmd::ReplaceText { search, .. } => search.replace_references,
             // Field Properties of a Reference field renames the symbol
@@ -2143,6 +2164,7 @@ impl Cmd {
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, .. } => shape_ids.iter().chain(text_ids.iter()).chain(dimension_ids.iter()).map(String::as_str).collect(),
             Cmd::RemoveUnusedPads { selected, .. } => selected.iter().flatten().map(String::as_str).collect(),
+            Cmd::SwapPadNets { ids, .. } | Cmd::SwapGateNets { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetTeardropSettings { .. } => vec!["teardrop_settings"],
             Cmd::AddAllTeardrops | Cmd::RemoveAllTeardrops => vec!["teardrops"],
             Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
@@ -2734,6 +2756,8 @@ impl<'a> Board<'a> {
             Cmd::DeleteText { id } => self.delete_text(id),
             Cmd::MoveText { id, x, y } => self.move_text(id, *x, *y),
             Cmd::RemoveUnusedPads { selected, vias, pads, keep_outside, remove } => self.remove_unused_pads(&unused_pads::UnusedPadLayers { selected: selected.as_deref(), vias: *vias, pads: *pads, keep_outside: *keep_outside, remove: *remove }),
+            Cmd::SwapPadNets { ids, connected_pads } => self.swap_pad_nets(ids, *connected_pads),
+            Cmd::SwapGateNets { ids, target, connected_pads } => self.swap_gate_nets(ids, target.as_deref(), *connected_pads),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, layer, line_width, text_size, text_thickness } => {
                 self.edit_text_and_graphics(&pcb_global_edit::GlobalTextEdit { shape_ids, text_ids, dimension_ids, layer_defaults: *layer_defaults, layer: layer.as_deref(), line_width: *line_width, text_size: *text_size, text_thickness: *text_thickness })
             }
@@ -5842,6 +5866,8 @@ mod fp_array_tests;
 mod pad_edit_tests;
 #[cfg(test)]
 mod unused_pads_tests;
+#[cfg(test)]
+mod pad_nets_tests;
 #[cfg(test)]
 mod sym_derive_tests;
 #[cfg(test)]

@@ -22,14 +22,15 @@ import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta
 import { finishInteractiveRoute, cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteractiveRoute } from "../components/canvas/routing";
 import { withTrackSnapping } from "../kicad-port/routerSettings";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
-import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic } from "../api/client";
+import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic, postSwapPreview } from "../api/client";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
-import { itemKind, padParent } from "../kicad-port/pcbItems";
+import { itemKind, padById, padParent } from "../kicad-port/pcbItems";
+import { padsOnly } from "../kicad-port/gateSwap";
 import { extraDeleteCmd, extraItemById } from "../kicad-port/pcbExtraItems";
 import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { nextAngleSnapMode } from "../kicad-port/pcbParityState";
@@ -1744,6 +1745,41 @@ export function useActionRunner() {
           dispatch({ type: "SET_SELECTION", refs });
           // `m_toolMgr->RunAction( PCB_ACTIONS::moveIndividually )`
           startMoveIndividually(refs);
+        })
+      );
+
+      // ---- Swap Pad Nets / Swap Gate Nets -- edit_tool_move_fct.cpp EDIT_TOOL::SwapPadNets, ::SwapGateNets. The nets of the selected pads (or of the pads of whole units of
+      // a multi-gate footprint) rotate in selection order, with the copper connected to them. When that copper reaches pads that are not selected KiCad asks what to do with
+      // them (`PromptConnectedPadDecision`): the preview finds them, the dialog asks, and the answer goes with the verb.
+      const swapNets = async (cmd: Cmd, title: string) => {
+        const reply = await postSwapPreview(cmd);
+        if (!reply.ok) {
+          dispatch({ type: "TOAST", message: reply.message, kind: "error" });
+          return;
+        }
+        if (reply.pads.length === 0) {
+          void api.cmd({ ...cmd, connected_pads: true } as Cmd);
+          return;
+        }
+        dispatch({ type: "SET_SWAP_NETS_PROMPT", prompt: { cmd, pads: reply.pads, title } });
+      };
+      m.set(
+        "pcbnew.InteractiveEdit.swapPadNets",
+        pcbOnly(() => {
+          const ids = board ? padsOnly(board, [...state.selection]) : null;
+          if (!ids || ids.length < 2) return; // `selection.Size() < 2 || !selection.OnlyContains( { PCB_PAD_T } )`
+          void swapNets({ op: "swap_pad_nets", ids }, "Swap Pad Nets");
+        })
+      );
+      m.set(
+        "pcbnew.InteractiveEdit.swapGateNets",
+        pcbOnly((unit?: unknown) => {
+          if (!board) return;
+          const ids = [...state.selection].filter((id) => padById(board, id));
+          if (ids.length === 0) return;
+          // The unit to swap the one selected unit with (the "Swap with B" entry's parameter).
+          const target = typeof unit === "string" && unit !== "" ? unit : null;
+          void swapNets({ op: "swap_gate_nets", ids, target }, "Swap Gate Nets");
         })
       );
 

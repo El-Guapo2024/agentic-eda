@@ -80,6 +80,48 @@ fn the_padstacks_of_kicads_qa_board_are_read_and_written_back_block_by_block() {
     }
 }
 
+/// A board with a multi-gate footprint: `(units (unit (name "A") (pins "1" "2")) (unit (name "B") (pins "3" "4")))` after the sheet, as `format( FOOTPRINT )` writes it.
+const GATES_BOARD: &str = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+	(general (thickness 1.6) (legacy_teardrops no))
+	(paper "A4")
+	(layers (0 "F.Cu" signal) (2 "B.Cu" signal) (1 "F.Mask" user) (3 "B.Mask" user) (25 "Edge.Cuts" user))
+	(setup (pad_to_mask_clearance 0))
+	(net 0 "")
+	(net 1 "N1")
+	(net 2 "N2")
+	(gr_rect (start 0 0) (end 40 20) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts") (uuid "00000000-0000-0000-0000-000000000001"))
+	(footprint "Test:Dual" (layer "F.Cu") (uuid "10000000-0000-0000-0000-000000000001") (at 20 10 0)
+		(property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+		(sheetname "/")
+		(sheetfile "dual.kicad_sch")
+		(units (unit (name "A") (pins "1" "2")) (unit (name "B") (pins "3" "4")))
+		(pad "1" smd rect (at -3 0) (size 1 1) (layers "F.Cu" "F.Mask") (net 1 "N1") (uuid "20000000-0000-0000-0000-000000000001"))
+		(pad "2" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask") (net 2 "N2") (uuid "20000000-0000-0000-0000-000000000002"))
+		(pad "3" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Mask") (uuid "20000000-0000-0000-0000-000000000003"))
+		(pad "4" smd rect (at 3 0) (size 1 1) (layers "F.Cu" "F.Mask") (uuid "20000000-0000-0000-0000-000000000004"))
+	)
+)
+"#;
+
+#[test]
+fn a_footprints_units_are_read_for_swap_gate_nets_and_written_back_after_the_sheet() {
+    let (design, model, _) = import_kicad_pcb(GATES_BOARD).expect("imports");
+    let extra = design.drawings.as_ref().expect("drawings").footprint_extras.iter().find(|e| e.id == "U1").expect("U1's extras");
+    let names: Vec<(&str, Vec<&str>)> = extra.units.iter().map(|u| (u.name.as_str(), u.pins.iter().map(String::as_str).collect())).collect();
+    assert_eq!(names, vec![("A", vec!["1", "2"]), ("B", vec!["3", "4"])]);
+    // They are the footprint's units to everything that asks, and no longer a token kept as text.
+    assert_eq!(eda_model::fp_units::unit_info(&design, &model, "U1").len(), 2);
+    assert!(extra.tokens.iter().all(|t| !t.starts_with("(units")), "{:?}", extra.tokens);
+    let out = export(&design, &model);
+    assert_eq!(out.matches("(units (unit").count(), 1, "{out}");
+    assert!(out.contains("(units (unit (name \"A\") (pins \"1\" \"2\")) (unit (name \"B\") (pins \"3\" \"4\")))"), "{out}");
+    let sheet = out.find("(sheetfile").expect("the sheet file");
+    assert!(out.find("(units (unit").unwrap() > sheet, "after the sheet, as KiCad writes them");
+    // And once more: the same.
+    let (again, _, _) = import_kicad_pcb(&out).expect("imports again");
+    assert_eq!(again.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "U1").unwrap().units, extra.units);
+}
+
 // ----------------------------------------------------------------------------------------------------------------------
 // kicad-cli
 // ----------------------------------------------------------------------------------------------------------------------

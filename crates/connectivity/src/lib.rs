@@ -39,6 +39,7 @@ pub mod flash;
 pub mod geom;
 pub mod grid;
 pub mod items;
+pub mod pad_cluster;
 pub mod ratsnest;
 pub mod teardrop;
 
@@ -47,6 +48,7 @@ pub use cleanup::{compute_cleanup, compute_cleanup_filtered, CleanupChange, Clea
 pub use cleanup_filter::CleanupFilter;
 pub use dangling::{dangling_tracks_and_vias, DanglingItem, DanglingKind};
 pub use flash::{flashed_layers, removes_any_layer, Flashed};
+pub use pad_cluster::{pad_clusters, PadCluster};
 pub use items::{CnItem, ItemRef};
 pub use ratsnest::{compute_ratsnest, RatsnestEdge};
 pub use teardrop::generate_teardrops;

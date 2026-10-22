@@ -16,6 +16,7 @@ pub mod fp_art;
 pub mod fp_assign;
 pub mod fp_compare;
 pub mod fp_edit;
+pub mod fp_units;
 pub mod fp_exchange;
 pub mod fp_models;
 pub mod gensym;

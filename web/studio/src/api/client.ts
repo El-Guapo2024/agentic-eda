@@ -232,6 +232,19 @@ export async function postCmd(cmd: Cmd, strict: boolean, carry?: "begin" | "comm
 }
 
 /**
+ * What a swap of nets would ask first (`PromptConnectedPadDecision`): the pads that are not selected and are connected to the nets (`R2.1`, `C3.1`), or why the swap cannot be
+ * made. A read: it changes nothing on the board.
+ */
+export async function postSwapPreview(cmd: Cmd): Promise<{ ok: true; pads: string[] } | { ok: false; message: string }> {
+  const r = await fetch("/api/swap_nets/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cmd }),
+  });
+  return (await r.json()) as { ok: true; pads: string[] } | { ok: false; message: string };
+}
+
+/**
  * The end of a carried placement without a command of its own (crates/cli/src/carry.rs): "commit" when the drop changed nothing, "cancel" for Escape --
  * `commit.Revert()`, which takes the carried items away and leaves the undo and redo history as it was. `ok` is false when nothing was being carried.
  */

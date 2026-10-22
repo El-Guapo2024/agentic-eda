@@ -1614,7 +1614,7 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     // (`solder_mask_margin` is `FootprintExtra::solder_mask_margin`, which the writer makes it from; `thermal_width` and `thermal_gap` are read and dropped by KiCad itself.)
     const OWN: &[&str] = &[
         "layer", "uuid", "tstamp", "tedit", "at", "transform", "locked", "attr", "clearance", "zone_connect", "solder_mask_margin", "thermal_width", "thermal_gap", "net_tie_pad_groups", "fp_line", "fp_arc",
-        "fp_circle", "fp_rect", "fp_poly", "fp_curve", "fp_text", "pad", "model", "zone", "group", "component_classes", "sheetname", "sheetfile", "path", "embedded_fonts", "embedded_files",
+        "fp_circle", "fp_rect", "fp_poly", "fp_curve", "fp_text", "pad", "model", "zone", "group", "component_classes", "sheetname", "sheetfile", "units", "path", "embedded_fonts", "embedded_files",
     ];
     for item in fp.iter().skip(2).filter_map(Sexpr::as_list) {
         let tag = sexpr::tag(item);
@@ -1641,6 +1641,14 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     // The sheet the footprint's symbol is on.
     e.sheetname = sexpr::find(fp, "sheetname").and_then(|s| sexpr::txt(s, 1)).map(str::to_string);
     e.sheetfile = sexpr::find(fp, "sheetfile").and_then(|s| sexpr::txt(s, 1)).map(str::to_string);
+    // `(units (unit (name "A") (pins "1" "2" ..)) ..)`: the footprint's gates (`parseFOOTPRINT_unchecked`'s `T_units`), which Swap Gate Nets reads.
+    if let Some(units) = sexpr::find(fp, "units") {
+        for unit in sexpr::find_all(units, "unit") {
+            let name = sexpr::find(unit, "name").and_then(|n| sexpr::txt(n, 1)).unwrap_or_default().to_string();
+            let pins: Vec<String> = sexpr::find(unit, "pins").map(|p| p.iter().skip(1).filter_map(|x| x.text().map(str::to_string)).collect()).unwrap_or_default();
+            e.units.push(eda_model::fp_units::FootprintUnit { name, pins });
+        }
+    }
     // A footprint with nothing on its courtyard layers has no courtyard (`BuildCourtyardCaches` finds none, and kicad-cli says `missing_courtyard` or nothing).
     e.no_courtyard = !["fp_line", "fp_arc", "fp_rect", "fp_circle", "fp_poly", "fp_curve"].iter().any(|tag| sexpr::find_all(fp, tag).any(|it| matches!(sexpr::find(it, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd"))));
     // The courtyard graphics as the file wrote them, in file order (see `FootprintExtra::courtyard_items`).

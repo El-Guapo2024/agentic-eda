@@ -2856,6 +2856,10 @@ pub struct FootprintExtra {
     pub sheetname: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheetfile: Option<String>,
+    /// `(units (unit (name "A") (pins "1" "2" ..)) ..)`: the footprint's gates (`FOOTPRINT::GetUnitInfo`), which Swap Gate Nets reads ([`crate::fp_units`]). Empty when the file
+    /// gave none: [`crate::fp_units::unit_info`] then asks the symbol.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub units: Vec<crate::fp_units::FootprintUnit>,
     /// The pads with a mask layer and no copper, as mask apertures in board space (`FootprintGraphic::pad_number` is set). A
     /// design imported before footprints had graphics of their own holds the footprint's silk and mask graphics here as well
     /// (`pad_number` is `None`); the importer no longer writes those, they are [`crate::Footprint::art`], and the DRC reads them
