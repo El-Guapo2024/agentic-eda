@@ -23,15 +23,15 @@
 //     items of the block copied onto the group's nets and joined to the group, nothing of the board's own taken away, one undo step; a group with a locked footprint, or one whose
 //     footprints do not match the block's, is refused in KiCad's words.
 //
-// It answers through `window.__multichannelCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. A run takes a minute or two: read it with
-// `await __multichannelCheck.wait(40000)` (it returns when the run is done or the time is up) until `.done`.
+// It answers through `window.__multichannelCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. A run takes about three minutes: read it with
+// `await __multichannelCheck.wait(20000)` (it returns when the run is done or the time is up; the Browser pane's javascript tool gives up after 45 s) until `.done`.
 (async () => {
   const results = [];
   const check = (window.__multichannelCheck = { results, done: false, ok: false, wait: null });
   const E = window.__eda;
   const json = (url, init) => fetch(url, init).then((r) => r.json());
   const sleep = async (ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) await fetch("/api/version").then((r) => r.text()); }; // a fetch loop: a hidden pane throttles timers
-  check.wait = async (ms = 40000) => {
+  check.wait = async (ms = 20000) => {
     const t0 = Date.now();
     while (!check.done && Date.now() - t0 < ms) await fetch("/index.html").then((r) => r.text());
     return { done: check.done, ok: check.ok, n: results.length, failed: results.filter((r) => !r.ok), last: results.slice(-1).map((r) => r.name) };
