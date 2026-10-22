@@ -24,6 +24,7 @@ import { registerPcbGlobalEditSweep } from "./pcbGlobalEditSweep";
 import { registerPcbPointEditSweep } from "./pcbPointEditSweep";
 import { registerPcbReferenceSweep } from "./pcbReferenceSweep";
 import { registerPcbItemActions } from "./pcbItemActions";
+import { registerMicrowaveActions } from "./microwaveActions";
 import { registerPcbMultichannelActions } from "./pcbMultichannelActions";
 import { registerPcbAssignNetclass } from "./assignNetclass";
 import { DEFAULT_FILTER_OPTIONS, filterSelection, netItems, netsOfItems, unrouteSelected, type FilterOptions } from "../kicad-port/pcbSelectionOps";
@@ -426,6 +427,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
 
   registerPcbRouterSweep(m, ctx);
   registerPcbItemActions(m, ctx);
+  registerMicrowaveActions(m, ctx);
   registerPcbMultichannelActions(m, ctx);
   registerPcbSelectionSync(m, ctx);
   registerPcbConvertSweep(m, ctx);

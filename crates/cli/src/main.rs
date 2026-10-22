@@ -22,6 +22,7 @@ mod board_control_api;
 mod board_output_api;
 mod body_api;
 mod model3d_api;
+mod microwave_api;
 mod model3d_tab_api;
 mod clipboard_api;
 mod bom_plugins;
@@ -62,6 +63,7 @@ mod import_foreign;
 mod import_kicad;
 mod route_api;
 mod sch_output_api;
+mod sheet_drop_api;
 mod sheet_import;
 #[cfg(test)]
 mod sch_hierarchy_tests;

@@ -29,11 +29,12 @@ pub fn load_sheet_file(path: &Path) -> Result<SheetFile, Vec<CheckResult>> {
     let root = design.schematic.ok_or_else(|| fail("sheet_file_empty", "the file holds no schematic".into()))?;
     let screens = design.sheet_contents.unwrap_or_default();
 
-    // the library symbols of every file in the tree
+    // the library symbols of every file in the tree, and the sheet files that are not there
     let mut lib_symbols: Vec<LibrarySymbol> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
-    collect_lib_symbols(path, &mut seen, &mut lib_symbols, &mut notes);
+    collect_lib_symbols(path, None, &mut seen, &mut lib_symbols, &mut notes, &mut missing);
     // a name two files give to different symbols: the first wins, as the design's own would
     let mut names = BTreeSet::new();
     lib_symbols.retain(|s| names.insert(s.lib_id.clone()));
@@ -44,15 +45,38 @@ pub fn load_sheet_file(path: &Path) -> Result<SheetFile, Vec<CheckResult>> {
     if imported.sheets_not_descended > 0 {
         notes.push(format!("{} sheet(s) name a file that could not be read; they come in empty", imported.sheets_not_descended));
     }
+    // which: the files the sheets place that are not beside the one read (a file taken from a project alone, or a drop that left some out)
+    for m in missing {
+        notes.push(m);
+    }
     Ok(SheetFile { root, screens, lib_symbols, notes })
 }
 
-fn collect_lib_symbols(path: &Path, seen: &mut BTreeSet<PathBuf>, out: &mut Vec<LibrarySymbol>, notes: &mut Vec<String>) {
+/// The files the sheets of a schematic text place, as the text names them (the `Sheetfile` of each `(sheet ..)`: a path relative to the folder of the file that places them, in the
+/// file's own spelling), in the order they are placed, repeats included. Nothing is read from disk: it is how a set of files that arrived as text -- a drop in a browser -- is put
+/// together before [`load_sheet_file`] reads them.
+pub fn referenced_sheet_files(text: &str) -> Vec<String> {
+    let Ok(tree) = sexpr::parse(text) else { return Vec::new() };
+    let Some(root) = tree.as_list() else { return Vec::new() };
+    sexpr::find_all(root, "sheet")
+        .filter_map(|sheet| sexpr::find_all(sheet, "property").find(|p| sexpr::txt(p, 1) == Some("Sheetfile")).and_then(|p| sexpr::txt(p, 2)))
+        .filter(|f| !f.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// `placed_by` is the sheet file that names `path` and how it names it (`None` for the file that was asked for): a file that is not there is said by name, with the file that places it.
+fn collect_lib_symbols(path: &Path, placed_by: Option<(&str, &str)>, seen: &mut BTreeSet<PathBuf>, out: &mut Vec<LibrarySymbol>, notes: &mut Vec<String>, missing: &mut Vec<String>) {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if !seen.insert(canonical) {
         return;
     }
-    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        if let Some((parent, named)) = placed_by {
+            missing.push(format!("The sheet file '{named}' that '{parent}' places was not found: its sheet comes in empty."));
+        }
+        return;
+    };
     let Ok(tree) = sexpr::parse(&text) else { return };
     let Some(root) = tree.as_list() else { return };
     for cache in sexpr::find_all(root, "lib_symbols") {
@@ -61,10 +85,11 @@ fn collect_lib_symbols(path: &Path, seen: &mut BTreeSet<PathBuf>, out: &mut Vec<
         out.extend(parsed.symbols);
     }
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let own = path.file_name().and_then(|n| n.to_str()).unwrap_or("the sheet");
     for sheet in sexpr::find_all(root, "sheet") {
         let file = sexpr::find_all(sheet, "property").find(|p| sexpr::txt(p, 1) == Some("Sheetfile")).and_then(|p| sexpr::txt(p, 2));
         if let Some(file) = file {
-            collect_lib_symbols(&dir.join(file), seen, out, notes);
+            collect_lib_symbols(&dir.join(file), Some((own, file)), seen, out, notes, missing);
         }
     }
 }
@@ -119,6 +144,22 @@ mod tests {
         std::fs::remove_file(dir.join(child)).unwrap();
         let file = load_sheet_file(&dir.join("whole.kicad_sch")).unwrap();
         assert!(file.notes.iter().any(|n| n.contains("could not be read")), "{:?}", file.notes);
+        // and the file that is missing is named, with the one that places it
+        assert!(file.notes.iter().any(|n| n.contains(&format!("The sheet file '{child}' that 'whole.kicad_sch' places was not found"))), "{:?}", file.notes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_sheet_files_a_text_places_are_listed_as_it_names_them() {
+        let (dir, names) = written("references");
+        let text = std::fs::read_to_string(dir.join("whole.kicad_sch")).unwrap();
+        let mut listed = referenced_sheet_files(&text);
+        listed.sort();
+        let mut want: Vec<String> = names.iter().filter(|n| *n != "whole.kicad_sch").cloned().collect();
+        want.sort();
+        assert_eq!(listed, want);
+        assert!(referenced_sheet_files("(kicad_sch (version 20250114))").is_empty());
+        assert!(referenced_sheet_files("not a schematic (").is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

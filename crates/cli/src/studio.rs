@@ -687,6 +687,8 @@ fn handle(
         // Import Sheet / Draw Sheet from File: the project's schematics, and the checks on one (`LoadSheetFromFile`) before it is taken in.
         ("GET", "/api/sch/sheet_files") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_files(dir).to_string().as_bytes()),
         ("POST", "/api/sch/sheet_file") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_file(dir, &body).to_string().as_bytes()),
+        // A schematic file dropped on the sheet (`ddAppendFile`): the files of the drop put where Import Sheet reads them (a browser gives no path), the sheets they place found among them.
+        ("POST", "/api/sch/dropped_sheets") => respond(stream, "200 OK", "application/json", crate::sheet_drop_api::put(&body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
         ("GET", "/api/sch/erc_severities") => respond(stream, "200 OK", "application/json", sch_api::erc_severities(dir).to_string().as_bytes()),
         ("GET", "/api/sch/formatting") => respond(stream, "200 OK", "application/json", sch_api::formatting(dir).to_string().as_bytes()),
@@ -818,6 +820,9 @@ fn handle(
         ("POST", "/api/import_foreign") => offload(stream, lane, dir, job, path, &body, crate::foreign_api::convert),
         // Append Board: what a `.kicad_pcb` brings and the point it is held by (a read; the append is `Cmd::PasteClipboard` with the file's text).
         ("POST", "/api/append_board/read") => respond(stream, "200 OK", "application/json", crate::append_api::read(dir, &body).to_string().as_bytes()),
+        // The microwave tools' Complex Shape dialog: the scales and the point count of a shape description file (the shape itself is `Cmd::Microwave` with the file's text).
+        ("POST", "/api/microwave/shape") => respond(stream, "200 OK", "application/json", crate::microwave_api::read_shape(&body).to_string().as_bytes()),
+        ("POST", "/api/microwave/inductor") => respond(stream, "200 OK", "application/json", crate::microwave_api::check_inductor(&body).to_string().as_bytes()),
         // The Design Blocks panels (`crate::design_block_api`): the libraries and their blocks, a block's board file, its preview (kicad-cli, off the loop), and the dialogs'
         // reads and writes. Placing a block is `Cmd::ImportSheet` / `Cmd::PlaceDesignBlock`; the save also applies the link of a selection to the block (`LinkDesignBlock`).
         ("GET", "/api/design_blocks") => respond(stream, "200 OK", "application/json", crate::design_block_api::list(dir).to_string().as_bytes()),

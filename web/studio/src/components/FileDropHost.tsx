@@ -1,5 +1,5 @@
 // File drops (`EDA_BASE_FRAME::OnDropFiles`, common/eda_base_frame.cpp): a file dropped on the window runs the action its editor's `m_acceptedExts` names for its extension --
-// Append Board and Import Graphics on the board, Import Footprint in the Footprint Editor, Import Graphics in the schematic editor (kicad-port/fileDrops.ts has the tables).
+// Append Board and Import Graphics on the board, Import Footprint in the Footprint Editor, Import Sheet and Import Graphics in the schematic editor (kicad-port/fileDrops.ts has the tables).
 // KiCad hands the action the file's path; a browser hands the page the file's contents, so the file is read here and the action is run with `{ name, text }`.
 //
 // Mounted once by App.tsx. It also keeps the browser from doing what it does with a file dropped on a page nobody listens to (leave for the file). A drop while a dialog is open is
@@ -63,6 +63,19 @@ export function FileDropHost() {
         if (plan.open.action.endsWith("ddAddImage")) {
           try {
             run(plan.open.action, await readImageFile(file));
+          } catch (err) {
+            toast(err instanceof Error ? err.message : String(err), "error");
+          }
+          if (word) toast(word);
+          return;
+        }
+        // An action that takes every file of its kind (the schematics Import Sheet is dropped with) is handed all of them, with their text.
+        if (plan.open.names) {
+          const group = files.filter((f) => plan.open!.names!.includes(f.name));
+          const big = group.find((f) => f.size > MAX_IMPORT_BYTES);
+          if (big) return toast(`${big.name} is larger than 64 MB, which the studio's server will not read`, "error");
+          try {
+            run(plan.open.action, { files: await Promise.all(group.map(async (f) => ({ name: f.name, text: await f.text() }))) });
           } catch (err) {
             toast(err instanceof Error ? err.message : String(err), "error");
           }
