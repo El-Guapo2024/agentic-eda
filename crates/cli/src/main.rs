@@ -24,6 +24,7 @@ mod body_api;
 mod model3d_api;
 mod microwave_api;
 mod model3d_tab_api;
+mod embedded_api;
 mod clipboard_api;
 mod bom_plugins;
 mod cleanup_api;

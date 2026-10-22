@@ -1026,6 +1026,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // A schematic file imported as a sheet is read here, into the command (`crate::sheet_import`).
     let with_file = crate::sheet_import::with_loaded_file(cmd, dir)?;
     let cmd = with_file.as_ref().unwrap_or(cmd);
+    // Collect and Embed 3D Models: the model files the footprints name are read here, into the command (`crate::embedded_api`).
+    let with_models = crate::embedded_api::with_collected_models(cmd, dir, &design, &model)?;
+    let cmd = with_models.as_ref().unwrap_or(cmd);
     // A board imported from another EDA format brings a model of its own: the file the command names is written before it runs (`crate::import_foreign`).
     crate::import_foreign::prepare_board(cmd, dir)?;
     // The studio shows a board with no stored schematic as the one derived
@@ -1394,6 +1397,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
         Cmd::PcbItem(c) => c.describe(),
+        Cmd::Embedded(c) => c.describe(),
         Cmd::Microwave(c) => c.describe(),
         Cmd::Multichannel(c) => c.describe(),
         Cmd::Table(c) => c.describe(),
@@ -1663,6 +1667,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SchEdit(c) => c.kind(),
         Cmd::SchMove(c) => c.kind(),
         Cmd::PcbItem(c) => c.kind(),
+        Cmd::Embedded(c) => c.kind(),
         Cmd::Microwave(c) => c.kind(),
         Cmd::Multichannel(c) => c.kind(),
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
