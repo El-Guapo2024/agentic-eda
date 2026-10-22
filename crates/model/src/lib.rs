@@ -47,6 +47,7 @@ pub mod table;
 pub mod table_edit;
 pub mod table_text;
 pub mod text_vars;
+pub mod topo_match;
 pub mod via_extra;
 
 pub use footprint::{Footprint, Pad, PadKind, PadShape};

@@ -45,6 +45,7 @@ mod table_json;
 mod text_vars_json;
 mod page_json;
 mod barcode_api;
+mod multichannel_api;
 mod image_api;
 mod pcb_items_json;
 mod sch_api;

@@ -82,6 +82,11 @@ mod sch_groups;
 mod pcb_paste;
 mod pcb_paste_special;
 mod design_blocks;
+mod multichannel;
+mod multichannel_copy;
+mod multichannel_facts;
+mod multichannel_geom;
+pub use multichannel::{AreaKind, AreaPick, MultichannelCmd, PlacementSources, PotentialArea, RepeatOptions, RepeatPlan, TargetCompat};
 pub mod pcb_items;
 mod pcb_props;
 mod pcb_table_builders;
@@ -451,15 +456,15 @@ pub enum Cmd {
         smoothing: Option<eda_model::ir::ZoneSmoothing>,
         #[serde(default)]
         corner_radius: Option<Um>,
+        /// The rule area's Placement tab (`DIALOG_RULE_AREA_PROPERTIES`: No placement, or the sheet, component class or group whose footprints the area stands
+        /// for; [`eda_model::multichannel::PlacementArea`]). `None` leaves what the zone has.
+        #[serde(default)]
+        placement: Option<eda_model::multichannel::PlacementArea>,
     },
 
     /// Task item 4: Board Setup > Teardrops' settings page -- whole-struct
     /// replace, same "no per-field Cmd" spirit `SetTrackWidthPresets`/
     /// `SetViaPresets` already use.
-        /// The rule area's Placement tab (`DIALOG_RULE_AREA_PROPERTIES`: No placement, or the sheet, component class or group whose footprints the area stands
-        /// for; [`eda_model::multichannel::PlacementArea`]). `None` leaves what the zone has.
-        #[serde(default)]
-        placement: Option<eda_model::multichannel::PlacementArea>,
     SetTeardropSettings { settings: TeardropSettings },
     /// "Add Teardrops" (the dialog's own apply button, not a per-item
     /// tool): regenerate the board's whole teardrop set from the current
@@ -690,6 +695,9 @@ pub enum Cmd {
     /// The board items the IR gained with GAPS.md item 24 (package P16): text boxes, reference images, points and the hatch fill of shapes -- one verb family, see
     /// [`pcb_items::PcbItemCmd`]. On the wire: `{"op": "pcb_item", "verb": "add_text_box", "text_box": {..}}`.
     PcbItem(pcb_items::PcbItemCmd),
+    /// The multichannel tool (GAPS.md items 24 and 32, package P24): Generate Placement Rule Areas, Repeat Layout and Apply Design Block Layout -- one verb family, see
+    /// [`multichannel::MultichannelCmd`]. On the wire: `{"op": "multichannel", "verb": "repeat_layout", "reference": "zone_..", "targets": [..]}`.
+    Multichannel(multichannel::MultichannelCmd),
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -2191,6 +2199,7 @@ impl Cmd {
             Cmd::SchEdit(c) => c.ids(),
             Cmd::SchMove(c) => c.ids(),
             Cmd::PcbItem(c) => c.ids(),
+            Cmd::Multichannel(c) => c.ids(),
             Cmd::Table(c) | Cmd::SchTable(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::ClearErcExclusions => vec!["erc_exclusions"],
@@ -2666,6 +2675,7 @@ impl<'a> Board<'a> {
                 keepout_footprints,
                 smoothing,
                 corner_radius,
+                placement,
             } => self.edit_zone(
                 id,
                 net,
@@ -2675,7 +2685,6 @@ impl<'a> Board<'a> {
                 *min_thickness,
                 *thermal_gap,
                 *thermal_spoke_width,
-                placement,
                 *pad_connection,
                 *priority,
                 *island_removal_mode,
@@ -2696,6 +2705,7 @@ impl<'a> Board<'a> {
                 *keepout_footprints,
                 *smoothing,
                 *corner_radius,
+                placement.as_ref(),
             ),
 
             Cmd::AddShape { shape } => self.add_shape(shape.clone()),
@@ -2705,7 +2715,6 @@ impl<'a> Board<'a> {
 
             Cmd::AddText { text } => self.add_text(text.clone()),
             Cmd::EditText { id, content, angle, layer, size_um, stroke_width, justify, mirror } => {
-                placement.as_ref(),
                 self.edit_text(id, content.clone(), *angle, layer.clone(), *size_um, *stroke_width, *justify, *mirror)
             }
             Cmd::DeleteText { id } => self.delete_text(id),
@@ -2783,6 +2792,7 @@ impl<'a> Board<'a> {
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
+            Cmd::Multichannel(c) => self.apply_multichannel(c),
             Cmd::Table(c) => self.apply_table(c),
             Cmd::SchTable(c) => self.apply_sch_table(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
@@ -3663,6 +3673,7 @@ impl<'a> Board<'a> {
         keepout_footprints: bool,
         smoothing: Option<eda_model::ir::ZoneSmoothing>,
         corner_radius: Option<Um>,
+        placement: Option<&eda_model::multichannel::PlacementArea>,
     ) -> Result<(), Vec<CheckResult>> {
         // "" (no net) is normal for a rule area, and allowed for an
         // ordinary zone too -- see `add_zone`'s matching comment.
@@ -3673,7 +3684,6 @@ impl<'a> Board<'a> {
         let wanted: Vec<String> = match layers {
             Some(set) if !set.is_empty() => set.to_vec(),
             _ => vec![layer.to_string()],
-        placement: Option<&eda_model::multichannel::PlacementArea>,
         };
         for l in &wanted {
             self.known_zone_layer(l)?;
@@ -3737,6 +3747,12 @@ impl<'a> Board<'a> {
         if let Some(r) = corner_radius {
             z.corner_radius = r;
         }
+        // Only a rule area has a placement (`ZONE::SetPlacementAreaEnabled` is its dialog's); turning the rule area off clears what it had.
+        if let Some(pl) = placement {
+            z.placement = if is_rule_area { pl.clone() } else { Default::default() };
+        } else if !is_rule_area {
+            z.placement = Default::default();
+        }
         Ok(())
     }
 
@@ -3747,12 +3763,6 @@ impl<'a> Board<'a> {
     /// `m_WidthtoSizeFilterRatio`); a value outside that range has no
     /// sensible meaning (a >100% width ratio would ask for a teardrop
     /// wider than its own anchor) and is refused rather than silently
-        // Only a rule area has a placement (`ZONE::SetPlacementAreaEnabled` is its dialog's); turning the rule area off clears what it had.
-        if let Some(pl) = placement {
-            z.placement = if is_rule_area { pl.clone() } else { Default::default() };
-        } else if !is_rule_area {
-            z.placement = Default::default();
-        }
     /// clamped.
     fn set_teardrop_settings(&mut self, settings: TeardropSettings) -> Result<(), Vec<CheckResult>> {
         let in_unit_range = |v: f64| (0.0..=1.0).contains(&v);
@@ -5903,3 +5913,5 @@ mod sch_labels_tests;
 mod sch_net_collision_tests;
 #[cfg(test)]
 mod sch_sheet_pin_tests;
+#[cfg(test)]
+mod multichannel_tests;
