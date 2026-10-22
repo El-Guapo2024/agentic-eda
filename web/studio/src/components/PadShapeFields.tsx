@@ -2,7 +2,7 @@
 // choices, the size, a trapezoid's delta and axis, the corner size, the chamfer's size and corners, a custom pad's zone knockout, and the list of the custom pad's
 // basic shapes (add, edit, delete, duplicate). The rules are `kicad-port/padShape.ts`'s; this is the view of them.
 import { Fragment, useState } from "react";
-import type { PadPrimitive } from "../api/types";
+import type { PadPrimitive, PadStackMode, UnconnectedLayers } from "../api/types";
 import {
   PAD_SHAPE_CHOICES,
   PRIMITIVE_KINDS,
@@ -27,6 +27,7 @@ import {
   type PadShapeForm,
   type PrimitiveKind,
 } from "../kicad-port/padShape";
+import { PADSTACK_MODES, copperLayersChoices, editLayerChoices, type PadStackState } from "../kicad-port/padStack";
 import { formatLength, umFrom, umTo, type LengthUnit } from "../state/units";
 
 type PolygonShape = Extract<PadPrimitive["shape"], { kind: "polygon" }>;
@@ -57,6 +58,50 @@ function Percent({ ratio, onChange, testid }: { ratio: number; onChange: (ratio:
       onChange={(e) => Number.isFinite(Number(e.target.value)) && e.target.value !== "" && onChange(Number(e.target.value) / 100)}
       style={{ width: 74 }}
     />
+  );
+}
+
+/**
+ * The padstack's two rows of a `kv-grid`: "Padstack mode" (Normal, Front/Inner/Back, Custom) and "Edit layer", which picks the copper layer the shape rows below show
+ * (`m_cbPadstackMode`, `m_cbEditLayer`; the edit layer is disabled for a normal stack). Shown for a plated through-hole pad only, as KiCad does. The rules are `kicad-port/padStack.ts`'s.
+ */
+export function PadStackRows({ state, boardLayers, onMode, onEditLayer }: { state: PadStackState; boardLayers: readonly string[]; onMode: (mode: PadStackMode) => void; onEditLayer: (key: string) => void }) {
+  return (
+    <>
+      <span>Padstack mode</span>
+      <select value={state.mode} onChange={(e) => onMode(e.target.value as PadStackMode)} data-testid="pad-stack-mode">
+        {PADSTACK_MODES.map((m) => (
+          <option key={m.value} value={m.value}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+      <span>Edit layer</span>
+      <select value={state.editLayer} disabled={state.mode === "normal"} onChange={(e) => onEditLayer(e.target.value)} data-testid="pad-stack-layer">
+        {editLayerChoices(state.mode, boardLayers).map((c) => (
+          <option key={c.key} value={c.key}>
+            {c.label}
+          </option>
+        ))}
+      </select>
+    </>
+  );
+}
+
+/** "Copper layers" of a plated through-hole pad (`m_rbCopperLayersSel`): all, front and back and connected, connected only. */
+export function CopperLayersRow({ value, boardLayers, onChange }: { value: UnconnectedLayers; boardLayers: readonly string[]; onChange: (v: UnconnectedLayers) => void }) {
+  const choices = copperLayersChoices(boardLayers[0] ?? "F.Cu", boardLayers[boardLayers.length - 1] ?? "B.Cu");
+  return (
+    <>
+      <span>Copper layers</span>
+      <select value={value === "start_end_only" ? "remove_except_start_and_end" : value} onChange={(e) => onChange(e.target.value as UnconnectedLayers)} data-testid="pad-copper-layers">
+        {choices.map((c) => (
+          <option key={c.value} value={c.value}>
+            {c.label}
+          </option>
+        ))}
+      </select>
+    </>
   );
 }
 

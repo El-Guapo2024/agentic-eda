@@ -15,6 +15,7 @@ import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import * as fpLib from "./footprintLibraryOps";
 import { showFootprintChecker } from "./footprintCheckerActions";
 import { fpArrayIds } from "../kicad-port/fpArray";
+import { padToolsBlocked } from "../kicad-port/padEditMode";
 import { asPickedFile } from "./importActions";
 import * as symLib from "./symbolLibraryOps";
 
@@ -74,7 +75,12 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   // Pad Table... -- PAD_TOOL::PadTable (DIALOG_FP_EDIT_PAD_TABLE): refused while there is no footprint (`if( !footprint ) return 0`).
   m.set(
     "pcbnew.ModuleEditor.padTable",
-    fpTab(() => (ctx.fpApi.getState().footprint ? ctx.fpDispatch({ type: "SET_PAD_TABLE_OPEN", open: true }) : fpToast("Open a footprint first.")))
+    fpTab(() => {
+      const fp = ctx.fpApi.getState().footprint;
+      if (!fp) return fpToast("Open a footprint first.");
+      if (padToolsBlocked(fp)) return; // `if( !m_isFootprintEditor || InPadEditMode() ) return 0;`
+      ctx.fpDispatch({ type: "SET_PAD_TABLE_OPEN", open: true });
+    })
   );
   // Repair Footprint -- RepairFootprint.
   m.set("pcbnew.ModuleEditor.repairFootprint", fpTab(() => fpLib.repairFootprint(fpc)));
@@ -146,15 +152,25 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
       if (selectedPads().length === 1 && ctx.fpApi.getState().selection.size === 1) ctx.fpDispatch({ type: "SET_PUSH_PAD_OPEN", open: true });
     })
   );
-  // Renumber Pads... -- PAD_TOOL::EnumeratePads: DIALOG_ENUM_PADS, then the click-to-number tool. `if( !board()->GetFirstFootprint()->Pads().empty() )` only.
+  // Renumber Pads... -- PAD_TOOL::EnumeratePads: DIALOG_ENUM_PADS, then the click-to-number tool. `if( !board()->GetFirstFootprint()->Pads().empty() )` only,
+  // and not while a pad is edited as shapes (`if( !m_isFootprintEditor || InPadEditMode() ) return 0;`).
   m.set(
     "pcbnew.PadTool.enumeratePads",
     fpTab(() => {
       const fp = ctx.fpApi.getState().footprint;
-      if (!fp || fp.pads.length === 0) return;
+      if (!fp || fp.pads.length === 0 || padToolsBlocked(fp)) return;
       ctx.fpDispatch({ type: "SET_RENUMBER_DIALOG_OPEN", open: true });
     })
   );
+  // Edit Pad as Graphic Shapes / Finish Pad Edit (Ctrl+E, both) -- PAD_TOOL::EditPad: with a pad being edited it recombines it, whichever of the two ran; with none
+  // and a single pad selected it explodes that pad (the Footprint Editor's alone: `if( !m_isFootprintEditor ) return 0;`).
+  const editPadShapes = fpTab(async () => {
+    const st = ctx.fpApi.getState();
+    if (!st.name) return fpToast("Open a footprint first.");
+    if (!(await ctx.fpApi.editPadShapes())) fpToast(st.footprint?.pad_edit ? "Finish the pad edit first." : "Select a single pad to edit as graphic shapes.");
+  });
+  m.set("pcbnew.PadTool.explodePad", editPadShapes);
+  m.set("pcbnew.PadTool.recombinePad", editPadShapes);
 
   // ===================================================================================================
   // Symbol editor: SYMBOL_EDITOR_CONTROL (eeschema/tools/symbol_editor_control.cpp), the drawing tools and the pin tool

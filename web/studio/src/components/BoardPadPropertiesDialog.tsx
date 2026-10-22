@@ -13,19 +13,23 @@
 // clearance, and it is the zone overlay's). The zone fields are those of every pad that carries this pad's number, as the zone overlay keeps them. The checks are
 // `padValuesOK`'s (`PAD::CheckPad`), in its words.
 //
-// Not ported: padstack modes (front/inner/back differing), the fabrication property, the pad number and pin function, the pad-to-die length and the layer
-// checkboxes (the type picks the layers), and backdrill and post-machining. "Push Pad Properties to other pads" is the footprint editor's.
+// The padstack (`kicad-port/padStack.ts`): for a plated through-hole pad "Padstack mode" (Normal, Front/Inner/Back, Custom) and "Edit layer" pick the copper layer the shape
+// rows and the shape offset show, "Copper layers" the layers that keep their copper when nothing is connected there; one OK sends the whole stack with the edit.
+//
+// Not ported: the fabrication property, the pad number and pin function, the pad-to-die length and the layer checkboxes (the type picks the layers), and backdrill and
+// post-machining. "Push Pad Properties to other pads" is the footprint editor's.
 import { useEffect, useState } from "react";
 import type { Cmd, PadConnection, PadEditCmd } from "../api/types";
 import { checkPadValues, padEditWith } from "../kicad-port/fpFields";
 import { chooseShape, checkShape, hasSizeY, shapeFormOf, shapeNameOf, shapePatch, sizeOf, type PadShapeChoice, type PadShapeForm } from "../kicad-port/padShape";
+import { FRONT, changeMode, checkStack, layerFormOf, padstackControlsShown, stackDiffers, stackOf, stackStateOf, withLayerForm, type LayerForm, type PadStackState } from "../kicad-port/padStack";
 import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { footprintZoneForm, padZoneForm, zoneCmds, type PadZoneForm } from "../kicad-port/padZone";
 import { padById } from "../kicad-port/pcbItems";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, umFrom, umTo } from "../state/units";
 import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
-import { PadPrimitivePanel, PadShapeRows } from "./PadShapeFields";
+import { CopperLayersRow, PadPrimitivePanel, PadShapeRows, PadStackRows } from "./PadShapeFields";
 
 type Kind = "smd" | "through_hole" | "non_plated_hole";
 
@@ -45,6 +49,8 @@ interface Form {
   mask: number | null;
   paste: number | null;
   pasteRatio: number | null;
+  /** The padstack: the mode, the edit layer and the shapes of the layers but the front, whose shape is `s` and offset `ox`, `oy`. */
+  stack: PadStackState;
 }
 
 const KINDS: { value: Kind; label: string }[] = [
@@ -69,11 +75,14 @@ export function BoardPadPropertiesDialog() {
     if (!hit) return;
     const { pad, part } = hit;
     const size = pad.size ?? [pad.w, pad.h];
+    const s = shapeFormOf({ ...pad, size });
+    const [ox, oy] = [pad.offset?.[0] ?? 0, pad.offset?.[1] ?? 0];
     setForm({
       kind: pad.kind ?? (pad.th ? "through_hole" : "smd"),
-      s: shapeFormOf({ ...pad, size }),
-      ox: pad.offset?.[0] ?? 0,
-      oy: pad.offset?.[1] ?? 0,
+      s,
+      ox,
+      oy,
+      stack: stackStateOf(pad.stack, { s, ox, oy, tokens: [] }),
       rot: pad.rot ?? 0,
       hole: pad.slot ? "oblong" : "round",
       drill: pad.drill ?? 800,
@@ -92,7 +101,6 @@ export function BoardPadPropertiesDialog() {
   const { part, pad } = hit;
   const close = () => dispatch({ type: "SET_BOARD_PAD_PROPERTIES_ID", id: null });
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
-  const setShapeForm = (next: PadShapeForm) => setForm((f) => (f ? { ...f, s: next } : f));
   const setZone = (patch: Partial<PadZoneForm>) => setForm((f) => (f ? { ...f, zone: { ...f.zone, ...patch } } : f));
   const fmt = (um: number) => formatLength(um, units);
 
@@ -107,6 +115,19 @@ export function BoardPadPropertiesDialog() {
     />
   );
   const s = form.s;
+  // The padstack: the front's shape is the form's own; the layer being edited is the one the shape rows and the offset show.
+  const boardLayers = (state.board?.layers ?? ["F.Cu", "B.Cu"]).filter((l) => l.endsWith(".Cu"));
+  const stackShown = padstackControlsShown(form.kind);
+  const frontForm: LayerForm = { s: form.s, ox: form.ox, oy: form.oy, tokens: [] };
+  const editLayer = stackShown ? form.stack.editLayer : FRONT;
+  const active = layerFormOf(form.stack, frontForm, editLayer);
+  /** The edited layer's form replaced: the front's is the form's own shape and offset, any other layer's is the stack's. */
+  const setActive = (next: LayerForm) =>
+    setForm((f) => {
+      if (!f) return f;
+      const r = withLayerForm(f.stack, { s: f.s, ox: f.ox, oy: f.oy, tokens: [] }, editLayer, next);
+      return { ...f, stack: r.state, s: r.front.s, ox: r.front.ox, oy: r.front.oy };
+    });
   const hasHole = form.kind !== "smd";
   // The zone overlay addresses a pad by its number: a pad with none (a mounting hole) has no zone fields, and a number several pads share is one set of fields.
   const numbered = pad.num !== "";
@@ -129,7 +150,7 @@ export function BoardPadPropertiesDialog() {
       checkPadValues(
         { kind: form.kind, shape: shapeNameOf(s.choice), size, drill: form.hole === "round" ? form.drill : null, slot: form.hole === "oblong" ? [form.slotW, form.slotH] : null, ratio: s.choice === "round_rect" ? s.ratio : null, pasteRatio: form.pasteRatio },
         fmt
-      ) ?? checkShape(s);
+      ) ?? checkShape(s) ?? (stackShown ? checkStack(form.stack) : null);
     if (message) return setError(message);
 
     // What differs from the pad as it is becomes a key of the pad's edit; an override that was switched off becomes `undefined` and goes.
@@ -152,6 +173,9 @@ export function BoardPadPropertiesDialog() {
     override("solder_paste_margin_ratio", form.pasteRatio, pad.paste_ratio);
     // An offset of nothing is no offset.
     if (patch.offset && patch.offset.x === 0 && patch.offset.y === 0) patch.offset = undefined;
+    // The padstack, replaced whole when it is not what the pad has (`PAD::SetPadstack`).
+    const stackNow = stackOf(form.stack);
+    if (form.kind === "through_hole" && stackDiffers(stackNow, pad.stack)) patch.stack = stackNow;
 
     const cmds: Cmd[] = [];
     if (Object.keys(patch).length > 0) cmds.push({ op: "edit_board_pad", part: part.ref, edit: padEditWith(part, pad, patch) });
@@ -212,10 +236,18 @@ export function BoardPadPropertiesDialog() {
             </select>
             <span>Position</span>
             <span style={{ fontSize: 11 }}>{`${fmt(pad.px ?? pad.x)}, ${fmt(pad.py ?? pad.y)}`} (on the board)</span>
-            <PadShapeRows form={s} onForm={setShapeForm} units={units} onChoose={chooseShapeOf} />
+            {stackShown && (
+              <PadStackRows
+                state={form.stack}
+                boardLayers={boardLayers}
+                onMode={(mode) => setForm((f) => (f ? { ...f, stack: changeMode(f.stack, mode, { s: f.s, ox: f.ox, oy: f.oy, tokens: [] }, boardLayers) } : f))}
+                onEditLayer={(key) => setForm((f) => (f ? { ...f, stack: { ...f.stack, editLayer: key } } : f))}
+              />
+            )}
+            <PadShapeRows form={active.s} onForm={(next) => setActive({ ...active, s: next })} units={units} onChoose={editLayer === FRONT ? chooseShapeOf : undefined} />
             <span>Shape offset</span>
             <span>
-              {len(form.ox, (v) => set("ox", v), 74, "pad-offset-x")} {len(form.oy, (v) => set("oy", v), 74, "pad-offset-y")} {units}
+              {len(active.ox, (v) => setActive({ ...active, ox: v }), 74, "pad-offset-x")} {len(active.oy, (v) => setActive({ ...active, oy: v }), 74, "pad-offset-y")} {units}
             </span>
             <span>Rotation (clockwise)</span>
             <span>
@@ -246,7 +278,12 @@ export function BoardPadPropertiesDialog() {
               </>
             )}
           </div>
-          <PadPrimitivePanel form={s} onForm={setShapeForm} units={units} />
+          <PadPrimitivePanel form={active.s} onForm={(next) => setActive({ ...active, s: next })} units={units} />
+          {stackShown && (
+            <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr", marginTop: 8 }}>
+              <CopperLayersRow value={form.stack.unconnected} boardLayers={boardLayers} onChange={(v) => setForm((f) => (f ? { ...f, stack: { ...f.stack, unconnected: v } } : f))} />
+            </div>
+          )}
           <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Clearance overrides and settings (blank = the board&apos;s)</p>
           <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr" }}>
             {numbered && (

@@ -255,15 +255,6 @@ fn parse_pad(pad: &[Sexpr]) -> Option<LibraryPad> {
     let size = sexpr::find(pad, "size")?;
     // The shape with its delta, chamfer, primitives and offset (`parsePAD`); a `.kicad_mod` is always seen from the top.
     let read = crate::pad_shape::read_pad_shape(pad, Side::Top);
-    let shape = match read.shape {
-        PadShape::Circle => LibraryPadShape::Circle,
-        PadShape::Oval => LibraryPadShape::Oval,
-        PadShape::RoundRect => LibraryPadShape::RoundRect,
-        PadShape::ChamferedRect => LibraryPadShape::ChamferedRect,
-        PadShape::Trapezoid => LibraryPadShape::Trapezoid,
-        PadShape::Custom => LibraryPadShape::Custom,
-        PadShape::Rect => LibraryPadShape::Rect,
-    };
     let (drill, drill_slot) = match sexpr::find(pad, "drill") {
         Some(d) => {
             let toks: Vec<&str> = d.iter().skip(1).filter_map(Sexpr::text).collect();
@@ -278,32 +269,60 @@ fn parse_pad(pad: &[Sexpr]) -> Option<LibraryPad> {
         None => (None, None),
     };
     let um = |tag: &str| sexpr::find(pad, tag).and_then(|c| sexpr::num(c, 1)).map(mm_to_um);
+    let size_um = (mm_to_um(sexpr::num(size, 1)?), mm_to_um(sexpr::num(size, 2)?));
+    // The padstack (`(padstack ..)`, `(remove_unused_layers ..)`, `(keep_end_layers ..)`): a `.kicad_mod` is a footprint on the top, and the library has no board, so a custom
+    // stack has every copper layer KiCad's file can name.
+    let main = eda_model::padstack::PadLayerShape {
+        shape: read.shape,
+        size: size_um,
+        roundrect_ratio: read.roundrect_ratio,
+        offset: read.ext.offset,
+        trapezoid_delta: read.ext.trapezoid_delta,
+        chamfer_ratio: read.ext.chamfer_ratio,
+        chamfer_corners: read.ext.chamfer_corners,
+        custom: read.ext.custom.clone(),
+        tokens: Vec::new(),
+    };
+    let read_stack = crate::padstack_io::read_padstack(pad, &main, Side::Top, &crate::padstack_io::library_copper_layers());
+    let stack = read_stack.stack.clone();
+    // A `(layer "F.Cu" ..)` node of the stack says the front shape again: it is the pad's own.
+    let main = read_stack.own.unwrap_or(main);
+    let shape = match main.shape {
+        PadShape::Circle => LibraryPadShape::Circle,
+        PadShape::Oval => LibraryPadShape::Oval,
+        PadShape::RoundRect => LibraryPadShape::RoundRect,
+        PadShape::ChamferedRect => LibraryPadShape::ChamferedRect,
+        PadShape::Trapezoid => LibraryPadShape::Trapezoid,
+        PadShape::Custom => LibraryPadShape::Custom,
+        PadShape::Rect => LibraryPadShape::Rect,
+    };
     Some(LibraryPad {
         id: String::new(),
         number,
         at: Point { x: mm_to_um(sexpr::num(at, 1)?), y: mm_to_um(sexpr::num(at, 2)?) },
-        size: (mm_to_um(sexpr::num(size, 1)?), mm_to_um(sexpr::num(size, 2)?)),
+        size: main.size,
         // The offset lives inside `(drill ..)`; an older export of this app wrote it as a token of the pad.
-        offset: read.ext.offset.map(|(x, y)| Point { x, y }).or_else(|| point(pad, "offset")).unwrap_or_default(),
+        offset: main.offset.map(|(x, y)| Point { x, y }).or_else(|| point(pad, "offset")).unwrap_or_default(),
         shape,
         kind,
         drill,
         drill_slot,
         rot: crate::pad_rot_from_file(Side::Top, 0, sexpr::num(at, 3).unwrap_or(0.0)),
         roundrect_ratio: match shape {
-            LibraryPadShape::RoundRect | LibraryPadShape::ChamferedRect => Some(read.roundrect_ratio.unwrap_or(0.25)),
+            LibraryPadShape::RoundRect | LibraryPadShape::ChamferedRect => Some(main.roundrect_ratio.unwrap_or(0.25)),
             _ => None,
         },
-        trapezoid_delta: read.ext.trapezoid_delta,
-        chamfer_ratio: if shape == LibraryPadShape::ChamferedRect { Some(read.ext.chamfer_ratio.unwrap_or(0.2)) } else { None },
-        chamfer_corners: read.ext.chamfer_corners,
-        custom: read.ext.custom,
+        trapezoid_delta: main.trapezoid_delta,
+        chamfer_ratio: if shape == LibraryPadShape::ChamferedRect { Some(main.chamfer_ratio.unwrap_or(0.2)) } else { None },
+        chamfer_corners: main.chamfer_corners,
+        custom: main.custom,
         layers: sexpr::find(pad, "layers").map(|l| l.iter().skip(1).filter_map(Sexpr::text).map(str::to_string).collect()).unwrap_or_default(),
         clearance_override: um("clearance"),
         thermal_gap_override: um("thermal_gap"),
         thermal_spoke_width_override: um("thermal_bridge_width"),
         zone_connection: sexpr::find(pad, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64)),
         thermal_spoke_angle_mdeg: sexpr::find(pad, "thermal_bridge_angle").and_then(|a| sexpr::num(a, 1)).map(|d| ((d * 1000.0).round() as i64).rem_euclid(360_000) as eda_model::ir::Millideg),
+        stack,
     })
 }
 
@@ -336,6 +355,7 @@ mod tests {
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            stack: Default::default(),
         }
     }
 

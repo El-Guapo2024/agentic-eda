@@ -464,6 +464,10 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
             write!(out, " {}", crate::sexpr_str(l)).unwrap();
         }
         write!(out, ")").unwrap();
+        // `(remove_unused_layers ..) (keep_end_layers ..)` of a plated through-hole pad, after its layers.
+        if pad.kind == eda_model::PadKind::ThroughHole {
+            out.push_str(&crate::padstack_io::unconnected_text(engine.ext.stack.unconnected));
+        }
         if let Some(c) = pad.clearance_override {
             write!(out, " (clearance {})", crate::mm(c)).unwrap();
         }
@@ -485,7 +489,10 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
             write!(out, " (thermal_gap {})", crate::mm(g)).unwrap();
         }
         out.push_str(&shape_text.custom);
-        writeln!(out, " (uuid \"{uuid}\"))").unwrap();
+        write!(out, " (uuid \"{uuid}\")").unwrap();
+        // The other layers' shapes, after the uuid (a library file has no board: every copper layer KiCad's file can name, `MAX_CU_LAYERS`).
+        out.push_str(&crate::padstack_io::write_padstack(&engine, eda_model::ir::Side::Top, &crate::padstack_io::library_copper_layers()));
+        writeln!(out, ")").unwrap();
     }
 
     // The embedded files, before the models as KiCad writes them.
@@ -672,6 +679,7 @@ mod tests {
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            stack: Default::default(),
         }
     }
 
@@ -700,6 +708,7 @@ mod tests {
             anchor: eda_model::ir::Point { x: 0, y: 0 },
             published: false,
             zone_connection: None,
+            pad_edit: None,
         };
 
         let text = export_kicad_mod(&fp);

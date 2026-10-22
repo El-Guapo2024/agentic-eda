@@ -52,6 +52,7 @@ fn library_pad(number: &str, x: i64, y: i64) -> eda_model::ir::LibraryPad {
         thermal_spoke_width_override: None,
         zone_connection: None,
         thermal_spoke_angle_mdeg: None,
+        stack: Default::default(),
     }
 }
 

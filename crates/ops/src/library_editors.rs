@@ -95,6 +95,8 @@ pub fn import_pad_settings(dst: &mut LibraryPad, master: &LibraryPad) {
     dst.thermal_spoke_width_override = master.thermal_spoke_width_override;
     dst.zone_connection = master.zone_connection;
     dst.thermal_spoke_angle_mdeg = master.thermal_spoke_angle_mdeg;
+    // `SetPadstack( aMasterPad.Padstack() )`: the shapes of the other layers and the unconnected-layer mode come across with the rest.
+    dst.stack = master.stack.clone();
 
     if master.shape == eda_model::ir::LibraryPadShape::Circle {
         dst.size = (dst.size.0, dst.size.0);
@@ -412,6 +414,7 @@ mod verb_tests {
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            stack: Default::default(),
         }
     }
 

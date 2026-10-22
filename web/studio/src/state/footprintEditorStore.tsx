@@ -16,6 +16,7 @@ import { duplicatePads, uniqueFootprintName } from "../kicad-port/fpEditActions"
 import { highestPadNumber } from "../kicad-port/padNumbering";
 import { DEFAULT_PAD_MASTER, importPadSettings, settingsOf, type PadSettings } from "../kicad-port/padSettings";
 import { DEFAULT_ENUMERATE_PARAMS, enumerateCommit, type EnumerateParams, type EnumerateState } from "../kicad-port/padEnumeration";
+import { editPadCommand, enterContrast, exitContrast, padEditLayer } from "../kicad-port/padEditMode";
 import type { ViewTransform } from "./store";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
@@ -103,6 +104,11 @@ export interface FootprintEditorState {
   lastPadNumber: string | null;
   /** `EDIT_TOOL::Duplicate` hands the copies straight to `doMoveSelection` and, if that is cancelled, `commit.Revert()`s them: true while the freshly duplicated items are glued to the cursor, so Escape undoes the duplicate and a drop keeps it. */
   duplicatePending: boolean;
+  /**
+   * `PAD_TOOL::m_previousHighContrastMode`: the high contrast flag as it was when the pad edit mode began, to put back when it ends; `null` while no pad is edited
+   * (kicad-port/padEditMode.ts `enterContrast` / `exitContrast`).
+   */
+  padEditContrast: boolean | null;
   toast: { message: string; kind: "error" | "info" } | null;
 }
 
@@ -139,6 +145,7 @@ const initialState: FootprintEditorState = {
   linkedPart: null,
   lastPadNumber: null,
   duplicatePending: false,
+  padEditContrast: null,
   toast: null,
 };
 
@@ -177,6 +184,10 @@ export type FpAction =
   | { type: "SET_LINKED_PART"; ref: string | null }
   | { type: "SET_LAST_PAD_NUMBER"; number: string | null }
   | { type: "SET_DUPLICATE_PENDING"; pending: boolean }
+  /** The pad edit mode began (`PAD_TOOL::enterPadEditMode`): the active layer is the pad's and the contrast is dimmed. */
+  | { type: "PAD_EDIT_ENTER"; layer: string }
+  /** The pad edit mode ended (`ExitPadEditMode`). */
+  | { type: "PAD_EDIT_EXIT" }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" };
 
@@ -191,7 +202,7 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
         name: action.name,
         gridUm: state.gridUm,
         gridVisible: state.gridVisible,
-        highContrast: state.highContrast,
+        highContrast: state.padEditContrast !== null ? exitContrast(state.padEditContrast, state.highContrast) : state.highContrast,
         defaultPad: state.defaultPad,
         enumerateParams: state.enumerateParams,
         treeSelection: state.treeSelection,
@@ -267,6 +278,14 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, lastPadNumber: action.number };
     case "SET_DUPLICATE_PENDING":
       return { ...state, duplicatePending: action.pending };
+    case "PAD_EDIT_ENTER": {
+      if (state.padEditContrast !== null) return state.activeLayer === action.layer ? state : { ...state, activeLayer: action.layer };
+      const c = enterContrast(state.highContrast);
+      return { ...state, activeLayer: action.layer, highContrast: c.highContrast, padEditContrast: c.remembered };
+    }
+    case "PAD_EDIT_EXIT":
+      if (state.padEditContrast === null) return state;
+      return { ...state, highContrast: exitContrast(state.padEditContrast, state.highContrast), padEditContrast: null };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind } };
     case "TOAST_CLEAR":
@@ -314,6 +333,11 @@ export interface FootprintEditorApi {
   pastePadProperties: (ids: string[]) => Promise<void>;
   /** `PAD_TOOL::EnumeratePads`' commit (`finish`) or revert: the numbers the click session produced are sent as one `set_pad_numbers` (one undo step), or dropped. */
   finishEnumerate: (commit: boolean) => Promise<void>;
+  /**
+   * `PAD_TOOL::EditPad` (`pcbnew.PadTool.explodePad` and `recombinePad`, both Ctrl+E): with a pad being edited as shapes, recombine it; with none and a single pad selected,
+   * explode it (selection cleared, the active layer the pad's). One undo step each. `false` when there was nothing to do.
+   */
+  editPadShapes: () => Promise<boolean>;
   /** Pick a tool the way the toolbar does: leaving the Renumber Pads tool commits what it numbered (`evt->IsActivate()` -> `commit.Push( "Renumber Pads" )`). */
   setTool: (tool: FpToolId) => Promise<void>;
   addGraphic: (shape: CmdShape) => Promise<void>;
@@ -542,6 +566,20 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       if (numbers.length === 0) return;
       if (await runCmd({ op: "set_pad_numbers", footprint: name, numbers })) dispatch({ type: "SET_LAST_PAD_NUMBER", number: numbers[numbers.length - 1]![1] }); // `SetLastPadNumber( newNumber )`
     },
+    editPadShapes: async () => {
+      const st = stateRef.current;
+      const name = st.name;
+      if (!name) return false;
+      const cmd = editPadCommand(name, st.footprint, st.selection);
+      if (!cmd) return false;
+      dispatch({ type: "CLEAR_SELECTION" }); // `ACTIONS::selectionClear`
+      const ok = await runCmd(cmd);
+      if (ok && cmd.op === "explode_pad") {
+        const pad = st.footprint?.pads.find((p) => p.id === cmd.id);
+        if (pad) dispatch({ type: "PAD_EDIT_ENTER", layer: padEditLayer(pad) }); // `frame()->SetActiveLayer( layer )`
+      }
+      return ok;
+    },
     setTool: async (tool) => {
       if (stateRef.current.enumerate && tool !== "enumerate") await api.finishEnumerate(true);
       dispatch({ type: "SET_ACTIVE_TOOL", tool });
@@ -613,6 +651,8 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
     exportKicadMod: async () => {
       const name = stateRef.current.name;
       if (!name) return;
+      // `FOOTPRINT_EDIT_FRAME::SaveFootprint`: a pad being edited as shapes is recombined first.
+      if (stateRef.current.footprint?.pad_edit) await runCmd({ op: "recombine_pad", footprint: name });
       try {
         await downloadFootprintKicadMod(name);
       } catch (e) {

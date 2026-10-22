@@ -141,6 +141,23 @@ test("Flip, Move, Cut, Copy, Duplicate and Delete need a selection; Swap and Pac
   assert.ok(!actions(sel({ pads: 1, footprints: 1 })).includes(A.swapPadNets));
 });
 
+test("Swap Gate Nets is offered for pads of two units that have as many pins, and a pad of one unit gets a Swap with <unit> entry for each unit it could go to", () => {
+  const multi = sel({ pads: 2, gateSwap: { multiple: true, targets: null } });
+  assert.ok(actions(multi).includes(A.swapGateNets) && actions(multi).includes(A.swapPadNets), "both swaps, the pads being two");
+  assert.equal(submenu(pcbSelectionMenu(multi), "Swap Gate Nets..."), null, "no submenu with two units hit");
+  const single = sel({ pads: 1, gateSwap: { multiple: false, targets: ["B", "C"] } });
+  const nodes = pcbSelectionMenu(single);
+  assert.ok(!nodes.some((n) => n.type === "item" && n.action === A.swapGateNets), "the plain action (as a menu entry of its own) needs two units");
+  const entries = submenu(nodes, "Swap Gate Nets...")!;
+  assert.deepEqual(entries.map((n) => (n.type === "item" ? [n.action, n.label, n.arg] : null)), [
+    [A.swapGateNets, "Swap with B", "B"],
+    [A.swapGateNets, "Swap with C", "C"],
+  ]);
+  // No other unit to go to: no submenu. No footprint with units: neither entry.
+  assert.equal(submenu(pcbSelectionMenu(sel({ pads: 1, gateSwap: { multiple: false, targets: [] } })), "Swap Gate Nets..."), null);
+  assert.ok(!actions(sel({ pads: 2 })).includes(A.swapGateNets));
+});
+
 test("the footprint block: Open, Update, Change for one footprint; the plural forms for several", () => {
   assert.deepEqual(
     actions(sel({ footprints: 1 })).filter((a) => /EditFpInFpEditor|GlobalEdit/.test(a)),
