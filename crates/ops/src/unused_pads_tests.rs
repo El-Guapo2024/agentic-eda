@@ -119,31 +119,59 @@ fn a_through_via_has_layers_to_remove_only_on_a_board_of_more_than_two_copper_la
 }
 
 #[test]
+fn the_layer_depth_is_kicads_difference_of_layer_ids() {
+    use super::unused_pads::layer_depth;
+    // `BOARD::LayerDepth`: ids F_Cu 0, B_Cu 2, In1_Cu 4 ..., put in order; a back layer that is then the end counts as `F_Cu + count - 1`.
+    assert_eq!(layer_depth("F.Cu", "B.Cu", 2), Some(1));
+    assert_eq!(layer_depth("B.Cu", "F.Cu", 2), Some(1));
+    assert_eq!(layer_depth("F.Cu", "B.Cu", 4), Some(3));
+    assert_eq!(layer_depth("F.Cu", "In1.Cu", 4), Some(4));
+    assert_eq!(layer_depth("In1.Cu", "In2.Cu", 4), Some(2), "two inner layers: the ids are two apart");
+    assert_eq!(layer_depth("In1.Cu", "B.Cu", 4), Some(2), "swapped, the back layer is the start and stays 2");
+    assert_eq!(layer_depth("B.Cu", "In1.Cu", 4), Some(2));
+    assert_eq!(layer_depth("F.Cu", "Edge.Cuts", 4), None, "not a copper layer");
+}
+
+#[test]
 fn a_blind_or_buried_via_is_taken_by_the_layer_depth_between_its_ends() {
     let m = through_hole_model(&FOUR);
     let b = board(&m);
     let dr = b.design().drawings.clone().unwrap();
-    // Blind from the front to the first inner layer: BOARD::LayerDepth( F_Cu, In1_Cu ) is 2.
     let mut d = b.design().clone();
     {
         let rt = d.routing.as_mut().unwrap();
         rt.vias[0].to_layer = "In1.Cu".into();
         rt.vias.push(super::pcb_transform_tests::via("via_b", (30_000, 50_000), "In1.Cu", "In2.Cu"));
         rt.vias.push(super::pcb_transform_tests::via("via_c", (40_000, 50_000), "In1.Cu", "B.Cu"));
+        rt.vias.push(super::pcb_transform_tests::via("via_d", (50_000, 50_000), "F.Cu", "B.Cu"));
         let mut dr = dr.clone();
-        dr.via_extras = ["via_a", "via_b", "via_c"].iter().map(|id| ViaExtra { id: (*id).into(), kind: ViaKind::Blind, tokens: vec![] }).collect();
+        dr.via_extras = ["via_a", "via_b", "via_c", "via_d"].iter().map(|id| ViaExtra { id: (*id).into(), kind: ViaKind::Blind, tokens: vec![] }).collect();
         d.drawings = Some(dr);
     }
     let mut b = Board::new(d, &m, 100, 300);
     b.apply(&remove(None, true, false, true, true)).unwrap();
-    assert_eq!(via_mode(&b, "via_a"), UnconnectedLayers::RemoveExceptStartAndEnd, "F.Cu to In1.Cu: depth 2");
-    assert_eq!(via_mode(&b, "via_b"), UnconnectedLayers::KeepAll, "In1.Cu to In2.Cu: depth 1, nothing between");
-    // KiCad numbers B_Cu 2 and In1_Cu 4, so the dialog's `LayerDepth` swaps the two and finds depth 1 (the back layer counts as the last of the stack only for a via that
-    // starts on the front): a blind via from an inner layer to the back is not taken, as in the dialog.
-    assert_eq!(via_mode(&b, "via_c"), UnconnectedLayers::KeepAll, "In1.Cu to B.Cu");
+    // The dialog takes every via that spans more than a depth of 1, and with KiCad's layer ids that is every pair of layers but the front and the back of a board of
+    // two copper layers.
+    assert_eq!(via_mode(&b, "via_a"), UnconnectedLayers::RemoveExceptStartAndEnd, "F.Cu to In1.Cu");
+    assert_eq!(via_mode(&b, "via_b"), UnconnectedLayers::RemoveExceptStartAndEnd, "In1.Cu to In2.Cu: depth 2");
+    assert_eq!(via_mode(&b, "via_c"), UnconnectedLayers::RemoveExceptStartAndEnd, "In1.Cu to B.Cu: depth 2");
+    assert_eq!(via_mode(&b, "via_d"), UnconnectedLayers::RemoveExceptStartAndEnd, "F.Cu to B.Cu on four layers: depth 3");
     // The via is still a blind one.
     assert_eq!(b.design().drawings.as_ref().unwrap().via_extra("via_a").unwrap().kind, ViaKind::Blind);
     let _ = p(0, 0);
+
+    // On two copper layers the front-to-back via that is not a through one has a depth of 1: nothing between its ends.
+    let m = through_hole_model(&["F.Cu", "B.Cu"]);
+    let b = board(&m);
+    let mut d = b.design().clone();
+    {
+        let mut dr = d.drawings.clone().unwrap();
+        dr.via_extras = vec![ViaExtra { id: "via_a".into(), kind: ViaKind::Blind, tokens: vec![] }];
+        d.drawings = Some(dr);
+    }
+    let mut b = Board::new(d, &m, 100, 300);
+    assert!(refusal(&mut b, remove(None, true, false, true, true)).starts_with("ops_nothing_to_change"));
+    assert_eq!(via_mode(&b, "via_a"), UnconnectedLayers::KeepAll);
 }
 
 #[test]
