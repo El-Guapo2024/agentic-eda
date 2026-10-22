@@ -647,6 +647,44 @@ fn an_anchor_footprint_turns_and_moves_the_copy_to_lie_where_the_anchor_is() {
 }
 
 #[test]
+fn copper_that_ends_on_a_pad_ends_on_the_matching_pad_of_a_target_turned_a_quarter_about_the_anchor() {
+    // A half turn does not tell a turn one way from the other way round, a quarter turn does: with the amplifier of channel 2 a quarter from the one of channel 1 and the
+    // amplifier as the anchor, a stub that starts on a pad of channel 1 starts on the matching pad of channel 2, whichever footprint carries it -- the copper turns the way the
+    // footprints do.
+    let m = model(2);
+    let mut d = design(2);
+    d.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == "U2").unwrap().rot = 90_000;
+    let pad_centre = |d: &Design, reference: &str, number: &str| -> Point {
+        let f = d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == reference).unwrap();
+        eda_model::footprint::placed_pads(&m, m.part(reference).unwrap(), f).unwrap().into_iter().find(|p| p.number == number).unwrap().center
+    };
+    // a stub of 0.3 mm into the footprint from the amplifier's pad 4 and from the resistor's pad 2 and the capacitor's pad 2, each on the net of its pad
+    let stubs = [("U1", "4", "OUT0"), ("R1", "2", "MID0"), ("C1", "2", "OUT0")];
+    for (reference, number, net) in stubs {
+        let at = pad_centre(&d, reference, number);
+        let inwards = if at.x >= d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == reference).unwrap().at.x { -300 } else { 300 };
+        d.routing.as_mut().unwrap().tracks.push(track(&format!("stub_{reference}"), net, "F.Cu", &[(at.x, at.y), (at.x + inwards, at.y)]));
+    }
+    let mut b = Board::new(d, &m, 100, 300);
+    generate_sheets(&mut b, 2);
+    let ids = areas_of(&b, 2);
+    let area = zone_named(&b, "auto-placement-area-/ch1/").outline.clone();
+    for (reference, _, _) in stubs {
+        let t = routing(&b).tracks.iter().find(|t| t.id == format!("stub_{reference}")).unwrap();
+        assert!(t.pts.iter().all(|q| eda_model::multichannel::point_inside(&area, *q)), "the stub of {reference} is in the area: {:?}", t.pts);
+    }
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions { anchor: Some("U1".into()), ..Default::default() })).unwrap();
+    assert_eq!(pose_of(&b, "U2").rot, 90_000, "the counterpart of the anchor stays as it is");
+    assert_ne!(pose_of(&b, "R2").rot, pose_of(&b, "R1").rot, "the others turned with it");
+    for (reference, target, number, net) in [("U1", "U2", "4", "OUT1"), ("R1", "R2", "2", "MID1"), ("C1", "C2", "2", "OUT1")] {
+        let want = pad_centre(b.design(), target, number);
+        let copies: Vec<&Track> = routing(&b).tracks.iter().filter(|t| t.net == net && t.pts.len() == 2 && t.id != format!("stub_{reference}")).collect();
+        // (a micrometre of rounding: the pad's place and the copy's are each rounded to it)
+        assert!(copies.iter().any(|t| (t.pts[0].x - want.x).abs() <= 1 && (t.pts[0].y - want.y).abs() <= 1), "the copy of the stub of {reference}'s pad {number} starts on pad {number} of {target} at {want:?}: {:?}", copies.iter().map(|t| &t.pts).collect::<Vec<_>>());
+    }
+}
+
+#[test]
 fn the_text_fields_and_the_models_of_the_footprints_follow_the_placement() {
     let m = model(2);
     let mut d = design(2);

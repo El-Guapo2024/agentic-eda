@@ -9,6 +9,7 @@
 //
 // What it checks:
 //   the actions: the three are wired on the PCB tab and on no other; Tools > Multi-Channel has the two menu entries; with no footprint placed Generate says there is nothing to generate;
+//     Strict (which refuses a move that makes the board worse) does not refuse Generate on a board with no routing;
 //   Generate Placement Rule Areas: the dialog's three tabs (Sheets, Component Classes, Groups) with a row for each channel, one rule area for each row ticked (named, with its placement
 //     source, on the copper layers, its outline the rectilinear hull of the footprints of the channel, around every one of them), nothing made when nothing is ticked, one undo step; a row
 //     whose area is there already is left alone, and made again with "Replace existing placement rule areas"; "Group footprints with their placement rule areas" groups each area with its
@@ -79,6 +80,8 @@
   // the board
   const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
   const poseOf = (b, ref) => { const p = b.parts.find((q) => q.ref === ref); return p && p.placed ? { x: p.at[0], y: p.at[1], rot: p.rot, side: p.side } : null; };
+  /** The place of pad `num` of footprint `ref`, as the server works it out from the footprint's pose. */
+  const padOf = (b, ref, num) => { const q = b.parts.find((x) => x.ref === ref)?.pads?.find((x) => x.num === num); return q ? { x: q.x, y: q.y } : null; };
   const angle = (a) => ((a % 360) + 360) % 360;
   const sameAngle = (a, b) => near(angle(a), angle(b), 0.01) || near(Math.abs(angle(a) - angle(b)), 360, 0.01);
   const ruleAreas = (b) => (b.routing?.zones ?? []).filter((z) => z.is_rule_area);
@@ -241,6 +244,26 @@
       t(shiftOf(b, 2) === null && shiftOf(b, 3) === null, "the other two channels are not laid out like channel 1");
     });
 
+    // ======================================================================================================================== Strict
+    await scenario("Strict, which refuses a move that makes the board worse, does not refuse Generate Placement Rule Areas on a board with no routing", async (t) => {
+      if (!strict) return void t(true, "(skipped: there is no Strict switch)");
+      if (!strict.checked) strict.click();
+      await sleep(300);
+      try {
+        const snap = await snapshot();
+        const t0 = Date.now();
+        await openGenerate(false, false);
+        await press("OK", 1800);
+        // the first zone of a board with no routing starts the routing section, and the connectivity gate then judges every open net: a rule area moves and routes nothing
+        t(ruleAreas(await board()).length === 3 && errorsSince(t0).length === 0, `with Strict on the three areas are made (${JSON.stringify(errorsSince(t0))})`);
+        await undo();
+        t((await snapshot()) === snap, "and one undo takes them away");
+      } finally {
+        if (strict.checked) strict.click();
+        await sleep(300);
+      }
+    });
+
     // ======================================================================================================================== Generate Placement Rule Areas
     await scenario("Generate Placement Rule Areas: the dialog has a tab for sheets, classes and groups, with a row for each channel", async (t) => {
       const r = await E.run("pcbnew.Multichannel.generatePlacementRuleAreas");
@@ -400,7 +423,9 @@
     const COPPER = {};
     await scenario("setup: channel 1's copper, and what channel 2 has of its own", async (t) => {
       const out = [];
-      out.push(await post({ op: "add_track", net: "SUM1", layer: "F.Cu", width: 200, pts: [{ x: 3500, y: 4200 }, { x: 3500, y: 6500 }, { x: 5500, y: 8000 }] }));
+      // the track of the middle net ends on pad 2 of the amplifier, so what a copy of it ends on says whether the copper turns the way the footprints do
+      const pad2 = padOf(await board(), "U1", "2");
+      out.push(await post({ op: "add_track", net: "SUM1", layer: "F.Cu", width: 200, pts: [{ x: 3500, y: 4200 }, { x: 3500, y: 6500 }, { x: pad2.x, y: pad2.y }] }));
       out.push(await post({ op: "add_track", net: "OUT1", layer: "F.Cu", width: 250, pts: [{ x: 7700, y: 4200 }, { x: 7700, y: 7000 }] }));
       out.push(await post({ op: "add_track", net: "GND", layer: "F.Cu", width: 300, pts: [{ x: 3000, y: 9000 }, { x: 3000, y: 10500 }] }));
       out.push(await post({ op: "add_via", net: "SUM1", x: 5500, y: 11000, drill: 300, diameter: 600, from_layer: "F.Cu", to_layer: "B.Cu" }));
@@ -491,6 +516,9 @@
         const texts = textsOf(after).filter((x) => inside(ak.outline, [x.x, x.y]));
         t(texts.length === 1 && texts[0].content === "CH" && near(texts[0].x, 6500 + v.x) && near(texts[0].y, 12500 + v.y), `and the text on a copper layer, and not the silkscreen one, which is on no layer of the area (${JSON.stringify(texts.map((x) => [x.content, x.x, x.y]))})`);
         t(ak.outline.length === a1.outline.length && JSON.stringify(ak.outline) === JSON.stringify(shifted(a1.outline, v)), "the target's area takes the reference area's shape");
+        const toPad = tracksOf(after).find((x) => x.net === CH[k].sum && x.pts.length === 3);
+        const pad = padOf(after, CH[k].U, "2");
+        t(!!toPad && !!pad && near(toPad.pts[2][0], pad.x, 2) && near(toPad.pts[2][1], pad.y, 2), `the copy of the track that ends on pad 2 of the amplifier ends on pad 2 of the amplifier of channel ${k} (${JSON.stringify(toPad?.pts[2])} against ${JSON.stringify(pad)})`);
       }
       // what the target had of its own in the area goes, what it had outside stays
       t(!tracksOf(after).some((x) => COPPER.ch2Old.includes(x.id)), "the track channel 2 had in its area is gone");
@@ -596,6 +624,12 @@
       const turn = turnedBy(after, 3);
       t(turn !== null && near(angle(turn), angle(poseOf(before, "U3").rot - poseOf(before, "U1").rot), 0.01) && !near(angle(turn), 0, 0.01), `channel 3 is channel 1 turned about its amplifier by the angle between the two amplifiers (${turn})`);
       t(tracksOf(after).filter((x) => x.net === "SUM3").length === 1, "and its routing is copied onto its nets");
+      // the copper turns the way the footprints do: the track that ends on pad 2 of the amplifier ends on pad 2 of the turned amplifier, which is where the pad is on the board
+      for (const k of [2, 3]) {
+        const toPad = tracksOf(after).find((x) => x.net === CH[k].sum && x.pts.length === 3);
+        const pad = padOf(after, CH[k].U, "2");
+        t(!!toPad && !!pad && near(toPad.pts[2][0], pad.x, 2) && near(toPad.pts[2][1], pad.y, 2), `channel ${k}: the copy of the track that ends on pad 2 of the amplifier ends on pad 2 of the amplifier (${JSON.stringify(toPad?.pts[2])} against ${JSON.stringify(pad)})`);
+      }
       await ensureSame(turned);
       await undo(); // the turn
       t((await snapshot()) === afterSetup, "undone");

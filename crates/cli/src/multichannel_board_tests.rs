@@ -91,7 +91,12 @@ fn channels(dir: &Path) {
     let mut all = design(&PLACE);
     all.routing = routed.routing;
     assert!(all.routing.as_ref().is_some_and(|r| r.tracks.len() >= 3), "the router drew channel 1's copper");
-    save(dir, &all).unwrap();
+    write_board(dir, &all);
+}
+
+/// `design` as the board folder `dir`'s design, with the intent of the three channels.
+fn write_board(dir: &Path, design: &Design) {
+    save(dir, design).unwrap();
     let meta = Meta { intent: intent_path().canonicalize().unwrap().display().to_string(), snap_um: 100, spacing_um: 600 };
     std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 }
@@ -188,6 +193,30 @@ fn generate_and_repeat_are_one_undo_step_each_and_the_areas_are_in_the_board_fil
     assert_eq!(design_json(&dir), generated, "one the edit of the area's corners");
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert_eq!(design_json(&dir), start, "and one the three areas");
+}
+
+#[test]
+fn strict_refuses_neither_the_areas_nor_the_repeat_on_a_board_that_is_not_routed_yet() {
+    // The first zone of a board with no routing starts the routing section, and with it the connectivity gate's judgement of every net: a board judged to have no failure is then
+    // judged to have eight (the nets of the three channels are open). A rule area moves nothing and routes nothing, so Strict -- the studio's Strict switch, which refuses a move
+    // that makes the board worse -- does not refuse Generate; and the Repeat Layout that follows moves footprints into places that are free, which does not make it worse.
+    let dir = scratch("p24_strict");
+    write_board(&dir, &design(&PLACE));
+    assert!(design_json(&dir)["routing"].is_null(), "no routing yet");
+    let (meta, d, model) = load(&dir).unwrap();
+    let rows = Board::new(d, &model, meta.snap_um, meta.spacing_um).mc_potential_areas();
+    let areas: Vec<AreaPick> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| AreaPick { kind: r.kind, key: r.key.clone() }).collect();
+    step(&dir, Cmd::Multichannel(MultichannelCmd::GenerateRuleAreas { areas, replace_existing: false, group_items: false }), true, "test").expect("Strict lets the rule areas be made");
+    let found = rule_areas(&dir);
+    assert_eq!(found.len(), 3);
+    step(&dir, Cmd::Multichannel(MultichannelCmd::RepeatLayout { reference: found[0].0.clone(), targets: found[1..].iter().map(|a| a.0.clone()).collect(), options: RepeatOptions::default() }), true, "test").expect("and the layout be repeated");
+    let (u1, u2) = (pose(&dir, "U1"), pose(&dir, "U2"));
+    assert_ne!(u1.0, u2.0);
+    // the same board, a copper pour on it instead: the gate does judge that (it is what the exemption is not)
+    let other = scratch("p24_strict_pour");
+    write_board(&other, &design(&PLACE));
+    let pour = Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 1_000, y: 16_000 }, Point { x: 8_000, y: 16_000 }, Point { x: 8_000, y: 20_000 }, Point { x: 1_000, y: 20_000 }] };
+    assert_eq!(step(&other, pour, true, "test").unwrap_err()[0].check, "board_worse", "the first pour of a board with no routing is judged, a rule area is not");
 }
 
 /// `(zone ...)` blocks of a board file that are placement rule areas, each as its text.

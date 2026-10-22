@@ -2045,6 +2045,13 @@ impl Cmd {
     pub fn replaces_schematic(&self) -> bool {
         matches!(self, Cmd::ReplaceSchematic { .. })
     }
+
+    /// Does this command only add placement rule areas (and the groups round them)? Such a command moves nothing and routes nothing, so the gates that refuse a move that makes the
+    /// board worse have no say in it: what they find after it is the board's own, which the first zone of a board with no routing yet starts to count (`routing_connectivity` judges
+    /// a board that has a routing section, and a zone is held in it).
+    pub fn adds_only_rule_areas(&self) -> bool {
+        matches!(self, Cmd::Multichannel(MultichannelCmd::GenerateRuleAreas { .. }))
+    }
 }
 
 impl Cmd {
