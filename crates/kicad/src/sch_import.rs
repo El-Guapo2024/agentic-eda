@@ -572,7 +572,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     let junction_points: Vec<Point> = junctions.iter().map(|j| j.at).collect();
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects, &junction_points);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: user_fields_read, imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), ..Default::default() }, field_layout: field_layout_read };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: user_fields_read, imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), embedded: crate::embedded::read_owner(root, &mut Vec::new()), ..Default::default() }, field_layout: field_layout_read };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
@@ -750,7 +750,15 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
                 design.bus_aliases.push(alias);
             }
         }
-        if let Some(child_sch) = child_design.schematic {
+        if let Some(mut child_sch) = child_design.schematic {
+            // The embedded files belong to the schematic, whichever sheet's file holds them (`SCH_IO_KICAD_SEXPR_PARSER` files them under the `SCHEMATIC`): the root's list gets them,
+            // the first of a name staying, and the sheet is left with none (the writer files them in the root sheet's file only).
+            let from_child = std::mem::take(&mut child_sch.extras.embedded);
+            if let Some(root_sch) = design.schematic.as_mut() {
+                for f in from_child.files {
+                    root_sch.extras.embedded.insert(f);
+                }
+            }
             let child_dir = child_path.parent().unwrap_or(&resolve_dir).to_path_buf();
             for s in &child_sch.sheets {
                 queue.push((s.file.clone(), child_dir.clone()));

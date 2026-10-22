@@ -122,6 +122,10 @@ pub struct ImportNotes {
     /// each: they are not in the design and not in what is exported from it. Nothing is listed for a kind that is read.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub unread_items: BTreeMap<String, usize>,
+    /// What was wrong in the `(embedded_files ..)` of the board (a file with no name, a type KiCad does not know): the files are read as far as they go, and these are what
+    /// KiCad would have stopped at. A checksum that does not match is not found here: that is told when the file is looked at (`crate::embedded::decode`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedded_problems: Vec<String>,
     /// The `(filled_polygon ..)` the file stored for its zones (KiCad's own fill, as saved): not part of the design. The caller that keeps the board files
     /// (`eda_kicad::zone_fills::entries_of_imported_file`) files them beside `design.json`, so an imported board shows the fills it was saved with.
     #[serde(skip)]
@@ -144,8 +148,8 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         .ok_or_else(|| vec![CheckResult::fail("kicad_import.not_a_board", "file", "top-level form is not (kicad_pcb ...); not a KiCad PCB file")])?;
 
     let mut notes = ImportNotes { footprints_scaled, unread_items: unread_items(root), ..ImportNotes::default() };
-    // The items nothing here reads are kept as text and written back (`DrawingsSection::raw_items`), except the embedded files, whose data a re-quoting would break.
-    let mut raw_items: Vec<String> = root.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l).is_some_and(|t| !is_read(l, t) && t != "embedded_files")).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
+    // The items nothing here reads are kept as text and written back (`DrawingsSection::raw_items`).
+    let mut raw_items: Vec<String> = root.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l).is_some_and(|t| !is_read(l, t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
 
     let layers = import_layers(root);
     let net_names = import_net_names(root);
@@ -215,6 +219,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     }
     if !tables.is_empty() {
         design.drawings.get_or_insert_with(Default::default).tables = tables;
+    }
+    // The files embedded in the board, with their data as read: `(embedded_fonts ..)` and `(embedded_files ..)` (`PCB_IO_KICAD_SEXPR_PARSER`, `EMBEDDED_FILES_PARSER::ParseEmbedded`).
+    let embedded = crate::embedded::read_owner(root, &mut notes.embedded_problems);
+    if !embedded.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).embedded = embedded;
     }
     // The vias' protection defaults of KiCad 10's `(setup ..)`.
     let setup_tokens: Vec<String> = sexpr::find(root, "setup").map(|s| s.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| matches!(sexpr::tag(l), Some("covering") | Some("plugging") | Some("capping") | Some("filling"))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect()).unwrap_or_default();
@@ -297,11 +306,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
 }
 
 /// The kinds of top-level item a reader here takes: everything `import_kicad_pcb` reads below, the header (`version`, `generator`, `general`, `paper`, `title_block`, `layers`,
-/// `setup`, nets and net classes) and `embedded_fonts`, which is a flag. The other kinds are counted ([`unread_items`]) and kept as text (`DrawingsSection::raw_items`).
+/// `setup`, nets and net classes), `embedded_fonts` (a flag) and `embedded_files` (`DrawingsSection::embedded`). The other kinds are counted ([`unread_items`]) and kept as text (`DrawingsSection::raw_items`).
 const READ_ITEMS: &[&str] = &[
     "version", "generator", "generator_version", "general", "paper", "page", "title_block", "layers", "setup", "host", "net", "net_class", "footprint", "module", "segment", "arc", "via", "zone", "gr_line", "gr_arc",
     "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "gr_text_box", "image", "point", "dimension", "group", "generated", "barcode", "embedded_fonts",
-    "table",
+    "table", "embedded_files",
 ];
 
 /// Whether a reader here takes the top-level `item` of kind `tag`: its kind is in [`READ_ITEMS`], and a reference image is one whose data is a file the reader understands
@@ -1630,6 +1639,8 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
         }
     }
     e.source_name = name.to_string();
+    // The files the footprint lists (`(embedded_files ..)` inside the footprint: names, types and checksums; the data is the board's).
+    e.embedded = crate::embedded::read_owner(fp, &mut Vec::new());
     // `(component_classes (class "A") (class "B"))`: the classes the file gives the footprint (`parseFOOTPRINT_unchecked`'s `T_component_classes`), without repeats.
     if let Some(classes) = sexpr::find(fp, "component_classes") {
         for name in sexpr::find_all(classes, "class").filter_map(|c| sexpr::txt(c, 1)) {
