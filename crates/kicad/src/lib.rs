@@ -32,6 +32,7 @@ mod via_io;
 mod fp_art_io;
 mod fp_fields;
 mod pad_shape;
+mod padstack_io;
 mod pcb;
 mod pcb_generated;
 mod pcb_items;

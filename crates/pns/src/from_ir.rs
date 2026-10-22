@@ -48,6 +48,27 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
     let locked = locked_ids_with(design, !patterns_in_edit);
 
     for pad in &drc_board.pads {
+        // A padstack: one solid per group of layers that shares a shape, as `PNS_KICAD_IFACE_BASE::syncPad` makes them (`PADSTACK::ForEachUniqueLayer`; the router treats
+        // the pad as flashed on all of them and leaves the test of what is connected to the checks). A group whose layers are not next to each other (a custom stack's front
+        // shape on the front and on a deeper layer) is a solid for each run of layers.
+        if !pad.copper_by_layer.is_empty() {
+            let net = pad.net.as_deref().map(net_of).unwrap_or(None);
+            for (names, shape) in pad.copper_groups() {
+                let mut idx: Vec<i32> = names.iter().filter_map(|n| layers.index_of(n)).collect();
+                idx.sort_unstable();
+                idx.dedup();
+                let mut k = 0;
+                while k < idx.len() {
+                    let mut end = k;
+                    while end + 1 < idx.len() && idx[end + 1] == idx[end] + 1 {
+                        end += 1;
+                    }
+                    node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::new(idx[k], idx[end]), pos: pad.center, shape: shape.clone(), source: pad.id.clone(), edge: false }));
+                    k = end + 1;
+                }
+            }
+            continue;
+        }
         let layer_range = pad.layers.iter().filter_map(|n| layers.index_of(n)).fold(None, |acc: Option<crate::layer::LayerRange>, i| {
             let r = crate::layer::LayerRange::single(i);
             Some(match acc {
@@ -160,6 +181,49 @@ mod tests {
             drawings: None,
         };
         (design, model)
+    }
+
+    /// A through-hole pad whose copper differs from layer to layer, on a four-layer board.
+    fn padstack_board(side: Side) -> (Design, ConstraintModel) {
+        use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode};
+        use eda_model::{BoardRules, Footprint, Pad, PadKind, PadShape};
+        let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("TH1".into()), footprint: Some("TH1".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None };
+        let mut pad = Pad { number: "1".into(), at: (0, 0), size: (1600, 1600), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(800), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        pad.ext.stack = PadStack {
+            mode: PadStackMode::FrontInnerBack,
+            inner: Some(PadLayerShape::plain(PadShape::Rect, (1200, 1200))),
+            back: Some(PadLayerShape::plain(PadShape::Oval, (2400, 1000))),
+            ..Default::default()
+        };
+        let model = ConstraintModel {
+            parts: vec![part],
+            footprints: vec![Footprint { name: "TH1".into(), pads: vec![pad], courtyard: Some((2000, 2000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }],
+            board: BoardRules { layers: vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()], ..Default::default() },
+            ..Default::default()
+        };
+        let (mut design, _) = two_pad_board();
+        design.placement = Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "J1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 0, side, label: LabelSide::Above }], modules: vec![] });
+        design.routing = None;
+        (design, model)
+    }
+
+    /// `(first layer, last layer, bounding box)` of each solid of the board's one pad, in layer order.
+    fn pad_solids(node: &Node) -> Vec<(i32, i32, (i64, i64, i64, i64))> {
+        let mut v: Vec<(i32, i32, (i64, i64, i64, i64))> = node.iter().filter_map(|(_, it)| match it { Item::Solid(s) if !s.edge => Some((s.layers.start(), s.layers.end(), s.shape.bbox(0))), _ => None }).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn a_padstack_is_a_solid_for_each_group_of_layers_that_shares_a_shape() {
+        let (design, model) = padstack_board(Side::Top);
+        let (node, _) = build_node(&design, &model);
+        // Front: the circle of 1.6 mm; the two inner layers one rectangle of 1.2 mm; the back the 2.4 x 1.0 mm oval.
+        assert_eq!(pad_solids(&node), vec![(0, 0, (9_200, 9_200, 10_800, 10_800)), (1, 2, (9_400, 9_400, 10_600, 10_600)), (3, 3, (8_800, 9_500, 11_200, 10_500))]);
+        // A footprint on the bottom has them the other way round: the oval on the board's front, the circle on its back.
+        let (design, model) = padstack_board(Side::Bottom);
+        let (node, _) = build_node(&design, &model);
+        assert_eq!(pad_solids(&node), vec![(0, 0, (8_800, 9_500, 11_200, 10_500)), (1, 2, (9_400, 9_400, 10_600, 10_600)), (3, 3, (9_200, 9_200, 10_800, 10_800))]);
     }
 
     #[test]

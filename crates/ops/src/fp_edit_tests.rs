@@ -393,3 +393,75 @@ fn one_field_is_edited_on_its_own_and_edits_of_two_fields_of_one_footprint_compo
     assert!(refusal(&mut b, Cmd::EditBoardField { part: "U1".into(), name: "Nope".into(), layout: Some(r), text: None }).contains("no field called"));
     assert!(refusal(&mut b, Cmd::EditBoardField { part: "U1".into(), name: "Value".into(), layout: None, text: None }).contains("nothing to change"));
 }
+
+#[test]
+fn a_pad_gets_a_padstack_the_edit_replaces_whole_and_each_layer_is_checked_as_a_pad_is() {
+    use eda_model::footprint::{PadAnchor, PadCustom, PadPrimitive};
+    use eda_model::ir::{ChamferCorners, Shape};
+    use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode, UnconnectedLayers};
+    let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let through = |stack: PadStack| {
+        let mut e = PadEdit::none("1", 1);
+        e.kind = Some(PadKind::ThroughHole);
+        e.shape = Some(PadShape::Circle);
+        e.size = Some((1_600, 1_600));
+        e.drill = Some(800);
+        e.stack = Some(stack);
+        Cmd::EditBoardPad { part: "U1".into(), edit: e }
+    };
+
+    // Front/inner/back: the layers' shapes, normalized as a pad's own are (a circle is square), and the unconnected-layer mode with them.
+    let mut inner = PadLayerShape::plain(PadShape::Circle, (1_400, 900));
+    inner.roundrect_ratio = Some(0.3);
+    let stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(inner), back: Some(PadLayerShape::plain(PadShape::Oval, (2_400, 1_000))), unconnected: UnconnectedLayers::RemoveExceptStartAndEnd, ..Default::default() };
+    b.apply(&through(stack)).unwrap();
+    let pad1 = pad_after_edits(&b, &m, "U1", "1");
+    assert_eq!((pad1.shape, pad1.size, pad1.drill), (PadShape::Circle, (1_600, 1_600), Some(800)));
+    let s = &pad1.ext.stack;
+    assert_eq!(s.mode, PadStackMode::FrontInnerBack);
+    assert_eq!(s.inner.as_ref().map(|i| (i.shape, i.size, i.roundrect_ratio)), Some((PadShape::Circle, (1_400, 1_400), None)), "a circle is square and has no corner ratio");
+    assert_eq!(s.back.as_ref().map(|i| i.size), Some((2_400, 1_000)));
+    assert_eq!(s.unconnected, UnconnectedLayers::RemoveExceptStartAndEnd);
+    // The stack gives the pad's extents the copper of every layer: the box the placer keeps clear holds the 2.4 mm oval.
+    let fp = pose(&b, "U1");
+    assert_eq!(eda_model::footprint::placed_pad_of(&fp, &pad1).size.0, 2_400);
+
+    // A normal stack has no layers (and takes the old ones away): only the unconnected-layer mode stays.
+    let normal = PadStack { mode: PadStackMode::Normal, inner: Some(PadLayerShape::plain(PadShape::Rect, (900, 900))), unconnected: UnconnectedLayers::RemoveAll, ..Default::default() };
+    b.apply(&through(normal)).unwrap();
+    let s = pad_after_edits(&b, &m, "U1", "1").ext.stack;
+    assert_eq!((s.mode, s.inner.is_none(), s.unconnected), (PadStackMode::Normal, true, UnconnectedLayers::RemoveAll));
+
+    // A layer of a custom stack is judged as the pad is: a basic shape that cannot be drawn, copper in two pieces, a chamfer too large.
+    let custom_layer = |shape: PadLayerShape| through(PadStack { mode: PadStackMode::Custom, layers: [("In1.Cu".to_string(), shape)].into(), ..Default::default() });
+    let line = |a: Point, z: Point| PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100, filled: false, start: a, end: z }, proxy: false };
+    let mut bad_shape = PadLayerShape::plain(PadShape::Custom, (1_000, 1_000));
+    bad_shape.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(0, 0), p(0, 0))] });
+    assert!(refusal(&mut b, custom_layer(bad_shape)).contains("Basic shape 1 on In1.Cu"));
+    let mut two_pieces = PadLayerShape::plain(PadShape::Custom, (1_000, 1_000));
+    two_pieces.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(5_000, 5_000), p(6_000, 5_000))] });
+    assert!(refusal(&mut b, custom_layer(two_pieces)).contains("single polygon"));
+    let mut chamfer = PadLayerShape::plain(PadShape::ChamferedRect, (1_000, 1_000));
+    chamfer.chamfer_ratio = Some(0.7);
+    chamfer.chamfer_corners = ChamferCorners { top_left: true, top_right: true, ..Default::default() };
+    assert!(refusal(&mut b, custom_layer(chamfer)).contains("corner chamfer is too large"));
+    let negative = PadLayerShape::plain(PadShape::Rect, (-5, 1_000));
+    assert!(refusal(&mut b, custom_layer(negative)).contains("must not be negative"));
+    // The edit that was refused left the one before it.
+    assert_eq!(pad_after_edits(&b, &m, "U1", "1").ext.stack.unconnected, UnconnectedLayers::RemoveAll);
+}
+
+#[test]
+fn a_footprints_pad_edit_that_differs_from_the_libraries_padstack_is_found_by_pad_edits_between() {
+    use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode};
+    let m = model(&["F.Cu", "B.Cu"]);
+    let lib = m.library_footprint_of(m.part("U1").unwrap()).unwrap();
+    let mut edited = lib.clone();
+    edited.pads[0].ext.stack = PadStack { mode: PadStackMode::FrontInnerBack, back: Some(PadLayerShape::plain(PadShape::Oval, (2_000, 900))), ..Default::default() };
+    let edits = eda_model::fp_edit::pad_edits_between(&lib, &edited);
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0].stack.as_ref().map(|s| s.mode), Some(PadStackMode::FrontInnerBack));
+    // The patched library footprint is the edited one again.
+    assert_eq!(eda_model::fp_edit::patched_footprint(&lib, &edits).pads[0].ext.stack.back, edited.pads[0].ext.stack.back);
+}

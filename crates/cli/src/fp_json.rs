@@ -103,9 +103,9 @@ fn copper_centre(pad: &Pad, offset: Option<Point>) -> (Um, Um) {
 /// hole, rotation, corner ratio and the edit that was made to it. `x` and `y` are the copper's centre; `px` and `py` the pad's position
 /// (where the hole is), which differ only for a pad with an offset. `placed` is the pad as the engine places it (board space); `pad` is
 /// the engine's pad in the footprint's frame.
-pub(crate) fn pad_json(design: &Design, model: &ConstraintModel, fp: &FootprintInstance, placed: &PlacedPad, pad: &Pad, nth: u32, net: Option<&str>) -> Value {
-    let _ = model;
+pub(crate) fn pad_json(design: &Design, model: &ConstraintModel, fp: &FootprintInstance, placed: &PlacedPad, pad: &Pad, nth: u32, net: Option<&str>, flashed: &eda_connectivity::Flashed) -> Value {
     let edit: Option<&PadEdit> = design.footprint_edit(&fp.id).and_then(|e| e.pad(&pad.number, nth));
+    let flashed_here: Option<&Vec<String>> = flashed.pads.get(&eda_model::fp_edit::pad_id(&fp.id, &pad.number, nth));
     // The offset the pad has (the library's or the one an edit made: the engine's pad already holds the edit).
     let offset = pad.ext.offset.map(|(x, y)| Point { x, y }).filter(|o| o.x != 0 || o.y != 0);
     let centre = if offset.is_some() { to_board(fp, copper_centre(pad, offset)) } else { placed.center };
@@ -146,7 +146,51 @@ pub(crate) fn pad_json(design: &Design, model: &ConstraintModel, fp: &FootprintI
         "edited": edit.is_some(),
         // The edit as stored, so the dialog sends back the overrides that are already there along with the one it changes.
         "edit": edit.and_then(|e| serde_json::to_value(e).ok()),
+        // The padstack (`eda_model::padstack::PadStack`) as the model has it, for the dialog; and, for a stack whose copper differs from layer to layer, the copper of
+        // each group of layers on the board (`stack_layers`: what the canvas and the 3D scene draw, as the router and the gates measure it).
+        "stack": (!pad.ext.stack.is_default()).then(|| serde_json::to_value(&pad.ext.stack).ok()).flatten(),
+        "stack_layers": (pad.has_stack() || flashed_here.is_some()).then(|| stack_layers_json(model, fp, pad, flashed_here)),
+        // A plated through-hole pad that removes the layers nothing connects it on (`remove_unused_layers`): the copper layers it has copper on, what the
+        // connectivity says (`eda_connectivity::flashed_layers`).
+        "flashed": flashed_here,
     })
+}
+
+/// The copper shapes of a padstack pad on `fp`, each with the board's layers it is on: `{ layers, x, y, w, h, round, shape, ratio, outline }`, the keys of a pad's own
+/// (`x` and `y` the copper's centre on the board).
+fn stack_layers_json(model: &ConstraintModel, fp: &FootprintInstance, pad: &Pad, flashed: Option<&Vec<String>>) -> Vec<Value> {
+    pad.shape_groups(fp.side, &model.board.layers)
+        .into_iter()
+        .filter_map(|mut g| {
+            // The layers where nothing connects the pad and it removes unconnected layers have no copper (`PAD::FlashLayer`): a group left with none is not drawn.
+            if let Some(kept) = flashed {
+                g.layers.retain(|l| kept.contains(l));
+                if g.layers.is_empty() {
+                    return None;
+                }
+            }
+            Some(g)
+        })
+        .map(|g| {
+            let view = g.shape.lay_on(pad);
+            let placed = eda_model::footprint::placed_pad_of(fp, &view);
+            let offset = view.ext.offset.map(|(x, y)| Point { x, y }).filter(|o| o.x != 0 || o.y != 0);
+            let centre = if offset.is_some() { to_board(fp, copper_centre(&view, offset)) } else { placed.center };
+            let outline: Option<Vec<Vec<[i64; 2]>>> = view.has_complex_outline().then(|| eda_drc::pad_shape::pad_outline(fp, &view, placed.center, 5).into_iter().map(|c| c.into_iter().map(|p| [p.x, p.y]).collect()).collect());
+            json!({
+                "layers": g.layers,
+                "role": g.role,
+                "x": centre.x,
+                "y": centre.y,
+                "w": placed.size.0,
+                "h": placed.size.1,
+                "round": placed.is_round(),
+                "shape": shape_name(view.shape),
+                "ratio": view.roundrect_ratio,
+                "outline": outline,
+            })
+        })
+        .collect()
 }
 
 /// The pads of `footprint` in the order the studio lists them (sorted by number, ties in the footprint's own order), each with the

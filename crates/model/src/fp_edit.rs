@@ -322,6 +322,10 @@ pub struct PadEdit {
     /// A custom pad's anchor, clearance option and basic shapes (`PAD::ReplacePrimitives`), replaced whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom: Option<PadCustom>,
+    /// `PAD::SetPadstack`: the shapes of the pad's other copper layers and what becomes of the layers nothing connects to, replaced whole ([`crate::padstack`]). The
+    /// fields above are the pad's front shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack: Option<crate::padstack::PadStack>,
 }
 
 impl PadEdit {
@@ -347,6 +351,7 @@ impl PadEdit {
             && self.chamfer_ratio.is_none()
             && self.chamfer_corners.is_none()
             && self.custom.is_none()
+            && self.stack.is_none()
     }
 
     /// Whether this edit changes the pad's geometry the engine knows (shape, size, hole, type, rotation, corner radius, the copper's
@@ -364,6 +369,7 @@ impl PadEdit {
             || self.chamfer_ratio.is_some()
             || self.chamfer_corners.is_some()
             || self.custom.is_some()
+            || self.stack.is_some()
     }
 
     /// The same pad, identified: `REF.NUM` for the first pad with the number, `REF.NUM#k` for the k-th (k from 2).
@@ -665,6 +671,32 @@ pub fn apply_pad_edit(pad: &mut Pad, e: &PadEdit) {
     } else {
         pad.ext.custom = None;
     }
+    // The padstack: replaced whole, every layer's shape kept as one shape keeps it (a circle square, a corner ratio, a delta only for a trapezoid ...).
+    if let Some(stack) = &e.stack {
+        pad.ext.stack = normalized_stack(stack);
+    }
+}
+
+/// `stack` as a pad keeps it: a normal one has no layers, and each layer's shape is normalized as the pad's own is ([`crate::padstack::PadLayerShape::normalize`]).
+pub fn normalized_stack(stack: &crate::padstack::PadStack) -> crate::padstack::PadStack {
+    use crate::padstack::PadStackMode;
+    let mut out = stack.clone();
+    match out.mode {
+        PadStackMode::Normal => {
+            out.inner = None;
+            out.back = None;
+            out.layers.clear();
+        }
+        PadStackMode::FrontInnerBack => out.layers.clear(),
+        PadStackMode::Custom => {
+            out.inner = None;
+            out.back = None;
+        }
+    }
+    for shape in out.inner.iter_mut().chain(out.back.iter_mut()).chain(out.layers.values_mut()) {
+        shape.normalize();
+    }
+    out
 }
 
 /// The pad edits that turn `base` into `edited`: for each pad of `edited` (the k-th that carries its number) that `base` has too, the type,
@@ -719,6 +751,9 @@ pub fn pad_edits_between(base: &Footprint, edited: &Footprint) -> Vec<PadEdit> {
         }
         if pad.shape == PadShape::Custom && pad.ext.custom != was.ext.custom {
             e.custom = pad.ext.custom.clone();
+        }
+        if pad.ext.stack != was.ext.stack {
+            e.stack = Some(pad.ext.stack.clone());
         }
         if !e.is_empty() {
             out.push(e);

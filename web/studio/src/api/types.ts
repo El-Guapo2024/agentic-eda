@@ -69,6 +69,52 @@ export interface Pad {
   edited?: boolean;
   /** The edit as stored (`PadEditCmd`), for the dialog to send back with the one change it makes. */
   edit?: PadEditCmd | null;
+  /** The padstack as the model has it (`PadStack`), when the pad has more than one shape for all layers or does not keep every layer; the shape fields above are its front. */
+  stack?: PadStack | null;
+  /** For a padstack whose copper differs from layer to layer: the copper of each group of layers on the board, with the keys of a pad's own (`x`, `y`, `w`, `h`, `round`, `shape`, `ratio`, `outline`). */
+  stack_layers?: PadStackLayer[] | null;
+  /** A plated through-hole pad that removes the layers nothing connects it on (Remove Unused Pads): the copper layers that have its ring (`eda_connectivity::flashed_layers`). */
+  flashed?: string[] | null;
+}
+
+/** `eda_model::padstack::PadStackMode` (`PADSTACK::MODE`). */
+export type PadStackMode = "normal" | "front_inner_back" | "custom";
+/** `eda_model::padstack::UnconnectedLayers` (`UNCONNECTED_LAYER_MODE`): "All copper layers", "Connected layers only", "Front, back and connected layers", "Start and end layers only" (a via's). */
+export type UnconnectedLayers = "keep_all" | "remove_all" | "remove_except_start_and_end" | "start_end_only";
+/** `eda_model::padstack::PadLayerShape`: one copper layer of a padstack (`PADSTACK::COPPER_LAYER_PROPS`), in the pad's own frame. */
+export interface PadLayerShape {
+  shape: PadShapeName;
+  size: [Um, Um];
+  roundrect_ratio?: number | null;
+  offset?: [Um, Um] | null;
+  trapezoid_delta?: [Um, Um] | null;
+  chamfer_ratio?: number | null;
+  chamfer_corners?: ChamferCorners;
+  custom?: PadCustom | null;
+  /** What the layer's node of the file says beyond its shape, as the file wrote it (thermal and clearance settings). */
+  tokens?: string[];
+}
+/** `eda_model::padstack::PadStack`: the shapes of a pad's other copper layers and what becomes of the layers nothing connects to; the pad's own fields are the front. */
+export interface PadStack {
+  mode?: PadStackMode;
+  inner?: PadLayerShape | null;
+  back?: PadLayerShape | null;
+  /** `custom`: the shape of each copper layer but the front, named as for a footprint on the top side. */
+  layers?: Record<string, PadLayerShape>;
+  unconnected?: UnconnectedLayers;
+}
+/** One group of layers that shares a copper shape of a padstack pad, as the state carries it (crates/cli/src/fp_json.rs `stack_layers_json`). */
+export interface PadStackLayer {
+  layers: string[];
+  role: string;
+  x: Um;
+  y: Um;
+  w: Um;
+  h: Um;
+  round: boolean;
+  shape: PadShapeName;
+  ratio?: number | null;
+  outline?: [Um, Um][][] | null;
 }
 
 /** The engine's pad shapes (`eda_model::PadShape`) and three pad types (`PadKind`), as the studio state names them. */
@@ -251,6 +297,8 @@ export interface Part {
   /** How KiCad's 3D viewer sorts the part's models: a through-hole model (`tht`), an SMD one or a virtual one (`BOARD_ADAPTER::IsFootprintShown`). */
   kind3d?: "smd" | "tht" | "virtual";
   pads?: Pad[];
+  /** A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`): each unit's name and the numbers of its pads; absent when it has fewer than two (Swap Gate Nets). */
+  units?: Array<{ name: string; pins: string[] }> | null;
   /** The footprint's silkscreen, fab and assembly drawings, board space (absent when it has none). */
   graphics?: FpGraphic[];
   /** The footprint's own texts (`${REFERENCE}` on the fab layer ...), board space (absent when it has none). */
@@ -293,6 +341,10 @@ export interface Via {
   drill: Um;
   from: string;
   to: string;
+  /** What the via does with the layers nothing connects it on (`remove_unused_layers`); absent when it keeps them all. */
+  unconnected?: UnconnectedLayers | null;
+  /** With `unconnected`: the copper layers that have its ring. */
+  flashed?: string[] | null;
 }
 
 /** `crates/model/src/ir.rs` `PadConnection` ("ZONE_CONNECTION") -- exact Rust variant names on the wire (no `rename_all`, see api/types.ts's own convention note below). */
@@ -805,6 +857,8 @@ export interface LibraryPad {
   zone_connection?: PadConnection | null;
   /** The dialog's "Spoke angle" (`PAD::GetThermalSpokeAngle`), millidegrees as in the `.kicad_pcb`; absent/`null` is the shape's default (90 degrees, 45 for a circle). */
   thermal_spoke_angle_mdeg?: number | null;
+  /** The padstack: the shapes of the pad's other copper layers and what becomes of the layers nothing connects to; the fields above are the front. Absent: one shape for every layer, every layer kept. */
+  stack?: PadStack | null;
 }
 
 /** `crates/model/src/ir.rs` `FootprintAttributes` (`FOOTPRINT_ATTR_T` plus the dialog's two related non-attribute-bit checkboxes). */
@@ -866,6 +920,15 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
   courtyard: [Um, Um] | null;
   anchor: PointXY;
   published: boolean;
+  /** `PAD_TOOL::InPadEditMode`: the pad being edited as graphic shapes (Edit Pad as Graphic Shapes), until Finish Pad Edit recombines it (kicad-port/padEditMode.ts). Absent when none is. */
+  pad_edit?: PadEditMode | null;
+}
+
+/** `crates/model/src/ir.rs` `PadEditMode`: the pad flagged `ENTERED`, and what its explode set aside (the custom pad's zone option and proxy items, which the recombine gives back). */
+export interface PadEditMode {
+  pad: string;
+  zone?: "outline" | "convex_hull";
+  proxies?: unknown[];
 }
 
 /** `GET /api/footprint_library`'s one field: every footprint name available to open (already-opened library entries plus intent/real-library-resolved ones), sorted. */
@@ -1348,6 +1411,8 @@ export interface PadEditCmd {
   chamfer_corners?: ChamferCorners;
   /** A custom pad's anchor, zone knockout and basic shapes, replaced whole. */
   custom?: PadCustom;
+  /** The padstack, replaced whole (`PAD::SetPadstack`): the shapes of the other copper layers and the unconnected-layer mode. */
+  stack?: PadStack;
 }
 
 /**
@@ -1523,6 +1588,11 @@ export type Cmd =
   | { op: "set_erc_severities"; severities: Record<string, RuleSeverity> }
   /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
   | { op: "swap_layers"; mapping: [string, string][] }
+  /** Remove Unused Pads: `selected` is the ids of "Selected only" (null: the whole board), `remove: false` is "Restore All Layers". */
+  | { op: "remove_unused_pads"; selected: string[] | null; vias: boolean; pads: boolean; keep_outside: boolean; remove: boolean }
+  /** Swap Pad Nets (the pads in selection order) and Swap Gate Nets (`target`: the unit to swap the one selected unit with). `connected_pads`: the answer to "Ignore Unselected Pads" (false) / "Swap All Connected Pads" (true); absent while it has not been asked. */
+  | { op: "swap_pad_nets"; ids: string[]; connected_pads?: boolean | null }
+  | { op: "swap_gate_nets"; ids: string[]; target?: string | null; connected_pads?: boolean | null }
   /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
   | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[] }
   /** `EDIT_TOOL::BooleanPolygons`: merge/subtract/intersect rectangles, circles and polygons (`ids` in routine order, the base first). */
@@ -1797,6 +1867,9 @@ export type Cmd =
   | { op: "move_footprint_text"; footprint: string; id: string; x: Um; y: Um }
   /** `pcbnew.Array.createArray` in the Footprint Editor (`ARRAY_TOOL::CreateArray`, `m_isFootprintEditor`): `numbering` renumbers the pads of the array; left out, the copies keep their source's number. */
   | { op: "create_footprint_array"; footprint: string; ids: string[]; geometry: ArrayGeometry; arrange?: boolean; numbering?: PadNumbering | null }
+  /** `pcbnew.PadTool.explodePad` / `recombinePad` (Ctrl+E), `PAD_TOOL::EditPad`: a custom pad's basic shapes as free graphics of the footprint on the pad's layer, and the way back. One undo step each. */
+  | { op: "explode_pad"; footprint: string; id: string }
+  | { op: "recombine_pad"; footprint: string }
 
   // ----------------------------------------------------------- symbol editor
   //

@@ -868,6 +868,10 @@ export interface StudioState {
   boardStatisticsDialogOpen: boolean;
   /** `pcbnew.GlobalEdit.swapLayers` -- components/SwapLayersDialog.tsx. */
   swapLayersDialogOpen: boolean;
+  /** `pcbnew.GlobalEdit.removeUnusedPads` -- components/RemoveUnusedPadsDialog.tsx. */
+  removeUnusedPadsDialogOpen: boolean;
+  /** Swap Pad Nets / Swap Gate Nets asking what to do with the unselected pads that are connected to the nets (`PromptConnectedPadDecision`; components/SwapNetsDialog.tsx). Null = not asking. */
+  swapNetsPrompt: { cmd: Cmd; pads: string[]; title: string } | null;
   /** `pcbnew.GlobalEdit.editTextAndGraphics` -- components/GlobalEditTextAndGraphicsDialog.tsx. */
   editTextAndGraphicsDialogOpen: boolean;
   /** `pcbnew.Array.createArray` (Ctrl+T, task item 6) -- components/CreateArrayDialog.tsx. */
@@ -1020,6 +1024,8 @@ const initialState: StudioState = {
   editTracksAndViasDialogOpen: false,
   boardStatisticsDialogOpen: false,
   swapLayersDialogOpen: false,
+  removeUnusedPadsDialogOpen: false,
+  swapNetsPrompt: null,
   editTextAndGraphicsDialogOpen: false,
   createArrayDialogOpen: false,
   // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
@@ -1182,6 +1188,8 @@ export type Action =
   | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_BOARD_STATISTICS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_SWAP_LAYERS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_REMOVE_UNUSED_PADS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_SWAP_NETS_PROMPT"; prompt: { cmd: Cmd; pads: string[]; title: string } | null }
   | { type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_CREATE_ARRAY_DIALOG_OPEN"; open: boolean };
 
@@ -1664,6 +1672,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, boardStatisticsDialogOpen: action.open };
     case "SET_SWAP_LAYERS_DIALOG_OPEN":
       return { ...state, swapLayersDialogOpen: action.open };
+    case "SET_REMOVE_UNUSED_PADS_DIALOG_OPEN":
+      return { ...state, removeUnusedPadsDialogOpen: action.open };
+    case "SET_SWAP_NETS_PROMPT":
+      return { ...state, swapNetsPrompt: action.prompt };
     case "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN":
       return { ...state, editTextAndGraphicsDialogOpen: action.open };
     case "SET_CREATE_ARRAY_DIALOG_OPEN":

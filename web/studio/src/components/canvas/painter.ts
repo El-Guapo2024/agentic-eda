@@ -35,6 +35,7 @@ import { zoneCopperLayers, zoneIsOnCopper, zoneLayers } from "../../kicad-port/z
 import { drcMarkerObject } from "../../kicad-port/appearance";
 import { drawFootprintArt } from "./fpArtPaint";
 import { isAnyFill } from "../../kicad-port/shapeFill";
+import { orderedStackLayers } from "../../kicad-port/padStack";
 import { drawPcbItems, drawRefImages } from "./pcbItemsPaint";
 import { drawTablePreview, drawTables } from "./tablePaint";
 import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
@@ -329,15 +330,36 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   for (const pad of on(opts.layerVisible, "pads") ? (part.pads ?? []).filter((q) => (q.th ? anyCopper : opts.layerVisible[sideCopper] !== false)) : []) {
     ctx.save();
     ctx.globalAlpha *= padAlpha;
-    const fill = copperPaint(layerColor(padCopperKey), pad.net, opts);
-    pathForPad(ctx, pad);
-    if (opts.sketchPads) {
-      ctx.strokeStyle = fill;
-      ctx.lineWidth = hairlineUm(view, 1.5);
-      ctx.stroke();
+    // A padstack whose copper differs from layer to layer (`pad.stack_layers`): each group of layers is drawn as its own shape in the color of its layer, the footprint's
+    // own side on top (`PCB_PAINTER::draw( const PAD* )` draws each copper layer's shape: `PADSTACK::ForEachUniqueLayer`).
+    // (An empty list is a through-hole pad that removes the layers nothing connects and has none left: only its hole shows -- `PAD::FlashLayer`.)
+    if (Array.isArray(pad.stack_layers)) {
+      for (const g of orderedStackLayers(pad.stack_layers, part.side ?? "top")) {
+        const shown = g.layers.find((l) => opts.layerVisible[l] !== false);
+        if (!shown) continue;
+        const shape: Pad = { ...pad, x: g.x, y: g.y, w: g.w, h: g.h, round: g.round, shape: g.shape, ratio: g.ratio ?? null, outline: g.outline ?? null };
+        const paint = copperPaint(layerColor(copperColorKey(shown)), pad.net, opts);
+        pathForPad(ctx, shape);
+        if (opts.sketchPads) {
+          ctx.strokeStyle = paint;
+          ctx.lineWidth = hairlineUm(view, 1.5);
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = paint;
+          ctx.fill(padFillRule(shape));
+        }
+      }
     } else {
-      ctx.fillStyle = fill;
-      ctx.fill(padFillRule(pad));
+      const fill = copperPaint(layerColor(padCopperKey), pad.net, opts);
+      pathForPad(ctx, pad);
+      if (opts.sketchPads) {
+        ctx.strokeStyle = fill;
+        ctx.lineWidth = hairlineUm(view, 1.5);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = fill;
+        ctx.fill(padFillRule(pad));
+      }
     }
     if (pad.th) {
       // The hole punched through the copper (the board's background shows in it), with the wall around it, when the backend says how big it is.

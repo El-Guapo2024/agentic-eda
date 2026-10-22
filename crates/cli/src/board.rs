@@ -58,6 +58,9 @@ mod design_block_tests;
 #[path = "fp_assign_tests.rs"]
 mod fp_assign_tests;
 #[cfg(test)]
+#[path = "pad_nets_tests.rs"]
+mod pad_nets_tests;
+#[cfg(test)]
 #[path = "fp_library_tests.rs"]
 mod fp_library_tests;
 #[cfg(test)]
@@ -1254,6 +1257,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, .. } => {
             format!("global-edit text-and-graphics --shapes {} --texts {} --dimensions {}{}", shape_ids.len(), text_ids.len(), dimension_ids.len(), if *layer_defaults { " --layer-defaults" } else { "" })
         }
+        Cmd::RemoveUnusedPads { selected, vias, pads, remove, .. } => format!("remove-unused-pads {}{}{}{}", if *remove { "--remove" } else { "--restore" }, if *vias { " --vias" } else { "" }, if *pads { " --pads" } else { "" }, selected.as_ref().map(|s| format!(" --selected {}", s.len())).unwrap_or_default()),
+        Cmd::SwapPadNets { ids, .. } => format!("swap-pad-nets {}", ids.join(" ")),
+        Cmd::SwapGateNets { ids, target, .. } => format!("swap-gate-nets {}{}", ids.join(" "), target.as_ref().map(|t| format!(" --with {t}")).unwrap_or_default()),
         Cmd::SetTeardropSettings { .. } => "board-setup teardrops".to_string(),
         Cmd::AddAllTeardrops => "teardrops add-all".to_string(),
         Cmd::RemoveAllTeardrops => "teardrops remove-all".to_string(),
@@ -1489,6 +1495,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteFootprintText { footprint, id } => format!("footprint-text delete {footprint:?} {id}"),
         Cmd::MoveFootprintText { footprint, id, x, y } => format!("footprint-text move {footprint:?} {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::CreateFootprintArray { footprint, ids, arrange, .. } => format!("footprint-array {footprint:?} --items {}{}", ids.len(), if *arrange { " --arrange" } else { "" }),
+        Cmd::ExplodePad { footprint, id } => format!("pad-explode {footprint:?} {id}"),
+        Cmd::RecombinePad { footprint } => format!("pad-recombine {footprint:?}"),
 
         // The Symbol Editor tab. No real `eda board` CLI subcommand parses
         // these either, same reasoning as the footprint-editor verbs just
@@ -1584,6 +1592,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddShape { .. } | Cmd::DeleteShape { .. } | Cmd::MoveShape { .. } | Cmd::EditShape { .. } => "shape",
         Cmd::AddText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
         Cmd::EditTextAndGraphics { .. } => "global-edit-text-and-graphics",
+        Cmd::RemoveUnusedPads { .. } => "remove-unused-pads",
+        Cmd::SwapPadNets { .. } | Cmd::SwapGateNets { .. } => "swap-nets",
         Cmd::SetTeardropSettings { .. } => "board-setup-teardrops",
         Cmd::AddAllTeardrops => "teardrops-add-all",
         Cmd::RemoveAllTeardrops => "teardrops-remove-all",
@@ -1694,6 +1704,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
         Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",
         Cmd::CreateFootprintArray { .. } => "footprint-array",
+        Cmd::ExplodePad { .. } | Cmd::RecombinePad { .. } => "pad-edit",
 
         Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::PutLibrarySymbol { .. } | Cmd::RenameLibrarySymbol { .. } | Cmd::SetSymbolAnchor { .. } | Cmd::EditSymbolProperties { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
         Cmd::DeriveSymbol { .. } | Cmd::FlattenSymbol { .. } | Cmd::UpdateSymbolFields { .. } | Cmd::SetSymbolParent { .. } | Cmd::EditLibrarySymbolFields { .. } => "symbol-derive",
@@ -4756,6 +4767,7 @@ mod tests {
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            stack: Default::default(),
         };
         step(&dir, Cmd::AddPad { footprint: "2PAD".into(), pad }, false, "test").unwrap();
 

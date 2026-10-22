@@ -2862,6 +2862,10 @@ pub struct FootprintExtra {
     pub sheetname: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheetfile: Option<String>,
+    /// `(units (unit (name "A") (pins "1" "2" ..)) ..)`: the footprint's gates (`FOOTPRINT::GetUnitInfo`), which Swap Gate Nets reads ([`crate::fp_units`]). Empty when the file
+    /// gave none: [`crate::fp_units::unit_info`] then asks the symbol.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub units: Vec<crate::fp_units::FootprintUnit>,
     /// The pads with a mask layer and no copper, as mask apertures in board space (`FootprintGraphic::pad_number` is set). A
     /// design imported before footprints had graphics of their own holds the footprint's silk and mask graphics here as well
     /// (`pad_number` is `None`); the importer no longer writes those, they are [`crate::Footprint::art`], and the DRC reads them
@@ -3165,6 +3169,10 @@ pub struct LibraryPad {
     /// default (90 degrees for an oval or (rounded) rectangle, 45 for a circle).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thermal_spoke_angle_mdeg: Option<Millideg>,
+    /// `PAD::Padstack()` beyond the pad's own shape: the shapes of its other copper layers (`PADSTACK::MODE`) and what becomes of the layers nothing connects to
+    /// (`UNCONNECTED_LAYER_MODE`); the fields above are the front shape. See [`crate::padstack`].
+    #[serde(default, skip_serializing_if = "crate::padstack::PadStack::is_default")]
+    pub stack: crate::padstack::PadStack,
 }
 
 /// `PAD_SHAPE` (`pcbnew/padstack.h`) as the Footprint Editor exposes it --
@@ -3249,6 +3257,7 @@ impl LibraryPad {
             chamfer_ratio: if shape == S::ChamferedRect { self.chamfer_ratio } else { None },
             chamfer_corners: if shape == S::ChamferedRect { self.chamfer_corners } else { ChamferCorners::default() },
             custom: if shape == S::Custom { Some(self.custom.clone().unwrap_or_default()) } else { None },
+            stack: self.stack.clone(),
         };
         crate::footprint::Pad { opposite_side: false, ext,
             number: self.number.clone(),
@@ -3304,8 +3313,27 @@ impl LibraryPad {
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            stack: p.ext.stack.clone(),
         }
     }
+}
+
+/// `PAD_TOOL::m_editPad` and the `ENTERED` flag of its pad (`pcbnew/tools/pad_tool.cpp`): the pad of a library footprint that is being edited as
+/// graphic shapes ("Edit Pad as Graphic Shapes", Ctrl+E) until "Finish Pad Edit" recombines them. While it lasts the pad is its anchor and its
+/// basic shapes are free graphics of the footprint on the pad's layer. Part of the footprint, so undo and redo bring the mode back with the pad as
+/// `PAD_TOOL::OnUndoRedo` does by looking for the flagged pad. What the explode could not leave as graphics is kept here for the recombine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PadEditMode {
+    /// The id of the pad being edited.
+    pub pad: String,
+    /// The custom pad's zone option (`CUSTOM_SHAPE_ZONE_MODE`), which the pad being its anchor has no place for.
+    #[serde(default)]
+    pub zone: crate::footprint::CustomZoneMode,
+    /// The proxy items of the custom pad (`gr_bbox`, the box the pad number sits in, and `gr_vector`, a thermal spoke template): not copper, so not
+    /// graphics to draw; set aside in the footprint's frame (as the explode placed them) and given back to the pad by the recombine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proxies: Vec<crate::footprint::PadPrimitive>,
 }
 
 /// A footprint definition as the Footprint Editor shows/edits it --
@@ -3405,6 +3433,9 @@ pub struct LibraryFootprint {
     /// every pad of this footprint that does not set its own. `None` is `INHERITED`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_connection: Option<PadConnection>,
+    /// The pad being edited as graphic shapes, if one is (`PAD_TOOL::InPadEditMode`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_edit: Option<PadEditMode>,
 }
 
 impl Default for LibraryFootprint {
@@ -3428,6 +3459,7 @@ impl Default for LibraryFootprint {
             anchor: Point { x: 0, y: 0 },
             published: false,
             zone_connection: None,
+            pad_edit: None,
         }
     }
 }
@@ -4660,6 +4692,7 @@ mod tests {
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            stack: Default::default(),
         }
     }
 

@@ -136,7 +136,14 @@ pub struct DrcPad {
     /// SMD), so a DRC run against our own exported `.kicad_pcb` agrees with
     /// what kicad-cli actually sees.
     pub layers: Vec<String>,
+    /// The pad's own copper: the shape on the footprint's side (the front of a padstack, [`eda_model::padstack`]).
     pub copper: Shape,
+    /// A padstack whose copper differs from layer to layer: every copper shape of the pad, each with the board's layers it is on (what `PADSTACK::ForEachUniqueLayer`
+    /// gives, `PNS_KICAD_IFACE_BASE::syncPad`'s solids). Empty for a pad of one shape, whose copper is [`Self::copper`] on every one of [`Self::layers`]; see
+    /// [`DrcPad::copper_groups`].
+    pub copper_by_layer: Vec<(Vec<String>, Shape)>,
+    /// `UNCONNECTED_LAYER_MODE`: which layers of a plated through-hole pad keep their copper when nothing is connected there (`PAD::FlashLayer`; [`DrcPad::flash`]).
+    pub unconnected: eda_model::padstack::UnconnectedLayers,
     /// Hole shape (round or slot), board space; `None` for a pure SMD pad.
     pub hole: Option<Shape>,
     pub drill_round: Option<Um>,
@@ -150,6 +157,43 @@ pub struct DrcPad {
     pub orientation_mdeg: i64,
     /// The pad's and footprint's zone-connection overrides, thermal gap / spoke width / spoke angle.
     pub zone: PadZoneFacts,
+}
+
+impl DrcPad {
+    /// The pad's copper shapes with the layers each is on: one for a pad of one shape (its copper on all its layers), one per layer group for a padstack.
+    pub fn copper_groups(&self) -> Vec<(&[String], &Shape)> {
+        if self.copper_by_layer.is_empty() {
+            vec![(self.layers.as_slice(), &self.copper)]
+        } else {
+            self.copper_by_layer.iter().map(|(l, s)| (l.as_slice(), s)).collect()
+        }
+    }
+
+    /// The pad's copper on `layer`, when it has any there (before what is connected: [`Self::flash`]).
+    pub fn copper_on(&self, layer: &str) -> Option<&Shape> {
+        self.copper_groups().into_iter().find(|(l, _)| l.iter().any(|x| x == layer)).map(|(_, s)| s)
+    }
+
+    /// `PAD::FlashLayer` from the pad's own settings, `first` and `last` the board's outer copper layers: see [`eda_model::padstack::Flash`].
+    pub fn flash(&self, layer: &str, first: &str, last: &str) -> eda_model::padstack::Flash {
+        use eda_model::padstack::{Flash, UnconnectedLayers};
+        if self.kind != PadKind::ThroughHole {
+            return Flash::Always;
+        }
+        let outer = layer == first || layer == last;
+        match self.unconnected {
+            UnconnectedLayers::KeepAll => Flash::Always,
+            UnconnectedLayers::StartEndOnly => {
+                if outer {
+                    Flash::Always
+                } else {
+                    Flash::Never
+                }
+            }
+            UnconnectedLayers::RemoveExceptStartAndEnd if outer => Flash::Always,
+            UnconnectedLayers::RemoveExceptStartAndEnd | UnconnectedLayers::RemoveAll => Flash::IfConnected,
+        }
+    }
 }
 
 pub struct DrcTrackSeg {
@@ -534,6 +578,12 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 let center = pad_center(fp, pad.at);
                 let pad_rot = board_rot + pad.rot as i64;
                 let copper = placed_pad_copper(fp, pad);
+                // A padstack: the copper of each group of layers that shares a shape (`PADSTACK::ForEachUniqueLayer`).
+                let copper_by_layer: Vec<(Vec<String>, Shape)> = if pad.has_stack() {
+                    pad.shape_groups(fp.side, &layers).into_iter().map(|g| (g.layers, placed_pad_copper(fp, &g.shape.lay_on(pad)))).collect()
+                } else {
+                    Vec::new()
+                };
                 let hole = pad_hole_shape(center, pad, pad_rot);
                 let drill_slot = pad.drill_slot.map(|s| rotated_extent_by(pad_rot, s));
                 let net = pin_net.get(&format!("{}.{}", fp.id, pad.number)).cloned();
@@ -562,6 +612,8 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     kind: pad.kind,
                     layers: pad_layers,
                     copper,
+                    copper_by_layer,
+                    unconnected: pad.ext.stack.unconnected,
                     hole,
                     drill_round: pad.drill,
                     drill_slot,
