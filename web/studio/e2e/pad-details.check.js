@@ -4,10 +4,12 @@
 // Run it in the page of a served board that has footprints placed -- paste it into the Browser pane's javascript tool, or `page.evaluate( src )` in Playwright -- on a COPY
 // of a board (it edits and undoes, and it leaves Strict off while it runs). It makes nothing that stays: every edit is undone and the board compared with how it was.
 //
-// It needs placed footprints with a net on a pad (`R1`, `R2` ... in examples/mcu_board_30plus.yaml after `eda board place R1 --at 27,17`, `R2 --at 27,22`, `R3 --at 27,27`), and
-// it places a pin header from the installed KiCad libraries for the through-hole pads. It answers through `window.__padDetailsCheck`:
+// It needs two placed footprints that share a net and a third on another net (`C1`, `C2` and `R1` in examples/mcu_board_30plus.yaml after `eda board place C1 --at 20,20`,
+// `C2 --at 28,20`, `R1 --at 20,28`), and it places a pin header from the installed KiCad libraries for the through-hole pads. Swap Gate Nets is exercised too when a placed
+// footprint has units: a board made from an intent whose part has `symbol: "74xx:74HC00"` (`package: SOIC-14`) does; any other board skips that scenario. It answers through
+// `window.__padDetailsCheck`:
 //   { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }
-// Read it with `await __padDetailsCheck.wait(60000)` until `.done` (a run takes about a minute). In a hidden pane the browser stops timers; the script then waits with a
+// Read it with `await __padDetailsCheck.wait(40000)` until `.done` (a run takes about two minutes). In a hidden pane the browser stops timers; the script then waits with a
 // fetch loop.
 //
 // It works through `window.__eda` (select with `common.InteractiveSelection.selectItems`, undo with `common.Interactive.undo`, open the dialogs by their actions), the
