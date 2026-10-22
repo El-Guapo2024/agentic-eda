@@ -110,6 +110,5 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
 
 ## Gates of the last main
 
-- **Last full fast tier that passed:** `79d92d5` (Rust 3180 passed, web 2306 unit tests passed, 0 failed).
-- **Since then** (P24, P19, P25, P26 step 1 and P19b steps 1-2): every merge passed `cargo check --workspace --tests` with no warnings, plus the web typecheck, and each agent ran the fast tier on its own crates.
-- **`tools/check.sh fast` on `2b0cafb`** was still running when this file was written. Run it first in a fresh session.
+- **`tools/check.sh fast` on `2b0cafb`** (everything above merged) passed: Rust 3387 passed, 0 failed, 24 ignored; web typecheck ok, 2347 unit tests passed. This commit only adds this file.
+- **The slow tier** (`EDA_SLOW_TESTS=1`, kicad-cli) ran per package on the Mac's 10.99.0-5334. Rerun it on the box's nightly before relying on it.
