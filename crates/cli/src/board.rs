@@ -73,6 +73,9 @@ mod review_tests;
 #[path = "pcb_items_tests.rs"]
 mod pcb_items_tests;
 #[cfg(test)]
+#[path = "multichannel_board_tests.rs"]
+mod multichannel_board_tests;
+#[cfg(test)]
 #[path = "table_tests.rs"]
 mod table_tests;
 
