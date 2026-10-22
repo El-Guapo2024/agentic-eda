@@ -649,6 +649,7 @@ fn edit_zone_cmd(id: String, net: &str, overrides: impl FnOnce(&mut Zone)) -> Cm
         keepout_footprints: z.keepout_footprints,
         smoothing: Some(z.smoothing),
         corner_radius: Some(z.corner_radius),
+        placement: (!z.placement.is_default()).then(|| z.placement.clone()),
     }
 }
 

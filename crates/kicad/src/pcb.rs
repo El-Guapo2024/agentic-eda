@@ -1855,7 +1855,7 @@ mod tests {
         let out = export_kicad_pcb(&design, &model, &meta()).expect("a board with a rule area must export");
         let zone = out.split("\t(zone").nth(1).expect("one zone block");
         assert!(zone.contains("(keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour allowed) (footprints allowed))"), "{zone}");
-        assert!(zone.contains("(placement") && zone.contains("(enabled no)"), "{zone}");
+        assert!(zone.contains("(placement (enabled no) (sheetname \"\"))"), "{zone}");
         assert!(!zone.contains("(net ") && !zone.contains("(net_name"), "a rule area has no net: {zone}");
         assert!(!zone.contains("filled_polygon"), "a rule area is never filled: {zone}");
     }

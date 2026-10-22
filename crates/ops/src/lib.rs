@@ -83,6 +83,11 @@ mod sch_groups;
 mod pcb_paste;
 mod pcb_paste_special;
 mod design_blocks;
+mod multichannel;
+mod multichannel_copy;
+mod multichannel_facts;
+mod multichannel_geom;
+pub use multichannel::{AreaKind, AreaPick, MultichannelCmd, PlacementSources, PotentialArea, RepeatOptions, RepeatPlan, TargetCompat};
 pub mod pcb_items;
 mod pcb_props;
 mod pcb_table_builders;
@@ -452,6 +457,10 @@ pub enum Cmd {
         smoothing: Option<eda_model::ir::ZoneSmoothing>,
         #[serde(default)]
         corner_radius: Option<Um>,
+        /// The rule area's Placement tab (`DIALOG_RULE_AREA_PROPERTIES`: No placement, or the sheet, component class or group whose footprints the area stands
+        /// for; [`eda_model::multichannel::PlacementArea`]). `None` leaves what the zone has.
+        #[serde(default)]
+        placement: Option<eda_model::multichannel::PlacementArea>,
     },
 
     /// Task item 4: Board Setup > Teardrops' settings page -- whole-struct
@@ -690,6 +699,9 @@ pub enum Cmd {
     /// The microwave tools (`pcbnew.MicrowaveTool.*`, GAPS.md item 9, package P19): a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own, one verb family, see
     /// [`microwave::MicrowaveCmd`]. On the wire: `{"op": "microwave", "verb": "gap", "at": {..}, "size_um": 500, "track_width_um": 250}`.
     Microwave(microwave::MicrowaveCmd),
+    /// The multichannel tool (GAPS.md items 24 and 32, package P24): Generate Placement Rule Areas, Repeat Layout and Apply Design Block Layout -- one verb family, see
+    /// [`multichannel::MultichannelCmd`]. On the wire: `{"op": "multichannel", "verb": "repeat_layout", "reference": "zone_..", "targets": [..]}`.
+    Multichannel(multichannel::MultichannelCmd),
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -2037,6 +2049,13 @@ impl Cmd {
     pub fn replaces_schematic(&self) -> bool {
         matches!(self, Cmd::ReplaceSchematic { .. })
     }
+
+    /// Does this command only add placement rule areas (and the groups round them)? Such a command moves nothing and routes nothing, so the gates that refuse a move that makes the
+    /// board worse have no say in it: what they find after it is the board's own, which the first zone of a board with no routing yet starts to count (`routing_connectivity` judges
+    /// a board that has a routing section, and a zone is held in it).
+    pub fn adds_only_rule_areas(&self) -> bool {
+        matches!(self, Cmd::Multichannel(MultichannelCmd::GenerateRuleAreas { .. }))
+    }
 }
 
 impl Cmd {
@@ -2192,6 +2211,7 @@ impl Cmd {
             Cmd::SchMove(c) => c.ids(),
             Cmd::PcbItem(c) => c.ids(),
             Cmd::Microwave(c) => c.ids(),
+            Cmd::Multichannel(c) => c.ids(),
             Cmd::Table(c) | Cmd::SchTable(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::ClearErcExclusions => vec!["erc_exclusions"],
@@ -2667,6 +2687,7 @@ impl<'a> Board<'a> {
                 keepout_footprints,
                 smoothing,
                 corner_radius,
+                placement,
             } => self.edit_zone(
                 id,
                 net,
@@ -2696,6 +2717,7 @@ impl<'a> Board<'a> {
                 *keepout_footprints,
                 *smoothing,
                 *corner_radius,
+                placement.as_ref(),
             ),
 
             Cmd::AddShape { shape } => self.add_shape(shape.clone()),
@@ -2783,6 +2805,7 @@ impl<'a> Board<'a> {
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
             Cmd::Microwave(c) => self.apply_microwave(c),
+            Cmd::Multichannel(c) => self.apply_multichannel(c),
             Cmd::Table(c) => self.apply_table(c),
             Cmd::SchTable(c) => self.apply_sch_table(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
@@ -3668,6 +3691,7 @@ impl<'a> Board<'a> {
         keepout_footprints: bool,
         smoothing: Option<eda_model::ir::ZoneSmoothing>,
         corner_radius: Option<Um>,
+        placement: Option<&eda_model::multichannel::PlacementArea>,
     ) -> Result<(), Vec<CheckResult>> {
         // "" (no net) is normal for a rule area, and allowed for an
         // ordinary zone too -- see `add_zone`'s matching comment.
@@ -3740,6 +3764,12 @@ impl<'a> Board<'a> {
         }
         if let Some(r) = corner_radius {
             z.corner_radius = r;
+        }
+        // Only a rule area has a placement (`ZONE::SetPlacementAreaEnabled` is its dialog's); turning the rule area off clears what it had.
+        if let Some(pl) = placement {
+            z.placement = if is_rule_area { pl.clone() } else { Default::default() };
+        } else if !is_rule_area {
+            z.placement = Default::default();
         }
         Ok(())
     }
@@ -5903,3 +5933,5 @@ mod sch_labels_tests;
 mod sch_net_collision_tests;
 #[cfg(test)]
 mod sch_sheet_pin_tests;
+#[cfg(test)]
+mod multichannel_tests;
