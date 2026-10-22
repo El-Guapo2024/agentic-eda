@@ -1208,6 +1208,12 @@ pub(crate) fn parse_pad_geometry(pad: &[Sexpr], fp_side: Side, fp_rot: u32, note
 /// no copper layer (a mask-only aperture pad) instead of dropping it -- the
 /// solder-mask DRC needs those as `PCB_PAD_T` mask apertures.
 pub(crate) fn parse_pad_geometry_opt(pad: &[Sexpr], fp_side: Side, fp_rot: u32, notes: &mut ImportNotes, keep_non_copper: bool) -> Option<Pad> {
+    parse_pad_geometry_in(pad, fp_side, fp_rot, notes, keep_non_copper, &[])
+}
+
+/// [`parse_pad_geometry_opt`] on a board whose copper layers are `copper_layers`, front to back (a bottom-side pad's custom padstack needs to know which
+/// layer each of them has become; empty is a two-layer board).
+pub(crate) fn parse_pad_geometry_in(pad: &[Sexpr], fp_side: Side, fp_rot: u32, notes: &mut ImportNotes, keep_non_copper: bool, copper_layers: &[String]) -> Option<Pad> {
     let number = sexpr::txt(pad, 1).unwrap_or("").to_string();
     let kind_tok = sexpr::txt(pad, 2).unwrap_or("");
     let pad_kind = match kind_tok {
@@ -1288,7 +1294,17 @@ pub(crate) fn parse_pad_geometry_opt(pad: &[Sexpr], fp_side: Side, fp_rot: u32, 
         None => (None, None),
     };
 
-    Some(Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: read.shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio: read.roundrect_ratio, opposite_side, ext: read.ext })
+    let mut out = Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: read.shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio: read.roundrect_ratio, opposite_side, ext: read.ext };
+    // The padstack (`(padstack ..)`, `(remove_unused_layers ..)`, `(keep_end_layers ..)`): the other layers' shapes and what becomes of the layers nothing connects to.
+    // The main fields are the shape on `F.Cu`; the pad's own shape is the footprint's side, which on the bottom is the file's `B.Cu`.
+    let main = eda_model::padstack::PadLayerShape::of(&out);
+    let layers: Vec<String> = if copper_layers.is_empty() { vec!["F.Cu".to_string(), "B.Cu".to_string()] } else { copper_layers.to_vec() };
+    let read_stack = crate::padstack_io::read_padstack(pad, &main, fp_side, &layers);
+    if let Some(own) = &read_stack.own {
+        own.put_on(&mut out);
+    }
+    out.ext.stack = read_stack.stack;
+    Some(out)
 }
 
 /// The cache key `import_footprints` should use for an instance whose lib id
@@ -1498,7 +1514,7 @@ fn import_footprints(
         // The Reference and Value text as the file has it, the user fields and the attributes; the pad offsets and margins join below.
         let mut edit = crate::fp_fields::parse_footprint_edit_in(fp, &reference, value.as_deref(), side, rot, file_version);
         for pad in sexpr::find_all(fp, "pad") {
-            let Some(p) = parse_pad_geometry(pad, side, rot, notes) else {
+            let Some(p) = parse_pad_geometry_in(pad, side, rot, notes, false, layers) else {
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
                     extra.graphics.extend(g);
                 }
@@ -1714,6 +1730,8 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
     const OWN: &[&str] = &[
         "at", "size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "drill", "layers", "net", "pinfunction", "pintype", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio",
         "clearance", "zone_connect", "thermal_bridge_width", "thermal_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "uuid", "tstamp",
+        // The padstack is the pad's own (`Pad::ext.stack`): its layers and what becomes of the layers nothing connects to.
+        "padstack", "remove_unused_layers", "keep_end_layers",
     ];
     info.tokens = pad.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| OWN.contains(&t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
     // `parsePAD`: `(zone_connect N)`, `(thermal_bridge_width ..)` (legacy `(thermal_width ..)`), `(thermal_bridge_angle ..)`, `(thermal_gap ..)`.

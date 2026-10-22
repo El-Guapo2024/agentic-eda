@@ -3159,6 +3159,10 @@ pub struct LibraryPad {
     /// default (90 degrees for an oval or (rounded) rectangle, 45 for a circle).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thermal_spoke_angle_mdeg: Option<Millideg>,
+    /// `PAD::Padstack()` beyond the pad's own shape: the shapes of its other copper layers (`PADSTACK::MODE`) and what becomes of the layers nothing connects to
+    /// (`UNCONNECTED_LAYER_MODE`); the fields above are the front shape. See [`crate::padstack`].
+    #[serde(default, skip_serializing_if = "crate::padstack::PadStack::is_default")]
+    pub stack: crate::padstack::PadStack,
 }
 
 /// `PAD_SHAPE` (`pcbnew/padstack.h`) as the Footprint Editor exposes it --
@@ -3243,6 +3247,7 @@ impl LibraryPad {
             chamfer_ratio: if shape == S::ChamferedRect { self.chamfer_ratio } else { None },
             chamfer_corners: if shape == S::ChamferedRect { self.chamfer_corners } else { ChamferCorners::default() },
             custom: if shape == S::Custom { Some(self.custom.clone().unwrap_or_default()) } else { None },
+            stack: self.stack.clone(),
         };
         crate::footprint::Pad { opposite_side: false, ext,
             number: self.number.clone(),
@@ -3298,6 +3303,7 @@ impl LibraryPad {
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            stack: p.ext.stack.clone(),
         }
     }
 }
@@ -4676,6 +4682,7 @@ mod tests {
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            stack: Default::default(),
         }
     }
 

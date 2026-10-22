@@ -31,6 +31,7 @@ pub mod modules;
 pub mod net_pattern;
 pub mod outline;
 pub mod pad_geom;
+pub mod padstack;
 pub mod page;
 pub mod pcb_items;
 pub mod reannotate;

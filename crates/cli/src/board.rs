@@ -4749,6 +4749,7 @@ mod tests {
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            stack: Default::default(),
         };
         step(&dir, Cmd::AddPad { footprint: "2PAD".into(), pad }, false, "test").unwrap();
 

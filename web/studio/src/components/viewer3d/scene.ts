@@ -1028,7 +1028,16 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     const copper = side === "top" ? shown("copper_top") : shown("copper_bottom");
     for (const pad of part.pads ?? []) {
       const y = side === "top" ? topCuY : botCuY;
-      if (copper) addPad(group, mm(pad.x), mm(pad.y), mm(pad.w), mm(pad.h), pad.round, y, pad.th ? platedMat[side] : smdMat[side]);
+      if (pad.stack_layers?.length) {
+        // A padstack whose copper differs from layer to layer: each outer layer has the shape the stack gives it (`PADSTACK::ForEachUniqueLayer`), the far side's too; the inner
+        // layers have no copper in this scene.
+        for (const g of pad.stack_layers) {
+          for (const outer of ["top", "bottom"] as const) {
+            if (!g.layers.includes(outer === "top" ? "F.Cu" : "B.Cu") || !shown(outer === "top" ? "copper_top" : "copper_bottom")) continue;
+            addPad(group, mm(g.x), mm(g.y), mm(g.w), mm(g.h), g.round, outer === "top" ? topCuY : botCuY, pad.th ? platedMat[outer] : smdMat[outer]);
+          }
+        }
+      } else if (copper) addPad(group, mm(pad.x), mm(pad.y), mm(pad.w), mm(pad.h), pad.round, y, pad.th ? platedMat[side] : smdMat[side]);
       // Solder paste only applies to exposed SMD pads (a through-hole pad
       // is soldered from the opposite side through the barrel, not pasted).
       if (shown("solder_paste") && !pad.th) {

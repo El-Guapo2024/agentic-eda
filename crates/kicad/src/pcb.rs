@@ -1046,7 +1046,10 @@ pub(crate) fn write_footprint(
         // there), so it needs no mirroring of its own here.
         let px = mm(if fp.side == Side::Bottom { -pad.at.0 } else { pad.at.0 });
         let py = mm(pad.at.1);
-        let (w, h) = pad.size;
+        // The shape the file's main fields hold: the pad's own on the top, the one its back has on the bottom (`PADSTACK::FlipLayers`: the front of the board is the
+        // footprint's other side), see `padstack_io`.
+        let file_main = pad.file_main_shape(fp.side);
+        let (w, h) = file_main.size;
         let wmm = mm(w);
         let hmm = mm(h);
         let kind = match pad.kind {
@@ -1055,9 +1058,17 @@ pub(crate) fn write_footprint(
             PadKind::ThroughHole => "thru_hole",
             PadKind::NonPlatedHole => "np_thru_hole",
         };
-        let shape = crate::pad_shape::shape_token(pad.shape);
+        let shape = crate::pad_shape::shape_token(file_main.shape);
         // The delta, the offset, the corners and a custom pad's primitives (`PCB_IO_KICAD_SEXPR::format( const PAD* )`).
-        let shape_text = crate::pad_shape::write_pad_shape(pad.shape, pad.roundrect_ratio, &pad.ext, fp.side);
+        let main_ext = eda_model::footprint::PadShapeExt {
+            offset: file_main.offset,
+            trapezoid_delta: file_main.trapezoid_delta,
+            chamfer_ratio: file_main.chamfer_ratio,
+            chamfer_corners: file_main.chamfer_corners,
+            custom: file_main.custom.clone(),
+            stack: Default::default(),
+        };
+        let shape_text = crate::pad_shape::write_pad_shape(file_main.shape, file_main.roundrect_ratio, &main_ext, fp.side);
         // Pad numbers repeat by design (a connector's shield tab, several
         // physical pads on one pin), so the number alone cannot make a
         // unique uuid; the position can, since two pads of one footprint
@@ -1124,6 +1135,11 @@ pub(crate) fn write_footprint(
                 }
             }
         }
+        // `(remove_unused_layers ..) (keep_end_layers ..)` of a plated through-hole pad (`format( const PAD* )`: after its layers).
+        let stack_modelled = !pad.ext.stack.is_default();
+        if pad.kind == PadKind::ThroughHole {
+            out.push_str(&crate::padstack_io::unconnected_text(pad.ext.stack.unconnected));
+        }
         // A non-plated hole has no net by definition -- nothing to look up.
         if pad.kind != PadKind::NonPlatedHole {
             if let Some(net_name) = pin_net(&pad.number) {
@@ -1142,6 +1158,10 @@ pub(crate) fn write_footprint(
         }
         // The pad's other tokens as the file had them (`remove_unused_layers`, `teardrops`, `tenting`, `property pad_prop_heatsink`, `die_length`, ..).
         for token in pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.tokens.as_slice()).unwrap_or_default() {
+            // A design from before the padstack was modelled kept these as tokens; once the pad has a padstack of its own they are written from it.
+            if stack_modelled && ["(remove_unused_layers", "(keep_end_layers", "(padstack"].iter().any(|t| token.starts_with(t)) {
+                continue;
+            }
             write!(out, " {token}").unwrap();
         }
         // The margins of a pad edit (`solder_mask_margin`, `solder_paste_margin`, `solder_paste_margin_ratio`), then the zone facts: KiCad's order.
@@ -1168,7 +1188,10 @@ pub(crate) fn write_footprint(
             write!(out, " (thermal_gap {})", mm(g)).unwrap();
         }
         out.push_str(&shape_text.custom);
-        writeln!(out, " (uuid \"{uuid}\"))").unwrap();
+        write!(out, " (uuid \"{uuid}\")").unwrap();
+        // The other layers' shapes (`(padstack (mode ..) (layer ..) ..)`), after the uuid as `format( const PAD* )` writes them.
+        out.push_str(&crate::padstack_io::write_padstack(pad, fp.side, &model.board.layers));
+        writeln!(out, ")").unwrap();
     }
 
     // The non-plated holes the footprint has on no copper layer (`FootprintExtra::holes`: a `*.Mask`-only pad), as the pads they are: without them the board would lose its drilled holes,
@@ -3356,11 +3379,14 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                vec!["(remove_unused_layers yes)", "(keep_end_layers no)", "(zone_layer_connections \"F.Cu\")", "(tenting (front no) (back yes))", "(teardrops (best_length_ratio 0.5) (curved_edges no))", "(die_length 0.25)", "(property pad_prop_heatsink)"],
+                // The unconnected-layer mode is the pad's own now (`Pad::ext.stack`), not a token.
+                vec!["(zone_layer_connections \"F.Cu\")", "(tenting (front no) (back yes))", "(teardrops (best_length_ratio 0.5) (curved_edges no))", "(die_length 0.25)", "(property pad_prop_heatsink)"],
                 vec!["(locked yes)"],
                 vec![],
             ]
         );
+        let first = &model.footprints.first().expect("the footprint").pads;
+        assert_eq!(first[0].ext.stack.unconnected, eda_model::padstack::UnconnectedLayers::RemoveAll, "remove_unused_layers yes, keep_end_layers no");
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\" "))).unwrap_or_else(|| panic!("pad {number}")).trim().to_string();
         assert!(pad("1").contains("(layers \"*.Cu\" \"*.Mask\") (remove_unused_layers yes) (keep_end_layers no) (zone_layer_connections \"F.Cu\") (tenting (front no) (back yes)) (teardrops (best_length_ratio 0.5) (curved_edges no)) (die_length 0.25) (property pad_prop_heatsink)"), "{}", pad("1"));
