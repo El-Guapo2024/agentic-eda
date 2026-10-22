@@ -12,4 +12,6 @@ export type MicrowaveCmd =
   /** Draw Microwave Gaps / Stubs: two pads of the track width, `size_um` apart (a gap) or one of them `size_um` long (a stub). */
   | { verb: "gap" | "stub"; at: PointXY; size_um: Um; track_width_um: Um; hand?: MicrowaveHand }
   /** Draw Microwave Arc Stubs: one custom pad, a pie slice of `radius_um` and `angle_millideg` (0 to 180 degrees). */
-  | { verb: "arc_stub"; at: PointXY; radius_um: Um; angle_millideg: number; track_width_um: Um; hand?: MicrowaveHand };
+  | { verb: "arc_stub"; at: PointXY; radius_um: Um; angle_millideg: number; track_width_um: Um; hand?: MicrowaveHand }
+  /** Draw Microwave Lines: the S-shaped coil of `length_um` between two points, on a footprint whose value is `name`. */
+  | { verb: "inductor"; start: PointXY; end: PointXY; length_um: Um; name?: string; track_width_um: Um };

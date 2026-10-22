@@ -4,26 +4,37 @@
 //   pcbnew.MicrowaveTool.createGap             MICROWAVE_TOOL::addMicrowaveFootprint( GAP ): a click, "Gap Size:", and the footprint of two pads that far apart where the click was
 //   pcbnew.MicrowaveTool.createStub            .. ( STUB ): "Stub Size:", a square pad and the stub
 //   pcbnew.MicrowaveTool.createStubArc         .. ( STUB_ARC ): "Arc Stub Radius Value:" and "Angle in degrees:", one custom pad shaped as a pie slice
+//   pcbnew.MicrowaveTool.createLine            MICROWAVE_TOOL::drawMicrowaveInductor: two clicks, "Length of track:", "Component value:", and the S-shaped coil between the points
 //
 // `doInteractiveItemPlacement( .., IPO_REPEAT | IPO_ROTATE | IPO_FLIP )` makes the footprint and carries it on the cursor until a second click; here it is put down where the first
 // click was (`Cmd::Microwave`, one undo step) and left selected, and the tool waits for the next click until Escape. KiCad's `ShowInfoBarError` is a toast.
 import { fetchState } from "../api/client";
+import { checkInductor } from "../api/microwaveClient";
 import type { Cmd, PointXY } from "../api/types";
 import {
   ANGLE_DEFAULT,
   ANGLE_LABEL,
   INCORRECT_NUMBER,
+  LENGTH_LABEL,
   MICROWAVE_TITLE,
   SIZE_LABEL,
+  VALUE_DEFAULT,
+  VALUE_LABEL,
   arcStubAngleMillideg,
+  inductorEnd,
+  inductorMinLengthUm,
+  isValidValueName,
   lengthFromText,
   lengthText,
+  lengthTextAtLeast,
   parseDouble,
 } from "../kicad-port/microwave";
+import { setToolPreview } from "../components/canvas/pcbItemsPaint";
 import { askText } from "../state/microwaveDialogs";
 import type { StudioState } from "../state/store";
 import { picker } from "./pcbPicker";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
+import type { PickerSession } from "../kicad-port/pickerHost";
 import type { MicrowaveCmd } from "../api/microwaveTypes";
 
 type FootprintTool = "gap" | "stub" | "arc_stub";
@@ -45,6 +56,7 @@ export function registerMicrowaveActions(m: Map<string, (param?: unknown) => voi
   m.set("pcbnew.MicrowaveTool.createGap", pcbOnly(() => startFootprintTool(ctx, "gap")));
   m.set("pcbnew.MicrowaveTool.createStub", pcbOnly(() => startFootprintTool(ctx, "stub")));
   m.set("pcbnew.MicrowaveTool.createStubArc", pcbOnly(() => startFootprintTool(ctx, "arc_stub")));
+  m.set("pcbnew.MicrowaveTool.createLine", pcbOnly(() => startInductorTool(ctx)));
 }
 
 /**
@@ -106,4 +118,62 @@ function startFootprintTool(ctx: SweepCtx, tool: FootprintTool): void {
       },
     });
   next();
+}
+
+/**
+ * `MICROWAVE_TOOL::drawMicrowaveInductor` and `createInductorBetween`: a click sets the origin (a rectangle along the centre line, half as wide as the line is long, follows the cursor,
+ * its end held by the angle snap), Escape takes the origin back, and the second click asks "Length of track:" (starting at the distance between the points) and, once the coil can be
+ * made, "Component value:". The tool then waits for the next origin, until Escape.
+ */
+function startInductorTool(ctx: SweepCtx): void {
+  const { api, dispatch } = ctx;
+  dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+  const toast = (message: string) => dispatch({ type: "TOAST", message, kind: "error" });
+
+  const first = (): void =>
+    picker.start({
+      kind: "point",
+      prompt: "Draw Microwave Lines: click where the coil starts (Escape ends the tool)",
+      onPoint: (start) => second({ x: start.x, y: start.y }),
+    });
+
+  const second = (start: PointXY): PickerSession => {
+    setToolPreview({ kind: "centreline_rect", from: [start.x, start.y], aspect: 0.5 });
+    return {
+      kind: "point",
+      prompt: "Draw Microwave Lines: click where the coil ends (Escape takes the start back)",
+      onPoint: (at) => {
+        setToolPreview(null);
+        const end = inductorEnd(start, { x: at.x, y: at.y }, api.getState().pcbx.angleSnapMode);
+        void create(start, end).then(first);
+        return false;
+      },
+      // `if( originSet ) cleanup();` -- the start is forgotten and the tool waits for another; another tool taking over ends it.
+      onCancel: (activated) => {
+        setToolPreview(null);
+        if (!activated) first();
+      },
+    };
+  };
+
+  /** `createInductorBetween` + `createMicrowaveInductor`. */
+  const create = async (start: PointXY, end: PointXY): Promise<void> => {
+    const st = api.getState();
+    const units = st.units;
+    const track = currentTrackWidth(st);
+    const lengthAnswer = await askText({ title: MICROWAVE_TITLE, label: LENGTH_LABEL, initial: lengthTextAtLeast(inductorMinLengthUm(start, end), units) });
+    if (lengthAnswer === null) return;
+    const length = lengthFromText(lengthAnswer, units);
+    // the length is judged before the value is asked: `aErrorMessage` and `ShowInfoBarError`
+    const verdict = await checkInductor({ start, end, length_um: length, track_width_um: track }).catch(() => null);
+    if (verdict && !verdict.ok) {
+      toast(verdict.message ?? "The inductor cannot be made.");
+      return;
+    }
+    const name = await askText({ title: MICROWAVE_TITLE, label: VALUE_LABEL, initial: VALUE_DEFAULT, accept: isValidValueName, hint: 'A footprint name cannot have any of  % $ < > " \\ / :  or a tab or a line break in it.' });
+    if (name === null) return;
+    await put(ctx, { verb: "inductor", start, end, length_um: length, name, track_width_um: track });
+  };
+
+  first();
 }
