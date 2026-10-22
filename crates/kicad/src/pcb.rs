@@ -472,6 +472,10 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         writeln!(out, "\t{item}").unwrap();
     }
 
+    // The files embedded in the board, and those its footprints use: one list, last in the file as KiCad writes it (`PCB_IO_KICAD_SEXPR::format( const BOARD* )`), each file's
+    // data as it was read.
+    crate::embedded::write_owner(&mut out, &eda_model::embedded_files::board_file_list(design), 1, false);
+
     writeln!(out, ")").unwrap();
     if !net_errors.is_empty() {
         return Err(net_errors);
@@ -1229,6 +1233,18 @@ pub(crate) fn write_footprint(
             let pts: Vec<String> = outline.iter().map(|&(x, y)| format!("(xy {} {})", mm(if fp.side == Side::Bottom { -x } else { x }), mm(y))).collect();
             let uuid = crate::duid_for(&format!("footprint:{}:crtyd:{i}", fp.id), &fp.id);
             writeln!(out, "\t\t(fp_poly (pts {}) (stroke (width 0.05) (type solid)) (fill none) (layer {}) (uuid \"{uuid}\"))", pts.join(" "), sexpr_str(crtyd_layer)).unwrap();
+        }
+    }
+
+    // The files the footprint lists as its own: names, types and checksums (the data is the board's), before its models as KiCad writes them.
+    {
+        let listed = eda_model::embedded_files::footprint_listed_files(design, &fp.id);
+        if !listed.is_empty() {
+            if eda_model::embedded_files::of_footprint(design, &fp.id).is_some_and(|l| l.fonts) {
+                writeln!(out, "\t\t(embedded_fonts yes)").unwrap();
+            }
+            let refs: Vec<&eda_model::embedded_files::EmbeddedFile> = listed.iter().collect();
+            crate::embedded::write_block(out, &refs, 2, false);
         }
     }
 

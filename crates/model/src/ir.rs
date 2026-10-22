@@ -2510,6 +2510,11 @@ pub struct DrawingsSection {
     /// starts from it instead of `board.json`'s intent. Additive: absent in an older `design.json` reads as "the intent of `board.json`". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent_file: Option<String>,
+    /// The files embedded in the board (`BOARD`'s `EMBEDDED_FILES`: Board Setup > Board Data > Embedded Files, `(embedded_files ..)` and `(embedded_fonts ..)` of the `.kicad_pcb`) --
+    /// see [`crate::embedded_files`]. The footprints' own lists are [`FootprintExtra::embedded`] and [`crate::fp_edit::FootprintEdit::embedded`]; the board's holds the data of
+    /// every file a footprint uses, as KiCad's file does. Additive: absent in an older `design.json` reads as "none". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "crate::embedded_files::EmbeddedFiles::is_empty")]
+    pub embedded: crate::embedded_files::EmbeddedFiles,
 }
 
 /// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part
@@ -2872,6 +2877,10 @@ pub struct FootprintExtra {
     /// their own ([`crate::fp_art::FpArt::texts`], and the Reference, Value and user fields of [`crate::fp_edit`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<FootprintText>,
+    /// The files the footprint lists as its own (`(embedded_files ..)` inside the `(footprint ..)` of a board): names, types and checksums, the data being the board's
+    /// ([`DrawingsSection::embedded`]) -- see [`crate::embedded_files`]. A footprint on a board saved by KiCad names a model it embeds here and in the board's list.
+    #[serde(default, skip_serializing_if = "crate::embedded_files::EmbeddedFiles::is_empty")]
+    pub embedded: crate::embedded_files::EmbeddedFiles,
 }
 
 /// A visible footprint text item (`PCB_FIELD`/`PCB_TEXT` parented to a
@@ -3000,6 +3009,10 @@ pub struct FootprintLibrarySection {
     /// Sorted by `name`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprints: Vec<LibraryFootprint>,
+    /// The files each footprint embeds (`(embedded_files ..)` of the `.kicad_mod`; Footprint Properties > Embedded Files in the Footprint Editor), by the footprint's
+    /// `name` -- see [`crate::embedded_files`]. A footprint with none has no entry. Additive: absent in an older `design.json` reads as "none".
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub embedded: std::collections::BTreeMap<String, crate::embedded_files::EmbeddedFiles>,
 }
 
 /// KiCad's `FOOTPRINT_ATTR_T` flags (`pcbnew/footprint.h:83-91`:
@@ -3605,6 +3618,10 @@ impl FootprintLibrarySection {
 pub struct SymbolLibrarySection {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub symbols: Vec<LibrarySymbol>,
+    /// The files each symbol embeds (`(embedded_files ..)` of the symbol in a `.kicad_sym`), by the symbol's `lib_id` -- see [`crate::embedded_files`]. A symbol with none has no
+    /// entry. Additive: absent in an older `design.json` reads as "none".
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub embedded: std::collections::BTreeMap<String, crate::embedded_files::EmbeddedFiles>,
 }
 
 impl SymbolLibrarySection {

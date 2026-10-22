@@ -5168,7 +5168,7 @@ mod tests {
         lib.pins = vec![pin("1", 3.81, 270.0, 0), pin("2", -3.81, 90.0, 0)];
         lib.graphics = vec![rect(1.016, 1), rect(2.032, 2)];
         lib.assign_missing_ids();
-        design.symbol_library = Some(SymbolLibrarySection { symbols: vec![lib] });
+        design.symbol_library = Some(SymbolLibrarySection { symbols: vec![lib], ..Default::default() });
         save(&dir, &design).unwrap();
 
         let on_root = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };

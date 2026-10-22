@@ -8,6 +8,7 @@ pub mod bezier;
 pub mod board;
 pub mod board_text;
 pub mod component_classes;
+pub mod embedded_files;
 mod drc_checks;
 pub mod erc_checks;
 pub mod floorplan;

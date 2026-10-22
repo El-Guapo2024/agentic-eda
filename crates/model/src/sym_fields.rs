@@ -535,7 +535,7 @@ mod tests {
     }
 
     fn section_with(extra: Vec<LibrarySymbol>) -> SymbolLibrarySection {
-        let mut section = SymbolLibrarySection { symbols: vec![base()] };
+        let mut section = SymbolLibrarySection { symbols: vec![base()], ..Default::default() };
         section.symbols.extend(extra);
         section
     }
@@ -616,7 +616,7 @@ mod tests {
         // a derived power symbol shows its own name as the net
         let mut gnd = LibrarySymbol::new_empty("Lib:GND");
         gnd.power = true;
-        let power = derive_symbol(&SymbolLibrarySection { symbols: vec![gnd.clone()] }, &gnd, "Lib:GNDA", DeriveOptions::default());
+        let power = derive_symbol(&SymbolLibrarySection { symbols: vec![gnd.clone()], ..Default::default() }, &gnd, "Lib:GNDA", DeriveOptions::default());
         assert_eq!(power.field("Value").unwrap().text, "GNDA");
     }
 
@@ -677,7 +677,7 @@ mod tests {
         a.extends = Some("Lib:B".into());
         let mut b = LibrarySymbol::new_empty("Lib:B");
         b.extends = Some("Lib:A".into());
-        let section = SymbolLibrarySection { symbols: vec![a, b] };
+        let section = SymbolLibrarySection { symbols: vec![a, b], ..Default::default() };
         let chain = section.parent_chain("Lib:A");
         assert!(chain.cycle);
         assert_eq!(chain.parents, ["Lib:B"]);

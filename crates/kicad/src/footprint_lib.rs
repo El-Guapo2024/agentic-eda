@@ -317,6 +317,12 @@ fn write_library_fields(out: &mut String, fp: &eda_model::ir::LibraryFootprint) 
 /// writer already round-trips (`offset`/`clearance`/`layers`/
 /// `roundrect_rratio`/`drill`). See PARITY-fpedit.md for the tracked gap.
 pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
+    export_kicad_mod_with(fp, &eda_model::embedded_files::EmbeddedFiles::default())
+}
+
+/// [`export_kicad_mod`] for a footprint that embeds files: `(embedded_fonts ..)` and `(embedded_files ..)` with the data (`PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* )` for a
+/// library, where `aWriteData` is true), before the models as KiCad writes them. The fonts a footprint does not embed are dropped (`ClearEmbeddedFonts`).
+pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &eda_model::embedded_files::EmbeddedFiles) -> String {
     use eda_model::ir::Shape;
     use std::fmt::Write as _;
 
@@ -481,6 +487,9 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
         out.push_str(&shape_text.custom);
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
+
+    // The embedded files, before the models as KiCad writes them.
+    crate::embedded::write_owner(&mut out, embedded, 1, false);
 
     // The 3D models: the list, else the one path of an older entry, placed as it comes.
     let models: Vec<Model3d> = if fp.models3d.is_empty() { fp.model.iter().map(Model3d::identity).collect() } else { fp.models3d.clone() };
