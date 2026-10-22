@@ -4,6 +4,7 @@
 import type { BoardState } from "../../api/types";
 import type { BoardBarcode, BoardRefImage, BoardTextBox } from "../../api/pcbItemTypes";
 import { barcodeShape, barcodeShapeKey, symbolCorners } from "../../kicad-port/barcodeShapes";
+import { centrelineRect, inductorEnd } from "../../kicad-port/microwave";
 import { requestBarcodeShape } from "./barcodeCache";
 import { parseCssColor } from "../../kicad-port/appearance";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
@@ -36,7 +37,11 @@ function layoutOf(b: BoardTextBox): BoxTextLayout {
  * The tool in progress that draws something of its own (set by actions/pcbItemActions.ts): the Draw Text Box tool's rubber band, or the image Place Reference Image holds by its
  * centre at the cursor (`m_view->AddToPreview( image )`), drawn as the image will be, `w` x `h` micrometres on `layer`.
  */
-export type ToolPreview = { kind: "rect"; from: [number, number]; layer: string } | { kind: "image"; img: HTMLImageElement; w: number; h: number; layer: string };
+export type ToolPreview =
+  | { kind: "rect"; from: [number, number]; layer: string }
+  | { kind: "image"; img: HTMLImageElement; w: number; h: number; layer: string }
+  /** The Draw Microwave Lines tool between its two clicks (`CENTRELINE_RECT_ITEM`): the line from `from` to the cursor, held by the angle snap, and the rectangle along it, `aspect` as wide as it is long. */
+  | { kind: "centreline_rect"; from: [number, number]; aspect: number };
 let toolPreview: ToolPreview | null = null;
 export function setToolPreview(p: ToolPreview | null): void {
   toolPreview = p;
@@ -145,6 +150,24 @@ export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
     ctx.strokeStyle = layerColor("LAYER_ANCHOR");
     ctx.lineWidth = hairlineUm(view, 2);
     ctx.strokeRect(cursor[0] - Math.trunc(w / 2), cursor[1] - Math.trunc(h / 2), w, h);
+    ctx.restore();
+  }
+  if (toolPreview?.kind === "centreline_rect" && cursor && !opts.movePreview) {
+    // `inductorAreaFill`, `inductorAreaStroke` and `inductorAreaStrokeWidth` of `drawMicrowaveInductor`; the end is where `TWO_POINT_GEOMETRY_MANAGER::SetEnd` holds it.
+    const start = { x: toolPreview.from[0], y: toolPreview.from[1] };
+    const end = inductorEnd(start, { x: cursor[0], y: cursor[1] }, opts.angleSnapMode ?? "45");
+    const corners = centrelineRect(start, end, toolPreview.aspect);
+    ctx.save();
+    ctx.fillStyle = "rgba(77, 77, 128, 0.3)";
+    ctx.strokeStyle = "rgb(102, 255, 255)";
+    ctx.lineWidth = hairlineUm(view, 1);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    corners.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
     ctx.restore();
   }
   if (toolPreview?.kind === "rect" && cursor && !opts.movePreview) {

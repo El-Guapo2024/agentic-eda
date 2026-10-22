@@ -687,6 +687,8 @@ fn handle(
         // Import Sheet / Draw Sheet from File: the project's schematics, and the checks on one (`LoadSheetFromFile`) before it is taken in.
         ("GET", "/api/sch/sheet_files") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_files(dir).to_string().as_bytes()),
         ("POST", "/api/sch/sheet_file") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_file(dir, &body).to_string().as_bytes()),
+        // A schematic file dropped on the sheet (`ddAppendFile`): the files of the drop put where Import Sheet reads them (a browser gives no path), the sheets they place found among them.
+        ("POST", "/api/sch/dropped_sheets") => respond(stream, "200 OK", "application/json", crate::sheet_drop_api::put(&body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
         ("GET", "/api/sch/erc_severities") => respond(stream, "200 OK", "application/json", sch_api::erc_severities(dir).to_string().as_bytes()),
         ("GET", "/api/sch/formatting") => respond(stream, "200 OK", "application/json", sch_api::formatting(dir).to_string().as_bytes()),
@@ -818,6 +820,9 @@ fn handle(
         ("POST", "/api/import_foreign") => offload(stream, lane, dir, job, path, &body, crate::foreign_api::convert),
         // Append Board: what a `.kicad_pcb` brings and the point it is held by (a read; the append is `Cmd::PasteClipboard` with the file's text).
         ("POST", "/api/append_board/read") => respond(stream, "200 OK", "application/json", crate::append_api::read(dir, &body).to_string().as_bytes()),
+        // The microwave tools' Complex Shape dialog: the scales and the point count of a shape description file (the shape itself is `Cmd::Microwave` with the file's text).
+        ("POST", "/api/microwave/shape") => respond(stream, "200 OK", "application/json", crate::microwave_api::read_shape(&body).to_string().as_bytes()),
+        ("POST", "/api/microwave/inductor") => respond(stream, "200 OK", "application/json", crate::microwave_api::check_inductor(&body).to_string().as_bytes()),
         // The Design Blocks panels (`crate::design_block_api`): the libraries and their blocks, a block's board file, its preview (kicad-cli, off the loop), and the dialogs'
         // reads and writes. Placing a block is `Cmd::ImportSheet` / `Cmd::PlaceDesignBlock`; the save also applies the link of a selection to the block (`LinkDesignBlock`).
         ("GET", "/api/design_blocks") => respond(stream, "200 OK", "application/json", crate::design_block_api::list(dir).to_string().as_bytes()),
@@ -829,6 +834,10 @@ fn handle(
         ("POST", "/api/design_blocks/prepare") => respond(stream, "200 OK", "application/json", crate::design_block_api::prepare(dir, &body).to_string().as_bytes()),
         ("POST", "/api/design_blocks/save") => respond(stream, "200 OK", "application/json", crate::design_block_api::save(dir, &body).to_string().as_bytes()),
         ("POST", "/api/design_blocks/properties") => respond(stream, "200 OK", "application/json", crate::design_block_api::properties(dir, &body).to_string().as_bytes()),
+        // The multichannel tool's dialogs (`crate::multichannel_api`): the rows of Generate Placement Rule Areas, the sources the Placement tab offers, and the table of Repeat Layout.
+        ("POST", "/api/multichannel/areas") => respond(stream, "200 OK", "application/json", crate::multichannel_api::areas(dir).to_string().as_bytes()),
+        ("POST", "/api/multichannel/sources") => respond(stream, "200 OK", "application/json", crate::multichannel_api::sources(dir).to_string().as_bytes()),
+        ("POST", "/api/multichannel/compat") => respond(stream, "200 OK", "application/json", crate::multichannel_api::compat(dir, &body).to_string().as_bytes()),
         ("POST", "/api/design_blocks/delete") => respond(stream, "200 OK", "application/json", crate::design_block_api::delete(dir, &body).to_string().as_bytes()),
         // What Swap Pad Nets / Swap Gate Nets would ask first: the unselected pads the copper connected to the swapped pads reaches (`PromptConnectedPadDecision`).
         ("POST", "/api/swap_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::preview(dir, &body).to_string().as_bytes()),
@@ -1226,6 +1235,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "smoothing": z.smoothing, "corner_radius": z.corner_radius,
                 // `ZONE::GetZoneName()`: the Properties panel's "Name" row (`Cmd::SetZoneName`).
                 "name": z.name,
+                // The rule area's placement source (`ZONE::GetPlacementAreaEnabled` and the source type and name): the Placement tab of Zone Properties and what Repeat Layout reads.
+                "placement": z.placement,
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
             // the Board Setup "Track Widths & Vias" panel's editable

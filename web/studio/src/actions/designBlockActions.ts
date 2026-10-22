@@ -12,8 +12,8 @@
 // What the actions do is the server's (crates/cli/src/design_block_api.rs: the library, the files it writes, the checks KiCad's frames make before a dialog) and the ops
 // commands' (`import_sheet` with a `block`, `place_design_block`, `link_design_block`: one undo step each); this file asks the questions KiCad's dialogs ask, in KiCad's order
 // and words, and puts the answers to the server. The questions are `state/designBlockDialogs.ts`'s (components/designBlocks/DesignBlockDialogs.tsx shows them).
-//
-// Not here: `pcbnew.InteractiveDrawing.applyDesignBlockLayout`, which repeats the block's layout on a group's footprints with the multichannel tool (`RepeatLayout`).
+// `pcbnew.InteractiveDrawing.applyDesignBlockLayout` (PCB_CONTROL::ApplyDesignBlockLayout) is here too: the block's board layout is repeated on the footprints of the selected group with the
+// multichannel tool (`RepeatLayout`, crates/ops/src/multichannel_copy.rs), as one command that takes the block's board file.
 import type { Dispatch } from "react";
 import { fetchSchematic, fetchState } from "../api/client";
 import { deleteBlock, fetchBlockFile, prepareSave, saveBlock, saveBlockProperties, type Block, type BlockLibrary, type Refused, type SaveSource } from "../api/designBlockClient";
@@ -128,6 +128,29 @@ export function registerDesignBlockActions(m: Map<string, ActionHandler>, ctx: D
     if (editor === "schematic") await placeInSchematic(c.id);
     // the board's linked placement is `AppendBoard` once, with no repeat loop
     else await placeOnBoard(c.id, false);
+  };
+
+  /**
+   * `PCB_CONTROL::ApplyDesignBlockLayout`: the group selected, linked to a design block, takes the block's layout. Nothing happens for a selection that is not one linked group
+   * (the menu entry is there for every group); the block must be found and have a board file. The topology of the group's footprints and the block's must match, and none may be locked:
+   * the server refuses in KiCad's words if not.
+   */
+  const applyLayout = async () => {
+    const g = linkedGroup(ctx);
+    if (!g) return toast("Select one group linked to a design block to apply its layout.", "error");
+    await listing();
+    const c = chosen(g.link);
+    if (!c || !c.block) return toast(`Could not find design block ${g.link}.`, "error");
+    if (!c.block.board) return toast(`Design block ${g.link} does not have a board file.`, "error");
+    let file: Awaited<ReturnType<typeof fetchBlockFile>>;
+    try {
+      file = await fetchBlockFile(c.lib, c.name, "pcb");
+    } catch (e) {
+      return toast(messageOf(e), "error");
+    }
+    if (!file.ok) return say(file);
+    const ok = await ctx.api.cmd({ op: "multichannel", verb: "apply_design_block_layout", group: g.id, block: c.id, text: file.text });
+    if (ok) toast(`Applied the layout of design block ${c.id} to the group.`);
   };
 
   // ------------------------------------------------------------------------------------------------------------------------------------- saving
@@ -312,6 +335,7 @@ export function registerDesignBlockActions(m: Map<string, ActionHandler>, ctx: D
     m.set("pcbnew.PcbDesignBlockControl.showDesignBlockPanel", () => showPane("pcb"));
     m.set("pcbnew.InteractiveDrawing.placeDesignBlock", () => void placeOnBoard(getDesignBlocksUi().selected, true));
     m.set("pcbnew.InteractiveDrawing.placeLinkedDesignBlock", () => void placeLinked());
+    m.set("pcbnew.InteractiveDrawing.applyDesignBlockLayout", () => void applyLayout());
     m.set("pcbnew.InteractiveDrawing.saveToLinkedDesignBlock", () => void saveToLinked());
     m.set("pcbnew.PcbDesignBlockControl.saveBoardAsDesignBlock", () => void save({ what: "board" }, false));
     m.set("pcbnew.PcbDesignBlockControl.saveSelectionAsDesignBlock", () => void save({ what: "board_selection", ids: selectedIds() }, false));

@@ -48,3 +48,18 @@ test("a drop nothing of which is opened says why", () => {
   const ok = planDrop("pcb", ["b.kicad_pcb"], all);
   assert.equal(dropMessage("pcb", ok), null, "an opened file needs no word");
 });
+
+test("the schematics of a drop go to Import Sheet together: the sheets a file places are found among them", () => {
+  const plan = planDrop("schematic", ["main.kicad_sch", "logo.svg", "power.kicad_sch", "pic.png", "adc.kicad_sch"], all);
+  assert.deepEqual(plan.open, { name: "main.kicad_sch", action: "eeschema.EditorControl.ddAppendFile", names: ["main.kicad_sch", "power.kicad_sch", "adc.kicad_sch"] });
+  assert.deepEqual(plan.extra, ["logo.svg", "pic.png"], "the other kinds are skipped as before: one at a time");
+  assert.equal(dropMessage("schematic", plan), "Only main.kicad_sch was opened; logo.svg, pic.png were skipped (drop one file at a time).");
+  // a drop of schematics only says nothing
+  const only = planDrop("schematic", ["a.kicad_sch", "b.kicad_sch"], all);
+  assert.deepEqual(only.open?.names, ["a.kicad_sch", "b.kicad_sch"]);
+  assert.equal(dropMessage("schematic", only), null);
+  // the other actions take one file, and say so as they always did
+  const boards = planDrop("pcb", ["a.kicad_pcb", "b.kicad_pcb"], all);
+  assert.deepEqual(boards.open, { name: "a.kicad_pcb", action: "pcbnew.Control.DdAppendBoard" });
+  assert.deepEqual(boards.extra, ["b.kicad_pcb"]);
+});

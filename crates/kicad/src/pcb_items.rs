@@ -136,8 +136,16 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
             tok(z.keepout_footprints)
         )
         .unwrap();
-        // Multichannel placement settings: this model has none, so the area never places anything.
-        writeln!(out, "\t\t(placement (enabled no))").unwrap();
+        // Multichannel settings: `(placement (enabled ..) (sheetname|component_class|group ".."))`. The source is written even when the area is not enabled, as
+        // `format( const ZONE* )` does (a default area says `(sheetname "")`).
+        writeln!(
+            out,
+            "\t\t(placement (enabled {}) ({} {}))",
+            if z.placement.enabled { "yes" } else { "no" },
+            z.placement.source_type.token(),
+            sexpr_str(&z.placement.source)
+        )
+        .unwrap();
     }
 
     // `(fill [yes] [(mode hatch)] (thermal_gap ..) (thermal_bridge_width ..) [smoothing] (island_removal_mode ..) ..)`.

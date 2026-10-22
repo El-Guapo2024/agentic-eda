@@ -19,7 +19,7 @@ use super::pcb_paste_special::{PasteMode, DEFAULT_REFERENCE};
 use super::Board;
 use eda_kicad::{ClipRef, Clipboard};
 use eda_model::fp_edit::FootprintEdit;
-use eda_model::ir::{next_item_id, BoardPart, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, LibraryFootprint, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
+use eda_model::ir::{next_item_id, BoardPart, Dimension, FootprintExtra, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, LibraryFootprint, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
 use eda_model::pcb_items::HatchKind;
 use eda_model::{CheckResult, Footprint, Part};
 use std::collections::{BTreeMap, BTreeSet};
@@ -60,6 +60,9 @@ pub(crate) struct FootprintCopy {
     /// How zones connect to the footprint and to its pads, as the original had it (`PAD::GetLocalZoneConnection`, the thermal
     /// relief and the clearance overrides): the copy is filed under its own reference in `DrawingsSection::zone_overrides`.
     pub(crate) zone_overrides: Option<FootprintZoneOverrides>,
+    /// What the original's board file said of it that the model has no field for (`DrawingsSection::footprint_extras`: its pads' layers, a footprint with no courtyard, ..): the
+    /// copy has it too, under its own reference and uuid -- a copy of a microwave stub is still copper on the front layer only, with no courtyard.
+    pub(crate) extra: Option<FootprintExtra>,
     /// A paste puts a part of this board that is not placed back, rather than making a second one.
     pub(crate) reuse_unplaced: bool,
     /// What the reference text of the copy says when its id is not the reference it came with (`PASTE_MODE`, [`PasteMode`]). A Duplicate and
@@ -334,6 +337,7 @@ impl Board<'_> {
                 edit: self.design.footprint_edit(id).cloned(),
                 shown_reference: None,
                 zone_overrides,
+                extra: self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == id)).cloned(),
                 reuse_unplaced: false,
                 annotation: PasteMode::Unique,
             });
@@ -485,6 +489,7 @@ impl Board<'_> {
                 edit: self.clip_edit(f),
                 shown_reference: None,
                 zone_overrides: f.zone_overrides.clone(),
+                extra: f.extra.clone(),
                 reuse_unplaced: true,
                 annotation: mode,
             });
@@ -567,6 +572,7 @@ impl Board<'_> {
         let mut new_parts: Vec<(BoardPart, FootprintInstance)> = Vec::new();
         let mut replaced: Vec<FootprintInstance> = Vec::new();
         let mut new_edits: Vec<FootprintEdit> = Vec::new();
+        let mut new_extras: Vec<FootprintExtra> = Vec::new();
         // The copy's edit under its own reference, showing that reference (the text of a field follows the footprint it is on).
         let own_edit = |f: &FootprintCopy, reference: &str, pose: &FootprintInstance| -> Option<FootprintEdit> {
             let mut e = f.edit.clone().unwrap_or_else(|| FootprintEdit::new(reference));
@@ -609,6 +615,8 @@ impl Board<'_> {
             pad_nets.sort();
             let pose = FootprintInstance { id: reference.clone(), at, rot: f.rot, side: f.side, label: f.label };
             new_edits.extend(own_edit(f, &reference, &pose));
+            // (a uuid names one footprint: the copy is given one of its own when the file is written)
+            new_extras.extend(f.extra.iter().map(|e| FootprintExtra { id: reference.clone(), uuid: None, ..e.clone() }));
             new_parts.push((BoardPart { reference: reference.clone(), value: f.value.clone(), footprint: f.footprint.clone(), definition, pad_nets }, pose));
             fp_refs.push(reference);
         }
@@ -652,7 +660,7 @@ impl Board<'_> {
             rt.zones.append(&mut copies.zones);
             self.sort_routing();
         }
-        if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() || !new_edits.is_empty() {
+        if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() || !new_edits.is_empty() || !new_extras.is_empty() {
             let dr = self.drawings_mut();
             dr.shapes.append(&mut copies.shapes);
             // A copy of a hatched shape is hatched the same way.
@@ -675,6 +683,11 @@ impl Board<'_> {
                 dr.board_parts.push(bp.clone());
             }
             dr.board_parts.sort_by(|a, b| a.reference.cmp(&b.reference));
+            if !new_extras.is_empty() {
+                dr.footprint_extras.retain(|e| !new_extras.iter().any(|n| n.id == e.id));
+                dr.footprint_extras.append(&mut new_extras);
+                dr.footprint_extras.sort_by(|a, b| a.id.cmp(&b.id));
+            }
             if !new_edits.is_empty() {
                 dr.footprint_edits.retain(|e| !new_edits.iter().any(|n| n.id == e.id));
                 dr.footprint_edits.append(&mut new_edits);

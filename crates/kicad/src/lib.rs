@@ -89,7 +89,7 @@ pub mod sch_overlap;
 mod sch_import;
 mod sch_crossref;
 mod sheet_file;
-pub use sheet_file::load_sheet_file;
+pub use sheet_file::{load_sheet_file, referenced_sheet_files};
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_tree_with, import_kicad_sch_with, pin_kind_from_electrical_type, reconcile, transform_local_point, ImportOptions};
 
 // The review workflow's share of the derived project: the waived DRC and ERC violations as KiCad's marker texts, and the per-check ERC severities.

@@ -564,7 +564,10 @@ function ruleAreaLabel(z: Zone): string {
   if (z.keepout_pads) parts.push("Pads");
   if (z.keepout_copper_pour) parts.push("Copper");
   if (z.keepout_footprints) parts.push("Fp");
-  return parts.length > 0 ? `Keepout: ${parts.join("/")}` : "Rule Area";
+  // A placement rule area names the channel it stands for (`ZONE::GetMsgPanelInfo`'s "Placement source"; the multichannel tool's, GAPS.md items 24 and 32).
+  const placement = z.placement?.enabled ? `Placement: ${z.placement.source === "" ? "(none)" : z.placement.source}` : "";
+  const keepout = parts.length > 0 ? `Keepout: ${parts.join("/")}` : "";
+  return [keepout, placement].filter((p) => p !== "").join("  ") || "Rule Area";
 }
 
 function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, selected: boolean) {

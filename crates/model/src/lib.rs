@@ -29,6 +29,7 @@ pub mod kicad_geom;
 pub mod layers;
 pub mod model_subst;
 pub mod modules;
+pub mod multichannel;
 pub mod net_pattern;
 pub mod outline;
 pub mod pad_geom;
@@ -48,6 +49,7 @@ pub mod table;
 pub mod table_edit;
 pub mod table_text;
 pub mod text_vars;
+pub mod topo_match;
 pub mod via_extra;
 
 pub use footprint::{Footprint, Pad, PadKind, PadShape};

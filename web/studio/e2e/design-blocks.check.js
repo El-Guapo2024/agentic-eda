@@ -190,7 +190,7 @@
         t(other.length === 0, `... and none of the other editor's${other.length ? ` (enabled: ${other})` : ""}`);
       }
       const acts = Object.fromEntries(E.actions({ all: true }).map((a) => [a.id, a]));
-      t(!acts["pcbnew.InteractiveDrawing.applyDesignBlockLayout"]?.enabled, "Apply Design Block Layout is not wired (it needs the multichannel tool)");
+      t(acts["pcbnew.InteractiveDrawing.applyDesignBlockLayout"]?.enabled === true, "Apply Design Block Layout is wired on the PCB tab (the multichannel tool, package P24; e2e/multichannel.check.js drives it)");
       await gotoTab("Schematic");
     });
 
