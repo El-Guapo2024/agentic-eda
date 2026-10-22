@@ -1054,6 +1054,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, clock));
     let b = eda_ops::Board::new(design.clone(), &model, meta.snap_um, meta.spacing_um);
     let view = eda_ops::view::view(&b, &model)?;
+    // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
+    let flashed = eda_connectivity::flashed_layers(&design, &model);
     let block_of: std::collections::HashMap<String, String> = view["parts"]
         .as_array()
         .map(|ps| ps.iter().filter_map(|p| Some((p["ref"].as_str()?.to_string(), p["block"].as_str().unwrap_or("").to_string()))).collect())
@@ -1097,7 +1099,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     let net = net_of.get(format!("{}.{}", part.reference, q.number).as_str()).copied();
                     match engine_pads.get(i) {
                         // The pad with its own shape, type, hole and overrides (`crate::fp_json`).
-                        Some((pad, nth)) => crate::fp_json::pad_json(&design, &model, fp, q, pad, *nth, net),
+                        Some((pad, nth)) => crate::fp_json::pad_json(&design, &model, fp, q, pad, *nth, net, &flashed),
                         None => json!({ "num": q.number, "net": net, "x": q.center.x, "y": q.center.y, "w": q.size.0, "h": q.size.1, "round": q.is_round(), "th": q.through_hole }),
                     }
                 })
@@ -1175,10 +1177,17 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 // The arc's mid point when this track is a KiCad arc (`Track::arc`), so an edit that re-sends the track keeps it an arc.
                 "arc_mid": t.arc().map(|(_, m, _)| [m.x, m.y]),
             })).collect::<Vec<_>>(),
-            "vias": r.vias.iter().map(|v| json!({
-                "id": v.id, "net": v.net, "x": v.at.x, "y": v.at.y, "d": v.diameter,
-                "drill": v.drill, "from": v.from_layer, "to": v.to_layer,
-            })).collect::<Vec<_>>(),
+            "vias": r.vias.iter().map(|v| {
+                let extra = design.drawings.as_ref().and_then(|d| d.via_extra(&v.id));
+                json!({
+                    "id": v.id, "net": v.net, "x": v.at.x, "y": v.at.y, "d": v.diameter,
+                    "drill": v.drill, "from": v.from_layer, "to": v.to_layer,
+                    // What the via does with the layers nothing connects it on (`remove_unused_layers`, Remove Unused Pads): `remove_all`,
+                    // `remove_except_start_and_end` or `start_end_only` -- absent when it keeps every layer -- and the layers it then has copper on.
+                    "unconnected": extra.map(|e| e.unconnected_layers()).filter(|m| m.removes()),
+                    "flashed": flashed.vias.get(&v.id),
+                })
+            }).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({
                 "id": z.id, "net": z.net, "layer": z.layer,
                 // `ZONE::GetLayerSet()`: the zone's layers, `layer` first -- one for a zone on one layer.

@@ -1248,6 +1248,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, .. } => {
             format!("global-edit text-and-graphics --shapes {} --texts {} --dimensions {}{}", shape_ids.len(), text_ids.len(), dimension_ids.len(), if *layer_defaults { " --layer-defaults" } else { "" })
         }
+        Cmd::RemoveUnusedPads { selected, vias, pads, remove, .. } => format!("remove-unused-pads {}{}{}{}", if *remove { "--remove" } else { "--restore" }, if *vias { " --vias" } else { "" }, if *pads { " --pads" } else { "" }, selected.as_ref().map(|s| format!(" --selected {}", s.len())).unwrap_or_default()),
         Cmd::SetTeardropSettings { .. } => "board-setup teardrops".to_string(),
         Cmd::AddAllTeardrops => "teardrops add-all".to_string(),
         Cmd::RemoveAllTeardrops => "teardrops remove-all".to_string(),
@@ -1578,6 +1579,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddShape { .. } | Cmd::DeleteShape { .. } | Cmd::MoveShape { .. } | Cmd::EditShape { .. } => "shape",
         Cmd::AddText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
         Cmd::EditTextAndGraphics { .. } => "global-edit-text-and-graphics",
+        Cmd::RemoveUnusedPads { .. } => "remove-unused-pads",
         Cmd::SetTeardropSettings { .. } => "board-setup-teardrops",
         Cmd::AddAllTeardrops => "teardrops-add-all",
         Cmd::RemoveAllTeardrops => "teardrops-remove-all",

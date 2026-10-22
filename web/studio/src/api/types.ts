@@ -72,6 +72,8 @@ export interface Pad {
   stack?: PadStack | null;
   /** For a padstack whose copper differs from layer to layer: the copper of each group of layers on the board, with the keys of a pad's own (`x`, `y`, `w`, `h`, `round`, `shape`, `ratio`, `outline`). */
   stack_layers?: PadStackLayer[] | null;
+  /** A plated through-hole pad that removes the layers nothing connects it on (Remove Unused Pads): the copper layers that have its ring (`eda_connectivity::flashed_layers`). */
+  flashed?: string[] | null;
 }
 
 /** `eda_model::padstack::PadStackMode` (`PADSTACK::MODE`). */
@@ -336,6 +338,10 @@ export interface Via {
   drill: Um;
   from: string;
   to: string;
+  /** What the via does with the layers nothing connects it on (`remove_unused_layers`); absent when it keeps them all. */
+  unconnected?: UnconnectedLayers | null;
+  /** With `unconnected`: the copper layers that have its ring. */
+  flashed?: string[] | null;
 }
 
 /** `crates/model/src/ir.rs` `PadConnection` ("ZONE_CONNECTION") -- exact Rust variant names on the wire (no `rename_all`, see api/types.ts's own convention note below). */
@@ -1546,6 +1552,8 @@ export type Cmd =
   | { op: "set_erc_severities"; severities: Record<string, RuleSeverity> }
   /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
   | { op: "swap_layers"; mapping: [string, string][] }
+  /** Remove Unused Pads: `selected` is the ids of "Selected only" (null: the whole board), `remove: false` is "Restore All Layers". */
+  | { op: "remove_unused_pads"; selected: string[] | null; vias: boolean; pads: boolean; keep_outside: boolean; remove: boolean }
   /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
   | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[] }
   /** `EDIT_TOOL::BooleanPolygons`: merge/subtract/intersect rectangles, circles and polygons (`ids` in routine order, the base first). */

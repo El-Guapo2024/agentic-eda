@@ -332,7 +332,8 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     ctx.globalAlpha *= padAlpha;
     // A padstack whose copper differs from layer to layer (`pad.stack_layers`): each group of layers is drawn as its own shape in the color of its layer, the footprint's
     // own side on top (`PCB_PAINTER::draw( const PAD* )` draws each copper layer's shape: `PADSTACK::ForEachUniqueLayer`).
-    if (pad.stack_layers?.length) {
+    // (An empty list is a through-hole pad that removes the layers nothing connects and has none left: only its hole shows -- `PAD::FlashLayer`.)
+    if (Array.isArray(pad.stack_layers)) {
       for (const g of orderedStackLayers(pad.stack_layers, part.side ?? "top")) {
         const shown = g.layers.find((l) => opts.layerVisible[l] !== false);
         if (!shown) continue;

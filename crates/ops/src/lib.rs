@@ -60,6 +60,7 @@ mod array_numbering;
 pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingAxes, NumberingType, PadNumberProvider, PadNumbering};
 mod fp_array;
 mod pad_edit;
+mod unused_pads;
 mod fp_lib_fields;
 mod sym_derive;
 mod fix_shapes;
@@ -741,6 +742,21 @@ pub enum Cmd {
         /// Texts' `stroke_width` and a dimension's `text_thickness_um`.
         #[serde(default)]
         text_thickness: Option<Um>,
+    },
+    /// `pcbnew.GlobalEdit.removeUnusedPads` (Remove Unused Pads...), `DIALOG_UNUSED_PAD_LAYERS::updatePadsAndVias` -- see `unused_pads.rs`: the plated
+    /// through-hole pads (`pads`) and the vias (`vias`) the dialog picked stop having copper on the layers nothing connects them on (`remove` with `keep_outside`:
+    /// "Keep outside layers" -- the pad keeps its front and back ring), or keep every layer again (`remove: false`, "Restore All Layers"). `selected` is "Selected only":
+    /// the ids of the selection (a footprint, a pad `REF.NUM`, a via); `None` takes the whole board. One undo step; refused when nothing qualifies.
+    RemoveUnusedPads {
+        #[serde(default)]
+        selected: Option<Vec<String>>,
+        #[serde(default)]
+        vias: bool,
+        #[serde(default)]
+        pads: bool,
+        #[serde(default)]
+        keep_outside: bool,
+        remove: bool,
     },
 
     /// `EDIT_TOOL::Duplicate` (the studio's Cmd+D): exact copies of the named items in place, under fresh ids -- placed footprints,
@@ -2126,6 +2142,7 @@ impl Cmd {
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, .. } => shape_ids.iter().chain(text_ids.iter()).chain(dimension_ids.iter()).map(String::as_str).collect(),
+            Cmd::RemoveUnusedPads { selected, .. } => selected.iter().flatten().map(String::as_str).collect(),
             Cmd::SetTeardropSettings { .. } => vec!["teardrop_settings"],
             Cmd::AddAllTeardrops | Cmd::RemoveAllTeardrops => vec!["teardrops"],
             Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
@@ -2716,6 +2733,7 @@ impl<'a> Board<'a> {
             }
             Cmd::DeleteText { id } => self.delete_text(id),
             Cmd::MoveText { id, x, y } => self.move_text(id, *x, *y),
+            Cmd::RemoveUnusedPads { selected, vias, pads, keep_outside, remove } => self.remove_unused_pads(&unused_pads::UnusedPadLayers { selected: selected.as_deref(), vias: *vias, pads: *pads, keep_outside: *keep_outside, remove: *remove }),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, layer, line_width, text_size, text_thickness } => {
                 self.edit_text_and_graphics(&pcb_global_edit::GlobalTextEdit { shape_ids, text_ids, dimension_ids, layer_defaults: *layer_defaults, layer: layer.as_deref(), line_width: *line_width, text_size: *text_size, text_thickness: *text_thickness })
             }
@@ -5822,6 +5840,8 @@ mod array_tests;
 mod fp_array_tests;
 #[cfg(test)]
 mod pad_edit_tests;
+#[cfg(test)]
+mod unused_pads_tests;
 #[cfg(test)]
 mod sym_derive_tests;
 #[cfg(test)]

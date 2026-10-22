@@ -54,6 +54,7 @@ import { GeneratorsManagerDialog } from "./components/GeneratorsManagerDialog";
 import { CleanupTracksDialog } from "./components/CleanupTracksDialog";
 import { BoardStatisticsDialog } from "./components/BoardStatisticsDialog";
 import { SwapLayersDialog } from "./components/SwapLayersDialog";
+import { RemoveUnusedPadsDialog } from "./components/RemoveUnusedPadsDialog";
 import { GlobalEditTracksAndViasDialog } from "./components/GlobalEditTracksAndViasDialog";
 import { GlobalEditTextAndGraphicsDialog } from "./components/GlobalEditTextAndGraphicsDialog";
 import { CreateArrayDialog } from "./components/CreateArrayDialog";
@@ -277,6 +278,7 @@ function StudioFrame() {
       <CleanupTracksDialog />
       <BoardStatisticsDialog />
       <SwapLayersDialog />
+      <RemoveUnusedPadsDialog />
       <GlobalEditTracksAndViasDialog />
       <GlobalEditTextAndGraphicsDialog />
       <CreateArrayDialog />

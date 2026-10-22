@@ -1028,8 +1028,8 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     const copper = side === "top" ? shown("copper_top") : shown("copper_bottom");
     for (const pad of part.pads ?? []) {
       const y = side === "top" ? topCuY : botCuY;
-      if (pad.stack_layers?.length) {
-        // A padstack whose copper differs from layer to layer: each outer layer has the shape the stack gives it (`PADSTACK::ForEachUniqueLayer`), the far side's too; the inner
+      if (Array.isArray(pad.stack_layers)) {
+        // (Empty: a through-hole pad that removes the layers nothing connects and keeps none of the outer ones.) A padstack whose copper differs from layer to layer: each outer layer has the shape the stack gives it (`PADSTACK::ForEachUniqueLayer`), the far side's too; the inner
         // layers have no copper in this scene.
         for (const g of pad.stack_layers) {
           for (const outer of ["top", "bottom"] as const) {

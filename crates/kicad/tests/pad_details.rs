@@ -378,3 +378,96 @@ fn kicad_cli_plots_the_padstack_of_a_library_footprint_before_and_after_the_edit
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ----------------------------------------------------------------------------------------------------------------------
+// Remove Unused Pads: kicad-cli draws the rings the connectivity says a pad keeps
+// ----------------------------------------------------------------------------------------------------------------------
+
+/// Four copper layers, three plated through-hole pads and what connects them: pad 1 (1.6 mm, `remove_unused_layers` with no outside layers kept, net N1) has a track on
+/// `In1.Cu` starting at its centre; pad 2 (2 mm, outside layers kept, net N2) has a via of its net from the front to `In2.Cu` at its centre; pad 3 (1.2 mm) keeps every layer.
+const UNUSED_LAYERS_BOARD: &str = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+	(general (thickness 1.6) (legacy_teardrops no))
+	(paper "A4")
+	(layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal) (1 "F.Mask" user) (3 "B.Mask" user) (25 "Edge.Cuts" user))
+	(setup (pad_to_mask_clearance 0))
+	(net 0 "")
+	(net 1 "N1")
+	(net 2 "N2")
+	(gr_rect (start 0 0) (end 40 20) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts") (uuid "00000000-0000-0000-0000-000000000001"))
+	(footprint "Test:J1" (layer "F.Cu") (uuid "10000000-0000-0000-0000-000000000001") (at 20 10 0)
+		(property "Reference" "J1" (at 0 -4 0) (layer "F.SilkS"))
+		(pad "1" thru_hole circle (at -5 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask") (remove_unused_layers yes) (keep_end_layers no) (net 1 "N1") (uuid "20000000-0000-0000-0000-000000000001"))
+		(pad "2" thru_hole circle (at 5 0) (size 2 2) (drill 0.9) (layers "*.Cu" "*.Mask") (remove_unused_layers yes) (keep_end_layers yes) (net 2 "N2") (uuid "20000000-0000-0000-0000-000000000002"))
+		(pad "3" thru_hole circle (at 0 5) (size 1.2 1.2) (drill 0.6) (layers "*.Cu" "*.Mask") (net 1 "N1") (uuid "20000000-0000-0000-0000-000000000003"))
+	)
+	(segment (start 15 10) (end 15 14) (width 0.25) (layer "In1.Cu") (net 1) (uuid "30000000-0000-0000-0000-000000000001"))
+	(via (at 25 10) (size 0.8) (drill 0.4) (layers "F.Cu" "In2.Cu") (net 2) (uuid "40000000-0000-0000-0000-000000000001"))
+)
+"#;
+
+/// Which of the three pads (by diameter: 1.6, 2.0 and 1.2 mm) kicad-cli's plot of `layer` draws a ring for.
+fn rings_plotted(svg: &str) -> Vec<&'static str> {
+    let round = |v: f64| (v * 10.0).round() / 10.0;
+    let mut out = Vec::new();
+    for b in plot_boxes(svg) {
+        let (w, h) = (b[2] - b[0], b[3] - b[1]);
+        if (w - h).abs() > 0.02 {
+            continue; // a track
+        }
+        match round(w) {
+            x if x == 1.6 => out.push("J1.1"),
+            x if x == 2.0 => out.push("J1.2"),
+            x if x == 1.2 => out.push("J1.3"),
+            _ => {} // the via
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn the_layers_a_pad_keeps_its_ring_on_are_those_kicad_cli_draws_one_on() {
+    // The model's side needs no tool.
+    let (design, model, _) = import_kicad_pcb(UNUSED_LAYERS_BOARD).expect("imports");
+    let flashed = eda_connectivity::flashed_layers(&design, &model);
+    assert_eq!(flashed.pads["J1.1"], ["In1.Cu"], "pad 1 removes every layer nothing is connected on: the track reaches it on In1.Cu");
+    assert_eq!(flashed.pads["J1.2"], ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"], "pad 2 keeps its outside layers, and the via of its net takes the layers from the front to In2.Cu");
+    assert!(!flashed.pads.contains_key("J1.3"), "pad 3 keeps all its layers and has nothing to say");
+    // The mode is what the file said, and what the writer says again.
+    assert_eq!(model.footprints[0].pads.iter().find(|p| p.number == "1").unwrap().ext.stack.unconnected, eda_model::padstack::UnconnectedLayers::RemoveAll);
+    let out = export(&design, &model);
+    let pad1 = out.lines().find(|l| l.contains("(pad \"1\"")).expect("pad 1");
+    assert!(pad1.contains("(remove_unused_layers yes)") && pad1.contains("(keep_end_layers no)"), "{pad1}");
+    let pad2 = out.lines().find(|l| l.contains("(pad \"2\"")).expect("pad 2");
+    assert!(pad2.contains("(remove_unused_layers yes)") && pad2.contains("(keep_end_layers yes)"), "{pad2}");
+    assert!(!out.lines().find(|l| l.contains("(pad \"3\"")).unwrap().contains("keep_end_layers"), "pad 3 says nothing of it beyond remove_unused_layers no");
+}
+
+#[test]
+fn kicad_cli_draws_the_rings_of_the_layers_the_connectivity_says_a_pad_keeps() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let dir = scratch("flash");
+    let original = dir.join("original.kicad_pcb");
+    std::fs::write(&original, UNUSED_LAYERS_BOARD).expect("write");
+    let (design, model, _) = import_kicad_pcb(UNUSED_LAYERS_BOARD).expect("imports");
+    let exported = dir.join("exported.kicad_pcb");
+    std::fs::write(&exported, export(&design, &model)).expect("write");
+    let flashed = eda_connectivity::flashed_layers(&design, &model);
+    for layer in ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"] {
+        let tag = layer.replace('.', "_");
+        // What the model says each pad keeps.
+        let mut ours: Vec<&str> = ["J1.1", "J1.2", "J1.3"].into_iter().filter(|id| flashed.pads.get(*id).map_or(true, |layers| layers.iter().any(|l| l == layer))).collect();
+        ours.sort();
+        let theirs = rings_plotted(&plot_board(&cli, &original, layer, &dir, &format!("original_{tag}")));
+        assert_eq!(ours, theirs, "{layer}: the rings the model keeps against the ones kicad-cli draws");
+        // And the board we write is drawn the same.
+        assert_eq!(rings_plotted(&plot_board(&cli, &exported, layer, &dir, &format!("exported_{tag}"))), theirs, "{layer}: our export");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

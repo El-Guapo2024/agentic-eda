@@ -501,6 +501,7 @@ export function useActionRunner() {
     // components/BoardStatisticsDialog.tsx / SwapLayersDialog.tsx.
     m.set("pcbnew.InspectionTool.ShowBoardStatistics", pcbOnly(() => dispatch({ type: "SET_BOARD_STATISTICS_DIALOG_OPEN", open: true })));
     m.set("pcbnew.GlobalEdit.swapLayers", pcbOnly(() => dispatch({ type: "SET_SWAP_LAYERS_DIALOG_OPEN", open: true })));
+    m.set("pcbnew.GlobalEdit.removeUnusedPads", pcbOnly(() => dispatch({ type: "SET_REMOVE_UNUSED_PADS_DIALOG_OPEN", open: true })));
     m.set("pcbnew.GlobalEdit.editTracksAndVias", pcbOnly(() => dispatch({ type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN", open: true })));
     m.set("pcbnew.GlobalEdit.editTextAndGraphics", pcbOnly(() => dispatch({ type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN", open: true })));
     // Ctrl+T (task item 6): `ARRAY_TOOL::CreateArray`'s own
