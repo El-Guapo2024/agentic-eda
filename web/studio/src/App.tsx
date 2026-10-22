@@ -42,6 +42,7 @@ import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
 import { TextDialog } from "./components/TextDialog";
 import { PcbItemDialogs } from "./components/PcbItemDialogs";
+import { MultichannelDialogs } from "./components/MultichannelDialogs";
 import { ItemPropertiesDialog } from "./components/ItemPropertiesDialog";
 import { MoveExactDialog } from "./components/MoveExactDialog";
 import { PcbParityDialogs } from "./components/PcbParityDialogs";
@@ -265,6 +266,7 @@ function StudioFrame() {
       <ZoneDialog />
       <TextDialog />
       <PcbItemDialogs />
+      <MultichannelDialogs />
       <ItemPropertiesDialog />
       <MoveExactDialog />
       <PcbParityDialogs />

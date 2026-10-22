@@ -2295,8 +2295,22 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             zone.keepout_pads = not_allowed("pads");
             zone.keepout_footprints = not_allowed("footprints");
         }
-        if sexpr::find(z, "placement").is_some() {
+        // `T_placement` of `parseZONE`: `(enabled yes|no)` and one source, `(sheetname ..)`, `(component_class ..)` or `(group ..)`; the last of them in the file stands.
+        if let Some(pl) = sexpr::find(z, "placement") {
             zone.is_rule_area = true;
+            for item in &pl[1..] {
+                let Some(list) = item.as_list() else { continue };
+                match sexpr::tag(list) {
+                    Some("enabled") => zone.placement.enabled = sexpr::txt(list, 1) == Some("yes"),
+                    Some(token) => {
+                        if let Some(source_type) = eda_model::multichannel::PlacementSourceType::from_token(token) {
+                            zone.placement.source_type = source_type;
+                            zone.placement.source = sexpr::txt(list, 1).unwrap_or("").to_string();
+                        }
+                    }
+                    None => {}
+                }
+            }
         }
         if let Some(a) = sexpr::find(z, "attr") {
             zone.teardrop = sexpr::find(a, "teardrop").is_some();

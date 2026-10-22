@@ -829,6 +829,10 @@ fn handle(
         ("POST", "/api/design_blocks/prepare") => respond(stream, "200 OK", "application/json", crate::design_block_api::prepare(dir, &body).to_string().as_bytes()),
         ("POST", "/api/design_blocks/save") => respond(stream, "200 OK", "application/json", crate::design_block_api::save(dir, &body).to_string().as_bytes()),
         ("POST", "/api/design_blocks/properties") => respond(stream, "200 OK", "application/json", crate::design_block_api::properties(dir, &body).to_string().as_bytes()),
+        // The multichannel tool's dialogs (`crate::multichannel_api`): the rows of Generate Placement Rule Areas, the sources the Placement tab offers, and the table of Repeat Layout.
+        ("POST", "/api/multichannel/areas") => respond(stream, "200 OK", "application/json", crate::multichannel_api::areas(dir).to_string().as_bytes()),
+        ("POST", "/api/multichannel/sources") => respond(stream, "200 OK", "application/json", crate::multichannel_api::sources(dir).to_string().as_bytes()),
+        ("POST", "/api/multichannel/compat") => respond(stream, "200 OK", "application/json", crate::multichannel_api::compat(dir, &body).to_string().as_bytes()),
         ("POST", "/api/design_blocks/delete") => respond(stream, "200 OK", "application/json", crate::design_block_api::delete(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
@@ -1210,6 +1214,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "smoothing": z.smoothing, "corner_radius": z.corner_radius,
                 // `ZONE::GetZoneName()`: the Properties panel's "Name" row (`Cmd::SetZoneName`).
                 "name": z.name,
+                // The rule area's placement source (`ZONE::GetPlacementAreaEnabled` and the source type and name): the Placement tab of Zone Properties and what Repeat Layout reads.
+                "placement": z.placement,
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
             // the Board Setup "Track Widths & Vias" panel's editable

@@ -1589,6 +1589,11 @@ pub struct Zone {
     /// `ZONE::GetCornerRadius()`, µm; only meaningful with `smoothing`.
     #[serde(default, skip_serializing_if = "is_zero_um")]
     pub corner_radius: Um,
+    /// The placement settings of a rule area (`ZONE::GetPlacementAreaEnabled`, `GetPlacementAreaSourceType`, `GetPlacementAreaSource`): the sheet, component class or group whose
+    /// footprints the area stands for, which Repeat Layout reads (`pcbnew/tools/multichannel_tool.cpp`). Written as `(placement (enabled yes) (sheetname ".."))`. See
+    /// [`crate::multichannel`]. Additive: absent in an older `design.json` reads as "no placement".
+    #[serde(default, skip_serializing_if = "crate::multichannel::PlacementArea::is_default")]
+    pub placement: crate::multichannel::PlacementArea,
 }
 
 impl Zone {
@@ -1683,6 +1688,7 @@ impl Default for Zone {
             border_style: ZoneBorderStyle::default(),
             smoothing: ZoneSmoothing::default(),
             corner_radius: 0,
+            placement: Default::default(),
         }
     }
 }
