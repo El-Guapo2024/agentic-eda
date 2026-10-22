@@ -95,6 +95,18 @@ export function lengthFromText(text: string, units: LengthUnit): number {
   return Math.round(umFrom(parseFloat(m[1]!), unit));
 }
 
+/** What the Complex Shape dialog's Size boxes start with once a file is read: `m_sizeX->SetValue( (int) g_ShapeScaleX )`, the file's scale in nanometres shown in the display units. */
+export function shapeSizeText(nanometres: number, units: LengthUnit): string {
+  return lengthText(nanometres / 1000, units);
+}
+
+/**
+ * What the dialog's Size box sends: nothing while it still shows the file's own scale (the server uses the exact one), or the length typed in micrometres once it was edited.
+ */
+export function shapeSizeOverride(text: string, shown: string, units: LengthUnit): number | null {
+  return text.trim() === shown.trim() ? null : lengthFromText(text, units);
+}
+
 /**
  * `getRectangleAlongCentreLine` (`common/preview_items/centreline_rect_item.cpp`): the four corners of the rectangle the tool previews between its two clicks -- a rectangle along the
  * centre line from `start` to `end` whose width is `aspect` times the line's length (`inductorAreaAspect`, 0.5 in `drawMicrowaveInductor`). A line of no length is taken as one unit long.

@@ -4,6 +4,7 @@
 //   pcbnew.MicrowaveTool.createGap             MICROWAVE_TOOL::addMicrowaveFootprint( GAP ): a click, "Gap Size:", and the footprint of two pads that far apart where the click was
 //   pcbnew.MicrowaveTool.createStub            .. ( STUB ): "Stub Size:", a square pad and the stub
 //   pcbnew.MicrowaveTool.createStubArc         .. ( STUB_ARC ): "Arc Stub Radius Value:" and "Angle in degrees:", one custom pad shaped as a pie slice
+//   pcbnew.MicrowaveTool.createFunctionShape   .. ( FUNCTION_SHAPE ): the Complex Shape dialog and the polygon of a shape description file between two pads
 //   pcbnew.MicrowaveTool.createLine            MICROWAVE_TOOL::drawMicrowaveInductor: two clicks, "Length of track:", "Component value:", and the S-shaped coil between the points
 //
 // `doInteractiveItemPlacement( .., IPO_REPEAT | IPO_ROTATE | IPO_FLIP )` makes the footprint and carries it on the cursor until a second click; here it is put down where the first
@@ -28,23 +29,31 @@ import {
   lengthText,
   lengthTextAtLeast,
   parseDouble,
+  shapeSizeOverride,
 } from "../kicad-port/microwave";
 import { setToolPreview } from "../components/canvas/pcbItemsPaint";
-import { askText } from "../state/microwaveDialogs";
+import { askShape, askText } from "../state/microwaveDialogs";
 import type { StudioState } from "../state/store";
 import { picker } from "./pcbPicker";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 import type { PickerSession } from "../kicad-port/pickerHost";
 import type { MicrowaveCmd } from "../api/microwaveTypes";
 
-type FootprintTool = "gap" | "stub" | "arc_stub";
+type FootprintTool = "gap" | "stub" | "arc_stub" | "function_shape";
 
 /** The status text of each tool's picker (`STATUS_TEXT_POPUP`). */
 const PROMPT: Record<FootprintTool, string> = {
   gap: "Draw Microwave Gaps",
   stub: "Draw Microwave Stubs",
   arc_stub: "Draw Microwave Arc Stubs",
+  function_shape: "Draw Microwave Polygonal Shapes",
 };
+
+/**
+ * `g_ShapeScaleX` and `g_ShapeScaleY` are statics of `microwave_polygon.cpp`: once a shape description file has been read they keep their scales, so a dialog closed without reading
+ * one finds a size and no points ("Shape has no points."); before any file was read there is no size ("Shape has a null size.").
+ */
+let shapeScalesRead = false;
 
 /** `GetCurrentTrackWidth()`: the track width the router would draw with now. */
 function currentTrackWidth(st: StudioState): number {
@@ -56,6 +65,7 @@ export function registerMicrowaveActions(m: Map<string, (param?: unknown) => voi
   m.set("pcbnew.MicrowaveTool.createGap", pcbOnly(() => startFootprintTool(ctx, "gap")));
   m.set("pcbnew.MicrowaveTool.createStub", pcbOnly(() => startFootprintTool(ctx, "stub")));
   m.set("pcbnew.MicrowaveTool.createStubArc", pcbOnly(() => startFootprintTool(ctx, "arc_stub")));
+  m.set("pcbnew.MicrowaveTool.createFunctionShape", pcbOnly(() => startFootprintTool(ctx, "function_shape")));
   m.set("pcbnew.MicrowaveTool.createLine", pcbOnly(() => startInductorTool(ctx)));
 }
 
@@ -80,6 +90,18 @@ async function askFootprint(ctx: SweepCtx, tool: FootprintTool, at: PointXY): Pr
   const units = st.units;
   const track = currentTrackWidth(st);
   const toast = (message: string) => ctx.dispatch({ type: "TOAST", message, kind: "error" });
+
+  if (tool === "function_shape") {
+    // `MWAVE_POLYGONAL_SHAPE_DLG dlg( &editFrame, wxDefaultPosition ); dlg.ShowModal()`
+    const a = await askShape(units);
+    if (a === null) return null;
+    if (a.file === null) {
+      toast(shapeScalesRead ? "Shape has no points." : "Shape has a null size.");
+      return null;
+    }
+    shapeScalesRead = true;
+    return { verb: "function_shape", at, file: a.file, kind: a.kind, size_x_um: shapeSizeOverride(a.sizeX, a.shownX, units), size_y_um: shapeSizeOverride(a.sizeY, a.shownY, units), track_width_um: track };
+  }
 
   // `WX_TEXT_ENTRY_DIALOG dlg( editFrame, msg, _( "Create Microwave Footprint" ), editFrame->StringFromValue( gap_size ) )`: it starts at the track width
   const text = await askText({ title: MICROWAVE_TITLE, label: SIZE_LABEL[tool], initial: lengthText(track, units) });

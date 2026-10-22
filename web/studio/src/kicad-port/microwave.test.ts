@@ -10,6 +10,8 @@ import {
   lengthText,
   lengthTextAtLeast,
   parseDouble,
+  shapeSizeOverride,
+  shapeSizeText,
 } from "./microwave";
 
 test("the angle is read as wxString::ToDouble reads it: all of the text, one number", () => {
@@ -73,6 +75,14 @@ test("lengths are shown to the digits of the units and read with or without a un
   assert.equal(lengthFromText("0.5 mm", "mil"), 500);
   assert.equal(lengthFromText('0.01"', "mm"), 254);
   assert.equal(lengthFromText("nonsense", "mm"), 0, "`ValueFromString` reads what is not a length as nothing");
+});
+
+test("the size boxes of the shape dialog: the file's scale shown, sent only once it was edited", () => {
+  assert.equal(shapeSizeText(271_501_000, "mm"), "271.501");
+  assert.equal(shapeSizeText(1_001_330, "mm"), "1.0013");
+  assert.equal(shapeSizeOverride("271.501", "271.501", "mm"), null);
+  assert.equal(shapeSizeOverride(" 271.501 ", "271.501", "mm"), null);
+  assert.equal(shapeSizeOverride("300", "271.501", "mm"), 300_000);
 });
 
 test("the preview between the inductor's clicks is a rectangle along the centre line, half as wide as the line is long", () => {
