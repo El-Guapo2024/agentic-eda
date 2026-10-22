@@ -472,6 +472,10 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         writeln!(out, "\t{item}").unwrap();
     }
 
+    // The files embedded in the board, and those its footprints use: one list, last in the file as KiCad writes it (`PCB_IO_KICAD_SEXPR::format( const BOARD* )`), each file's
+    // data as it was read.
+    crate::embedded::write_owner(&mut out, &eda_model::embedded_files::board_file_list(design), 1, false);
+
     writeln!(out, ")").unwrap();
     if !net_errors.is_empty() {
         return Err(net_errors);
@@ -978,6 +982,30 @@ pub(crate) fn write_footprint(
             writeln!(out, "\t\t(sheetfile {})", sexpr_str(file)).unwrap();
         }
     }
+    // The footprint's gates (`format( FOOTPRINT )` writes `(units ..)` after the sheet): the ones the file gave it, else the symbol's when it has two or more -- what the
+    // netlist hands a footprint updated from the schematic -- so that KiCad's Swap Gate Nets finds them on a board made here.
+    let units = own_extra
+        .filter(|e| !e.units.is_empty())
+        .map(|e| e.units.clone())
+        .unwrap_or_else(|| {
+            let derived = eda_model::fp_units::unit_info(design, model, &fp.id);
+            if derived.len() >= 2 {
+                derived
+            } else {
+                Vec::new()
+            }
+        });
+    if !units.is_empty() {
+        write!(out, "\t\t(units").unwrap();
+        for u in &units {
+            write!(out, " (unit (name {}) (pins", sexpr_str(&u.name)).unwrap();
+            for pin in &u.pins {
+                write!(out, " {}", sexpr_str(pin)).unwrap();
+            }
+            write!(out, "))").unwrap();
+        }
+        writeln!(out, ")").unwrap();
+    }
     write_attr(out, &extra.attrs);
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
@@ -1046,7 +1074,10 @@ pub(crate) fn write_footprint(
         // there), so it needs no mirroring of its own here.
         let px = mm(if fp.side == Side::Bottom { -pad.at.0 } else { pad.at.0 });
         let py = mm(pad.at.1);
-        let (w, h) = pad.size;
+        // The shape the file's main fields hold: the pad's own on the top, the one its back has on the bottom (`PADSTACK::FlipLayers`: the front of the board is the
+        // footprint's other side), see `padstack_io`.
+        let file_main = pad.file_main_shape(fp.side);
+        let (w, h) = file_main.size;
         let wmm = mm(w);
         let hmm = mm(h);
         let kind = match pad.kind {
@@ -1055,9 +1086,17 @@ pub(crate) fn write_footprint(
             PadKind::ThroughHole => "thru_hole",
             PadKind::NonPlatedHole => "np_thru_hole",
         };
-        let shape = crate::pad_shape::shape_token(pad.shape);
+        let shape = crate::pad_shape::shape_token(file_main.shape);
         // The delta, the offset, the corners and a custom pad's primitives (`PCB_IO_KICAD_SEXPR::format( const PAD* )`).
-        let shape_text = crate::pad_shape::write_pad_shape(pad.shape, pad.roundrect_ratio, &pad.ext, fp.side);
+        let main_ext = eda_model::footprint::PadShapeExt {
+            offset: file_main.offset,
+            trapezoid_delta: file_main.trapezoid_delta,
+            chamfer_ratio: file_main.chamfer_ratio,
+            chamfer_corners: file_main.chamfer_corners,
+            custom: file_main.custom.clone(),
+            stack: Default::default(),
+        };
+        let shape_text = crate::pad_shape::write_pad_shape(file_main.shape, file_main.roundrect_ratio, &main_ext, fp.side);
         // Pad numbers repeat by design (a connector's shield tab, several
         // physical pads on one pin), so the number alone cannot make a
         // unique uuid; the position can, since two pads of one footprint
@@ -1124,6 +1163,11 @@ pub(crate) fn write_footprint(
                 }
             }
         }
+        // `(remove_unused_layers ..) (keep_end_layers ..)` of a plated through-hole pad (`format( const PAD* )`: after its layers).
+        let stack_modelled = !pad.ext.stack.is_default();
+        if pad.kind == PadKind::ThroughHole {
+            out.push_str(&crate::padstack_io::unconnected_text(pad.ext.stack.unconnected));
+        }
         // A non-plated hole has no net by definition -- nothing to look up.
         if pad.kind != PadKind::NonPlatedHole {
             if let Some(net_name) = pin_net(&pad.number) {
@@ -1142,6 +1186,10 @@ pub(crate) fn write_footprint(
         }
         // The pad's other tokens as the file had them (`remove_unused_layers`, `teardrops`, `tenting`, `property pad_prop_heatsink`, `die_length`, ..).
         for token in pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.tokens.as_slice()).unwrap_or_default() {
+            // A design from before the padstack was modelled kept these as tokens; once the pad has a padstack of its own they are written from it.
+            if stack_modelled && ["(remove_unused_layers", "(keep_end_layers", "(padstack"].iter().any(|t| token.starts_with(t)) {
+                continue;
+            }
             write!(out, " {token}").unwrap();
         }
         // The margins of a pad edit (`solder_mask_margin`, `solder_paste_margin`, `solder_paste_margin_ratio`), then the zone facts: KiCad's order.
@@ -1168,7 +1216,10 @@ pub(crate) fn write_footprint(
             write!(out, " (thermal_gap {})", mm(g)).unwrap();
         }
         out.push_str(&shape_text.custom);
-        writeln!(out, " (uuid \"{uuid}\"))").unwrap();
+        write!(out, " (uuid \"{uuid}\")").unwrap();
+        // The other layers' shapes (`(padstack (mode ..) (layer ..) ..)`), after the uuid as `format( const PAD* )` writes them.
+        out.push_str(&crate::padstack_io::write_padstack(pad, fp.side, &model.board.layers));
+        writeln!(out, ")").unwrap();
     }
 
     // The non-plated holes the footprint has on no copper layer (`FootprintExtra::holes`: a `*.Mask`-only pad), as the pads they are: without them the board would lose its drilled holes,
@@ -1229,6 +1280,18 @@ pub(crate) fn write_footprint(
             let pts: Vec<String> = outline.iter().map(|&(x, y)| format!("(xy {} {})", mm(if fp.side == Side::Bottom { -x } else { x }), mm(y))).collect();
             let uuid = crate::duid_for(&format!("footprint:{}:crtyd:{i}", fp.id), &fp.id);
             writeln!(out, "\t\t(fp_poly (pts {}) (stroke (width 0.05) (type solid)) (fill none) (layer {}) (uuid \"{uuid}\"))", pts.join(" "), sexpr_str(crtyd_layer)).unwrap();
+        }
+    }
+
+    // The files the footprint lists as its own: names, types and checksums (the data is the board's), before its models as KiCad writes them.
+    {
+        let listed = eda_model::embedded_files::footprint_listed_files(design, &fp.id);
+        if !listed.is_empty() {
+            if eda_model::embedded_files::of_footprint(design, &fp.id).is_some_and(|l| l.fonts) {
+                writeln!(out, "\t\t(embedded_fonts yes)").unwrap();
+            }
+            let refs: Vec<&eda_model::embedded_files::EmbeddedFile> = listed.iter().collect();
+            crate::embedded::write_block(out, &refs, 2, false);
         }
     }
 
@@ -3356,11 +3419,14 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                vec!["(remove_unused_layers yes)", "(keep_end_layers no)", "(zone_layer_connections \"F.Cu\")", "(tenting (front no) (back yes))", "(teardrops (best_length_ratio 0.5) (curved_edges no))", "(die_length 0.25)", "(property pad_prop_heatsink)"],
+                // The unconnected-layer mode is the pad's own now (`Pad::ext.stack`), not a token.
+                vec!["(zone_layer_connections \"F.Cu\")", "(tenting (front no) (back yes))", "(teardrops (best_length_ratio 0.5) (curved_edges no))", "(die_length 0.25)", "(property pad_prop_heatsink)"],
                 vec!["(locked yes)"],
                 vec![],
             ]
         );
+        let first = &model.footprints.first().expect("the footprint").pads;
+        assert_eq!(first[0].ext.stack.unconnected, eda_model::padstack::UnconnectedLayers::RemoveAll, "remove_unused_layers yes, keep_end_layers no");
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\" "))).unwrap_or_else(|| panic!("pad {number}")).trim().to_string();
         assert!(pad("1").contains("(layers \"*.Cu\" \"*.Mask\") (remove_unused_layers yes) (keep_end_layers no) (zone_layer_connections \"F.Cu\") (tenting (front no) (back yes)) (teardrops (best_length_ratio 0.5) (curved_edges no)) (die_length 0.25) (property pad_prop_heatsink)"), "{}", pad("1"));

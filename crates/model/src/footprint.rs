@@ -149,23 +149,36 @@ pub fn rotated_extent(fp: &FootprintInstance, size: (Um, Um)) -> (Um, Um) {
 /// no resolvable footprint.
 pub fn placed_pads(model: &ConstraintModel, part: &Part, fp: &FootprintInstance) -> Option<Vec<PlacedPad>> {
     let footprint = model.footprint_of(part)?;
-    let mut pads: Vec<PlacedPad> = footprint
-        .pads
-        .iter()
-        .map(|p| PlacedPad {
-            number: p.number.clone(),
-            center: to_board(fp, p.at),
-            // The pad's own rotation is relative to the footprint, applied
-            // before the footprint's own rotation/mirror -- see `Pad::rot`.
-            size: placed_extent(fp, p),
-            through_hole: p.kind != PadKind::Smd,
-            shape: p.shape,
-            roundrect_ratio: p.roundrect_ratio,
-            pieces: placed_pieces(fp, p),
-        })
-        .collect();
+    let mut pads: Vec<PlacedPad> = footprint.pads.iter().map(|p| placed_pad_of(fp, p)).collect();
     pads.sort_by(|a, b| a.number.cmp(&b.number));
     Some(pads)
+}
+
+/// The pad `p` of `fp` in board space. The pad's own rotation is relative to the footprint, applied before the footprint's own rotation/mirror -- see
+/// `Pad::rot`. A pad whose copper differs from layer to layer ([`crate::padstack`]) is one box and one set of pieces that hold the copper of every layer, so a
+/// consumer that knows nothing of layers keeps clear of all of it; the ones that do use [`Pad::shape_groups`] and this function for each layer's shape.
+pub fn placed_pad_of(fp: &FootprintInstance, p: &Pad) -> PlacedPad {
+    if p.has_stack() {
+        let mut size = (0, 0);
+        let mut pieces = Vec::new();
+        for shape in p.unique_shapes() {
+            let v = shape.lay_on(p);
+            let e = placed_extent(fp, &v);
+            size = (size.0.max(e.0), size.1.max(e.1));
+            let frame = crate::pad_geom::PadFrame::of(fp, &v, to_board(fp, v.at));
+            pieces.extend(crate::pad_geom::pad_pieces(&v).iter().map(|q| q.map(&|w| frame.to_board(w))));
+        }
+        return PlacedPad { number: p.number.clone(), center: to_board(fp, p.at), size, through_hole: p.kind != PadKind::Smd, shape: p.shape, roundrect_ratio: p.roundrect_ratio, pieces };
+    }
+    PlacedPad {
+        number: p.number.clone(),
+        center: to_board(fp, p.at),
+        size: placed_extent(fp, p),
+        through_hole: p.kind != PadKind::Smd,
+        shape: p.shape,
+        roundrect_ratio: p.roundrect_ratio,
+        pieces: placed_pieces(fp, p),
+    }
 }
 
 /// The extents of pad `p` of `fp` about the pad's position: its size turned by the pad's and the footprint's rotation. A trapezoid, a
@@ -491,28 +504,31 @@ impl Footprint {
             if p.size.0 <= 0 || p.size.1 <= 0 {
                 bad(&format!("pad {}", p.number), format!("pad is {} x {} um", p.size.0, p.size.1));
             }
-            if let Some(r) = p.roundrect_ratio {
-                if !(0.0..=0.5).contains(&r) {
-                    bad(&format!("pad {}", p.number), format!("roundrect ratio {r} is outside 0.0..=0.5 (a fraction of the shorter side)"));
+            // Each copper layer's own shape (`PAD::CheckPad` runs `doCheckPad` for every unique layer of the padstack).
+            for shape in p.unique_shapes() {
+                if let Some(r) = shape.roundrect_ratio {
+                    if !(0.0..=0.5).contains(&r) {
+                        bad(&format!("pad {}", p.number), format!("roundrect ratio {r} is outside 0.0..=0.5 (a fraction of the shorter side)"));
+                    }
                 }
-            }
-            // `PAD::doCheckPad`: a chamfer cannot be negative nor cut more than the side there is; a trapezoid cannot narrow a side past nothing.
-            if p.shape == PadShape::ChamferedRect {
-                let r = p.ext.chamfer_ratio.unwrap_or(0.2);
-                let adjacent = {
-                    let c = p.ext.chamfer_corners;
-                    (c.top_left && (c.top_right || c.bottom_left)) || (c.bottom_right && (c.top_right || c.bottom_left))
-                };
-                if r < 0.0 {
-                    bad(&format!("pad {}", p.number), "negative corner chamfer is not allowed".into());
-                } else if r > if adjacent { 0.5 } else { 1.0 } {
-                    bad(&format!("pad {}", p.number), "corner chamfer is too large".into());
+                // `PAD::doCheckPad`: a chamfer cannot be negative nor cut more than the side there is; a trapezoid cannot narrow a side past nothing.
+                if shape.shape == PadShape::ChamferedRect {
+                    let r = shape.chamfer_ratio.unwrap_or(0.2);
+                    let adjacent = {
+                        let c = shape.chamfer_corners;
+                        (c.top_left && (c.top_right || c.bottom_left)) || (c.bottom_right && (c.top_right || c.bottom_left))
+                    };
+                    if r < 0.0 {
+                        bad(&format!("pad {}", p.number), "negative corner chamfer is not allowed".into());
+                    } else if r > if adjacent { 0.5 } else { 1.0 } {
+                        bad(&format!("pad {}", p.number), "corner chamfer is too large".into());
+                    }
                 }
-            }
-            if p.shape == PadShape::Trapezoid {
-                if let Some((dx, dy)) = p.ext.trapezoid_delta {
-                    if dx.abs() > p.size.1 || dy.abs() > p.size.0 {
-                        bad(&format!("pad {}", p.number), "trapezoid delta is too large".into());
+                if shape.shape == PadShape::Trapezoid {
+                    if let Some((dx, dy)) = shape.trapezoid_delta {
+                        if dx.abs() > shape.size.1 || dy.abs() > shape.size.0 {
+                            bad(&format!("pad {}", p.number), "trapezoid delta is too large".into());
+                        }
                     }
                 }
             }
@@ -637,6 +653,11 @@ pub struct PadShapeExt {
     /// The anchor and primitives of a custom pad.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom: Option<PadCustom>,
+    /// The padstack: the shape the pad has on its other layers (`PADSTACK::MODE`) and what becomes of the layers nothing connects to
+    /// (`UNCONNECTED_LAYER_MODE`). The fields above and [`Pad::shape`], [`Pad::size`] and [`Pad::roundrect_ratio`] are the front shape; see
+    /// [`crate::padstack`]. Default: one shape on every layer, every layer kept.
+    #[serde(default, skip_serializing_if = "crate::padstack::PadStack::is_default")]
+    pub stack: crate::padstack::PadStack,
 }
 
 impl PadShapeExt {
@@ -664,18 +685,22 @@ impl Footprint {
     /// `(min_x, min_y, max_x, max_y)`. Zero box for a pad-less footprint.
     pub fn pad_bbox(&self) -> (Um, Um, Um, Um) {
         let mut b = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
-        for p in &self.pads {
-            // A trapezoid, a custom pad or copper off the pad's position reaches where its outline does, not where its size says.
-            let (x0, y0, x1, y1) = if p.has_complex_outline() || p.ext.offset.is_some() {
-                let (x0, y0, x1, y1) = p.local_bbox();
-                (p.at.0 + x0.floor() as Um, p.at.1 + y0.floor() as Um, p.at.0 + x1.ceil() as Um, p.at.1 + y1.ceil() as Um)
-            } else {
-                (p.at.0 - p.size.0 / 2, p.at.1 - p.size.1 / 2, p.at.0 + p.size.0 / 2, p.at.1 + p.size.1 / 2)
-            };
-            b.0 = b.0.min(x0);
-            b.1 = b.1.min(y0);
-            b.2 = b.2.max(x1);
-            b.3 = b.3.max(y1);
+        for pad in &self.pads {
+            // Every copper layer's shape of a padstack ([`crate::padstack`]); a pad of one shape is that shape.
+            let views: Vec<Pad> = if pad.has_stack() { pad.unique_shapes().iter().map(|s| s.lay_on(pad)).collect() } else { vec![pad.clone()] };
+            for p in &views {
+                // A trapezoid, a custom pad or copper off the pad's position reaches where its outline does, not where its size says.
+                let (x0, y0, x1, y1) = if p.has_complex_outline() || p.ext.offset.is_some() {
+                    let (x0, y0, x1, y1) = p.local_bbox();
+                    (p.at.0 + x0.floor() as Um, p.at.1 + y0.floor() as Um, p.at.0 + x1.ceil() as Um, p.at.1 + y1.ceil() as Um)
+                } else {
+                    (p.at.0 - p.size.0 / 2, p.at.1 - p.size.1 / 2, p.at.0 + p.size.0 / 2, p.at.1 + p.size.1 / 2)
+                };
+                b.0 = b.0.min(x0);
+                b.1 = b.1.min(y0);
+                b.2 = b.2.max(x1);
+                b.3 = b.3.max(y1);
+            }
         }
         if self.pads.is_empty() {
             (0, 0, 0, 0)

@@ -40,7 +40,13 @@ pub(crate) fn read_offset(pad: &[Sexpr], side: Side) -> Option<(Um, Um)> {
 /// The shape of `pad` (`parsePAD`): the shape token, `rect_delta`, `roundrect_rratio`, `chamfer_ratio`, `chamfer` and `options` and
 /// `primitives`. `side` is the side of the pad's footprint (the file's frame is mirrored on the bottom).
 pub(crate) fn read_pad_shape(pad: &[Sexpr], side: Side) -> PadShapeRead {
-    let mut shape = match sexpr::txt(pad, 3).unwrap_or("") {
+    read_shape_node(pad, sexpr::txt(pad, 3).unwrap_or(""), read_offset(pad, side), side)
+}
+
+/// The shape a node holds: `shape_token` (`rect`, `circle`, ..), the copper's `offset` and the tokens `rect_delta`, `roundrect_rratio`, `chamfer_ratio`,
+/// `chamfer`, `options` and `primitives` among its children. A pad is such a node (`parsePAD`), and so is each `(layer ..)` of its padstack (`parsePadstack`).
+pub(crate) fn read_shape_node(pad: &[Sexpr], shape_token: &str, offset: Option<(Um, Um)>, side: Side) -> PadShapeRead {
+    let mut shape = match shape_token {
         "circle" => PadShape::Circle,
         "oval" => PadShape::Oval,
         "roundrect" => PadShape::RoundRect,
@@ -48,7 +54,7 @@ pub(crate) fn read_pad_shape(pad: &[Sexpr], side: Side) -> PadShapeRead {
         "custom" => PadShape::Custom,
         _ => PadShape::Rect,
     };
-    let mut ext = PadShapeExt { offset: read_offset(pad, side), ..Default::default() };
+    let mut ext = PadShapeExt { offset, ..Default::default() };
 
     // `(rect_delta dx dy)`, `PAD::SetDelta`; the delta's x is mirrored with the pad.
     if let Some(d) = sexpr::find(pad, "rect_delta") {
@@ -182,17 +188,29 @@ pub(crate) fn write_pad_shape(shape: PadShape, roundrect_ratio: Option<f64>, ext
         t.corners.push(')');
     }
     if shape == PadShape::Custom {
-        let default = PadCustom::default();
-        let custom = ext.custom.as_ref().unwrap_or(&default);
-        let zone = if custom.zone == CustomZoneMode::ConvexHull { "convexhull" } else { "outline" };
-        let anchor = if custom.anchor == PadAnchor::Rect { "rect" } else { "circle" };
-        write!(t.custom, " (options (clearance {zone}) (anchor {anchor})) (primitives").unwrap();
-        for prim in &custom.primitives {
-            write_primitive(&mut t.custom, prim, side);
-        }
-        t.custom.push(')');
+        t.custom = write_custom_text(ext, side, true);
     }
     t
+}
+
+/// A custom pad's ` (options (clearance outline|convexhull) (anchor circle|rect)) (primitives ..)`; a padstack layer has no zone option of its own (it is the
+/// pad's) and writes ` (options (anchor ..)) (primitives ..)` (`with_clearance` false).
+pub(crate) fn write_custom_text(ext: &PadShapeExt, side: Side, with_clearance: bool) -> String {
+    let mut text = String::new();
+    let default = PadCustom::default();
+    let custom = ext.custom.as_ref().unwrap_or(&default);
+    let zone = if custom.zone == CustomZoneMode::ConvexHull { "convexhull" } else { "outline" };
+    let anchor = if custom.anchor == PadAnchor::Rect { "rect" } else { "circle" };
+    if with_clearance {
+        write!(text, " (options (clearance {zone}) (anchor {anchor})) (primitives").unwrap();
+    } else {
+        write!(text, " (options (anchor {anchor})) (primitives").unwrap();
+    }
+    for prim in &custom.primitives {
+        write_primitive(&mut text, prim, side);
+    }
+    text.push(')');
+    text
 }
 
 /// One primitive as `formatPrimitives` writes it: `(gr_line (start ..) (end ..) (width w))`, the filled shapes with `(fill yes|no)`.

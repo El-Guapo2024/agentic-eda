@@ -164,3 +164,12 @@ test("table cells and tables are counted, a cell is as locked as its table, and 
   const locked = summarizePcbSelection(board({ drawings: drawings({ tables: [tbl] }), locked: ["tbl_a"] }), ["tbl_a:0:0", "tbl_a:1:2"]);
   assert.deepEqual([locked.locked, locked.unlocked], [2, 0]);
 });
+
+test("the units of the selected pads reach the summary: two units with as many pins are a gate swap, one unit offers its mates", () => {
+  const gates = { ...part("U1", [0, 0], ["1", "2", "3", "4"].map((n) => pad(n, 0, 0))), units: [{ name: "A", pins: ["1", "2"] }, { name: "B", pins: ["3", "4"] }] } as Part;
+  const b = board({ parts: [gates, part("R1", [9000, 0], [pad("1", 0, 0), pad("2", 100, 0)])] });
+  assert.deepEqual(summarizePcbSelection(b, ["U1.1", "U1.3"]).gateSwap, { multiple: true, targets: null });
+  assert.deepEqual(summarizePcbSelection(b, ["U1.2"]).gateSwap, { multiple: false, targets: ["B"] });
+  assert.deepEqual(summarizePcbSelection(b, ["R1.1", "R1.2"]).gateSwap, { multiple: false, targets: null }, "a footprint without units");
+  assert.deepEqual(summarizePcbSelection(b, ["U1.1", "R1.1"]).gateSwap, { multiple: false, targets: ["B"] }, "R1's pad is passed over, as a non-eligible pad is");
+});

@@ -204,7 +204,7 @@ fn what_is_keyed_by_the_reference_follows_the_new_one() {
 fn two_chips() -> Design {
     let u = |id: &str, unit: u32, y: Um| symbol(id, "Test:Dual", "TL072", unit, p(0, y));
     let mut d = design();
-    d.symbol_library = Some(eda_model::ir::SymbolLibrarySection { symbols: vec![dual()] });
+    d.symbol_library = Some(eda_model::ir::SymbolLibrarySection { symbols: vec![dual()], ..Default::default() });
     let a = d.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap();
     a.symbols = vec![u("U5", 1, 0), u("U3", 2, 10), u("U5", 2, 20), u("U3", 1, 30)];
     a.wires.push(Wire { id: String::new(), net: "N".into(), pins: vec!["U3.1".into(), "U3.3".into()], pts: vec![p(0, 0), p(10, 0)], bus: false });

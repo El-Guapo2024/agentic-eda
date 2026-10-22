@@ -33,6 +33,7 @@ mod fill_api;
 mod fp_art_json;
 mod fp_assign_api;
 mod fp_json;
+mod pad_nets_api;
 mod append_api;
 mod design_block_api;
 mod graphics_api;

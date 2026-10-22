@@ -21,6 +21,7 @@ use eda_model::ir::{Design, FieldPlacement, NetLabel, NoConnect, PowerSymbol, Sc
 use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
+pub mod embedded;
 mod barcode_io;
 mod pcb_image;
 mod pcb_items_io;
@@ -32,6 +33,7 @@ mod via_io;
 mod fp_art_io;
 mod fp_fields;
 mod pad_shape;
+mod padstack_io;
 mod pcb;
 mod pcb_generated;
 mod pcb_items;
@@ -54,7 +56,7 @@ mod footprint_import;
 pub use footprint_import::{parse_library_footprint, ParsedFootprint};
 
 mod footprint_lib;
-pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_footprint_file, footprint_attributes, footprint_models, parse_footprint_file, resolve_library_footprints, resolve_library_footprints_with, LIBRARY_ROOT_ENV};
+pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, export_kicad_mod_with, find_footprint_file, footprint_attributes, footprint_models, parse_footprint_file, resolve_library_footprints, resolve_library_footprints_with, LIBRARY_ROOT_ENV};
 
 mod model3d;
 pub use model3d::{default_part_models, default_part_models_in, fit_pads, installed_footprint, installed_footprint_in, part_models, part_models_in, Fit, InstalledFootprint, ModelKind, PartModels};
@@ -69,7 +71,7 @@ mod footprint_scan;
 pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
 
 mod symbol_lib;
-pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, find_symbol_library_file, list_symbol_libraries, list_symbols_in_file, list_symbols_in_library, resolve_library_symbols, resolve_library_symbols_with, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
+pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, export_kicad_sym_library_with, find_symbol_library_file, list_symbol_libraries, list_symbols_in_file, list_symbols_in_library, resolve_library_symbols, resolve_library_symbols_with, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
 // KiCad's library tables (`sym-lib-table`, `fp-lib-table`, `design-block-lib-table`): the file format, the path variables, how global and project tables are put together.
 pub mod library_table;
@@ -616,7 +618,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     writeln!(out, "\t(sheet_instances").unwrap();
     writeln!(out, "\t\t(path \"/\" (page \"1\"))").unwrap();
     writeln!(out, "\t)").unwrap();
-    writeln!(out, "\t(embedded_fonts no)").unwrap();
+    // The files embedded in the schematic belong to it, not to a sheet: they are in the root sheet's file only, which is the one whose extras hold them
+    // (`SCH_IO_KICAD_SEXPR::Format`: the schematic's first top-level sheet).
+    embedded::write_owner(&mut out, &sch.extras.embedded, 1, true);
 
     writeln!(out, ")").unwrap();
     Ok(out)
