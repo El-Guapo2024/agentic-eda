@@ -73,6 +73,7 @@ pub use import_graphics_sch::{sch_items as graphics_sch_items, symbol_items as g
 mod fp_exchange;
 pub use fp_exchange::{board_footprint, footprint_name_of, pending_footprint_changes, BoardFootprint, ExchangeOptions, FootprintChange};
 mod library_place;
+pub mod microwave;
 mod outline;
 mod part_rename;
 mod reannotate;
@@ -686,6 +687,9 @@ pub enum Cmd {
     /// The board items the IR gained with GAPS.md item 24 (package P16): text boxes, reference images, points and the hatch fill of shapes -- one verb family, see
     /// [`pcb_items::PcbItemCmd`]. On the wire: `{"op": "pcb_item", "verb": "add_text_box", "text_box": {..}}`.
     PcbItem(pcb_items::PcbItemCmd),
+    /// The microwave tools (`pcbnew.MicrowaveTool.*`, GAPS.md item 9, package P19): a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own, one verb family, see
+    /// [`microwave::MicrowaveCmd`]. On the wire: `{"op": "microwave", "verb": "gap", "at": {..}, "size_um": 500, "track_width_um": 250}`.
+    Microwave(microwave::MicrowaveCmd),
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -2187,6 +2191,7 @@ impl Cmd {
             Cmd::SchEdit(c) => c.ids(),
             Cmd::SchMove(c) => c.ids(),
             Cmd::PcbItem(c) => c.ids(),
+            Cmd::Microwave(c) => c.ids(),
             Cmd::Table(c) | Cmd::SchTable(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::ClearErcExclusions => vec!["erc_exclusions"],
@@ -2777,6 +2782,7 @@ impl<'a> Board<'a> {
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
+            Cmd::Microwave(c) => self.apply_microwave(c),
             Cmd::Table(c) => self.apply_table(c),
             Cmd::SchTable(c) => self.apply_sch_table(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
@@ -3292,6 +3298,11 @@ impl<'a> Board<'a> {
         self.design.placement.as_mut().unwrap().footprints.retain(|f| f.id != part);
         // A footprint that exists only on the board (a copy) has no intent to go back to: deleting it deletes the part too.
         if let Some(dr) = self.design.drawings.as_mut() {
+            // The facts a footprint of its own was made with (the microwave tools' pads on the copper layer only, no courtyard) go with it: a footprint that takes the reference later
+            // starts without them. A part of the intent keeps what its board file said of it.
+            if dr.board_parts.iter().any(|b| b.reference == part) {
+                dr.footprint_extras.retain(|e| e.id != part);
+            }
             dr.board_parts.retain(|b| b.reference != part);
             // What was edited on the footprint (its fields, attributes, pads, and how zones connect to it) goes with it: a footprint put there again, or a copy
             // that takes the reference, starts from the library's own.
@@ -5824,6 +5835,8 @@ mod import_graphics_sch_tests;
 mod pcb_groups_tests;
 #[cfg(test)]
 mod pcb_items_tests;
+#[cfg(test)]
+mod microwave_tests;
 #[cfg(test)]
 mod tuning_tests;
 #[cfg(test)]

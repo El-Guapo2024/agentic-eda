@@ -73,6 +73,9 @@ mod review_tests;
 #[path = "pcb_items_tests.rs"]
 mod pcb_items_tests;
 #[cfg(test)]
+#[path = "microwave_tests.rs"]
+mod microwave_tests;
+#[cfg(test)]
 #[path = "table_tests.rs"]
 mod table_tests;
 
@@ -1388,6 +1391,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
         Cmd::PcbItem(c) => c.describe(),
+        Cmd::Microwave(c) => c.describe(),
         Cmd::Table(c) => c.describe(),
         Cmd::SchTable(c) => format!("schematic {}", c.describe()),
         Cmd::AddErcExclusion { check, location, .. } => format!("schematic erc-exclude {check:?} {location:?}"),
@@ -1655,6 +1659,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SchEdit(c) => c.kind(),
         Cmd::SchMove(c) => c.kind(),
         Cmd::PcbItem(c) => c.kind(),
+        Cmd::Microwave(c) => c.kind(),
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
         Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",

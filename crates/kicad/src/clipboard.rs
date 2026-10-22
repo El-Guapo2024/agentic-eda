@@ -75,6 +75,9 @@ pub struct ClipFootprint {
     /// clearance of the pads and of the footprint), as the board edit that gives the pasted footprint the same ones
     /// (`DrawingsSection::zone_overrides`; the `id` is the reference the text carried). `None` when it set none.
     pub zone_overrides: Option<FootprintZoneOverrides>,
+    /// What the text said of the footprint that the model has no field for (`DrawingsSection::footprint_extras`: the layers of its pads, no courtyard, the name it had with no
+    /// library, the tokens it carries), under the id the importer gave it: the pasted copy has them too.
+    pub extra: Option<eda_model::ir::FootprintExtra>,
 }
 
 /// A group on the clipboard: its name, its members and the design block it is linked to (`(lib_id ..)`, empty for none).
@@ -363,6 +366,7 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
             pad_nets,
             edit: design.footprint_edit(&fp.id).cloned(),
             zone_overrides,
+            extra: design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id)).cloned(),
         });
     }
     if let Some(dr) = &design.drawings {

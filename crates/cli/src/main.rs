@@ -22,6 +22,7 @@ mod board_control_api;
 mod board_output_api;
 mod body_api;
 mod model3d_api;
+mod microwave_api;
 mod model3d_tab_api;
 mod clipboard_api;
 mod bom_plugins;
