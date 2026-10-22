@@ -2053,6 +2053,16 @@ pub fn run(
         // `eda board export --kicad gerbers [-- kicad-cli args...]` (a `pcb
         // export` kind), `eda board export --kicad-sch netlist` (a `sch
         // export` kind).
+        "export" if rest.get(1).map(String::as_str) == Some("specctra") => {
+            // `eda board export specctra -o FILE.dsn`: the Specctra DSN of the board, written by our own exporter (kicad-cli has none).
+            let out = flag(rest, "-o").map(PathBuf::from).ok_or_else(|| fail("board_usage", "export specctra", "usage: eda board export specctra -o <file.dsn> [-C dir]"))?;
+            let warnings = crate::specctra_api::export_to(&dir, &out)?;
+            for w in &warnings {
+                eprintln!("warning: {w}");
+            }
+            eprintln!("BOARD exported OK: {}", out.display());
+            Ok(())
+        }
         "export" => {
             let pass: Vec<String> = rest.iter().skip_while(|a| *a != "--").skip(1).cloned().collect();
             let usage = || fail("board_usage", "export", "usage: eda board export --kicad <gerbers|drill|pos|step|glb|pdf|svg|ipc2581|odb|...> | --kicad-sch <netlist|bom|pdf|svg|...> [-- args]");
