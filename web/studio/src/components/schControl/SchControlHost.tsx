@@ -26,7 +26,7 @@ export function SchControlHost() {
       {dialog?.kind === "export_symbols" && <ExportSymbolsDialog onClose={close} />}
       {dialog?.kind === "legacy_bom" && <LegacyBomDialog onClose={close} />}
       {dialog?.kind === "symbol_check" && <SymbolCheckerDialog onClose={close} />}
-      {dialog?.kind === "import_sheet" && <ImportSheetDialog forceSheet={dialog.forceSheet} onClose={close} />}
+      {dialog?.kind === "import_sheet" && <ImportSheetDialog forceSheet={dialog.forceSheet} initialPath={dialog.initialPath} onClose={close} />}
       {dialog?.kind === "symbol_diff" && <SymbolDiffDialog reference={dialog.ref} onClose={close} />}
     </>
   );

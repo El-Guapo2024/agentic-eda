@@ -687,6 +687,8 @@ fn handle(
         // Import Sheet / Draw Sheet from File: the project's schematics, and the checks on one (`LoadSheetFromFile`) before it is taken in.
         ("GET", "/api/sch/sheet_files") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_files(dir).to_string().as_bytes()),
         ("POST", "/api/sch/sheet_file") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_file(dir, &body).to_string().as_bytes()),
+        // A schematic file dropped on the sheet (`ddAppendFile`): the files of the drop put where Import Sheet reads them (a browser gives no path), the sheets they place found among them.
+        ("POST", "/api/sch/dropped_sheets") => respond(stream, "200 OK", "application/json", crate::sheet_drop_api::put(&body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
         ("GET", "/api/sch/erc_severities") => respond(stream, "200 OK", "application/json", sch_api::erc_severities(dir).to_string().as_bytes()),
         ("GET", "/api/sch/formatting") => respond(stream, "200 OK", "application/json", sch_api::formatting(dir).to_string().as_bytes()),
