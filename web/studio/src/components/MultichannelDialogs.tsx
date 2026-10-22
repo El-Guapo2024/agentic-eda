@@ -208,7 +208,7 @@ function RepeatDialog({ plan }: { plan: RepeatPlan }) {
         </div>
       </DialogShell>
       {details && (
-        <div className="dialog-backdrop" style={{ zIndex: 1100 }} onClick={() => setDetails(null)}>
+        <div className="dialog-backdrop" style={{ zIndex: 2100 }} onClick={() => setDetails(null)}>
           <div className="dialog" style={{ width: 560 }} data-testid="mc-repeat-mismatch" onClick={(e) => e.stopPropagation()}>
             <div className="dialog-header">
               <span>Topology mismatch</span>

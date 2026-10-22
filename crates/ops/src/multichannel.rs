@@ -457,11 +457,12 @@ impl Board<'_> {
         if made.is_empty() {
             return Err(fail("ops_no_rule_areas", "multichannel", "nothing to make: the areas chosen exist already (turn on Replace existing placement rule areas), hold no footprint or have no extent"));
         }
-        // Land the zones.
+        // Land the zones. The areas that are replaced go first: a zone's id is made from its net, layer and outline, so the area made again over the same footprints has the id of
+        // the one it replaces, and is new all the same.
+        self.routing_mut().zones.retain(|z| !removed.contains(&z.id));
         let before: BTreeSet<String> = self.design.routing.iter().flat_map(|r| r.zones.iter().map(|z| z.id.clone())).collect();
         {
             let rt = self.routing_mut();
-            rt.zones.retain(|z| !removed.contains(&z.id));
             for (z, _, _) in &made {
                 rt.zones.push(z.clone());
             }

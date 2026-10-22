@@ -289,6 +289,28 @@ fn generate_can_group_each_area_with_its_footprints() {
 }
 
 #[test]
+fn generate_with_replace_and_group_groups_the_areas_made_again_over_the_same_footprints() {
+    // a zone's id is made from its net, layer and outline, so an area made again over the same footprints has the id of the one it replaces: it must still be grouped
+    let m = model(2);
+    let mut b = board(&m, 2);
+    generate_sheets(&mut b, 2);
+    let ids: Vec<String> = rule_areas(&b).iter().map(|z| z.id.clone()).collect();
+    let picks = sheets(2);
+    let refs: Vec<(AreaKind, &str)> = picks.iter().map(|(k, s)| (*k, s.as_str())).collect();
+    b.apply(&generate(&refs, true, true)).unwrap();
+    assert_eq!(rule_areas(&b).iter().map(|z| z.id.clone()).collect::<Vec<_>>(), ids, "the same areas, the same ids");
+    let groups = &drawings(&b).groups;
+    assert_eq!(groups.len(), 2, "{groups:?}");
+    for id in &ids {
+        let g = groups.iter().find(|g| g.member_ids.contains(id)).unwrap();
+        assert_eq!(g.member_ids.len(), 4, "the area and the three footprints of its channel: {g:?}");
+    }
+    // and again: the groups of the first run are not left behind
+    b.apply(&generate(&refs, true, true)).unwrap();
+    assert_eq!(drawings(&b).groups.len(), 2);
+}
+
+#[test]
 fn generate_from_a_group_makes_the_area_from_everything_in_the_group() {
     let m = model(2);
     let mut b = board(&m, 2);
