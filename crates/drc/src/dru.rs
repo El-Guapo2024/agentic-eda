@@ -281,6 +281,8 @@ fn is_symbol(t: &Tok) -> bool {
 struct Parser {
     lx: Lexer,
     env: Rc<Env>,
+    /// Run `compileRules` after the parse ([`parse`]); off for [`parse_rules`].
+    compile: bool,
 }
 
 /// What a rules file holds.
@@ -293,7 +295,14 @@ pub struct Parsed {
 
 /// `DRC_RULES_PARSER::Parse` with no reporter: the rules of `text`, or the first error.
 pub fn parse(text: &str, env: &Rc<Env>) -> Result<Parsed, ParseError> {
-    let mut p = Parser { lx: Lexer::new(text), env: env.clone() };
+    let mut p = Parser { lx: Lexer::new(text), env: env.clone(), compile: true };
+    p.parse()
+}
+
+/// `DRC_RULES_PARSER::Parse` alone, without the `DRC_ENGINE::compileRules` that [`parse`] runs after it: a condition that parses but names a property
+/// or a function KiCad does not know is no error here. This is how the DRC Rule Editor reads the file (`DRC_RULE_LOADER::LoadFromString`).
+pub fn parse_rules(text: &str, env: &Rc<Env>) -> Result<Parsed, ParseError> {
+    let mut p = Parser { lx: Lexer::new(text), env: env.clone(), compile: false };
     p.parse()
 }
 
@@ -399,6 +408,9 @@ impl Parser {
             self.next()?;
         }
         // `compileRules`: a condition that tells an error is a parse error, after the whole file is read.
+        if !self.compile {
+            return Ok(out);
+        }
         for r in &mut out.rules {
             if let Some(c) = &mut r.condition {
                 if !c.expression().is_empty() {
