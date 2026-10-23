@@ -405,3 +405,132 @@ fn kicad_cli_exports_a_board_with_an_embedded_step_model_with_the_model_in_it() 
     eprintln!("{users} footprint(s) with the model; STEP solids {none_solids} / {path_solids} / {embedded_solids}, GLB meshes {none} / {by_path_meshes} / {embedded_meshes} (none / by path / embedded)");
     let _ = std::fs::remove_dir_all(&work);
 }
+
+/// The `(embedded_files ..)` block at `depth` tabs that follows `after` in `text` (the first one when `after` is empty): from its line to its closing parenthesis.
+fn block_at<'a>(text: &'a str, depth: usize, after: &str) -> &'a str {
+    let t = "\t".repeat(depth);
+    let from = if after.is_empty() { 0 } else { text.find(after).unwrap_or_else(|| panic!("{after:?} in the file")) };
+    let open = format!("\n{t}(embedded_files");
+    let at = text[from..].find(&open).unwrap_or_else(|| panic!("an embedded_files block at {depth} tabs after {after:?}")) + from + 1;
+    let close = format!("\n{t})\n");
+    let end = text[at..].find(&close).expect("the end of the block") + at + close.len() - 1;
+    &text[at..end]
+}
+
+fn upgrade(cli: &std::path::Path, kind: &str, file: &std::path::Path) -> String {
+    let o = std::process::Command::new(cli).args([kind, "upgrade", "--force"]).arg(file).output().expect("runs kicad-cli");
+    let report = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "kicad-cli {kind} upgrade --force: {report}");
+    report
+}
+
+/// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): what this studio writes, KiCad reads and saves again unchanged. A board (its own files, a font kept because the board embeds fonts,
+/// a footprint that lists a file by reference), a footprint library and a symbol library, each with files this studio encoded, are saved again by
+/// `kicad-cli <pcb|fp|sym> upgrade --force`; KiCad keeps a file's data as it read it (`EMBEDDED_FILES_PARSER::ParseEmbedded`) and writes the checksum it computed
+/// (`DecompressAndDecode`), so every `(embedded_files ..)` block comes back character for character -- names, types, data, the 76-character lines, the checksums.
+#[test]
+fn kicad_cli_saves_the_files_this_studio_embedded_character_for_character() {
+    let Some(cli) = kicad_cli() else { return };
+    let Some((_, mut design, model, _)) = board_files("pcbnew/footprints_load_save.kicad_pcb") else { return };
+    let work = std::env::temp_dir().join(format!("eda_embedded_resave_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let mut list = odd_list();
+    list.insert(eda_kicad::embedded::encode_new("Some Font.ttf", b"\0\x01\0\0 not really a font").unwrap());
+    list.fonts = true;
+    let id = design.placement.as_ref().unwrap().footprints[0].id.clone();
+    let drawings = design.drawings.get_or_insert_with(Default::default);
+    drawings.embedded = list.clone();
+    let mut mine = eda_model::embedded_files::EmbeddedFiles::default();
+    mine.insert(list.get("one.bin").unwrap().as_reference());
+    drawings.footprint_extras.iter_mut().find(|e| e.id == id).unwrap().embedded = mine;
+
+    // the board
+    let board = work.join("b.kicad_pcb");
+    let ours = export_kicad_pcb(&design, &model, &ExportMeta { date: "2026-10-23", title: "b" }).unwrap();
+    std::fs::write(&board, &ours).unwrap();
+    upgrade(&cli, "pcb", &board);
+    let theirs = std::fs::read_to_string(&board).unwrap();
+    assert_eq!(block_at(&theirs, 1, ""), block_at(&ours, 1, ""), "the board's block");
+    assert!(theirs.contains("\t(embedded_fonts yes)\n"), "the board's fonts flag");
+    let fp_ours = block_at(&ours, 2, "");
+    assert_eq!(block_at(&theirs, 2, ""), fp_ours, "the footprint's block of references");
+
+    // a board that does not embed fonts, a footprint that holds one (and does not embed fonts either), another that embeds fonts and lists nothing: KiCad clears the board's
+    // own fonts only, so the font stays in both blocks, and the second footprint's flag stays
+    let fps: Vec<String> = design.placement.as_ref().unwrap().footprints.iter().map(|f| f.id.clone()).collect();
+    let drawings = design.drawings.as_mut().unwrap();
+    drawings.embedded.fonts = false;
+    drawings.embedded.remove("Some Font.ttf");
+    let mut with_font = eda_model::embedded_files::EmbeddedFiles::default();
+    with_font.insert(list.get("Some Font.ttf").unwrap().clone());
+    drawings.footprint_extras.iter_mut().find(|e| e.id == fps[0]).unwrap().embedded = with_font;
+    drawings.footprint_extras.iter_mut().find(|e| e.id == fps[1]).unwrap().embedded = eda_model::embedded_files::EmbeddedFiles { fonts: true, files: Vec::new() };
+    let ours = export_kicad_pcb(&design, &model, &ExportMeta { date: "2026-10-23", title: "b" }).unwrap();
+    std::fs::write(&board, &ours).unwrap();
+    upgrade(&cli, "pcb", &board);
+    let theirs = std::fs::read_to_string(&board).unwrap();
+    assert_eq!(block_at(&theirs, 1, ""), block_at(&ours, 1, ""), "the board's block, the footprint's font in it");
+    assert!(block_at(&theirs, 1, "").contains("Some Font.ttf"));
+    assert_eq!(block_at(&theirs, 2, ""), block_at(&ours, 2, ""), "the footprint's block names its font");
+    assert_eq!(theirs.matches("\t\t(embedded_fonts yes)\n").count(), 1, "the second footprint embeds fonts");
+    assert!(theirs.contains("\t(embedded_fonts no)\n"));
+
+    // The schematic is not in this proof: `kicad-cli sch upgrade --force` (10.99) saves no root `(embedded_fonts ..)` nor `(embedded_files ..)` at all, not even for KiCad's own
+    // `qa/data/eeschema/api_kitchen_sink.kicad_sch` (`SCH_IO_KICAD_SEXPR::Format` writes them only for `GetTopLevelSheet( 0 )`, which the CLI's load does not match).
+
+    // a footprint library
+    if let Some(path) = qa(ESP32) {
+        let parsed = eda_kicad::parse_library_footprint(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let lib = work.join("L.pretty");
+        std::fs::create_dir_all(&lib).unwrap();
+        let fp = lib.join(format!("{}.kicad_mod", parsed.footprint.name));
+        let ours = eda_kicad::export_kicad_mod_with(&parsed.footprint, &list);
+        std::fs::write(&fp, &ours).unwrap();
+        upgrade(&cli, "fp", &lib);
+        let theirs = std::fs::read_to_string(&fp).unwrap();
+        assert_eq!(block_at(&theirs, 1, ""), block_at(&ours, 1, ""), "the footprint's block");
+    }
+
+    // a symbol library
+    let text = r#"(kicad_symbol_lib (version 20231120) (generator "t")
+        (symbol "R" (pin_numbers (hide yes)) (pin_names (offset 0) (hide no)) (in_bom yes) (on_board yes)
+            (property "Reference" "R" (at 0 0 0) (effects (font (size 1.27 1.27))))
+            (symbol "R_1_1" (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1")))
+        )
+    )"#;
+    let parsed = eda_kicad::parse_library_symbols(text).unwrap();
+    let embedded: std::collections::BTreeMap<String, eda_model::embedded_files::EmbeddedFiles> = [("R".to_string(), list.clone())].into();
+    let syms: Vec<&eda_model::ir::LibrarySymbol> = parsed.symbols.iter().collect();
+    let ours = eda_kicad::export_kicad_sym_library_with(&syms, &embedded);
+    let sym = work.join("S.kicad_sym");
+    std::fs::write(&sym, &ours).unwrap();
+    upgrade(&cli, "sym", &sym);
+    let theirs = std::fs::read_to_string(&sym).unwrap();
+    assert_eq!(block_at(&theirs, 2, ""), block_at(&ours, 2, ""), "the symbol's block");
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+/// `PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* )` on a board: `(embedded_fonts yes|no)` for every footprint, whatever it lists, and the footprint's files by name -- its fonts
+/// too, because the board's save clears only the board's own fonts (`FormatBoardToFormatter`: `m_board->GetEmbeddedFiles()->ClearEmbeddedFonts()`).
+#[test]
+fn a_footprint_on_a_board_keeps_its_fonts_flag_and_lists_its_fonts() {
+    let Some((_, mut design, model, _)) = board_files("pcbnew/footprints_load_save.kicad_pcb") else { return };
+    let fps: Vec<String> = design.placement.as_ref().unwrap().footprints.iter().map(|f| f.id.clone()).collect();
+    assert!(fps.len() >= 2);
+    let font = eda_kicad::embedded::encode_new("Some Font.ttf", b"\0\x01\0\0 a font").unwrap();
+    let drawings = design.drawings.get_or_insert_with(Default::default);
+    // the first footprint embeds a font and does not embed fonts; the second embeds fonts and lists nothing
+    let mut first = eda_model::embedded_files::EmbeddedFiles::default();
+    first.insert(font.clone());
+    drawings.footprint_extras.iter_mut().find(|e| e.id == fps[0]).unwrap().embedded = first;
+    drawings.footprint_extras.iter_mut().find(|e| e.id == fps[1]).unwrap().embedded = eda_model::embedded_files::EmbeddedFiles { fonts: true, files: Vec::new() };
+    let written = export_kicad_pcb(&design, &model, &ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    let fp_block = block_at(&written, 2, "");
+    assert!(fp_block.contains("(name \"Some Font.ttf\")") && fp_block.contains("(type font)"), "{written}");
+    assert!(block_of(&written).contains("(name \"Some Font.ttf\")"), "the board's block has its data");
+    let (back, _, _) = import_kicad_pcb(&written).unwrap();
+    let dr = back.drawings.unwrap();
+    assert!(dr.footprint_extras.iter().find(|e| e.id == fps[1]).unwrap().embedded.fonts, "the second footprint still embeds fonts");
+    assert_eq!(dr.footprint_extras.iter().find(|e| e.id == fps[0]).unwrap().embedded.files.len(), 1);
+}
