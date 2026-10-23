@@ -201,10 +201,12 @@ impl Node {
     }
 
     /// `NODE::FixupVirtualVias` (`pns_node.cpp:1270`, run by `ROUTER::SyncWorld`): a virtual via (`VVIA`) at every joint on one layer with no pad and no
-    /// via where three or more segments meet, where the width changes, or where a locked segment ends -- and one at the other end of that locked
-    /// segment too. Its diameter is the widest track's plus twice `PNS_HULL_MARGIN` (10 nm, which the micrometre grid has no room for). As
-    /// KiCad's, only segments are counted (an arc is no `SEGMENT`), "the locked one" is the last segment of the joint, and the solder mask, which
-    /// KiCad compares too, is not in the model.
+    /// via where the width changes or where a locked segment ends -- and one at the other end of that locked segment too, pad or via there or not.
+    /// Its diameter is the widest track's plus twice `PNS_HULL_MARGIN` (10 nm, which the micrometre grid has no room for). As KiCad's, only
+    /// segments are counted (an arc is no `SEGMENT`), "the locked one" is the last segment of the joint, and the solder mask, which KiCad compares
+    /// too, is not in the model. **Where three segments meet there is none**: the condition reads `n_seg >= 3`, but KiCad's loop never counts a
+    /// segment into `n_seg` (it stays 0), so a T of tracks of one width is no virtual via in KiCad's world -- and so not here (the review of
+    /// 2026-10-23 found the first port counting them).
     pub fn fixup_virtual_vias(&mut self) {
         let mut vvias: Vec<Via> = Vec::new();
         let mut keys: Vec<&JointKey> = self.joints.keys().collect();
@@ -214,7 +216,9 @@ impl Node {
             if joint.layers.start() != joint.layers.end() {
                 continue; // `IsMultilayer()`
             }
-            let (mut n_seg, mut n_solid, mut n_vias) = (0, 0, 0);
+            // `int n_seg = 0;` -- never incremented in KiCad's loop
+            let n_seg = 0;
+            let (mut n_solid, mut n_vias) = (0, 0);
             let (mut prev_w, mut max_w, mut is_width_change) = (-1, -1, false);
             let mut locked_seg: Option<&crate::item::Segment> = None;
             let mut is_locked = false;
@@ -234,7 +238,6 @@ impl Node {
                         prev_w = w;
                         is_locked = s.locked;
                         locked_seg = Some(s);
-                        n_seg += 1;
                         net = Some(s.net.clone());
                         pos = Some(key.pos());
                     }

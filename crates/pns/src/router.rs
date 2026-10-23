@@ -347,7 +347,7 @@ impl Router {
             (anchor, node.get(id).map_or(LayerRange::single(placer.current_layer), |i| i.layers()))
         };
         let layer = if layers.overlaps_layer(placer.current_layer) { placer.current_layer } else { layers.start() };
-        let mut commit = self.build_commit(&net, placer.runs.clone(), placer.current_layer, placer.width);
+        let mut commit = self.build_commit(&net, runs, placer.current_layer, placer.width);
         if !commit.tracks.is_empty() || !commit.vias.is_empty() {
             let splits = self.session_splits(false);
             self.apply_splits(&splits, &mut commit);
@@ -1055,8 +1055,8 @@ mod tests {
         let joint = after.joint_at(Point { x: 2000, y: 0 }, &net_of("SIG")).expect("a joint where the route starts");
         let segments = joint.links.iter().filter(|&&id| matches!(after.get(id), Some(Item::Segment(_)))).count();
         assert_eq!(segments, 3, "the two halves of the track and the route");
-        // three segments meet there with no pad or via: the world has a virtual via at the point (`FixupVirtualVias`)
-        assert!(joint.links.iter().any(|&id| after.get(id).is_some_and(Item::is_virtual)));
+        // three segments of one width meet there with no pad or via: no virtual via (`FixupVirtualVias` never counts `n_seg`)
+        assert!(!joint.links.iter().any(|&id| after.get(id).is_some_and(Item::is_virtual)));
     }
 
     /// A route that starts and places nothing leaves the track whole (`CommitRouting` commits nothing).

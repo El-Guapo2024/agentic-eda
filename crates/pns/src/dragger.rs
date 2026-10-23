@@ -74,8 +74,9 @@ pub enum DragKind {
 /// `DRAGGER::checkVirtualVia( aP, aSeg )`: a segment taken hold of within half its width of one of its ends (`EuclideanNorm() <= w2`, the start
 /// first), where the joint has a virtual via -- that via.
 fn check_virtual_via(node: &Node, at: Point, seg: &crate::item::Segment) -> Option<ItemId> {
-    let w2 = seg.width / 2;
-    let norm = |p: Point| (((at.x - p.x) as f64).hypot((at.y - p.y) as f64)).round() as Um;
+    // `( aP - aSeg->Seg().A ).EuclideanNorm() <= w2`: a double against the integer half width, not rounded
+    let w2 = (seg.width / 2) as f64;
+    let norm = |p: Point| ((at.x - p.x) as f64).hypot((at.y - p.y) as f64);
     let psnap = if norm(seg.a) <= w2 {
         seg.a
     } else if norm(seg.b) <= w2 {
@@ -724,15 +725,24 @@ mod tests {
         pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of(net), layer: 0, a: w[0], b: w[1], width: 200, source_track: Some((track.into(), i)), locked: false }))).collect()
     }
 
-    /// `NODE::FixupVirtualVias` + `DRAGGER::checkVirtualVia`: where three tracks meet with no pad or via, the world has a virtual via, and a segment
-    /// taken hold of within half its width of that end drags the junction as a via -- all three tracks follow, in every mode, and the commit moves the
-    /// three and adds no via. Taken hold of further along, it is a corner or segment drag of that track as before.
+    /// `NODE::FixupVirtualVias` + `DRAGGER::checkVirtualVia`: where tracks of different widths meet with no pad or via, the world has a virtual via,
+    /// and a segment taken hold of within half its width of that end drags the junction as a via -- all three tracks of this T follow, in every
+    /// mode, and the commit moves the three and adds no via. Taken hold of further along, it is a corner or segment drag of that track as before.
+    /// A T of one width has no virtual via (KiCad's `n_seg` is never counted), and its end is a corner drag of the one line.
     #[test]
     fn a_t_junction_is_dragged_as_a_virtual_via() {
         let mut node = Node::new();
         let a = add_track(&mut node, "SIG", "trkA", &[p(-3000, 0), p(0, 0)]);
         add_track(&mut node, "SIG", "trkB", &[p(0, 0), p(3000, 0)]);
-        add_track(&mut node, "SIG", "trkC", &[p(0, 0), p(0, 3000)]);
+        let one_width = {
+            let mut n = node.branch();
+            add_track(&mut n, "SIG", "trkC", &[p(0, 0), p(0, 3000)]);
+            n.fixup_virtual_vias();
+            n
+        };
+        assert!(one_width.joint_at(p(0, 0), &net_of("SIG")).unwrap().links.iter().all(|&id| !one_width.get(id).is_some_and(Item::is_virtual)), "a T of one width: none");
+        assert_eq!(Dragger::start(&one_width, p(-50, 0), a[0]).expect("a drag").kind, DragKind::Corner, "and its end is a corner drag");
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(0, 3000), width: 300, source_track: Some(("trkC".into(), 0)), locked: false }));
         node.fixup_virtual_vias();
         let joint = node.joint_at(p(0, 0), &net_of("SIG")).unwrap();
         let vvia = joint.links.iter().copied().find(|&id| node.get(id).is_some_and(Item::is_virtual)).expect("a virtual via at the T");

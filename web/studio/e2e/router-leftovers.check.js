@@ -718,11 +718,16 @@
     await ctrlSlash();
     const set2 = replies.slice(n).find((r) => r.name === "settings");
     t(!!set2 && set2.req.settings.corner_mode === "mitered_45", `and again to 45, the default: ${set2 && JSON.stringify(set2.req.settings.corner_mode)}`);
+    // `AS_CONTEXT`: outside the router tool the actions (and so their hotkeys, now in the action catalog) do nothing
+    await leaveTool();
+    const outside = await E.run("pcbnew.InteractiveRouter.SwitchRoundingArc90");
+    t(!!outside && outside.ok === false, `not in the selection tool: ${JSON.stringify(outside)}`);
   });
 
-  await scenario("virtual vias: D at the end of a segment where three tracks meet drags the junction, every track follows, no via is drawn or committed", async (t) => {
-    // a T of PA6 at (30, 10) mm: no pad or via there, so the router's world has a virtual via at it (`NODE::FixupVirtualVias`)
-    await commit([line("PA6", "F.Cu", [[27000, 10000], [30000, 10000]]), line("PA6", "F.Cu", [[30000, 10000], [33000, 10000]]), line("PA6", "F.Cu", [[30000, 10000], [30000, 13000]])]);
+  await scenario("virtual vias: D at the end of a segment where tracks of two widths meet drags the junction, every track follows, no via is drawn or committed", async (t) => {
+    // a T of PA6 at (30, 10) mm whose stem is wider: no pad or via there and the width changes, so the router's world has a virtual via at it
+    // (`NODE::FixupVirtualVias`; a T of one width has none -- KiCad never counts `n_seg`)
+    await commit([line("PA6", "F.Cu", [[27000, 10000], [30000, 10000]]), line("PA6", "F.Cu", [[30000, 10000], [33000, 10000]]), { ...line("PA6", "F.Cu", [[30000, 10000], [30000, 13000]]), width: 300 }]);
     for (const mode of ["pcbnew.InteractiveRouter.WalkaroundMode", "pcbnew.InteractiveRouter.ShoveMode"]) {
       await E.run(mode);
       await pointerTo(30000, 10000);

@@ -733,7 +733,7 @@ mod tests {
     }
 
     /// Virtual vias (`NODE::FixupVirtualVias`, `DRAGGER::checkVirtualVia`) against kicad-cli's DRC (slow tier): on `pic_programmer` and
-    /// `backspace1`, the joints where three tracks or more meet, or the width changes, with no pad or via, taken hold of at the end of one of their
+    /// `backspace1`, the joints where the width changes, with no pad or via (KiCad's `FixupVirtualVias` gives a T of one width none), taken hold of at the end of one of their
     /// segments and dragged 0.3 mm in each mode -- every track there follows, no via is committed, and kicad-cli finds no new copper violation and no
     /// new dangling track (the junction stays one joint).
     #[test]
