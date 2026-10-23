@@ -286,6 +286,7 @@ export async function closeSimulator(): Promise<boolean> {
 
 /** `SIMULATOR_CONTROL::NewAnalysisTab`: the analysis dialog on "*", a new tab with what it says. */
 export async function newAnalysisTab(): Promise<void> {
+  runAfterNewTab = false;
   await loadCircuit();
   const fields = parseCommand("*", current.frame.circuit?.sch_sim_command ?? "");
   setSimDialog({ kind: "command", mode: "new", fields, options: OPTION_DEFAULT_FLAGS, command: "*" });
@@ -319,7 +320,15 @@ export async function applyAnalysis(mode: "new" | "edit", command: string, optio
   current.frame.modified = true;
   setSimDialog(null);
   await saveSettings(settings);
+  // `RunSimulation` with no tab: `NewAnalysisTab`, then the run when the dialog made one
+  if (mode === "new" && runAfterNewTab) {
+    runAfterNewTab = false;
+    await startSimulation();
+  }
 }
+
+/** Run Simulation was asked with no tab: the tab the analysis dialog makes is run (`SIMULATOR_CONTROL::RunSimulation`). */
+let runAfterNewTab = false;
 
 /** `SIMULATOR_FRAME::SaveSettings`: the project's simulator settings written when they changed (`NGSPICE_SETTINGS::SaveToFile`, the schematic marked modified):
  *  one command, with the workbook the design holds. */
@@ -345,12 +354,30 @@ export async function runOrStop(): Promise<void> {
   }
   if (!currentTab(current.frame)) {
     await newAnalysisTab();
+    runAfterNewTab = true;
     return;
   }
   await startSimulation();
 }
 
-export async function startSimulation(overrides?: Map<string, number>): Promise<void> {
+/** The run in progress, so that a tuner's change can wait for the run it stopped. */
+let runInProgress: Promise<void> | null = null;
+/** Whether the last run was stopped (a multi-run goes no further). */
+let lastRunStopped = false;
+
+/** `SIMULATOR_FRAME::StartSimulation`. `fromTuner`: `onUpdateSim`'s run, the loaded circuit run again with the tuned values -- no FFT or schematic
+ *  checks (here the batch run reads the schematic again, without asking). */
+export async function startSimulation(overrides?: Map<string, number>, fromTuner = false): Promise<void> {
+  const run = startSimulationInner(overrides, fromTuner);
+  runInProgress = run;
+  try {
+    await run;
+  } finally {
+    if (runInProgress === run) runInProgress = null;
+  }
+}
+
+async function startSimulationInner(overrides: Map<string, number> | undefined, fromTuner: boolean): Promise<void> {
   const f = current.frame;
   const tab = currentTab(f);
   if (!tab) return;
@@ -363,7 +390,7 @@ export async function startSimulation(overrides?: Map<string, number>): Promise<
       return;
     }
     fftTran = { command: tran.command, options: tran.options };
-  } else if (f.tabs.indexOf(tab) === 0) {
+  } else if (f.tabs.indexOf(tab) === 0 && !fromTuner) {
     // busy from here: the schematic's analysis is read first (kicad-cli)
     f.running = true;
     emit();
@@ -394,6 +421,7 @@ export async function startSimulation(overrides?: Map<string, number>): Promise<
   current.opPoints = new Map();
   emit();
   const serial = ++runSerial;
+  lastRunStopped = false;
   const req: RunRequest = {
     command: tab.command,
     options: tab.options,
@@ -413,8 +441,11 @@ export async function startSimulation(overrides?: Map<string, number>): Promise<
   f.running = false;
   showNetlistErrors(reply.messages);
   if (reply.stopped) {
+    // `NGSPICE::Stop` ends the run and `onSimFinished` follows it (`m_simFinished = true`: Probe and Tune stay enabled); the killed batch run
+    // leaves no vectors
     f.console = reply.console ?? "";
-    f.finished = false;
+    f.finished = true;
+    lastRunStopped = true;
     emit();
     return;
   }
@@ -449,7 +480,7 @@ const pendingFourier: { fundamental: string; signal: string }[] = [];
 
 /** `SIMULATOR_FRAME_UI::DoFourier`: `fourier <fundamental> <signal>` into the console; a run that has it. */
 export async function doFourier(signals: string[], fundamental: string): Promise<void> {
-  const f = SpiceValue.parse(fundamental)?.toSpiceString() ?? fundamental;
+  const f = SpiceValue.parse(fundamental).toSpiceString();
   for (const s of signals) pendingFourier.push({ fundamental: f, signal: s });
   setSimDialog(null);
   await startSimulation();
@@ -560,16 +591,19 @@ export function removeTuner(t: Tuner): void {
  *  (`prepareMultiRunState`), the traces drawn as sweeps of the runs. */
 export async function tunerChanged(): Promise<void> {
   const f = current.frame;
-  if (f.running) return;
+  // `onUpdateSim`: a run going is stopped, and the simulation run again
+  if (f.running) {
+    await stop();
+    if (runInProgress) await runInProgress;
+  }
   const multi = f.tuners.filter((t) => t.multi);
   if (multi.length === 0) {
-    if (f.finished) await startSimulation();
-    else emit();
+    await startSimulation(undefined, true);
     return;
   }
   const steps = multiRunSteps(multi);
   if (steps.length < 2) {
-    await startSimulation();
+    await startSimulation(undefined, true);
     return;
   }
   const tab = currentTab(f);
@@ -577,8 +611,8 @@ export async function tunerChanged(): Promise<void> {
   // One run per step, the y of every trace recorded per step (`recordMultiRunData`), then each trace drawn with a sweep per run.
   const record = new Map<string, { x: number[]; ys: number[][] }>();
   for (const step of steps) {
-    await startSimulation(step);
-    if (!f.finished) return;
+    await startSimulation(step, true);
+    if (!f.finished || lastRunStopped) return;
     for (const [key, tr] of tab.plot.traces) {
       const r = record.get(key) ?? { x: tr.x.slice(), ys: [] };
       if (r.x.length === tr.x.length) r.ys.push(tr.y.slice());
@@ -595,6 +629,7 @@ export async function tunerChanged(): Promise<void> {
     tr.y = y;
     tr.sweepCount = r.ys.length;
     tr.sweepSize = r.x.length;
+    tr.multiRun = true;
   }
   emit();
 }

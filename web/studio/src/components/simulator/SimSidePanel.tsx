@@ -3,7 +3,7 @@
 // CURSORS_GRID_TRICKS, rebuildMeasurementsGrid, onMeasurementsGridCellChanged, MEASUREMENTS_GRID_TRICKS; eeschema/widgets/tuner_slider.cpp).
 import { useState } from "react";
 import { cssRgb, parseColor } from "../../kicad-port/sim/mathPlot";
-import { addMeasurement, createCursor, currentTab, cursorColumns, cursorRows, deleteCursor, deleteMeasurement, findTrace, setCursor, setCursorX, setMeasurement, setSignalPlotted, setTunerRange, setTunerSlider, setTunerValue, simTypeOf, sliderOf } from "../../kicad-port/sim/simFrame";
+import { addMeasurement, createCursor, currentTab, cursorColumns, cursorRows, deleteCursor, deleteMeasurement, findTrace, setCursor, setCursorX, setMeasurement, setSignalPlotted, setTunerRange, setTunerSlider, setTunerValue, simTypeOf, sliderOf, tunerSteps } from "../../kicad-port/sim/simFrame";
 import { measurementFor, measurementValue, signalsGrid } from "../../kicad-port/sim/simSignals";
 import { setTraceColor } from "../../kicad-port/sim/simPlotTab";
 import { SpiceValue, formatFromString, formatToString } from "../../kicad-port/sim/spiceValue";
@@ -353,7 +353,8 @@ function TunerView({ t }: { t: Tuner }) {
         <label>
           Steps
           <input type="number" min={2} max={100} disabled={!t.multi} value={t.steps} onChange={(e) => {
-            t.steps = Math.max(2, Number(e.target.value) || 2);
+            // `onStepsTextEnter`: a text that is no number keeps the count, fewer than 2 is 2; the spin control's `SetRange( 2, 100 )` caps it
+            t.steps = tunerSteps(e.target.value, t.steps);
             touch(true);
           }} onBlur={() => void tunerChanged()} />
         </label>

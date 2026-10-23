@@ -17,6 +17,11 @@ import { SpiceValue } from "./spiceValue";
 export interface Cursor {
   /** The cursor's x, in the trace's units (`CURSOR::m_coords.x`). */
   x: number;
+  /** `CURSOR::GetName`: the signal it was put on as the signals grid names it (`EnableCursor( trace, id, signalName )`: "V(a) (gain)", a
+   *  user-defined signal's expression), what the cursors grid's Signal column shows. */
+  name?: string;
+  /** `CURSOR::m_sweepIndex`: the run of a multi-run trace it reads. */
+  sweep?: number;
 }
 
 export interface Trace {
@@ -34,6 +39,8 @@ export interface Trace {
   sweepCount: number;
   /** Points per sweep; Infinity for one sweep (`std::numeric_limits<size_t>::max()`). */
   sweepSize: number;
+  /** `TRACE::IsMultiRun`: the sweeps are the runs of multi-run tuners. */
+  multiRun?: boolean;
 }
 
 /** `TRACE::GetDisplayName`. */
@@ -256,6 +263,7 @@ export function setTraceData(tab: PlotTab, tr: Trace, xs: number[], ys: number[]
   tr.y = y;
   tr.sweepCount = sweepCount;
   tr.sweepSize = sweepSize;
+  tr.multiRun = false;
   updateScalesOf(tab, tr);
   updateAxisVisibility(tab);
 }
@@ -303,7 +311,13 @@ export const labelOf = (s: Scale | null) => s?.name ?? "";
 export const unitsOf = (s: Scale | null) => s?.unit ?? "";
 
 /** `CURSOR::doSetCoordX` for a single-sweep trace: the value at the cursor. */
-export function cursorValue(tr: Trace, x: number): number {
+export function cursorValue(tr: Trace, x: number, sweep = 0): number {
+  // `CURSOR::doSetCoordX`: a multi-run trace is read on the cursor's run only (the first, or the last when the index is past the runs)
+  if (tr.multiRun && tr.sweepCount > 1 && Number.isFinite(tr.sweepSize) && tr.sweepSize > 0 && tr.sweepCount * tr.sweepSize <= tr.x.length) {
+    const i = sweep < 0 || sweep >= tr.sweepCount ? Math.max(tr.sweepCount - 1, 0) : sweep;
+    const start = i * tr.sweepSize;
+    return valueAt(tr.x, tr.y, x, start, Math.min(tr.x.length, start + tr.sweepSize));
+  }
   return valueAt(tr.x, tr.y, x);
 }
 

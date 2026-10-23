@@ -18,7 +18,7 @@ import {
   type CommandFields,
   type SimType,
 } from "../../kicad-port/sim/simCommand";
-import { currentTab, setUserSignals } from "../../kicad-port/sim/simFrame";
+import { currentTab, formatDialogUnits, setUserSignals } from "../../kicad-port/sim/simFrame";
 import { ensureThirdYAxis, gridShown, labelOf, setGrid, unitsOf, type PlotTab } from "../../kicad-port/sim/simPlotTab";
 import { adjustLimitedView } from "../../kicad-port/sim/mathPlot";
 import { SpiceValue, formatToString, type SpiceValueFormat } from "../../kicad-port/sim/spiceValue";
@@ -104,9 +104,11 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
   const vSources = (circuit?.items ?? []).filter((i) => i.device === "V").map((i) => i.ref);
   const title = d.mode === "new" ? "New Simulation Tab" : `${shortName(commandToSimType(d.command))}  —  ${longName(commandToSimType(d.command))}`;
   const [fftFilter, setFftFilter] = useState("");
+  // `m_inputSignalsList`: the signals the filter shows, in the list's order
+  const fftList = sortSignals([...ui.frame.signals, ...ui.frame.userSignals.values()]).filter((s) => signalMatches(fftFilter, s));
 
   const ok = () => {
-    const r = buildCommand(f, itemName, d.command === "*" ? "" : d.command);
+    const r = buildCommand(f, itemName, d.command === "*" ? "" : d.command, fftList);
     if ("error" in r) {
       setError(r.error);
       return;
@@ -119,8 +121,8 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
       const lock = (s: PlotTab["y1"], on: boolean, min: string, max: string) => {
         if (!s) return;
         s.locked = on;
-        s.axisMin = SpiceValue.parse(min)?.toDouble() ?? 0;
-        s.axisMax = SpiceValue.parse(max)?.toDouble() ?? 0;
+        s.axisMin = SpiceValue.parse(min).toDouble();
+        s.axisMax = SpiceValue.parse(max).toDouble();
       };
       if (labelOf(p.y1) !== "") lock(p.y1, plotSet.lock1, plotSet.min1, plotSet.max1);
       if (labelOf(p.y2) !== "") lock(p.y2, plotSet.lock2, plotSet.min2, plotSet.max2);
@@ -248,9 +250,7 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
         <div>Input signals:</div>
         <input type="search" placeholder="Filter" aria-label="Filter input signals" value={fftFilter} onChange={(e) => setFftFilter(e.target.value)} />
         <div className="sim-checklist">
-          {sortSignals([...ui.frame.signals, ...ui.frame.userSignals.values()])
-            .filter((s) => signalMatches(fftFilter, s))
-            .map((s) => (
+          {fftList.map((s) => (
               <label key={s} className="sim-check">
                 <input type="checkbox" checked={f.fftSignals.includes(s)} onChange={(e) => set({ fftSignals: e.target.checked ? [...f.fftSignals, s] : f.fftSignals.filter((x) => x !== s) })} />
                 {s}
@@ -492,7 +492,7 @@ function NetlistDialog({ text, messages }: { text: string; messages: string[] })
 /** `DIALOG_SIM_FORMAT_VALUE`: significant digits (1 to 9) and a range, Auto or a prefix. */
 function FormatDialog({ title, format, apply }: { title: string; format: SpiceValueFormat; apply: (f: SpiceValueFormat) => void }) {
   const r = format.range;
-  const units = r.endsWith("Hz") ? "Hz" : r.endsWith("dB") ? "dB" : r.startsWith("~") ? r.slice(1) : /^[fpnumKMGTP]/.test(r) && r.length > 1 ? r.slice(1) : r;
+  const units = formatDialogUnits(r);
   const [precision, setPrecision] = useState(format.precision);
   const [range, setRange] = useState(r.startsWith("~") ? "~" : r);
   const prefixes = ["f", "p", "n", "u", "m", "", "K", "M", "G", "T", "P"];

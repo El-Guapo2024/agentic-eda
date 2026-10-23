@@ -110,7 +110,7 @@ export interface DcSource {
   incr: SpiceValue;
 }
 
-const sv = (t: string | undefined) => SpiceValue.parse(t ?? "") ?? new SpiceValue();
+const sv = (t: string | undefined) => SpiceValue.parse(t ?? "");
 
 /** `SPICE_CIRCUIT_MODEL::ParseDCCommand`. */
 export function parseDcCommand(cmd: string): { src1: DcSource; src2: DcSource | null } | null {
@@ -304,7 +304,8 @@ export function parseCommand(cmd: string, customDirectives = ""): CommandFields 
         f.dcStart1 = p.src1.start.toSpiceString();
         f.dcStop1 = p.src1.end.toSpiceString();
         f.dcIncr1 = p.src1.incr.toSpiceString();
-        if (p.src2) {
+        // `src2.m_vincrement = SPICE_VALUE( -1 )` before the parse: a second source whose increment is -1 is no second source
+        if (p.src2 && p.src2.incr.toDouble() !== -1) {
           f.dcEnable2 = true;
           f.dcType2 = typeOf(p.src2.source);
           f.dcSource2 = p.src2.source;
@@ -356,12 +357,13 @@ export function parseCommand(cmd: string, customDirectives = ""): CommandFields 
       break;
     case "FFT":
       f.page = "FFT";
-      // every token after the first word, as `m_fftInputSignals` collects them
-      f.fftSignals = t.slice(1).filter((x) => x.toLowerCase() !== "fft" && x.toLowerCase() !== "linearize");
+      // every token after the first word, as the `std::set` `m_fftInputSignals` collects them (once each)
+      f.fftSignals = [...new Set(t.slice(1).filter((x) => x.toLowerCase() !== "fft" && x.toLowerCase() !== "linearize"))];
       break;
     default:
+      // `parseCommand` leaves `m_customTxt` alone: `TransferDataToWindow` fills it with the schematic's analyses (`loadDirectives`), so a Custom
+      // tab edited shows those, not its own command, as KiCad's does
       f.page = "UNKNOWN";
-      if (cmd !== "*") f.custom = cmd;
       break;
   }
   return f;
@@ -370,25 +372,20 @@ export function parseCommand(cmd: string, customDirectives = ""): CommandFields 
 /** The analysis's item names (`SPICE_CIRCUIT_MODEL::GetItemName`), by reference. */
 export type ItemNames = (ref: string) => string;
 
-const validSpice = (s: string) => SpiceValue.parse(s.replace(/,/g, ".")) !== null;
-
-/** `DIALOG_SIM_COMMAND::evaluateDCControls`. */
-function dcControls(type: string, source: string, start: string, stop: string, incr: string, itemName: ItemNames): string | { error: string } {
+/** `DIALOG_SIM_COMMAND::evaluateDCControls`: the fields validated (`SPICE_VALIDATOR::Validate`: empty is "Please, fill required fields", a ',' becomes
+ *  '.'; `SPICE_VALUE` never fails, so no text is refused), the source named as the exporter names it (`GetItemName`, empty for no item). */
+function dcControls(source: string, start: string, stop: string, incr: string, itemName: ItemNames): string | { error: string } {
   if (source === "") return { error: "A DC source must be specified." };
-  for (const v of [start, stop, incr]) {
-    if (v === "") return { error: "Please, fill required fields" };
-    if (!validSpice(v)) return { error: `'${v}' is not a valid SPICE value.` };
-  }
-  const src = type === "TEMP" || source === "TEMP" ? source : itemName(source) || source;
+  const e = required(start, stop, incr);
+  if (e) return e;
+  const src = source === "TEMP" ? source : itemName(source);
   const s = (x: string) => spiceString(x.replace(/,/g, "."));
   return `${src} ${s(start)} ${s(stop)} ${s(incr)}`;
 }
 
+/** `SPICE_VALIDATOR::Validate` of required fields: an empty one is refused; any other text is a SPICE value (`SPICE_VALUE` reads no number as 0). */
 function required(...vals: string[]): { error: string } | null {
-  for (const v of vals) {
-    if (v === "") return { error: "Please, fill required fields" };
-    if (!validSpice(v)) return { error: `'${v}' is not a valid SPICE value.` };
-  }
+  for (const v of vals) if (v === "") return { error: "Please, fill required fields" };
   return null;
 }
 
@@ -400,7 +397,7 @@ function positiveInt(v: string): { error: string } | null {
 
 /** `DIALOG_SIM_COMMAND::TransferDataFromWindow`: the command the page makes, or KiCad's message for what is wrong with it. `previous` is the
  *  command the dialog was opened with: a command that changed is trimmed. */
-export function buildCommand(f: CommandFields, itemName: ItemNames, previous = ""): { command: string } | { error: string } {
+export function buildCommand(f: CommandFields, itemName: ItemNames, previous = "", fftList: string[] = f.fftSignals): { command: string } | { error: string } {
   const s = (x: string) => spiceString(x.replace(/,/g, "."));
   let cmd: string;
   switch (f.page) {
@@ -413,15 +410,16 @@ export function buildCommand(f: CommandFields, itemName: ItemNames, previous = "
     case "SP": {
       const e = positiveInt(f.spPoints) ?? required(f.spStart, f.spStop);
       if (e) return e;
-      cmd = `.sp ${f.spScale} ${f.spPoints} ${s(f.spStart)} ${s(f.spStop)} ${f.spNoise ? "1" : ""}`;
+      // `m_spDoNoise ? "1" : ""` tests the check box's pointer, never null: KiCad always writes the 1
+      cmd = `.sp ${f.spScale} ${f.spPoints} ${s(f.spStart)} ${s(f.spStop)} 1`;
       break;
     }
     case "DC": {
-      const a = dcControls(f.dcType1, f.dcSource1, f.dcStart1, f.dcStop1, f.dcIncr1, itemName);
+      const a = dcControls(f.dcSource1, f.dcStart1, f.dcStop1, f.dcIncr1, itemName);
       if (typeof a !== "string") return a;
       cmd = `.dc ${a}`;
       if (f.dcEnable2) {
-        const b = dcControls(f.dcType2, f.dcSource2, f.dcStart2, f.dcStop2, f.dcIncr2, itemName);
+        const b = dcControls(f.dcSource2, f.dcStart2, f.dcStop2, f.dcIncr2, itemName);
         if (typeof b !== "string") return b;
         cmd += ` ${b}`;
         if (f.dcSource1 === f.dcSource2) return { error: "Source 1 and Source 2 must be different." };
@@ -429,7 +427,9 @@ export function buildCommand(f: CommandFields, itemName: ItemNames, previous = "
       break;
     }
     case "FFT": {
-      const vectors = f.fftSignals.map((v) => ` ${v}`).join("");
+      // the checked rows of `m_inputSignalsList` (`fftList`, what the filter shows) in its order; `m_fftInputSignals` is a set
+      const checked = new Set(f.fftSignals);
+      const vectors = fftList.filter((v) => checked.has(v)).map((v) => ` ${v}`).join("");
       cmd = (f.fftLinearize ? `linearize${vectors}\n` : "") + `fft${vectors}`;
       break;
     }
@@ -437,11 +437,11 @@ export function buildCommand(f: CommandFields, itemName: ItemNames, previous = "
       cmd = `.pz ${f.pzInput} ${f.pzInputRef} ${f.pzOutput} ${f.pzOutputRef} ${f.pzFunction} ${f.pzAnalyses}`;
       break;
     case "NOISE": {
+      // The page is not validated (KiCad's NOISE branch calls no `Validate`): the points as typed, the frequencies as `SPICE_VALUE` reads them
+      // (no ',' made '.'), the reference node through `GetItemName` -- which names items, not nets, so a net gives "v(out,)" as in KiCad.
       if (f.noiseStart === "" || f.noiseStop === "") return { error: "A frequency range must be specified." };
-      const e = positiveInt(f.noisePoints) ?? required(f.noiseStart, f.noiseStop);
-      if (e) return e;
-      const ref = f.noiseRef !== "" ? `,${itemName(f.noiseRef) || f.noiseRef}` : "";
-      cmd = `.noise v(${f.noiseMeas}${ref}) ${f.noiseSrc} ${f.noiseScale} ${f.noisePoints} ${s(f.noiseStart)} ${s(f.noiseStop)} ${f.noiseSaveAll ? "1" : ""}`;
+      const ref = f.noiseRef !== "" ? `,${itemName(f.noiseRef)}` : "";
+      cmd = `.noise v(${f.noiseMeas}${ref}) ${f.noiseSrc} ${f.noiseScale} ${f.noisePoints} ${spiceString(f.noiseStart)} ${spiceString(f.noiseStop)} ${f.noiseSaveAll ? "1" : ""}`;
       break;
     }
     case "OP":
@@ -450,11 +450,10 @@ export function buildCommand(f: CommandFields, itemName: ItemNames, previous = "
     case "TRAN": {
       const e = required(f.tranStep, f.tranFinal);
       if (e) return e;
-      for (const v of [f.tranInitial, f.tranMaxStep]) if (v !== "" && !validSpice(v)) return { error: `'${v}' is not a valid SPICE value.` };
-      const step = SpiceValue.parse(f.tranStep.replace(/,/g, ".")) ?? new SpiceValue();
-      const final = SpiceValue.parse(f.tranFinal.replace(/,/g, ".")) ?? new SpiceValue();
+      const step = SpiceValue.parse(f.tranStep.replace(/,/g, "."));
+      const final = SpiceValue.parse(f.tranFinal.replace(/,/g, "."));
       let start = SpiceValue.of(0);
-      if (f.tranInitial !== "") start = SpiceValue.parse(f.tranInitial.replace(/,/g, ".")) ?? start;
+      if (f.tranInitial !== "") start = SpiceValue.parse(f.tranInitial.replace(/,/g, "."));
       let optionals = f.tranUic ? "uic" : "";
       if (f.tranMaxStep !== "") {
         optionals = `${s(f.tranMaxStep)} ${optionals}`;

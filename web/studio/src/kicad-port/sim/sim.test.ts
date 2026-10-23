@@ -1,17 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SpiceValue, formatFromString, formatG, formatToString, formatWithUnits } from "./spiceValue";
+import { SpiceValue, formatFixed, formatFromString, formatG, formatToString, formatWithUnits } from "./spiceValue";
 import { OPTION_DEFAULT_FLAGS, OPTION_ADJUST_PASSIVE_VALS, OPTION_SAVE_ALL_EVENTS, buildCommand, commandFromCommands, commandToSimType, commandsOf, defaultFields, parseCommand, parseDcCommand, parseNoiseCommand, SPT_AC_GAIN, SPT_AC_PHASE, SPT_CURRENT, SPT_POWER, SPT_VOLTAGE, SPT_TIME } from "./simCommand";
 import { countDecimalDigits, fit, fitTo, newScale, newView, siSuffix, valueAt, xTicks, yTicks, zoomIn, zoomOut, zoomRect, zoomUndo, zoomRedo, toPlot, extendDataRange, generateColor, colorList } from "./mathPlot";
 import { findVector, measurementCommand, measurementFor, opResults, plotCsv, signalMatches, signalsList, sortSignals, traceData, vectorOfSignal, vectorToSignal, type Circuit, type RawPlot } from "./simSignals";
-import { addTrace, applyRun, cursorRows, createCursor, fromWorkbook, multiRunSteps, newFrame, newSimTab, newTuner, setCursor, setSignalPlotted, setTunerSlider, setUserSignals, toWorkbook, tunerText } from "./simFrame";
+import { addMeasurement, addTrace, applyRun, cursorRows, createCursor, formatDialogUnits, fromWorkbook, measurementRequests, multiRunSteps, newFrame, newSimTab, newTuner, setCursor, setCursorX, setSignalPlotted, setTunerSlider, setTunerValue, setUserSignals, toWorkbook, tunedValue, tunerSteps, tunerText } from "./simFrame";
+import { cursorValue } from "./simPlotTab";
 
 test("SPICE values read and write as KiCad's SPICE_VALUE does", () => {
   assert.equal(SpiceValue.parse("10k")!.toDouble(), 10_000);
   assert.equal(SpiceValue.parse("1Meg")!.toSpiceString(), "1Meg");
   assert.equal(SpiceValue.parse("1500000")!.toSpiceString(), "1.5Meg");
   assert.equal(SpiceValue.parse("0.001")!.toSpiceString(), "1m");
-  assert.equal(SpiceValue.parse("abc"), null);
+  // `SPICE_VALUE( wxString )` is `sscanf`, which never fails: no number is 0
+  assert.equal(SpiceValue.parse("abc").toDouble(), 0);
   assert.equal(SpiceValue.of(1 / 3).toSpiceString(), "333.333m");
   assert.equal(SpiceValue.of(4.99326).toFormatted(formatFromString("3~V")), "4.99V");
   assert.equal(SpiceValue.of(0.0031623).toFormatted(formatFromString("3~V")), "3.16mV");
@@ -66,7 +68,8 @@ test("the analysis dialog makes the commands KiCad's makes", () => {
   assert.equal(f.tranMaxStep, "10u");
   assert.equal(f.tranUic, true);
   assert.equal(parseCommand(".ac oct 5 10 1k").acScale, "oct");
-  assert.equal(parseCommand("* my own", "").custom, "* my own");
+  // `parseCommand` leaves the custom text to `loadDirectives`: the schematic's analyses, not the tab's own command
+  assert.equal(parseCommand("* my own", ".tran 1u 1m").custom, ".tran 1u 1m");
 });
 
 test("a workbook's commands carry the options", () => {
@@ -322,4 +325,92 @@ test("the plot goes to the schematic as KiCad's image clipboard text", async () 
   assert.equal(lines[1], "  (data");
   assert.equal(lines[2]!.length, 4 + 2 + 76, "76 characters a line");
   assert.ok(s.endsWith("  )\n)\n"));
+});
+
+// The P21 review: each against KiCad 8303b2ad's code.
+test("review: numbers are written as glibc's printf writes them", () => {
+  // an exact half rounds to even (`toFixed` and `toExponential` round it away from zero)
+  assert.equal(formatFixed(0.0625, 3), "0.062");
+  assert.equal(formatFixed(-45.0625, 3), "-45.062");
+  assert.equal(formatFixed(2.5, 0), "2");
+  assert.equal(formatFixed(0.0626, 3), "0.063");
+  assert.equal(new SpiceValue(1.828125).toSpiceString(), "1.82812");
+  assert.equal(SpiceValue.of(0.0625).toPlainString(), "0.062");
+  assert.equal(SpiceValue.of(-45.0625).toFormatted({ precision: 3, range: "~°" }), "-45.062°");
+  assert.equal(formatG(999999.5, 6), "1e+06");
+  assert.equal(formatG(0.0999, 2), "0.1");
+  assert.equal(formatG(1.5e-90, 6), "1.5e-90");
+});
+
+test("review: the analysis dialog writes what TransferDataFromWindow writes", () => {
+  const items = (r: string) => (r === "V1" ? "V1" : "");
+  const ok = (r: { command: string } | { error: string }) => {
+    assert.ok("command" in r, JSON.stringify(r));
+    return (r as { command: string }).command;
+  };
+  // `m_spDoNoise ? "1" : ""` tests a pointer: always 1
+  assert.equal(ok(buildCommand({ ...defaultFields(), page: "SP" as const, spPoints: "10", spStart: "1", spStop: "1k", spNoise: false }, items)), ".sp dec 10 1 1k 1");
+  // no SPICE value is refused; a text with no number is 0
+  const dc = { ...defaultFields(), page: "DC" as const, dcSource1: "V1", dcStart1: "abc", dcStop1: "5", dcIncr1: "1" };
+  assert.equal(ok(buildCommand(dc, items)), ".dc V1 0 5 1");
+  assert.deepEqual(buildCommand({ ...dc, dcStart1: "" }, items), { error: "Please, fill required fields" });
+  // the Noise page is not validated: the points as typed, the frequencies as SPICE_VALUE reads them (no ',' made '.'), the reference through GetItemName
+  const noise = { ...defaultFields(), page: "NOISE" as const, noiseMeas: "out", noiseRef: "in", noiseSrc: "V1", noisePoints: "", noiseStart: "1,5", noiseStop: "1k", noiseSaveAll: true };
+  assert.equal(ok(buildCommand(noise, items)), ".noise v(out,) V1 dec  1 1k 1");
+  // the FFT's signals are a set, written in the list's order, those the filter hides dropped
+  const fft = parseCommand("linearize V(a)\nfft V(a)");
+  assert.deepEqual(fft.fftSignals, ["V(a)"]);
+  assert.equal(ok(buildCommand({ ...fft, fftSignals: ["V(b)", "V(a)"] }, items, "", ["V(a)", "V(b)"])), "linearize V(a) V(b)\nfft V(a) V(b)");
+  assert.equal(ok(buildCommand({ ...fft, fftSignals: ["V(b)", "V(a)"] }, items, "", ["V(a)"])), "linearize V(a)\nfft V(a)");
+  // parseCommand: "uic" in the initial time's place is 0 and not "use initial conditions"; a second source of increment -1 is none
+  const t = parseCommand(".tran 1u 1m uic");
+  assert.equal(t.tranInitial, "0");
+  assert.equal(t.tranUic, false);
+  assert.equal(parseCommand(".dc V1 0 5 1 V2 0 -5 -1").dcEnable2, false);
+  assert.equal(parseCommand(".dc V1 0 5 1 V2 0 5 1").dcEnable2, true);
+});
+
+test("review: tuners, cursors and measurements as SIMULATOR_FRAME_UI has them", () => {
+  // `applyTuners` runs `GetValue()`, the tuner's value, not its rounded text
+  const tu = newTuner(circuit, "R1");
+  assert.ok(!("error" in tu));
+  const tuner = tu as Exclude<typeof tu, { error: string }>;
+  setTunerValue(tuner, SpiceValue.of(1234.56));
+  assert.equal(tuner.text, "1.235k");
+  assert.equal(tunedValue(tuner), 1234.56);
+  // the step count: a number, at least 2, at most 100 (`SetRange( 2, 100 )`)
+  assert.equal(tunerSteps("500", 5), 100);
+  assert.equal(tunerSteps("x", 7), 7);
+  assert.equal(tunerSteps("1", 7), 2);
+  const bad = newTuner({ ...circuit, items: [{ ...circuit.items[0]!, ref: "V2", tuner: null, sim_device: "V", sim_type: "SIN" }] }, "V2");
+  assert.equal((bad as { error: string }).error, "V2 has simulation model of type 'V SIN'.\n\nOnly passive R, L, C models and voltage and current sources may be tuned.");
+  // a multi-run trace's cursor reads its own run (`m_sweepIndex`, the first)
+  const tr = { vector: "V(a)", type: SPT_VOLTAGE, name: "V(a)", color: [0, 0, 0] as [number, number, number], cursors: new Map(), x: [0, 1, 2, 0, 1, 2], y: [0, 10, 20, 100, 110, 120], sweepCount: 2, sweepSize: 3, multiRun: true };
+  assert.equal(cursorValue(tr, 0.5), 5);
+  assert.equal(cursorValue(tr, 0.5, 1), 105);
+  // the cursors grid names the signal the cursor was put on (`CURSOR::GetName`)
+  const f = newFrame(true);
+  f.circuit = circuit;
+  newSimTab(f, ".ac dec 10 1 1k");
+  addTrace(f, "V(/out)", SPT_VOLTAGE);
+  setCursor(f, "V(/out) (gain)", 1, true);
+  assert.equal(cursorRows(f).rows[0]!.signal, "V(/out) (gain)");
+  // a cursor's x typed as no number goes to 0
+  setCursorX(f, cursorRows(f).rows[0]!, "abc");
+  assert.equal([...f.tabs[0]!.plot!.traces.values()].find((t) => t.cursors.has(1))!.cursors.get(1)!.x, 0);
+  // a measurement's units follow the analysis on every run (`UpdateMeasurement` from `OnSimRefresh`)
+  const g = newFrame(true);
+  g.circuit = circuit;
+  const tab = newSimTab(g, ".tran 1u 1m");
+  addMeasurement(g, "MAX_AT V(/out)");
+  assert.equal(tab.plot!.measurements[0]!.format, "3~s");
+  tab.command = ".ac dec 10 1 1k";
+  measurementRequests(tab);
+  assert.equal(tab.plot!.measurements[0]!.format, "3~Hz");
+  // the Format dialog's units, tested in DIALOG_SIM_FORMAT_VALUE's order
+  assert.equal(formatDialogUnits("~V.s"), "s");
+  assert.equal(formatDialogUnits("~dB"), "~dB");
+  assert.equal(formatDialogUnits("mV"), "V");
+  assert.equal(formatDialogUnits("~Hz"), "Hz");
+  assert.equal(formatDialogUnits("~J"), "J");
 });

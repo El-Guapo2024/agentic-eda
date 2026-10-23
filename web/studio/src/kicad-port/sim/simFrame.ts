@@ -45,7 +45,7 @@ import {
   type Trace,
 } from "./simPlotTab";
 import { measurementCommand, noiseSourceOf, signalsList, traceData, userVector, vectorOfSignal, type Circuit, type RawPlot } from "./simSignals";
-import { SpiceValue, formatFromString, formatToString, formatWithUnits, stripZeros, type SpiceValueFormat } from "./spiceValue";
+import { PFX_NONE, SpiceValue, formatFixed, formatFromString, parseSiPrefix, formatToString, formatWithUnits, stripZeros, type SpiceValueFormat } from "./spiceValue";
 
 export interface SimTab {
   id: number;
@@ -225,7 +225,7 @@ export function setCursor(f: SimFrame, signal: string, id: number, on: boolean):
   const tab = currentTab(f);
   if (!tab?.plot) return;
   const active = on ? findTrace(f, tab, signal) : null;
-  if (active && !active.cursors.has(id)) active.cursors.set(id, { x: cursorStart(tab.plot, id) });
+  if (active && !active.cursors.has(id)) active.cursors.set(id, { x: cursorStart(tab.plot, id), name: signal });
   for (const tr of tab.plot.traces.values()) if (tr !== active && tr.cursors.has(id)) tr.cursors.delete(id);
   f.modified = true;
 }
@@ -277,7 +277,7 @@ export function cursorRows(f: SimFrame): { rows: CursorRow[]; xLabel: string; yL
   const at = (id: number) => {
     for (const tr of traces) {
       const c = tr.cursors.get(id);
-      if (c) return { tr, x: c.x, y: cursorValue(tr, c.x) };
+      if (c) return { tr, x: c.x, y: cursorValue(tr, c.x, c.sweep ?? 0), name: c.name ?? displayName(tr) };
     }
     return null;
   };
@@ -293,19 +293,19 @@ export function cursorRows(f: SimFrame): { rows: CursorRow[]; xLabel: string; yL
     u1 = unitsY(c1.tr);
     f.cursorFormats[0]![0] = formatWithUnits(f.cursorFormats[0]![0]!, unitsX);
     f.cursorFormats[0]![1] = formatWithUnits(f.cursorFormats[0]![1]!, u1);
-    rows.push({ name: "1", signal: c1.tr.name, x: fmt(c1.x, 0, 0), y: fmt(c1.y, 0, 1), id: 1 });
+    rows.push({ name: "1", signal: c1.name, x: fmt(c1.x, 0, 0), y: fmt(c1.y, 0, 1), id: 1 });
   }
   if (c2) {
     n2 = nameY(c2.tr);
     u2 = unitsY(c2.tr);
     f.cursorFormats[1]![0] = formatWithUnits(f.cursorFormats[1]![0]!, unitsX);
     f.cursorFormats[1]![1] = formatWithUnits(f.cursorFormats[1]![1]!, u2);
-    rows.push({ name: "2", signal: c2.tr.name, x: fmt(c2.x, 1, 0), y: fmt(c2.y, 1, 1), id: 2 });
+    rows.push({ name: "2", signal: c2.name, x: fmt(c2.x, 1, 0), y: fmt(c2.y, 1, 1), id: 2 });
   }
   if (c1 && c2 && u1 === u2) {
     f.cursorFormats[2]![0] = formatWithUnits(f.cursorFormats[2]![0]!, unitsX);
     f.cursorFormats[2]![1] = formatWithUnits(f.cursorFormats[2]![1]!, u1);
-    const signal = c1.tr.name === c2.tr.name ? `${c2.tr.name}[2 - 1]` : `${c2.tr.name} - ${c1.tr.name}`;
+    const signal = c1.name === c2.name ? `${c2.name}[2 - 1]` : `${c2.name} - ${c1.name}`;
     rows.splice(2, 0, { name: "Diff", signal, x: fmt(c2.x - c1.x, 2, 0), y: fmt(c2.y - c1.y, 2, 1), id: null });
   }
   let yLabel = "Value";
@@ -318,7 +318,7 @@ export function cursorRows(f: SimFrame): { rows: CursorRow[]; xLabel: string; yL
     const u = unitsY(c.tr);
     f.cursorFormats[i]![0] = formatWithUnits(f.cursorFormats[i]![0]!, unitsX);
     f.cursorFormats[i]![1] = formatWithUnits(f.cursorFormats[i]![1]!, u);
-    rows.push({ name: `${i}`, signal: c.tr.name, x: fmt(c.x, i, 0), y: fmt(c.y, i, 1), id: i });
+    rows.push({ name: `${i}`, signal: c.name, x: fmt(c.x, i, 0), y: fmt(c.y, i, 1), id: i });
     const name = nameY(c.tr);
     yLabel = name !== "" && yLabel === name ? name : "Value";
   }
@@ -329,8 +329,8 @@ export function cursorRows(f: SimFrame): { rows: CursorRow[]; xLabel: string; yL
 export function setCursorX(f: SimFrame, row: CursorRow, text: string): void {
   const tab = currentTab(f);
   if (!tab?.plot) return;
-  const value = SpiceValue.parse(text)?.toDouble();
-  if (value === undefined || Number.isNaN(value)) return;
+  // `SPICE_VALUE( text )`: a text with no number puts the cursor at 0
+  const value = SpiceValue.parse(text).toDouble();
   const find = (id: number) => [...tab.plot!.traces.values()].map((tr) => tr.cursors.get(id)).find((c) => c);
   if (row.id !== null) {
     const c = find(row.id);
@@ -402,11 +402,14 @@ export function deleteMeasurement(f: SimFrame, row: number): void {
   f.modified = true;
 }
 
-/** The measurements a run of the tab asks ngspice for (`UpdateMeasurement`): the row and what follows `meas <TYPE> meas_result_<row>`. */
+/** The measurements a run of the tab asks ngspice for (`UpdateMeasurement`, which `OnSimRefresh` calls for every row): the row and what follows
+ *  `meas <TYPE> meas_result_<row>`. Each row's format gets its units again (`fmt.UpdateUnits( units ); SetMeasureFormat( aRow, fmt )`), so a
+ *  measurement read from a workbook or kept across a change of analysis is written in the units it has now. */
 export function measurementRequests(tab: SimTab): { row: number; text: string }[] {
   const out: { row: number; text: string }[] = [];
   tab.plot?.measurements.forEach((m, row) => {
     const c = measurementCommand(m.expr, simTypeOf(tab), m.format);
+    m.format = c.format;
     if (c.text) out.push({ row, text: c.text });
   });
   return out;
@@ -492,12 +495,12 @@ export function tunerText(value: SpiceValue, series: Tuner["series"]): string {
           let precision = 0;
           if (decade === 1.0) precision++;
           if (extended && decade !== 100.0) precision++;
-          return `${(table[i]! * decade).toFixed(precision)}${prefix}`;
+          return `${formatFixed(table[i]! * decade, precision)}${prefix}`;
         }
       }
     }
   }
-  return `${stripZeros(v.toFixed(3))}${prefix}`;
+  return `${stripZeros(formatFixed(v, 3))}${prefix}`;
 }
 
 /** `TUNER_SLIDER::TUNER_SLIDER`: the range from half to twice the value; for a potentiometer, 0 to 1. Null with KiCad's reason when the item
@@ -505,11 +508,29 @@ export function tunerText(value: SpiceValue, series: Tuner["series"]): string {
 export function newTuner(circuit: Circuit | null, ref: string): Tuner | { error: string } {
   const item = circuit?.items.find((i) => i.ref === ref);
   if (!item) return { error: `${ref} not found` };
-  if (!item.tuner) return { error: `${ref} has simulation model of type '${item.device} ${item.name}'.\n\nOnly passive R, L, C models and voltage and current sources may be tuned.` };
-  const value = SpiceValue.parse(item.tuner.value) ?? new SpiceValue();
+  if (!item.tuner) return { error: `${ref} has simulation model of type '${item.sim_device ?? item.device} ${item.sim_type ?? ""}'.\n\nOnly passive R, L, C models and voltage and current sources may be tuned.` };
+  const value = SpiceValue.parse(item.tuner.value);
   const t: Tuner = { ref, item: item.name, param: item.tuner.param, min: SpiceValue.of(0.5).mul(value), max: SpiceValue.of(2.0).mul(value), value, text: "", series: "", multi: false, steps: 5 };
   t.text = tunerText(t.value, t.series);
   return t;
+}
+
+/** `DIALOG_SIM_FORMAT_VALUE::DIALOG_SIM_FORMAT_VALUE`: the units the range choices are made of, tested in KiCad's order -- the last letter for
+ *  "V", "A", "s" (so an integral's "V.s" is in seconds), two for "Hz", three for "dB" ("~dB" whole), one for "°", then what follows '~', then
+ *  the range without its SI prefix. */
+export function formatDialogUnits(range: string): string {
+  if (range.endsWith("V") || range.endsWith("A") || range.endsWith("s")) return range.slice(-1);
+  if (range.endsWith("Hz")) return range.slice(-2);
+  if (range.endsWith("dB")) return range.slice(-3);
+  if (range.endsWith("°")) return range.slice(-1);
+  if (range.startsWith("~")) return range.slice(1);
+  return parseSiPrefix(range.charAt(0)) !== PFX_NONE ? range.slice(1) : range;
+}
+
+/** `TUNER_SLIDER::onStepsTextEnter` on the spin control (`SetRange( 2, 100 )`): the step count typed, the old one when it is no number. */
+export function tunerSteps(text: string, old: number): number {
+  const n = /^\s*[+-]?\d+\s*$/.test(text) ? Number.parseInt(text, 10) : old;
+  return Math.min(100, Math.max(2, n));
 }
 
 /** `TUNER_SLIDER::SetValue`: within the range. */
@@ -539,8 +560,9 @@ export function setTunerSlider(t: Tuner, pos: number): void {
   t.text = tunerText(t.value, t.series);
 }
 
-/** The value a run tunes to: what the text says (`GetValue`, the text the E series rounded to). */
-export const tunedValue = (t: Tuner) => SpiceValue.parse(t.text)?.toDouble() ?? t.value.toDouble();
+/** The value a run tunes to: `applyTuners`' `tuner->GetValue().ToDouble()`, the tuner's `m_value` -- not its text, which `updateValueText`
+ *  rounds to three digits or to the E series for show only. */
+export const tunedValue = (t: Tuner) => t.value.toDouble();
 
 /** `SIMULATOR_FRAME_UI::calculateMultiRunSteps`: every combination of the multi-run tuners' steps, at most `limit` (KiCad's advanced setting
  *  `SimulatorMultiRunCombinationLimit`, 12). */
@@ -673,7 +695,7 @@ export function fromWorkbook(f: SimFrame, js: Js): void {
       const { vector } = vectorOf(f, tab, signal);
       const tr = getOrAddTrace(tab.plot!, vector, num(trJs.trace_type), f.dark);
       const addCursor = (id: number, c: Js) => {
-        if (id >= 1) tr.cursors.set(id, { x: num(c.position) });
+        if (id >= 1) tr.cursors.set(id, { x: num(c.position), name: signal });
         const i = id === -1 ? 2 : id < 3 ? id - 1 : id;
         const fm = f.cursorFormats[i];
         if (fm) {

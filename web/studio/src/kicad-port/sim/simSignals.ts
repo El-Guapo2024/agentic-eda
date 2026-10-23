@@ -36,6 +36,9 @@ export interface CircuitItem {
   pin_index: Record<string, number>;
   currents: string[];
   tuner: { param: string; value: string } | null;
+  /** `GetDeviceInfo().fieldValue` / `GetTypeInfo().fieldValue` of the item's model (`Sim.Device`, `Sim.Type`; the server's). */
+  sim_device?: string;
+  sim_type?: string;
 }
 
 export interface Circuit {

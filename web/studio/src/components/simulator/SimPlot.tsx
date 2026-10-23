@@ -28,7 +28,7 @@ import {
   type Rgb,
   type Scale,
 } from "../../kicad-port/sim/mathPlot";
-import { displayName, scaleOf, traceDotted, type PlotTab, type Trace } from "../../kicad-port/sim/simPlotTab";
+import { cursorValue, displayName, scaleOf, traceDotted, type Cursor, type PlotTab, type Trace } from "../../kicad-port/sim/simPlotTab";
 import { moveCursor } from "../../kicad-port/sim/simFrame";
 import { getSimUi, touch, useSimUi } from "../../state/simulator";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
@@ -167,23 +167,14 @@ function paintTrace(ctx: CanvasRenderingContext2D, plot: PlotTab, tr: Trace): vo
 }
 
 /** `CURSOR::Plot`: the cross lines in the trace's colour mixed with the foreground, the triangle and the cursor's number above the plot. */
-function paintCursor(ctx: CanvasRenderingContext2D, plot: PlotTab, tr: Trace, id: number, x: number, fg: Rgb): void {
+function paintCursor(ctx: CanvasRenderingContext2D, plot: PlotTab, tr: Trace, id: number, c: Cursor, fg: Rgb): void {
   const sx = plot.x;
   const sy = scaleOf(plot, tr);
   if (!sx || !sy || tr.x.length <= 1) return;
   const v = plot.view;
-  const xi = tr.x;
-  let y = Number.NaN;
-  {
-    let lo = 0;
-    let hi = xi.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (xi[mid]! <= x) lo = mid + 1;
-      else hi = mid;
-    }
-    if (lo > 0 && lo < xi.length) y = tr.y[lo - 1]! + ((tr.y[lo]! - tr.y[lo - 1]!) / (xi[lo]! - xi[lo - 1]!)) * (x - xi[lo - 1]!);
-  }
+  const x = c.x;
+  // `CURSOR::doSetCoordX` (a multi-run trace read on the cursor's run)
+  const y = cursorValue(tr, x, c.sweep ?? 0);
   const cx = x2p(v, toPlot(sx, x));
   const cy = y2p(v, toPlot(sy, y));
   const left = v.marginLeft;
@@ -264,7 +255,7 @@ export function paintPlot(ctx: CanvasRenderingContext2D, plot: PlotTab, dark: bo
   const legend = paintLegend(ctx, plot, traces, fg);
   for (const tr of traces) {
     paintTrace(ctx, plot, tr);
-    for (const [id, c] of tr.cursors) paintCursor(ctx, plot, tr, id, c.x, fg);
+    for (const [id, c] of tr.cursors) paintCursor(ctx, plot, tr, id, c, fg);
   }
   if (zoomBox) {
     ctx.strokeStyle = cssRgb(fg);
@@ -277,14 +268,16 @@ export function paintPlot(ctx: CanvasRenderingContext2D, plot: PlotTab, dark: bo
   return legend;
 }
 
-/** The cursor under a point (`CURSOR::Inside`: within DRAG_MARGIN of its vertical or horizontal line). */
-function cursorAt(plot: PlotTab, px: number): { tr: Trace; id: number } | null {
+/** The cursor under a point (`CURSOR::Inside`: within DRAG_MARGIN of its vertical or its horizontal line). */
+function cursorAt(plot: PlotTab, p: { x: number; y: number }): { tr: Trace; id: number } | null {
   const sx = plot.x;
   if (!sx) return null;
   for (const tr of tracesOf(plot)) {
+    const sy = scaleOf(plot, tr);
     for (const [id, c] of tr.cursors) {
       const cx = x2p(plot.view, toPlot(sx, c.x));
-      if (Math.abs(px - cx) <= DRAG_MARGIN) return { tr, id };
+      const cy = sy ? y2p(plot.view, toPlot(sy, cursorValue(tr, c.x, c.sweep ?? 0))) : Number.NaN;
+      if (Math.abs(p.x - cx) <= DRAG_MARGIN || Math.abs(p.y - cy) <= DRAG_MARGIN) return { tr, id };
     }
   }
   return null;
@@ -300,6 +293,7 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
   const drag = useRef<Drag | null>(null);
   const legendBox = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const middleClick = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const fitted = useRef(false);
 
   const paint = useCallback(() => {
@@ -362,6 +356,8 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
       // a pointer the page did not see go down
     }
     if (e.button === 1) {
+      // `OnMouseMiddleDown`: `m_mouseMClick`, where the popup's Zoom In zooms
+      middleClick.current = { x: p.x, y: p.y };
       drag.current = { kind: "pan", x: p.x, y: p.y };
       return;
     }
@@ -371,7 +367,7 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
       drag.current = { kind: "legend", dx: p.x - lb.x, dy: p.y - lb.y };
       return;
     }
-    const c = cursorAt(plot, p.x);
+    const c = cursorAt(plot, p);
     if (c) {
       drag.current = { kind: "cursor", tr: c.tr, id: c.id };
       return;
@@ -382,7 +378,7 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
   const onPointerMove = (e: React.PointerEvent) => {
     const d = drag.current;
     const p = pos(e);
-    if (canvas.current) canvas.current.style.cursor = d?.kind === "legend" ? "move" : d?.kind === "cursor" || cursorAt(plot, p.x) ? "ew-resize" : "crosshair";
+    if (canvas.current) canvas.current.style.cursor = d?.kind === "legend" ? "move" : d?.kind === "cursor" || cursorAt(plot, p) ? "ew-resize" : "crosshair";
     if (!d) return;
     if (d.kind === "zoom") {
       d.x1 = p.x;
@@ -392,6 +388,7 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
       pan(plot.view, d.x - p.x, d.y - p.y);
       d.x = p.x;
       d.y = p.y;
+      middleClick.current = { x: p.x, y: p.y };
       touch();
     } else if (d.kind === "legend") {
       plot.legend.x = Math.round(p.x - d.dx);
@@ -419,8 +416,9 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
     e.preventDefault();
     const p = pos(e);
     const change = -e.deltaY;
-    if (e.ctrlKey) pan(plot.view, -change / 1, 0);
-    else if (e.shiftKey) pan(plot.view, 0, change / 1);
+    // PAN_LEFT_RIGHT: `m_posX + change / m_scaleX`; PAN_UP_DOWN: `m_posY + change / m_scaleY` (`pan` takes pixels, y downwards)
+    if (e.ctrlKey) pan(plot.view, change, 0);
+    else if (e.shiftKey) pan(plot.view, 0, -change);
     else if (change > 0) zoomIn(plot.view, "both", p);
     else if (change < 0) zoomOut(plot.view, "both", p);
     touch();
@@ -452,16 +450,18 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
           {item("Undo Last Zoom", plot.view.undo.length > 0, () => zoomUndo(plot.view))}
           {item("Redo Last Zoom", plot.view.redo.length > 0, () => zoomRedo(plot.view))}
           <div className="menu-separator" role="separator" />
-          {item("Zoom In", true, () => zoomIn(plot.view, "both", menu))}
+          {item("Zoom In", true, () => zoomIn(plot.view, "both", middleClick.current))}
           {item("Zoom Out", true, () => zoomOut(plot.view))}
           {item("Center on Cursor", true, () => {
             // `mpWindow::OnCenter`: the clicked point to the middle of the plot area.
             const v = plot.view;
             const cx = (v.scrX - v.marginLeft - v.marginRight) / 2;
             const cy = (v.scrY - v.marginTop - v.marginBottom) / 2;
+            // `SetPos`: the position alone, not the desired view nor its limits
             const nx = p2x(v, menu.x - cx);
             const ny = p2y(v, menu.y - cy);
-            pan(v, (nx - v.posX) * v.scaleX, -(ny - v.posY) * v.scaleY);
+            v.posX = nx;
+            v.posY = ny;
           })}
           {item("Fit on Screen", true, () => fitWithUndo(plot.view))}
         </div>

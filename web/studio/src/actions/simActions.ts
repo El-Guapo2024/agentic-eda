@@ -175,10 +175,10 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
           return true;
         }
         const wire = wireAt(sch, at.x, at.y, tol);
-        if (wire) {
-          const net = spiceNetOf(sch, wire);
-          if (net) probeTrace(`V(${net})`, false);
-        }
+        // `if( !item ) return false;`: a click on no node ends the picker (`CLICK_CANCEL`)
+        if (!wire) return false;
+        const net = spiceNetOf(sch, wire);
+        if (net) probeTrace(`V(${net})`, false);
         return true;
       },
     });
@@ -196,7 +196,9 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
         const hit = pickItem(sch, at.x, at.y, s.schematicView.scale, () => true);
         const owner = hit?.startsWith("fld:") ? hit.split(":")[1] : hit;
         const ref = owner && sch.symbols.some((x) => x.id === owner) ? owner : null;
-        if (ref) void addTuner(ref);
+        // no symbol (nor a field of one) under the click: `return false`, the picker ends
+        if (!ref) return false;
+        void addTuner(ref);
         return true;
       },
     });

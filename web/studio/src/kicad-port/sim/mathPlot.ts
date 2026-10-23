@@ -13,6 +13,8 @@
 // labels, the view and its zoom history, a cursor's value -- and `SimPlot.tsx` paints it on a canvas in the same order mathplot plots its
 // layers. Text widths come from the canvas (`measure`), as mathplot asks the DC for them.
 
+import { formatFixed } from "./spiceValue";
+
 export type Align = "bottom" | "left" | "right" | "border_right";
 
 export interface Scale {
@@ -415,8 +417,8 @@ export function countDecimalDigits(x: number, maxDigits: number): number {
   return Math.min(sig(k), sig(k + 1));
 }
 
-/** `formatFloat`. */
-export const formatFloat = (x: number, digits: number) => x.toFixed(digits);
+/** `formatFloat`: `%.*f`, an exact half rounded to even as glibc rounds it (`toFixed` rounds it away from zero). */
+export const formatFloat = (x: number, digits: number) => formatFixed(x, digits);
 
 /** `LIN_SCALE::formatLabels` / `LOG_SCALE::formatLabels`. */
 export function formatLabels(s: Scale): void {
