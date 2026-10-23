@@ -1,6 +1,6 @@
 // pcbnew's Export / Fabrication Outputs dialogs that kicad-cli has a command for, in one component (a form per kind): Export
 // STEP/GLB/BREP/XAO/PLY/STL (`DIALOG_EXPORT_STEP`, which itself runs `kicad-cli pcb export <format>`), Export VRML
-// (`DIALOG_EXPORT_VRML`), Export GenCAD (`DIALOG_GENCAD_EXPORT_OPTIONS`), IPC-D-356 (`GenD356File`, no options), IPC-2581
+// (`DIALOG_EXPORT_VRML`), Export to GenCAD (`DIALOG_GENCAD_EXPORT_OPTIONS`), Export IDFv3 (`DIALOG_EXPORT_IDF3`), IPC-D-356 (`GenD356File`, no options), IPC-2581
 // (`DIALOG_EXPORT_2581`), ODB++ (`DIALOG_EXPORT_ODBPP`) and the board's Bill of Materials (`GenBOMFileFromBoard`) -- plus the
 // footprint association (.cmp) file, the one here that is written by the studio itself (kicad-cli has no command for it).
 // Each form's fields are the real dialog's, with its defaults; the options go to `/api/fab/<kind>` (crates/cli/src/
@@ -12,6 +12,7 @@ import type { BoardExportKind } from "../kicad-port/boardControlState";
 import {
   DEFAULT_3D_OPTIONS,
   DEFAULT_GENCAD_OPTIONS,
+  DEFAULT_IDF_OPTIONS,
   DEFAULT_IPC2581_OPTIONS,
   DEFAULT_ODB_OPTIONS,
   DEFAULT_VRML_OPTIONS,
@@ -19,12 +20,14 @@ import {
   postFab3d,
   postFabCmp,
   postFabGencad,
+  postFabIdf,
   postFabIpc2581,
   postFabIpcD356,
   postFabOdb,
   postFabPcbBom,
   postFabVrml,
   type GencadOptions,
+  type IdfOptions,
   type Ipc2581Options,
   type OdbOptions,
   type ThreeDOptions,
@@ -35,7 +38,9 @@ import type { FabReply } from "../api/client";
 const TITLES: Record<BoardExportKind, string> = {
   "3d": "Export STEP/GLB/BREP/XAO/PLY/STL",
   vrml: "Export VRML Board",
-  gencad: "Export GenCAD",
+  // `ExportGenCAD`'s title for the dialog; `DIALOG_EXPORT_IDF3_BASE`'s.
+  gencad: "Export to GenCAD",
+  idf: "Export IDFv3",
   ipcd356: "IPC-D-356 Netlist File",
   ipc2581: "Export IPC-2581",
   odb: "Export ODB++",
@@ -48,6 +53,7 @@ const WHERE: Record<BoardExportKind, string> = {
   "3d": "export/kicad/<format>/",
   vrml: "export/kicad/vrml/",
   gencad: "export/kicad/gencad/",
+  idf: "export/kicad/idf/",
   ipcd356: "export/kicad/ipcd356/",
   ipc2581: "export/kicad/ipc2581/",
   odb: "export/kicad/odb/",
@@ -59,6 +65,7 @@ const NOTE: Record<BoardExportKind, string> = {
   "3d": "Written by `kicad-cli pcb export <format>` with the options below -- the same command line KiCad's own dialog builds.",
   vrml: "Written by `kicad-cli pcb export vrml`.",
   gencad: "Written by `kicad-cli pcb export gencad`.",
+  idf: "Written by `kicad-cli pcb export idf`: the board (.emn) and its library (.emp).",
   ipcd356: "Written by `kicad-cli pcb export ipcd356`; it has no options.",
   ipc2581: "Written by `kicad-cli pcb export ipc2581`.",
   odb: "Written by `kicad-cli pcb export odb`.",
@@ -228,6 +235,35 @@ function GencadForm({ o, set }: { o: GencadOptions; set: (patch: Partial<GencadO
   );
 }
 
+/** `DIALOG_EXPORT_IDF3` (`dialog_export_idf_base.cpp`): its file name is the studio's (the output directory below). */
+function IdfForm({ o, set }: { o: IdfOptions; set: (patch: Partial<IdfOptions>) => void }) {
+  // `OnBoardReferencePointChecked`: the positions are enabled while the box is checked.
+  const on = o.set_reference_point;
+  return (
+    <>
+      <Check label="Set board reference point:" checked={on} onChange={(v) => set({ set_reference_point: v })} />
+      <div className="kv-grid" style={{ ...grid, marginLeft: 18, opacity: on ? 1 : 0.5 }}>
+        <Row label="X position:">
+          <input type="number" step="any" disabled={!on} value={o.x_ref} onChange={(e) => set({ x_ref: Number(e.target.value) || 0 })} style={{ width: 90 }} /> mm
+        </Row>
+        <Row label="Y position:">
+          <input type="number" step="any" disabled={!on} value={o.y_ref} onChange={(e) => set({ y_ref: Number(e.target.value) || 0 })} style={{ width: 90 }} /> mm
+        </Row>
+      </div>
+      <div className="kv-grid" style={grid}>
+        <Row label="Output units:">
+          <select value={o.units} onChange={(e) => set({ units: e.target.value as IdfOptions["units"] })}>
+            <option value="mm">Millimeters</option>
+            <option value="mils">Mils</option>
+          </select>
+        </Row>
+      </div>
+      <Check label="Ignore 'Do not populate' components" checked={o.no_dnp} onChange={(v) => set({ no_dnp: v })} />
+      <Check label="Ignore 'Unspecified' components" checked={o.no_unspecified} onChange={(v) => set({ no_unspecified: v })} />
+    </>
+  );
+}
+
 function Ipc2581Form({ o, set }: { o: Ipc2581Options; set: (patch: Partial<Ipc2581Options>) => void }) {
   const text = (label: string, key: "col_id" | "col_mpn" | "col_mfg" | "col_dist_pn" | "col_dist" | "bom_rev", placeholder: string) => (
     <Row label={label}>
@@ -299,6 +335,7 @@ export function BoardExportDialog() {
   const [three, setThree] = useState<ThreeDOptions>(DEFAULT_3D_OPTIONS);
   const [vrml, setVrml] = useState<VrmlOptions>(DEFAULT_VRML_OPTIONS);
   const [gencad, setGencad] = useState<GencadOptions>(DEFAULT_GENCAD_OPTIONS);
+  const [idf, setIdf] = useState<IdfOptions>(DEFAULT_IDF_OPTIONS);
   const [ipc, setIpc] = useState<Ipc2581Options>(DEFAULT_IPC2581_OPTIONS);
   const [odb, setOdb] = useState<OdbOptions>(DEFAULT_ODB_OPTIONS);
   const [busy, setBusy] = useState(false);
@@ -323,15 +360,17 @@ export function BoardExportDialog() {
             ? await postFabVrml(vrml)
             : kind === "gencad"
               ? await postFabGencad(gencad)
-              : kind === "ipc2581"
-                ? await postFabIpc2581(ipc)
-                : kind === "odb"
-                  ? await postFabOdb(odb)
-                  : kind === "pcb_bom"
-                    ? await postFabPcbBom()
-                    : kind === "cmp"
-                      ? await postFabCmp()
-                      : await postFabIpcD356();
+              : kind === "idf"
+                ? await postFabIdf(idf)
+                : kind === "ipc2581"
+                  ? await postFabIpc2581(ipc)
+                  : kind === "odb"
+                    ? await postFabOdb(odb)
+                    : kind === "pcb_bom"
+                      ? await postFabPcbBom()
+                      : kind === "cmp"
+                        ? await postFabCmp()
+                        : await postFabIpcD356();
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Done." : "Failed."), files: reply.files ?? [] });
     } catch (e) {
       setResult({ ok: false, message: e instanceof Error ? e.message : String(e), files: [] });
@@ -348,6 +387,7 @@ export function BoardExportDialog() {
           {kind === "3d" && <ThreeDForm o={three} set={(p) => setThree((o) => ({ ...o, ...p }))} selectedRefs={selectedRefs} />}
           {kind === "vrml" && <VrmlForm o={vrml} set={(p) => setVrml((o) => ({ ...o, ...p }))} />}
           {kind === "gencad" && <GencadForm o={gencad} set={(p) => setGencad((o) => ({ ...o, ...p }))} />}
+          {kind === "idf" && <IdfForm o={idf} set={(p) => setIdf((o) => ({ ...o, ...p }))} />}
           {kind === "ipc2581" && <Ipc2581Form o={ipc} set={(p) => setIpc((o) => ({ ...o, ...p }))} />}
           {kind === "odb" && <OdbForm o={odb} set={(p) => setOdb((o) => ({ ...o, ...p }))} />}
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", margin: "10px 0" }}>

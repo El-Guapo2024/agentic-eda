@@ -1208,7 +1208,8 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     const color = draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer));
     if (draw.dragKind === "via") {
       const [x, y] = draw.pts[0] ?? [0, 0];
-      strokeViaGhost(ctx, view, x, y, draw.viaDiameter ?? 600, color);
+      // a virtual via (a junction of tracks) is not drawn: `ROUTER_PREVIEW_ITEM` returns for `v->IsVirtual()`
+      if (!draw.virtualVia) strokeViaGhost(ctx, view, x, y, draw.viaDiameter ?? 600, color);
       for (const leg of draw.fanout ?? []) strokeDashedPolyline(ctx, view, leg.pts, layerColor(copperColorKey(leg.layer)), leg.width, false);
     } else {
       strokeDashedPolyline(ctx, view, draw.pts, color, draw.width, false);

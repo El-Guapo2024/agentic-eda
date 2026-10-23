@@ -18,8 +18,8 @@
 //!
 //! What differs from KiCad, on purpose:
 //!
-//! - **No springback.** Every `Move` resolves from the world as the last fix left it, as the rest of this router does
-//!   ([`crate::shove`]'s header): there is no shove branch kept between mouse samples.
+//! - **No springback.** Every `Move` resolves from the world as the last fix left it: there is no shove branch kept between mouse
+//!   samples. (The single-track placer has KiCad's stack, [`crate::springback`]; `DIFF_PAIR_PLACER::tryShove` uses the same one.)
 //! - **A walk that fails shows the pair as it was drawn.** `tryWalkDp` ends with `if( bestScore > 0.0 ) {..; return true;}`, which is
 //!   always true -- when no attempt worked, `best` is an empty `DIFF_PAIR` and the pair vanishes while the walk is called a success. Here a
 //!   failed walk leaves the pair where [`DiffPairPlacer::route_head`] put it and reports that it does not fit (it is drawn in violation).
@@ -432,7 +432,7 @@ impl DiffPairPlacer {
     /// `makeVia`: a via of the pair's size on the layers between the current one and the one the route goes on to.
     fn make_via(&self, pos: Point, net: &Net) -> Via {
         let to = self.via_to_layer.unwrap_or(self.current_layer);
-        Via { net: net.clone(), layers: LayerRange::new(self.current_layer, to), pos, diameter: self.sizes.via_diameter, drill: self.sizes.via_drill, source_via: None, locked: false }
+        Via { net: net.clone(), layers: LayerRange::new(self.current_layer, to), pos, diameter: self.sizes.via_diameter, drill: self.sizes.via_drill, source_via: None, locked: false, is_virtual: false }
     }
 
     /// The end item of a cursor (`TOOL_BASE::updateEndItem`, `pickSingleItem` for each net of the pair): a pad or via of either net near
@@ -490,7 +490,7 @@ impl DiffPairPlacer {
         let norm_sq = |v: (i64, i64)| v.0 as i128 * v.0 as i128 + v.1 as i128 * v.1 as i128;
         while iter < MAX_ITER {
             let circle = Shape::Circle { c: virt.pos, r: virt.diameter / 2 };
-            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true };
+            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false };
             let mut obstacles = self.world.colliding_with(&circle, &virt.net, virt.layers, rules, &[], opts);
             obstacles.sort_by_key(|o| o.id);
             let Some(obs) = obstacles.first() else { break };
@@ -667,6 +667,7 @@ impl DiffPairPlacer {
             return None;
         }
         let mut walker = Walker::new(node, rules);
+        walker.corner_mode = settings.corner_mode;
         walker.item_mask = mask;
         walker.iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
         walker.set_allowed_policies(&[WalkPolicy::Shortest]);

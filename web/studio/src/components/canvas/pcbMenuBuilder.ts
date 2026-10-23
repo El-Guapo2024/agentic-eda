@@ -1,5 +1,6 @@
 // The right-click menu of the board canvas, built from the studio's state: which tool owns the click (the router, a drawing tool, a picker, the selection tool),
 // what the selection is, and the lists the Zoom, Grid and Track/Via Width submenus show. The entries and their conditions are kicad-port/pcbContextMenu.ts's.
+import { cornerModeMenuKey } from "../../kicad-port/routerSettings";
 import type { MenuNode } from "../../kicad/types";
 import type { BoardState } from "../../api/types";
 import type { StudioState } from "../../state/store";
@@ -126,8 +127,8 @@ function routerContext(state: StudioState, board: BoardState): RouterMenuContext
     hasSelection: state.selection.size > 0,
     haveHighlight: state.netHighlight != null || state.bcx.netHighlightMore.length > 0,
     diffPair: state.activeTool === "diffpair" || draw?.kind === "diffpair",
-    // The studio's router always routes 45-degree mitered corners (`PNS::ROUTING_SETTINGS`' default corner mode).
-    cornerMode: "45",
+    // `m_router->Settings().GetCornerMode()`: the Track Corner Mode actions set it (`state.routerSettings.cornerMode`).
+    cornerMode: cornerModeMenuKey(state.routerSettings.cornerMode ?? "mitered_45"),
     trackViaMenu: trackViaWidthMenu(state, board),
     diffPairMenu: diffPairMenu(state),
     zoom: zoomEntries(state),

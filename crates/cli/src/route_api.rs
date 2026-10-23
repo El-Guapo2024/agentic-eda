@@ -31,8 +31,10 @@ fn body_json(body: &[u8]) -> Value {
     serde_json::from_slice(body).unwrap_or(Value::Null)
 }
 
+/// A whole number of micrometres: the studio sends the cursor as it converted it from the screen, which is not always whole
+/// (`32000.000000000004` after Backspace warps it), and such a number is rounded -- not read as missing, which put the head at 0.
 fn num(v: &Value, key: &str, default: i64) -> i64 {
-    v.get(key).and_then(Value::as_i64).unwrap_or(default)
+    v.get(key).and_then(|n| n.as_i64().or_else(|| n.as_f64().filter(|f| f.is_finite()).map(|f| f.round() as i64))).unwrap_or(default)
 }
 
 fn point_of(v: &Value) -> Point {
@@ -66,7 +68,8 @@ fn mode_of(req: &Value) -> Mode {
 /// - `mode` (`"mark_obstacles" | "walkaround" | "shove"`), `optimizer_effort` (`"low" | "medium" | "full"`),
 /// - the Interactive Router Settings dialog's switches `shove_vias`, `jump_over_obstacles`, `remove_loops`, `smart_pads`,
 ///   `allow_drc_violations` (`CanViolateDRC`), `free_angle_mode`, `fix_all_segments`, `smooth_dragged_segments`,
-///   `optimize_entire_dragged_track` ("Optimize entire track being dragged"), `auto_posture` ("Use mouse path to set track posture"), and
+///   `optimize_entire_dragged_track` ("Optimize entire track being dragged"), `auto_posture` ("Use mouse path to set track posture"),
+///   `corner_mode` (`"mitered_45" | "rounded_45" | "mitered_90" | "rounded_90"`, the Track Corner Mode actions), and
 ///   `snap_to_tracks` (the magnetic setting `checkSnap` hands the router, not a row of the dialog),
 /// - the limits `shove_iteration_limit`, `shove_time_limit` (milliseconds), `walkaround_iteration_limit`,
 ///   `via_force_prop_iteration_limit` and `walkaround_hug_length_threshold`, which KiCad keeps in the settings file only.
@@ -112,6 +115,9 @@ fn settings_over(req: &Value, base: RoutingSettings) -> RoutingSettings {
     flag("snap_to_tracks", &mut s.snap_to_tracks);
     flag("optimize_entire_dragged_track", &mut s.optimize_entire_dragged_track);
     flag("auto_posture", &mut s.auto_posture);
+    if let Some(m) = get("corner_mode").and_then(Value::as_str).and_then(eda_pns::direction45::CornerMode::from_name) {
+        s.corner_mode = m;
+    }
     limit("shove_iteration_limit", &mut s.shove_iteration_limit);
     limit("shove_time_limit", &mut s.shove_time_limit_ms);
     limit("walkaround_iteration_limit", &mut s.walkaround_iteration_limit);
@@ -358,6 +364,8 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
         "ok": true,
         // `DM_SEGMENT` (the whole segment slides), `DM_CORNER` (a vertex follows the cursor), `DM_VIA` or `DM_ARC` (the arc's curvature follows it)
         "drag": drag_kind_name(router.drag_kind()),
+        // `DM_VIA` of a virtual via (the joint where tracks meet, `DRAGGER::checkVirtualVia`): no via is drawn (`ROUTER_PREVIEW_ITEM`: "if( v->IsVirtual() ) return") or committed
+        "virtual_via": router.drag_virtual_via(),
         "colliding": preview.colliding,
         // the cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last solution")
         "restored": preview.restored,
@@ -684,6 +692,27 @@ mod tests {
 
     fn p(x: i64, y: i64) -> Point {
         Point { x, y }
+    }
+
+    /// `corner_mode`: the Track Corner Mode the studio sends with a route's settings; an unknown name keeps the default.
+    #[test]
+    fn the_corner_mode_is_read_from_the_settings() {
+        use eda_pns::direction45::CornerMode;
+        for (name, mode) in [("mitered_45", CornerMode::Mitered45), ("rounded_45", CornerMode::Rounded45), ("mitered_90", CornerMode::Mitered90), ("rounded_90", CornerMode::Rounded90)] {
+            assert_eq!(settings_of(&json!({ "settings": { "corner_mode": name } })).corner_mode, mode);
+        }
+        assert_eq!(settings_of(&json!({ "settings": { "corner_mode": "fillet" } })).corner_mode, CornerMode::Mitered45);
+        assert_eq!(settings_over(&json!({ "settings": { "mode": "shove" } }), RoutingSettings { corner_mode: CornerMode::Rounded90, ..RoutingSettings::default() }).corner_mode, CornerMode::Rounded90, "a live session keeps it");
+    }
+
+    /// The cursor as the studio sends it after Backspace (`32000.000000000004`) is the point it is, rounded -- it used to be read as missing,
+    /// and the head went to y = 0.
+    #[test]
+    fn a_cursor_that_is_not_a_whole_micrometre_is_rounded() {
+        let req = body_json(br#"{"x": 25000, "y": 32000.000000000004}"#);
+        assert_eq!(point_of(&req), p(25_000, 32_000));
+        assert_eq!(point_of(&body_json(br#"{"x": -10.6, "y": 7.4}"#)), p(-11, 7));
+        assert_eq!(point_of(&body_json(br#"{}"#)), p(0, 0));
     }
 
     /// A 20 mm board with a SIG stub ending at (10000, 8000) and a GND via at (10000, 5000), right in the way of SIG going down.

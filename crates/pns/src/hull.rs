@@ -237,6 +237,17 @@ fn shoelace(pts: &[Point]) -> i128 {
 }
 
 /// Reverse `pts` if needed so it winds clockwise in KiCad's sense.
+/// The 90-degree corner modes' hull (`WALKAROUND::processCluster`, `NODE::NearestObstacle`'s `makeHull`): the bounding box of `hull`, as
+/// `hull.Append( left, top ); Append( right, top ); Append( right, bottom ); Append( left, bottom )`.
+pub fn bbox_hull(hull: &[Point]) -> Vec<Point> {
+    let Some(first) = hull.first() else { return Vec::new() };
+    let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
+    for p in hull {
+        (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
+    }
+    vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }]
+}
+
 pub fn make_clockwise(mut pts: Vec<Point>) -> Vec<Point> {
     if shoelace(&pts) < 0 {
         pts.reverse();

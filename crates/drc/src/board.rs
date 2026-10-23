@@ -515,9 +515,20 @@ fn pad_hole_shape(center: Point, pad: &Pad, board_rot: i64) -> Option<Shape> {
 
 /// A footprint text's `GetEffectiveShape`: its stroke-font glyph segments,
 /// inflated by half the effective pen width.
-pub(crate) fn footprint_text_shape(t: &eda_model::ir::FootprintText) -> Option<Shape> {
-    // `PCB_TEXT::GetDrawRotation`: footprint text that keeps itself upright is
-    // folded into (-90, 90] degrees, any other text is normalised.
+pub fn footprint_text_shape(t: &eda_model::ir::FootprintText) -> Option<Shape> {
+    let rot = footprint_text_draw_rotation(t);
+    let pen = crate::stroke_font::effective_pen_width(t.thickness, t.size, t.bold);
+    let segs = crate::stroke_font::kicad_text_segments(&crate::stroke_font::TextLayout { text: &t.text, pos: t.at, size: t.size, thickness: t.thickness, angle_deg: rot, mirror: t.mirror, halign: t.halign, valign: t.valign });
+    if segs.is_empty() {
+        None
+    } else {
+        Some(Shape::Strokes { segs, r: pen / 2 })
+    }
+}
+
+/// `PCB_TEXT::GetDrawRotation`, in degrees: footprint text that keeps itself upright is folded into (-90, 90] degrees, any other text is
+/// normalised to [0, 360).
+pub fn footprint_text_draw_rotation(t: &eda_model::ir::FootprintText) -> f64 {
     let mut rot = t.angle_file_mdeg as f64 / 1000.0;
     if t.keep_upright {
         rot = rot.rem_euclid(360.0);
@@ -533,13 +544,7 @@ pub(crate) fn footprint_text_shape(t: &eda_model::ir::FootprintText) -> Option<S
     } else {
         rot = rot.rem_euclid(360.0);
     }
-    let pen = crate::stroke_font::effective_pen_width(t.thickness, t.size, t.bold);
-    let segs = crate::stroke_font::kicad_text_segments(&crate::stroke_font::TextLayout { text: &t.text, pos: t.at, size: t.size, thickness: t.thickness, angle_deg: rot, mirror: t.mirror, halign: t.halign, valign: t.valign });
-    if segs.is_empty() {
-        None
-    } else {
-        Some(Shape::Strokes { segs, r: pen / 2 })
-    }
+    rot
 }
 
 pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {

@@ -1,0 +1,8 @@
+[package]
+name = "eda-sim"
+version = "0.1.0"
+edition = "2021"
+description = "KiCad's SPICE simulator, server side: kicad-cli's SPICE netlist made into the simulator's, ngspice run in batch mode, its raw files read back, and the workbook (.wbk) read and written as KiCad does."
+
+[dependencies]
+serde_json = { workspace = true }

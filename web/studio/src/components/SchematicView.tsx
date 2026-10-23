@@ -42,6 +42,8 @@ import { isMac } from "../platform";
 import { ClickDragGesture, dragRuleFor } from "../kicad-port/dragThreshold";
 import { applyPatch, heldCmd, holdPoint, pickedVertices, previewBody, wirePick } from "../kicad-port/schMove";
 import { paintNetCollision } from "./schematic/netCollisionPainter";
+import { paintOperatingPoints } from "./simulator/opPainter";
+import { useSimUi } from "../state/simulator";
 import { hasNetCollision } from "../kicad-port/schNetCollision";
 import { LINE_MODE_FREE } from "../kicad-port/schLineMode";
 import { postMovePreview } from "../api/client";
@@ -167,6 +169,8 @@ export function SchematicView() {
   const api = useStudioApi();
   const wheelPrefs = useWheelPrefs();
   const schControl = useSchControlState();
+  // the simulator's operating point is drawn on the sheet: a new one redraws it
+  const simVersion = useSimUi().version;
   /** The paste being carried (`SCH_EDITOR_CONTROL::Paste` -> the Move tool): the items it would add, until a click drops them or Escape throws them away. */
   const paste = useSchPaste();
   /** The image Place Image holds (state/schImageHand.ts), and the number of bitmaps that have arrived: the sheet is painted again for either. */
@@ -353,6 +357,8 @@ export function SchematicView() {
     const collisionOverlay = held && patch ? patch.net_collision : undefined;
     paintSchematic(ctx, state.schematicView, displaySch, { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId });
     if (collisionOverlay) paintNetCollision(ctx, state.schematicView.scale || 1, collisionOverlay);
+    // The simulator's operating point (View > Show OP Voltages / Currents, components/simulator/opPainter.ts).
+    paintOperatingPoints(ctx, state.schematicView.scale || 1, displaySch, layerColor("LAYER_SCHEMATIC_BACKGROUND"));
     // The image in the hand, centred on the grid-snapped cursor (`GRID_GRAPHICS`), outlined as a selected image is.
     if (imageHand && state.cursorUm) {
       const [cx, cy] = snap.align([state.cursorUm.x, state.cursorUm.y], NO_MODS, "graphics");
@@ -433,7 +439,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion]);
+  }, [sch, displaySch, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 

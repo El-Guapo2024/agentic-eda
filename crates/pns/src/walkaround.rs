@@ -231,6 +231,11 @@ pub struct Walker<'a> {
     /// The arcs of the line being walked (`Line::arcs`): the walk works on bare points, and the clean-up of a path that has an arc in it must not drop the vertex an
     /// arc starts or ends at when it is collinear with its neighbours (a fillet's first chord is: it is tangent to the run before it).
     pub arcs: Vec<crate::arcs::ArcPts>,
+    /// The router's corner mode (`Settings().GetCornerMode()`, which `WALKAROUND` reads itself): in a 90-degree mode every hull the walk goes
+    /// round is its bounding box (`processCluster`: "if( cornerMode == MITERED_90 || cornerMode == ROUNDED_90 ) hull = cachedHull.BBox()"), and
+    /// so is the hull the nearest obstacle is measured on (`NODE::NearestObstacle`'s `simplifyHull`) -- a walk in a 90-degree mode goes round a
+    /// pad in axis legs.
+    pub corner_mode: crate::direction45::CornerMode,
     // per-route state
     iteration: u32,
     initial_length: f64,
@@ -239,7 +244,7 @@ pub struct Walker<'a> {
 
 impl<'a> Walker<'a> {
     pub fn new(node: &'a Node, rules: &'a BoardRules) -> Self {
-        Walker { node, rules, item_mask: kind_mask::ANY, iteration_limit: 40, length_limit_on: true, length_expansion_factor: 10.0, policies: [false; 3], restricted: HashSet::new(), skip: HashSet::new(), exclude: Vec::new(), end_via: None, arcs: Vec::new(), iteration: 0, initial_length: 0.0, processed: HashSet::new() }
+        Walker { node, rules, item_mask: kind_mask::ANY, iteration_limit: 40, length_limit_on: true, length_expansion_factor: 10.0, policies: [false; 3], restricted: HashSet::new(), skip: HashSet::new(), exclude: Vec::new(), end_via: None, arcs: Vec::new(), corner_mode: crate::direction45::CornerMode::Mitered45, iteration: 0, initial_length: 0.0, processed: HashSet::new() }
     }
 
     /// `SetAllowedPolicies`.
@@ -275,7 +280,7 @@ impl<'a> Walker<'a> {
         let line = Line::from_points(net.clone(), layer, width, pts.to_vec());
         let restricted = &self.restricted;
         let filter = |id: ItemId| restricted.contains(&id);
-        let opts = QueryOpts { kind_mask: self.item_mask, filter: if restricted.is_empty() { None } else { Some(&filter) }, use_epsilon: true };
+        let opts = QueryOpts { kind_mask: self.item_mask, filter: if restricted.is_empty() { None } else { Some(&filter) }, use_epsilon: true, box_hull: self.corner_mode.is_90() };
         self.node.nearest_obstacle(&line, self.end_via.as_ref(), self.rules, &self.exclude, opts)
     }
 
@@ -310,6 +315,7 @@ impl<'a> Walker<'a> {
             let Some(item) = self.node.get(id) else { continue };
             let clearance = Node::clearance_to(self.rules, net, item);
             let hull = item.hull(clearance, width, layer);
+            let hull = if self.corner_mode.is_90() { crate::hull::bbox_hull(&hull) } else { hull };
             let mut simplified = Line { arcs: self.arcs.clone(), ..Line::from_points(net.clone(), layer, width, std::mem::take(pts)) };
             simplified.simplify();
             match walk_around_hull(&simplified.pts, &hull, cw) {
@@ -521,8 +527,26 @@ pub fn path_collides(node: &Node, rules: &BoardRules, net: &Net, layer: i32, wid
 /// false). The cursor is the head's last point.
 #[allow(clippy::too_many_arguments)] // the node/rules/net/layer/width query context, plus the head, the kind mask, the iteration limit and the hug threshold this is specific to.
 pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Um, head: &[Point], mask: u8, iteration_limit: u32, hug_threshold: f64, exclude: &[ItemId]) -> Option<Vec<Point>> {
+    let line = Line::from_points(net.clone(), layer, width, head.to_vec());
+    walk_base_line(node, rules, &line, mask, iteration_limit, hug_threshold, exclude, crate::direction45::CornerMode::Mitered45).map(|l| l.pts)
+}
+
+/// [`walk_base`] for a head that may hold arcs (a rounded corner, [`Line::arcs`]), in the router's corner mode: the optimizer's merge builds its
+/// bypasses in `corner` (`OPTIMIZER::mergeStep`), and the walked line keeps the arcs the walk left alone and those the merge made.
+#[allow(clippy::too_many_arguments)] // walk_base's, with the head as a line and the corner mode
+pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, mask: u8, iteration_limit: u32, hug_threshold: f64, exclude: &[ItemId], corner: crate::direction45::CornerMode) -> Option<Line> {
+    let (net, layer, width) = (&head_line.net, head_line.layer, head_line.width);
+    let head: &[Point] = &head_line.pts;
+    let finish = |pts: Vec<Point>, arcs: Vec<crate::arcs::ArcPts>| {
+        let mut l = Line::from_points(net.clone(), layer, width, pts);
+        l.arcs = arcs;
+        let kept = l.arc_runs().into_iter().map(|r| l.arcs[r.arc]).collect();
+        l.arcs = kept;
+        l
+    };
     let cursor = *head.last()?;
     let mut w = Walker::new(node, rules);
+    w.corner_mode = corner;
     w.item_mask = mask;
     w.iteration_limit = iteration_limit;
     w.exclude_items(exclude.iter().copied());
@@ -536,6 +560,7 @@ pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: 
     // index 0 = clockwise, 1 = counter-clockwise (`WP_CW`, `WP_CCW`)
     let pols = [WalkPolicy::Cw, WalkPolicy::Ccw];
     let mut lines: [Vec<Point>; 2] = [wr.line_of(WalkPolicy::Cw).to_vec(), wr.line_of(WalkPolicy::Ccw).to_vec()];
+    let mut arcs: [Vec<crate::arcs::ArcPts>; 2] = [head_line.arcs.clone(), head_line.arcs.clone()];
     let mut len = [i64::MAX; 2];
     let mut best: Option<usize> = None;
     for (i, pol) in pols.iter().enumerate() {
@@ -544,8 +569,10 @@ pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: 
             len[i] = chain_length(&lines[i]);
         }
         if status == WalkStatus::Done {
-            let line = Line::from_points(net.clone(), layer, width, lines[i].clone());
-            lines[i] = crate::optimizer::optimize_with(&line, node, rules, exclude, crate::optimizer::effort::MERGE_SEGMENTS).pts;
+            let line = finish(lines[i].clone(), arcs[i].clone());
+            let constraints = crate::optimizer::Constraints { corner_mode: corner, ..Default::default() };
+            let optimized = crate::optimizer::optimize_constrained(&line, node, rules, exclude, crate::optimizer::effort::MERGE_SEGMENTS, &constraints);
+            (lines[i], arcs[i]) = (optimized.pts, optimized.arcs);
             len[i] = chain_length(&lines[i]);
             // `if( len_ccw < len_cw ) bestLine = ccw` -- CW wins ties
             if i == 0 || len[1] < len[0] {
@@ -556,7 +583,7 @@ pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: 
     let best_length = len[0].min(len[1]);
     if let Some(b) = best {
         if (best_length as f64) < hug_len_complete {
-            return Some(lines[b].clone());
+            return Some(finish(lines[b].clone(), arcs[b].clone()));
         }
     }
 
@@ -573,11 +600,8 @@ pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: 
             dists[i] = l.last().map_or(i64::MAX, |&p| dist_f(cursor, p).round() as i64);
         }
     }
-    if dists[0] < dists[1] && hugged[0].is_some() {
-        hugged[0].take()
-    } else {
-        hugged[1].take()
-    }
+    let pick = if dists[0] < dists[1] && hugged[0].is_some() { 0 } else { 1 };
+    hugged[pick].take().map(|pts| finish(pts, arcs[pick].clone()))
 }
 
 #[cfg(test)]
@@ -645,6 +669,24 @@ mod tests {
         for w in best.windows(2) {
             let shape = Shape::Stadium { a: w[0], b: w[1], r: 100 };
             assert!(node.first_colliding(&shape, &net_of("SIG"), LayerRange::single(0), &rules, &[]).is_none(), "leg {:?}-{:?} still collides with the pad", w[0], w[1]);
+        }
+    }
+
+    /// `WALKAROUND::processCluster` in a 90-degree corner mode walks round the hull's bounding box ("if( cornerMode == MITERED_90 || cornerMode
+    /// == ROUNDED_90 ) hull = BBox"): the way round a round pad is axis legs, where the 45-degree modes go round its octagon.
+    #[test]
+    fn a_walk_in_a_90_degree_mode_goes_round_the_box_of_the_hull() {
+        use crate::direction45::CornerMode;
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, shape: Shape::Circle { c: Point { x: 2500, y: 0 }, r: 500 }, source: "U1.1".into(), edge: false }));
+        let rules = rules();
+        let head = Line::from_points(net_of("SIG"), 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }]);
+        let diagonal = |pts: &[Point]| pts.windows(2).any(|w| w[0].x != w[1].x && w[0].y != w[1].y);
+        for (corner, diagonals) in [(CornerMode::Mitered45, true), (CornerMode::Mitered90, false), (CornerMode::Rounded90, false)] {
+            let walked = walk_base_line(&node, &rules, &head, kind_mask::ANY, 10, 1.5, &[], corner).expect("a way round");
+            assert_eq!((walked.first(), walked.last()), (Some(Point { x: 0, y: 0 }), Some(Point { x: 5000, y: 0 })), "{corner:?}");
+            assert_eq!(diagonal(&walked.pts), diagonals, "{corner:?}: {:?}", walked.pts);
+            assert!(all_clear(&node, &walked.pts, 200, &rules), "{corner:?}: {:?}", walked.pts);
         }
     }
 

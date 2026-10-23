@@ -41,7 +41,7 @@ const SEGMENT_AT_REACH: Um = 2_500;
 const ASSEMBLE_MAX_VERTS: usize = 1024 * 16;
 
 use crate::arcs::ArcPts;
-use crate::item::{same_net, Item, ItemId, Kind, Net};
+use crate::item::{same_net, Item, ItemId, Kind, Net, Via};
 use crate::joint::{Joint, JointKey};
 use crate::layer::LayerRange;
 use crate::line::Line;
@@ -82,11 +82,14 @@ pub struct QueryOpts<'a> {
     pub kind_mask: u8,
     pub filter: Option<&'a dyn Fn(ItemId) -> bool>,
     pub use_epsilon: bool,
+    /// [`Node::nearest_obstacle`] only: measure where the line enters each obstacle's hull on the hull's bounding box instead (`NearestObstacle`'s
+    /// `simplifyHull`, which KiCad turns on in the 90-degree corner modes: `cornerMode == MITERED_90 || cornerMode == ROUNDED_90`).
+    pub box_hull: bool,
 }
 
 impl Default for QueryOpts<'_> {
     fn default() -> Self {
-        QueryOpts { kind_mask: kind_mask::ANY, filter: None, use_epsilon: true }
+        QueryOpts { kind_mask: kind_mask::ANY, filter: None, use_epsilon: true, box_hull: false }
     }
 }
 
@@ -112,12 +115,14 @@ pub struct AssembleOpts {
     /// Continue through a change of track width. When false the line stops at the
     /// joint where the width changes, so a line never has two widths.
     pub allow_width_mismatch: bool,
+    /// `aStopAtLockedJoints`: end the line at a locked joint ([`crate::joint::Joint::locked`], `NODE::LockJoint`).
+    pub stop_at_locked_joints: bool,
 }
 
 impl Default for AssembleOpts {
     /// What the plain [`Node::assemble_line`] has always done: through everything.
     fn default() -> Self {
-        AssembleOpts { follow_locked_segments: true, allow_width_mismatch: true }
+        AssembleOpts { follow_locked_segments: true, allow_width_mismatch: true, stop_at_locked_joints: false }
     }
 }
 
@@ -189,8 +194,71 @@ impl Node {
         self.items.is_empty()
     }
 
+    /// Every item but the virtual ones ([`crate::item::Via::is_virtual`]: they are not drawn, not committed, not picked, and collide with nothing;
+    /// the joints have them, and [`Self::get`] finds them).
     pub fn iter(&self) -> impl Iterator<Item = (ItemId, &Item)> {
-        self.items.iter().map(|(&id, it)| (id, it))
+        self.items.iter().filter(|(_, it)| !it.is_virtual()).map(|(&id, it)| (id, it))
+    }
+
+    /// `NODE::FixupVirtualVias` (`pns_node.cpp:1270`, run by `ROUTER::SyncWorld`): a virtual via (`VVIA`) at every joint on one layer with no pad and no
+    /// via where the width changes or where a locked segment ends -- and one at the other end of that locked segment too, pad or via there or not.
+    /// Its diameter is the widest track's plus twice `PNS_HULL_MARGIN` (10 nm, which the micrometre grid has no room for). As KiCad's, only
+    /// segments are counted (an arc is no `SEGMENT`), "the locked one" is the last segment of the joint, and the solder mask, which KiCad compares
+    /// too, is not in the model. **Where three segments meet there is none**: the condition reads `n_seg >= 3`, but KiCad's loop never counts a
+    /// segment into `n_seg` (it stays 0), so a T of tracks of one width is no virtual via in KiCad's world -- and so not here (the review of
+    /// 2026-10-23 found the first port counting them).
+    pub fn fixup_virtual_vias(&mut self) {
+        let mut vvias: Vec<Via> = Vec::new();
+        let mut keys: Vec<&JointKey> = self.joints.keys().collect();
+        keys.sort_by_key(|k| format!("{k:?}")); // one order, whatever the hash map's
+        for key in keys {
+            let joint = &self.joints[key];
+            if joint.layers.start() != joint.layers.end() {
+                continue; // `IsMultilayer()`
+            }
+            // `int n_seg = 0;` -- never incremented in KiCad's loop
+            let n_seg = 0;
+            let (mut n_solid, mut n_vias) = (0, 0);
+            let (mut prev_w, mut max_w, mut is_width_change) = (-1, -1, false);
+            let mut locked_seg: Option<&crate::item::Segment> = None;
+            let mut is_locked = false;
+            let mut pos: Option<Point> = None;
+            let mut net = None;
+            for id in &joint.links {
+                match self.items.get(id) {
+                    Some(Item::Via(_)) => n_vias += 1,
+                    Some(Item::Solid(_)) => n_solid += 1,
+                    Some(Item::Segment(s)) => {
+                        let w = s.width;
+                        // `if( prev_w < 0 ) prev_w = w; else if( w != prev_w ) is_width_change = true;`
+                        if prev_w >= 0 && w != prev_w {
+                            is_width_change = true;
+                        }
+                        max_w = max_w.max(w);
+                        prev_w = w;
+                        is_locked = s.locked;
+                        locked_seg = Some(s);
+                        net = Some(s.net.clone());
+                        pos = Some(key.pos());
+                    }
+                    _ => {}
+                }
+            }
+            let (Some(pos), Some(net)) = (pos, net) else { continue };
+            let layer = joint.layers.start();
+            let vvia = |at: Point| Via { net: net.clone(), layers: LayerRange::single(layer), pos: at, diameter: max_w, drill: max_w / 2, source_via: None, locked: false, is_virtual: true };
+            if (is_width_change || n_seg >= 3 || is_locked) && n_solid == 0 && n_vias == 0 {
+                vvias.push(vvia(pos));
+            }
+            if is_locked {
+                if let Some(s) = locked_seg {
+                    vvias.push(vvia(if s.a == pos { s.b } else { s.a }));
+                }
+            }
+        }
+        for v in vvias {
+            self.add(Item::Via(v));
+        }
     }
 
     fn bbox_of(item: &Item) -> (Um, Um, Um, Um) {
@@ -210,7 +278,11 @@ impl Node {
     pub fn add(&mut self, item: Item) -> ItemId {
         let id = self.next_id;
         self.next_id += 1;
-        self.index.insert(id, Self::bbox_of(&item));
+        // a virtual item is in the joints but not in the index: "By default, virtual items cannot collide" (`QueryColliding`), so no spatial
+        // query is to find it
+        if !item.is_virtual() {
+            self.index.insert(id, Self::bbox_of(&item));
+        }
         for anchor in item.anchors() {
             self.touch_joint(anchor, item.layers(), item.net()).link(id);
         }
@@ -264,6 +336,14 @@ impl Node {
         self.joints.get(&JointKey::new(pos, net))
     }
 
+    /// `NODE::LockJoint( aPos, aItem, true )`: lock the joint of `net` at `pos`, if there is one (KiCad's `touchJoint` makes an empty one where
+    /// there is none, which nothing can stop at and which goes when an item links to it and leaves again).
+    pub fn lock_joint(&mut self, pos: Point, net: &Net) {
+        if let Some(j) = self.joints.get_mut(&JointKey::new(pos, net)) {
+            j.locked = true;
+        }
+    }
+
     /// `NODE::QueryJoints( bbox, joints, layers, ITEM::SOLID_T )` for what the optimizer's `KEEP_TOPOLOGY_CONSTRAINT` asks: the position and net of the joint of
     /// every pad (`Solid`) that is inside `bbox` (`x0, y0, x1, y1`) and on one of `layers`.
     pub fn solid_joints_in(&self, bbox: (Um, Um, Um, Um), layers: LayerRange) -> Vec<(Point, Net)> {
@@ -307,6 +387,8 @@ impl Node {
                         }
                     }
                 }
+                // "Virtual via will be added at the joint between an unlocked and locked seg": followed through when locked segments are
+                Some(Item::Via(v)) if v.is_virtual && follow_locked => {}
                 Some(Item::Solid(_)) | Some(Item::Via(_)) => return None, // pad/via: always a hard stop
                 _ => {}
             }
@@ -373,6 +455,10 @@ impl Node {
         let guard = b0;
         let mut guard_hit = false;
         while let Some(joint) = self.joint_at(cur_end, &net) {
+            // `followLine`: "bool locked = aStopAtLockedJoints ? jt->IsLocked() : false; if( locked || .. ) break;"
+            if opts.stop_at_locked_joints && joint.locked {
+                break;
+            }
             if let Some(next_id) = self.next_segment(joint, cur, &net, layers, opts.follow_locked_segments) {
                 if !opts.allow_width_mismatch && self.items[&next_id].width() != width {
                     break; // the line ends where the track width changes
@@ -410,6 +496,9 @@ impl Node {
         // walked all the way round going forward.
         if !guard_hit {
             while let Some(joint) = self.joint_at(cur_end, &net) {
+                if opts.stop_at_locked_joints && joint.locked {
+                    break;
+                }
                 if let Some(next_id) = self.next_segment(joint, cur, &net, layers, opts.follow_locked_segments) {
                     if !opts.allow_width_mismatch && self.items[&next_id].width() != width {
                         break;
@@ -767,7 +856,7 @@ impl Node {
             }
         }
         let mut best: Option<(i64, ItemId, Point)> = None;
-        let mut ids: Vec<ItemId> = self.items.iter().filter(|(id, it)| same_net_exact(it.net(), net) && !connected.contains(id) && !matches!(it, Item::Solid(s) if s.edge)).map(|(&id, _)| id).collect();
+        let mut ids: Vec<ItemId> = self.items.iter().filter(|(id, it)| same_net_exact(it.net(), net) && !connected.contains(id) && !it.is_virtual() && !matches!(it, Item::Solid(s) if !s.routable())).map(|(&id, _)| id).collect();
         ids.sort_unstable();
         for id in ids {
             for a in self.items[&id].anchors() {
@@ -883,7 +972,7 @@ impl Node {
                 found.entry(o.id).or_insert(o);
             }
         }
-        if let Some(v) = via {
+        if let Some(v) = via.filter(|v| !v.is_virtual) {
             let shape = Shape::Circle { c: v.pos, r: v.diameter / 2 };
             for o in self.colliding_with(&shape, &v.net, v.layers, rules, exclude, opts) {
                 found.entry(o.id).or_insert(o);
@@ -900,10 +989,12 @@ impl Node {
         for (id, o) in &found {
             let item = &self.items[id];
             // `GetClearance( item, aLine ) + aLine->Width() / 2`, hull thickness 0.
-            let hull = item.hull(eps(Self::clearance_to(rules, &line.net, item)) + line.width / 2, 0, line.layer);
+            // `makeHull`: the bounding box of the hull in a 90-degree corner mode (`simplifyHull`)
+            let make_hull = |h: Vec<Point>| if opts.box_hull { crate::hull::bbox_hull(&h) } else { h };
+            let hull = make_hull(item.hull(eps(Self::clearance_to(rules, &line.net, item)) + line.width / 2, 0, line.layer));
             let mut dist: Option<(i64, Point)> = first_entry(&hull);
             if let Some(v) = via {
-                let via_hull = item.hull(eps(Self::clearance_to(rules, &v.net, item)) + v.diameter / 2, 0, line.layer);
+                let via_hull = make_hull(item.hull(eps(Self::clearance_to(rules, &v.net, item)) + v.diameter / 2, 0, line.layer));
                 if let Some(d) = first_entry(&via_hull) {
                     if dist.is_none_or(|(bd, _)| d.0 < bd) {
                         dist = Some(d);
@@ -1038,7 +1129,7 @@ impl Node {
     pub fn nearest_anchor(&self, pos: Point, layers: LayerRange, max_dist: Um, net_filter: Option<&Net>) -> Option<(ItemId, Point)> {
         let mut best: Option<(ItemId, Point, i128)> = None;
         for (&id, item) in &self.items {
-            if !item.layers().overlaps(&layers) {
+            if !item.layers().overlaps(&layers) || item.is_virtual() {
                 continue;
             }
             if let Some(f) = net_filter {
@@ -1072,8 +1163,8 @@ impl Node {
         let mut best: Option<(ItemId, Um)> = None;
         for id in self.index.query(bbox) {
             let Some(item) = self.items.get(&id) else { continue };
-            if !item.layers().overlaps(&layers) || matches!(item, Item::Solid(s) if s.edge) {
-                continue; // the board outline is an obstacle, never something to pick up
+            if !item.layers().overlaps(&layers) || matches!(item, Item::Solid(s) if !s.routable()) {
+                continue; // the board outline and a copper text are obstacles, never something to pick up
             }
             let (actual, _) = probe.clearance_to(&item.shape(item.layers().start()));
             if actual <= max_dist && best.as_ref().map(|(_, d)| actual < *d).unwrap_or(true) {
@@ -1179,7 +1270,7 @@ mod tests {
         let net = net_of("SIG");
         let s1 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(0, 0), b: p(1000, 0), width: 200, source_track: None, locked: false }));
         let _s2 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(1000, 0), b: p(2000, 0), width: 200, source_track: None, locked: false }));
-        let _via = n.add(Item::Via(Via { net: net.clone(), layers: LayerRange::new(0, 1), pos: p(2000, 0), diameter: 600, drill: 300, source_via: None, locked: false }));
+        let _via = n.add(Item::Via(Via { net: net.clone(), layers: LayerRange::new(0, 1), pos: p(2000, 0), diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false }));
         let line = n.assemble_line(s1).expect("line");
         assert_eq!(line.pts, vec![p(0, 0), p(1000, 0), p(2000, 0)]);
         assert_eq!(line.segment_ids.len(), 2);
@@ -1240,7 +1331,7 @@ mod tests {
     #[test]
     fn branch_is_independent_clone() {
         let mut n = Node::new();
-        let id = n.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(0, 0), diameter: 600, drill: 300, source_via: None, locked: false }));
+        let id = n.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(0, 0), diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false }));
         let mut child = n.branch();
         child.remove(id);
         assert!(n.contains(id), "removing from a branch must not affect the parent");
@@ -1297,7 +1388,7 @@ mod tests {
         let pad = n.add(pad_item("A", p(1000, 3000), 300));
         let line = Line::from_points(net_of("SIG"), 0, 200, vec![p(0, 0), p(1000, 0)]);
         assert!(n.nearest_obstacle(&line, None, &rules, &[], QueryOpts::default()).is_none(), "the track alone is clear of the pad");
-        let via = crate::item::Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(1000, 2500), diameter: 600, drill: 300, source_via: None, locked: false };
+        let via = crate::item::Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(1000, 2500), diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false };
         assert_eq!(n.nearest_obstacle(&line, Some(&via), &rules, &[], QueryOpts::default()).unwrap().id, pad);
     }
 
@@ -1319,14 +1410,14 @@ mod tests {
         let locked = n.add(Item::Segment(Segment { net: net_of("N"), layer: 0, a: p(0, 0), b: p(-1000, 0), width: 200, source_track: None, locked: true }));
         let loose = n.assemble_line(a).unwrap();
         assert_eq!(loose.pts, vec![p(-1000, 0), p(0, 0), p(1000, 0), p(2000, 0), p(3000, 0)], "the plain assembly goes through everything");
-        let strict = n.assemble_line_with(a, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }).unwrap();
+        let strict = n.assemble_line_with(a, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }).unwrap();
         assert_eq!(strict.pts, vec![p(0, 0), p(1000, 0), p(2000, 0)]);
         assert_eq!(strict.segment_ids, vec![a, b]);
         assert_eq!(strict.width, 200);
-        let from_wide = n.assemble_line_with(wide, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }).unwrap();
+        let from_wide = n.assemble_line_with(wide, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }).unwrap();
         assert_eq!(from_wide.pts, vec![p(2000, 0), p(3000, 0)], "the wide part is a line of its own");
         // a line seeded on the locked segment itself still contains it (so `HasLockedSegments` can say so)
-        let from_locked = n.assemble_line_with(locked, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }).unwrap();
+        let from_locked = n.assemble_line_with(locked, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }).unwrap();
         assert!(from_locked.segment_ids.contains(&locked));
     }
 

@@ -393,6 +393,60 @@ fn parse_pin(item: &[Sexpr], unit: u32) -> Option<LibPin> {
 /// most parts (a plain resistor, a generic IC), not an error. Returns one
 /// human-readable warning per symbol that resolved to a file that exists
 /// but failed to parse.
+/// The fields named `Sim.*` of the library symbol `symbol_name` in the `.kicad_sym` at `path` (following `extends` to its parents, the nearest field of a
+/// name winning, as `LIB_SYMBOL::Flatten` lays a derived symbol's fields over its parent's), in the order the file has them. Cached per file and
+/// modification time, like the library table.
+pub fn sim_fields_of(path: &Path, symbol_name: &str) -> Vec<(String, String)> {
+    type SimTable = HashMap<String, Vec<(String, String)>>;
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Option<std::time::SystemTime>, std::sync::Arc<SimTable>)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let stamp = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let cached = cache.lock().ok().and_then(|g| g.get(path).filter(|(s, _)| *s == stamp).map(|(_, t)| t.clone()));
+    let table = match cached {
+        Some(t) => t,
+        None => {
+            let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
+            let Ok(tree) = sexpr::parse(&text) else { return Vec::new() };
+            let Some(root) = tree.as_list() else { return Vec::new() };
+            let mut own: HashMap<String, (Option<String>, Vec<(String, String)>)> = HashMap::new();
+            for item in sexpr::find_all(root, "symbol") {
+                let Some(name) = sexpr::txt(item, 1) else { continue };
+                let parent = sexpr::find(item, "extends").and_then(|e| sexpr::txt(e, 1)).map(str::to_string);
+                let fields = sexpr::find_all(item, "property")
+                    .filter_map(|p| Some((sexpr::txt(p, 1)?.to_string(), sexpr::txt(p, 2).unwrap_or("").to_string())))
+                    .filter(|(k, _)| k.starts_with("Sim."))
+                    .collect();
+                own.insert(name.to_string(), (parent, fields));
+            }
+            let mut table: SimTable = HashMap::new();
+            for name in own.keys() {
+                let mut fields: Vec<(String, String)> = Vec::new();
+                let mut cur = Some(name.clone());
+                let mut depth = 0;
+                while let Some(n) = cur.take() {
+                    let Some((parent, f)) = own.get(&n) else { break };
+                    for (k, v) in f {
+                        if !fields.iter().any(|(have, _)| have == k) {
+                            fields.push((k.clone(), v.clone()));
+                        }
+                    }
+                    depth += 1;
+                    if depth < 32 {
+                        cur = parent.clone();
+                    }
+                }
+                table.insert(name.clone(), fields);
+            }
+            let table = std::sync::Arc::new(table);
+            if let Ok(mut g) = cache.lock() {
+                g.insert(path.to_path_buf(), (stamp, table.clone()));
+            }
+            table
+        }
+    };
+    table.get(symbol_name).cloned().unwrap_or_default()
+}
+
 pub fn resolve_library_symbols(model: &mut ConstraintModel, lib_root: &Path) -> Vec<String> {
     resolve_library_symbols_with(model, |lib_name| find_symbol_library_file(lib_root, lib_name))
 }
@@ -406,6 +460,18 @@ pub fn resolve_library_symbols_with(model: &mut ConstraintModel, mut find: impl 
     wanted.dedup();
 
     let mut warnings = Vec::new();
+    // The simulation fields of every library symbol a part is drawn with, resolved before or now.
+    let mut sim_ids: Vec<String> = model.parts.iter().map(resolve_lib_id).filter(|id| !eda_model::is_synthetic_lib_id(id) && !model.symbol_sim_fields.contains_key(id)).collect();
+    sim_ids.sort();
+    sim_ids.dedup();
+    for lib_id in sim_ids {
+        let Some((lib_name, symbol_name)) = lib_id.split_once(':') else { continue };
+        let Some(path) = find(lib_name) else { continue };
+        let fields = sim_fields_of(&path, symbol_name);
+        if !fields.is_empty() {
+            model.symbol_sim_fields.insert(lib_id, fields);
+        }
+    }
     for lib_id in wanted {
         let Some((lib_name, _)) = lib_id.split_once(':') else { continue };
         let Some(path) = find(lib_name) else { continue };

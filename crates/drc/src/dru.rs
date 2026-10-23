@@ -146,8 +146,11 @@ impl Lexer {
         }
         loop {
             if self.li >= self.lines.len() {
+                // `STRING_LINE_READER::ReadLine` counts the read that finds nothing too, and the offset is the start of that empty line.
                 self.tok = Tok::Eof;
                 self.text.clear();
+                self.line_no = self.lines.len() + 1;
+                self.offset = 0;
                 return Ok(Tok::Eof);
             }
             let line = &self.lines[self.li];
@@ -283,6 +286,23 @@ struct Parser {
     env: Rc<Env>,
     /// Run `compileRules` after the parse ([`parse`]); off for [`parse_rules`].
     compile: bool,
+    /// `m_reporter`: with one ([`parse_reporting`]), `reportError` tells it and the parse goes on; without, the first error ends it.
+    reporter: Option<Vec<Reported>>,
+}
+
+/// `SEVERITY` of what the parser tells its reporter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportedSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+/// One `REPORTER::Report` of the parser: the text as KiCad words it (an error's place as `<a href='line:offset'>`), and its severity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reported {
+    pub text: String,
+    pub severity: ReportedSeverity,
 }
 
 /// What a rules file holds.
@@ -295,15 +315,28 @@ pub struct Parsed {
 
 /// `DRC_RULES_PARSER::Parse` with no reporter: the rules of `text`, or the first error.
 pub fn parse(text: &str, env: &Rc<Env>) -> Result<Parsed, ParseError> {
-    let mut p = Parser { lx: Lexer::new(text), env: env.clone(), compile: true };
+    let mut p = Parser { lx: Lexer::new(text), env: env.clone(), compile: true, reporter: None };
     p.parse()
 }
 
 /// `DRC_RULES_PARSER::Parse` alone, without the `DRC_ENGINE::compileRules` that [`parse`] runs after it: a condition that parses but names a property
 /// or a function KiCad does not know is no error here. This is how the DRC Rule Editor reads the file (`DRC_RULE_LOADER::LoadFromString`).
 pub fn parse_rules(text: &str, env: &Rc<Env>) -> Result<Parsed, ParseError> {
-    let mut p = Parser { lx: Lexer::new(text), env: env.clone(), compile: false };
+    let mut p = Parser { lx: Lexer::new(text), env: env.clone(), compile: false, reporter: None };
     p.parse()
+}
+
+/// `DRC_RULES_PARSER::Parse( rules, reporter )`: what the parser tells a reporter -- every error where it is, the deprecated keywords, the
+/// compiler's messages on a condition or an assertion, and "No errors found." when there is nothing else -- with what is still thrown (the lexer's
+/// `PARSE_ERROR`, an unterminated string) as the `Err`. No `compileRules` after it.
+pub fn parse_reporting(text: &str, env: &Rc<Env>) -> (Vec<Reported>, Result<Parsed, ParseError>) {
+    let mut p = Parser { lx: Lexer::new(text), env: env.clone(), compile: false, reporter: Some(Vec::new()) };
+    let r = p.parse();
+    let mut reported = p.reporter.take().unwrap_or_default();
+    if r.is_ok() && reported.is_empty() {
+        reported.push(Reported { text: "No errors found.".to_string(), severity: ReportedSeverity::Info });
+    }
+    (reported, r)
 }
 
 impl Parser {
@@ -315,28 +348,85 @@ impl Parser {
         &self.lx.tok
     }
 
-    /// `reportError`: with no reporter it throws. The message is cut at the `|` and the halves joined, as `"ERROR: %s%s"` does.
-    fn error<T>(&self, message: &str) -> Result<T, ParseError> {
+    /// `reportError`: with no reporter it throws. The message is cut at the `|` and the halves joined, as `"ERROR: %s%s"` does. With a reporter it is
+    /// told as `"ERROR: <a href='%d:%d'>%s</a>%s"` (the line, `CurOffset()`, from 1, plus `offset`) and the parse goes on.
+    fn error<T: Default>(&mut self, message: &str) -> Result<T, ParseError> {
         self.error_at(message, 0)
     }
 
-    fn error_at<T>(&self, message: &str, offset: usize) -> Result<T, ParseError> {
+    fn error_at<T: Default>(&mut self, message: &str, offset: usize) -> Result<T, ParseError> {
         let (first, rest) = message.split_once('|').unwrap_or((message, ""));
-        Err(self.lx.err(&format!("ERROR: {first}{rest}"), offset))
+        let (line, at) = (self.lx.line_no.max(1), self.lx.offset + 1 + offset);
+        self.report_or_throw(first, rest, line, at, offset)
+    }
+
+    /// An error at `line`:`at` as the reporter is told it, else the `PARSE_ERROR` thrown (at the token's offset plus `offset`).
+    fn report_or_throw<T: Default>(&mut self, first: &str, rest: &str, line: usize, at: usize, offset: usize) -> Result<T, ParseError> {
+        match &mut self.reporter {
+            Some(r) => {
+                r.push(Reported { text: format!("ERROR: <a href='{line}:{at}'>{first}</a>{rest}"), severity: ReportedSeverity::Error });
+                Ok(T::default())
+            }
+            None => Err(self.lx.err(&format!("ERROR: {first}{rest}"), offset)),
+        }
+    }
+
+    /// `reportDeprecation`: told to a reporter only.
+    fn deprecation(&mut self, old: &str, new: &str) {
+        if let Some(r) = &mut self.reporter {
+            r.push(Reported { text: format!("The '{old}' keyword has been deprecated.  Please use '{new}' instead."), severity: ReportedSeverity::Warning });
+        }
+    }
+
+    /// `DRC_RULE_CONDITION::Compile( m_reporter, CurLineNumber(), CurOffset() )`: with a reporter, each message of the compiler as its error callback
+    /// words it. The compiler's answer.
+    fn compile_reporting(&mut self, cond: &mut Condition) -> bool {
+        let ok = cond.compile(&self.env);
+        if self.reporter.is_some() {
+            let (line, at) = (self.lx.line_no.max(1), self.lx.offset + 1);
+            for (message, pos) in cond.compile_messages() {
+                let (first, rest) = message.split_once('|').unwrap_or((message.as_str(), ""));
+                let _ = self.report_or_throw::<()>(first, rest, line, at + pos, 0);
+            }
+        }
+        ok
     }
 
     /// `checkUnresolvedTextVariable`.
-    fn check_unresolved(&self) -> Result<bool, ParseError> {
+    fn check_unresolved(&mut self) -> Result<bool, ParseError> {
         if let Some(pos) = self.lx.text.find("${") {
-            return self.error_at("Unresolved text variable", self.lx.text[..pos].chars().count());
+            let at = self.lx.text[..pos].chars().count();
+            self.error_at::<()>("Unresolved text variable", at)?;
+            return Ok(true);
         }
         Ok(false)
     }
 
-    /// `expected`.
-    fn expected<T>(&self, expected: &str) -> Result<T, ParseError> {
+    /// `expected`: the error, then `parseUnknown` (reached with a reporter only).
+    fn expected<T: Default>(&mut self, expected: &str) -> Result<T, ParseError> {
         let msg = if self.lx.text.starts_with("${") { "Unresolved text variable.".to_string() } else { format!("Unrecognized item '{}'.| Expected {expected}.", self.lx.text) };
-        self.error(&msg)
+        let r = self.error(&msg)?;
+        self.parse_unknown()?;
+        Ok(r)
+    }
+
+    /// `parseUnknown`: the tokens up to the `)` that closes the current list.
+    fn parse_unknown(&mut self) -> Result<(), ParseError> {
+        let mut depth = 1;
+        loop {
+            match self.next()? {
+                Tok::Eof => break,
+                Tok::Left => depth += 1,
+                Tok::Right => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// `parseExpression`: the tokens up to the closing parenthesis, joined with the blanks that were between them.
@@ -381,6 +471,8 @@ impl Parser {
             self.next()?;
             if !have_version && *self.tok() != Tok::Kw("version") {
                 self.error::<()>("Missing version statement.")?;
+                // (don't keep on reporting it)
+                have_version = true;
             }
             match self.tok().clone() {
                 Tok::Kw("version") => {
@@ -453,7 +545,7 @@ impl Parser {
                     } else if is_symbol(&t) {
                         self.check_unresolved()?;
                         let mut cond = Condition::new(&self.lx.text);
-                        if !cond.compile(&self.env) {
+                        if !self.compile_reporting(&mut cond) {
                             let m = format!("Could not parse expression '{}'.", self.lx.text);
                             self.error::<()>(&m)?;
                         }
@@ -477,6 +569,7 @@ impl Parser {
                 Tok::Kw("severity") => rule.severity = self.parse_severity()?,
                 Tok::Eof => {
                     self.error::<()>("Incomplete statement.")?;
+                    return Ok(rule);
                 }
                 _ => self.expected::<()>("constraint, condition, or disallow")?,
             }
@@ -503,9 +596,15 @@ impl Parser {
         }
         // The deprecated names.
         t = match t {
-            Tok::Kw("mechanical_clearance") => Tok::Kw("physical_clearance"),
-            Tok::Kw("mechanical_hole_clearance") => Tok::Kw("physical_hole_clearance"),
-            Tok::Kw("hole") => Tok::Kw("hole_size"),
+            Tok::Kw(old @ ("mechanical_clearance" | "mechanical_hole_clearance" | "hole")) => {
+                let new = match old {
+                    "mechanical_clearance" => "physical_clearance",
+                    "mechanical_hole_clearance" => "physical_hole_clearance",
+                    _ => "hole_size",
+                };
+                self.deprecation(old, new);
+                Tok::Kw(new)
+            }
             other => other,
         };
         if t == Tok::Right || t == Tok::Eof {
@@ -598,7 +697,7 @@ impl Parser {
             if is_symbol(&t) {
                 // (The assertion is compiled for its code only: whatever it told is not an error of the file.)
                 let mut cond = Condition::new(&self.lx.text);
-                cond.compile(&self.env);
+                self.compile_reporting(&mut cond);
                 c.test = Some(cond);
                 if self.next()? != Tok::Right {
                     self.error::<()>("Missing ')'.")?;
@@ -619,11 +718,9 @@ impl Parser {
         }
         let mut units_type = UnitsType::Unitless;
         loop {
+            // (At the end of the file the loop ends too, with no word: the rule's own `)` is what is missing.)
             let t = self.next()?;
             if t == Tok::Right || t == Tok::Eof {
-                if t == Tok::Eof {
-                    self.error::<()>("Incomplete statement.")?;
-                }
                 break;
             }
             if t != Tok::Left {
@@ -641,6 +738,7 @@ impl Parser {
                     }
                 }
                 Tok::Kw(which @ ("min" | "max" | "opt")) => {
+                    // `CurOffset() + GetTokenString( token ).length()`, from 0 here (as the thrown error counts).
                     let offset = self.lx.offset + which.chars().count();
                     let expr = self.parse_expression()?;
                     if expr.is_empty() {
@@ -683,12 +781,17 @@ impl Parser {
         Ok(())
     }
 
-    /// `parseValueWithUnits`: the expression of a `(min ..)` evaluated to internal units, with the units it ended up in. Any error the compiler tells throws.
-    fn parse_value_with_units(&self, offset: usize, expr: &str, unitless: bool) -> Result<(i64, Unit), ParseError> {
+    /// `parseValueWithUnits`: the expression of a `(min ..)` evaluated to internal units, with the units it ended up in. Any error the compiler tells
+    /// throws; a reporter is told it (at the `(min`'s offset plus where in the expression), and the value is 0, unscaled.
+    fn parse_value_with_units(&mut self, offset: usize, expr: &str, unitless: bool) -> Result<(i64, Unit), ParseError> {
         match pcbexpr::evaluate_number(expr, unitless) {
             Ok(v) => Ok(v),
             Err(e) => {
                 let (first, rest) = e.message.split_once('|').unwrap_or((&e.message, ""));
+                if let Some(r) = &mut self.reporter {
+                    r.push(Reported { text: format!("ERROR: <a href='{}:{}'>{first}</a>{rest}", self.lx.line_no.max(1), offset + 1 + e.pos), severity: ReportedSeverity::Error });
+                    return Ok((0, Unit::Unscaled));
+                }
                 Err(ParseError { message: format!("ERROR: {first}{rest}"), line: self.lx.line_no.max(1), offset: self.lx.offset + offset, rule: String::new(), source: String::new() })
             }
         }
@@ -699,7 +802,11 @@ impl Parser {
         let t = self.next()?;
         let (set, source);
         if t == Tok::Right {
-            return self.error("Missing layer name or type.");
+            self.error::<()>("Missing layer name or type.")?;
+            // `LSET::AllCuMask()`.
+            let mut all: BTreeSet<String> = ["F.Cu", "B.Cu"].iter().map(|s| s.to_string()).collect();
+            all.extend((1..=30).map(|n| format!("In{n}.Cu")));
+            return Ok((all, String::new()));
         } else if t == Tok::Kw("outer") {
             source = "outer".to_string();
             set = ["F.Cu", "B.Cu"].iter().map(|s| s.to_string()).collect();
@@ -730,14 +837,18 @@ impl Parser {
     fn parse_severity(&mut self) -> Result<Severity, ParseError> {
         let t = self.next()?;
         if t == Tok::Right || t == Tok::Eof {
-            return self.error("Missing severity name.");
+            self.error::<()>("Missing severity name.")?;
+            return Ok(Severity::Undefined);
         }
         let sev = match t {
             Tok::Kw("ignore") => Severity::Ignore,
             Tok::Kw("warning") => Severity::Warning,
             Tok::Kw("error") => Severity::Error,
             Tok::Kw("exclusion") => Severity::Exclusion,
-            _ => return self.expected("ignore, warning, error, or exclusion"),
+            _ => {
+                self.expected::<()>("ignore, warning, error, or exclusion")?;
+                Severity::Undefined
+            }
         };
         if self.next()? != Tok::Right {
             self.error::<()>("Missing ')'.")?;
@@ -819,6 +930,10 @@ mod tests {
         assert_eq!(err("(version 1)(rule x (constraint skew (max 1mm) (max 5ps)))"), "ERROR: Mixed units for constraint values.");
         assert_eq!(err("(version 1)(rule x (constraint clearance (min 1ps)))"), "ERROR: Time based units not allowed for constraint type.");
         assert_eq!(err("(version 1)(rule x (constraint clearance (min 1mm))"), "ERROR: Missing ')'.");
+        // The file ends inside a constraint: its loop ends with no word, and the rule's `)` is what is missing (as kicad-cli says it), at the line
+        // after the last, offset 0.
+        let e = parse("(version 1)\n(rule x (constraint clearance (min 1mm)", &env()).err().unwrap();
+        assert_eq!((e.message.as_str(), e.line, e.offset), ("ERROR: Missing ')'.", 3, 0));
         assert_eq!(err("(version 1)(rule \"x"), "Unterminated delimited string");
     }
 

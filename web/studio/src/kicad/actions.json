@@ -3,7 +3,7 @@
     "generated": true,
     "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
     "kicadCommitDate": null,
-    "extractedAt": "2026-10-01T04:06:45.439Z",
+    "extractedAt": "2026-10-23T05:39:38.123Z",
     "sourceFiles": [
       "pcbnew/tools/pcb_actions.cpp",
       "common/tool/actions.cpp",
@@ -10474,6 +10474,21 @@
       "flags": []
     },
     {
+      "name": "pcbnew.InteractiveRouter.CustomTrackViaSize",
+      "label": "Custom Track/Via Size...",
+      "tooltip": "Shows a dialog for changing the track width and via size.",
+      "hotkey": "Q",
+      "altHotkey": null,
+      "hotkeyRaw": "'Q'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "width_track",
+      "flags": []
+    },
+    {
       "name": "pcbnew.InteractiveRouter.CycleRouterMode",
       "label": "Cycle Router Mode",
       "tooltip": "Cycle router to the next mode",
@@ -10583,6 +10598,57 @@
       "flags": []
     },
     {
+      "name": "pcbnew.InteractiveRouter.PlaceBlindVia",
+      "label": "Place Blind/Buried Via",
+      "tooltip": "Adds a blind or buried via at the end of currently routed track.",
+      "hotkey": "Alt+Shift+V",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + MD_SHIFT + 'V'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "via_buried",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.PlaceMicroVia",
+      "label": "Place Microvia",
+      "tooltip": "Adds a microvia at the end of currently routed track.",
+      "hotkey": "Ctrl+V",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'V'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "via_microvia",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.PlaceVia",
+      "label": "Place Through Via",
+      "tooltip": "Adds a through-hole via at the end of currently routed track.",
+      "hotkey": "V",
+      "altHotkey": null,
+      "hotkeyRaw": "'V'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "via",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
       "name": "pcbnew.InteractiveRouter.RouteSelected",
       "label": "Route Selected",
       "tooltip": "Sequentially route selected items from ratsnest anchor.",
@@ -10634,6 +10700,57 @@
       ]
     },
     {
+      "name": "pcbnew.InteractiveRouter.SelLayerAndPlaceBlindVia",
+      "label": "Select Layer and Place Blind/Buried Via...",
+      "tooltip": "Select a layer, then add a blind or buried via at the end of currently routed track.",
+      "hotkey": "Alt+<",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + '<'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "select_w_layer",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SelLayerAndPlaceMicroVia",
+      "label": "Select Layer and Place Micro Via...",
+      "tooltip": "Select a layer, then add a micro via at the end of currently routed track.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "select_w_layer",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SelLayerAndPlaceVia",
+      "label": "Select Layer and Place Through Via...",
+      "tooltip": "Select a layer, then add a through-hole via at the end of currently routed track.",
+      "hotkey": "<",
+      "altHotkey": null,
+      "hotkeyRaw": "'<'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "select_w_layer",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
       "name": "pcbnew.InteractiveRouter.SettingsDialog",
       "label": "Interactive Router Settings...",
       "tooltip": "Open Interactive Router settings",
@@ -10681,6 +10798,96 @@
       "flags": [
         "AF_ACTIVATE"
       ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SwitchPosture",
+      "label": "Switch Track Posture",
+      "tooltip": "Switches posture of the currently routed track.",
+      "hotkey": "/",
+      "altHotkey": null,
+      "hotkeyRaw": "'/'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "change_entry_orient",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SwitchRounding45",
+      "label": "Track Corner Mode 45",
+      "tooltip": "Switch to 45° corner when routing tracks.",
+      "hotkey": "Ctrl+W",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'W'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SwitchRounding90",
+      "label": "Track Corner Mode 90",
+      "tooltip": "Switch to 90° corner when routing tracks.",
+      "hotkey": "Ctrl+Alt+W",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_ALT + 'W'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SwitchRoundingArc45",
+      "label": "Track Corner Mode Arc 45",
+      "tooltip": "Switch to arc 45° corner when routing tracks.",
+      "hotkey": "Ctrl+Shift+W",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'W'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SwitchRoundingArc90",
+      "label": "Track Corner Mode Arc 90",
+      "tooltip": "Switch to arc 90° corner when routing tracks.",
+      "hotkey": "Alt+W",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + 'W'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SwitchRoundingToNext",
+      "label": "Track Corner Mode Switch",
+      "tooltip": "Switches between sharp/rounded and 45°/90° corners when routing tracks.",
+      "hotkey": "Ctrl+/",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + '/'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "switch_corner_rounding_shape",
+      "flags": []
     },
     {
       "name": "pcbnew.InteractiveRouter.UndoLastSegment",

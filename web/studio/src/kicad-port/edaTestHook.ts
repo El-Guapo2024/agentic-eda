@@ -83,21 +83,27 @@ export interface ActionInfo {
   reason?: string;
 }
 
-/** Why `name` cannot run on `tab`, or null when it can: no handler, or an action of another editor (`actionTabGate.ts`). */
-export function disabledReason(name: string, tab: string, registered: boolean): string | null {
+/** Why an action that has a handler cannot run all the same (an exporter the kicad-cli lacks: `cliExporters.ts`), or null. */
+export type Unavailable = (name: string) => string | null;
+
+/**
+ * Why `name` cannot run on `tab`, or null when it can: no handler, an action of another editor (`actionTabGate.ts`), or what `unavailable`
+ * says (an exporter the server's kicad-cli lacks).
+ */
+export function disabledReason(name: string, tab: string, registered: boolean, unavailable?: Unavailable): string | null {
   if (!registered) return `no handler on the ${tab} tab: the action is not wired in the studio, or that editor does not offer it`;
   if (!isActionEnabledForTab(name, tab, true)) return `not offered on the ${tab} tab: it belongs to another editor`;
-  return null;
+  return unavailable?.(name) ?? null;
 }
 
 /**
  * The action list: every id the runner has a handler for, sorted, with whether it is enabled on `tab` and why not. `unhandled` (the KiCad action ids with no
  * handler) are listed too when given -- each disabled, "no handler".
  */
-export function describeActions(handled: Iterable<string>, tab: string, labels: ReadonlyMap<string, string>, unhandled: Iterable<string> = []): ActionInfo[] {
+export function describeActions(handled: Iterable<string>, tab: string, labels: ReadonlyMap<string, string>, unhandled: Iterable<string> = [], unavailable?: Unavailable): ActionInfo[] {
   const out: ActionInfo[] = [];
   for (const id of handled) {
-    const reason = disabledReason(id, tab, true);
+    const reason = disabledReason(id, tab, true, unavailable);
     out.push({ id, label: labels.get(id) ?? null, enabled: reason === null, ...(reason ? { reason } : {}) });
   }
   for (const id of unhandled) out.push({ id, label: labels.get(id) ?? null, enabled: false, reason: disabledReason(id, tab, false)! });

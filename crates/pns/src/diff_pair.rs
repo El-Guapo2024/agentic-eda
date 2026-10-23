@@ -315,7 +315,7 @@ impl PairLine<'_> {
     /// `NODE::CheckColliding( &line, aKindMask )`: some segment of the line, or its via, is within the clearance of an item of `node`
     /// of one of the kinds in `mask` ([`crate::node::kind_mask`]).
     pub fn hits_node(&self, node: &Node, rules: &BoardRules, mask: u8) -> bool {
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false };
         let layers = LayerRange::single(self.layer);
         self.pts.windows(2).any(|w| !node.colliding_with(&Shape::Stadium { a: w[0], b: w[1], r: self.width / 2 }, self.net, layers, rules, &[], opts).is_empty())
             || self.via.is_some_and(|v| !node.colliding_with(&Shape::Circle { c: v.pos, r: v.diameter / 2 }, &v.net, v.layers, rules, &[], opts).is_empty())

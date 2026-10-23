@@ -57,6 +57,15 @@ test("an action is disabled with a reason: no handler, or an action of another e
   assert.equal(disabledReason("pcbnew.InteractiveRouter.SingleTrack", "pcb", true), null);
 });
 
+test("an action with a handler is disabled with the reason the kicad-cli gives (an exporter it lacks), on its own tab only", () => {
+  const noIdf = (name: string) => (name === "pcbnew.EditorControl.exportIDF" ? "This kicad-cli has no IDF exporter; KiCad 10.99 nightly or later has one." : null);
+  assert.equal(disabledReason("pcbnew.EditorControl.exportIDF", "pcb", true, noIdf), "This kicad-cli has no IDF exporter; KiCad 10.99 nightly or later has one.");
+  assert.equal(disabledReason("pcbnew.EditorControl.exportGenCAD", "pcb", true, noIdf), null);
+  assert.match(disabledReason("pcbnew.EditorControl.exportIDF", "schematic", true, noIdf)!, /another editor/);
+  const list = describeActions(["pcbnew.EditorControl.exportIDF"], "pcb", new Map(), [], noIdf);
+  assert.deepEqual(list[0], { id: "pcbnew.EditorControl.exportIDF", label: null, enabled: false, reason: noIdf("pcbnew.EditorControl.exportIDF")! });
+});
+
 test("the action list is sorted, labelled and says why a disabled one is; unhandled ones come only when asked for", () => {
   const labels = new Map([["common.Control.zoomIn", "Zoom In"]]);
   const list = describeActions(["pcbnew.Zzz.last", "common.Control.zoomIn", "eeschema.Aaa.first"], "pcb", labels);

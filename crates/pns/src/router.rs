@@ -12,11 +12,10 @@
 //! already a whole polyline -- see [`RouteCommit`]'s own doc comment).
 //!
 //! `Router` owns the committed [`Node`] (`m_world`) and, while a route is
-//! in progress, a [`crate::line_placer::LinePlacer`] session -- there is no
-//! persistent working/preview `Node` the way upstream keeps one, because
-//! neither `LinePlacer` nor `shove` need one between calls (both re-derive
-//! everything fresh from `m_world` plus the session's own state on every
-//! call; see those modules' doc comments for why that's enough here).
+//! in progress, a [`crate::line_placer::LinePlacer`] session. The placer keeps
+//! the shove's springback stack ([`crate::springback`]) as diffs against
+//! `m_world`, not the `NODE`s upstream keeps; each call makes the world it
+//! needs from `m_world` and the newest frame.
 
 use crate::arcs::ArcPts;
 use crate::item::{net_of, Item, ItemId, Net};
@@ -316,13 +315,14 @@ impl Router {
         let head = &preview.head;
         // what the session has fixed, in the world: segments, and a via where two runs on different layers meet
         let mut node = world.branch();
-        for run in &placer.runs {
+        let runs = placer.placed_runs();
+        for run in &runs {
             node.add_line(run, None, false);
         }
-        for w in placer.runs.windows(2) {
+        for w in runs.windows(2) {
             if w[0].layer != w[1].layer && w[0].last() == w[1].first() {
                 let (l0, l1) = (w[0].layer, w[1].layer);
-                node.add(Item::Via(crate::item::Via { net: net.clone(), layers: LayerRange::new(l0, l1), pos: w[0].last().unwrap(), diameter: placer.via_diameter.max(1), drill: placer.via_drill.max(1), source_via: None, locked: false }));
+                node.add(Item::Via(crate::item::Via { net: net.clone(), layers: LayerRange::new(l0, l1), pos: w[0].last().unwrap(), diameter: placer.via_diameter.max(1), drill: placer.via_drill.max(1), source_via: None, locked: false, is_virtual: false }));
             }
         }
         let current_end = head.last().unwrap_or_else(|| placer.fixed_start());
@@ -347,7 +347,7 @@ impl Router {
             (anchor, node.get(id).map_or(LayerRange::single(placer.current_layer), |i| i.layers()))
         };
         let layer = if layers.overlaps_layer(placer.current_layer) { placer.current_layer } else { layers.start() };
-        let mut commit = self.build_commit(&net, placer.runs.clone(), placer.current_layer, placer.width);
+        let mut commit = self.build_commit(&net, runs, placer.current_layer, placer.width);
         if !commit.tracks.is_empty() || !commit.vias.is_empty() {
             let splits = self.session_splits(false);
             self.apply_splits(&splits, &mut commit);
@@ -698,6 +698,11 @@ impl Router {
     }
 
     /// `GetForceMarkObstaclesMode`: the drag in progress only marks obstacles because its first position failed.
+    /// The drag is of a virtual via (`DRAGGER::checkVirtualVia`: the end of a segment where tracks meet with no pad or via), which is not drawn.
+    pub fn drag_virtual_via(&self) -> bool {
+        self.drag.as_ref().is_some_and(|d| d.via_virtual)
+    }
+
     pub fn drag_forces_mark_obstacles(&self) -> bool {
         self.drag.as_ref().is_some_and(|d| d.force_mark_obstacles())
     }
@@ -1048,7 +1053,10 @@ mod tests {
         // and in the board that results, the new route and both halves of the track meet at one joint
         let (after, _) = crate::from_ir::build_node(&committed(&design, &commit), &model);
         let joint = after.joint_at(Point { x: 2000, y: 0 }, &net_of("SIG")).expect("a joint where the route starts");
-        assert_eq!(joint.links.len(), 3, "the two halves of the track and the route");
+        let segments = joint.links.iter().filter(|&&id| matches!(after.get(id), Some(Item::Segment(_)))).count();
+        assert_eq!(segments, 3, "the two halves of the track and the route");
+        // three segments of one width meet there with no pad or via: no virtual via (`FixupVirtualVias` never counts `n_seg`)
+        assert!(!joint.links.iter().any(|&id| after.get(id).is_some_and(Item::is_virtual)));
     }
 
     /// A route that starts and places nothing leaves the track whole (`CommitRouting` commits nothing).
@@ -1114,7 +1122,7 @@ mod tests {
         let cut = commit.tracks.iter().find(|t| t.pts.first() == Some(&Point { x: 0, y: 0 })).expect("the cut track");
         assert_eq!(cut.pts, vec![Point { x: 0, y: 0 }, middle, Point { x: 4000, y: 0 }]);
         let (after, _) = crate::from_ir::build_node(&committed(&design, &commit), &model);
-        assert_eq!(after.joint_at(middle, &net_of("SIG")).map(|j| j.links.len()), Some(3));
+        assert_eq!(after.joint_at(middle, &net_of("SIG")).map(|j| j.links.iter().filter(|&&id| matches!(after.get(id), Some(Item::Segment(_)))).count()), Some(3));
     }
 
     /// With "snap to tracks" off the cursor over a track is no end, and nothing is cut.
@@ -1213,6 +1221,24 @@ mod tests {
         assert_eq!(commit.tracks[0].layer, "F.Cu");
         assert_eq!(commit.tracks[0].pts.first(), Some(&start_pos));
         assert_eq!(commit.tracks[0].pts.last(), Some(&Point { x: 5175, y: 0 }));
+    }
+
+    /// Track Corner Mode arc 45 (`ROUNDED_45`): the corner of a route is an arc track of the commit, between two polylines.
+    #[test]
+    fn a_rounded_corner_is_committed_as_an_arc_track() {
+        let (design, model) = two_pad_board();
+        let mut router = Router::new(&design, &model);
+        router.settings.corner_mode = crate::direction45::CornerMode::Rounded45;
+        router.start(Point { x: -825, y: 0 }, "F.Cu", 200).unwrap();
+        router.fix(Point { x: 3000, y: -2000 }).expect("a route is in progress");
+        let commit = router.finish(Point { x: 5175, y: 0 }).expect("must finish");
+        let arcs: Vec<_> = commit.tracks.iter().filter(|t| t.arc().is_some()).collect();
+        assert_eq!(arcs.len(), 2, "one arc a leg: {:?}", commit.tracks.iter().map(|t| (t.pts.len(), t.arc_mid_offset)).collect::<Vec<_>>());
+        // the pieces join end to end
+        let ends: Vec<(Point, Point)> = commit.tracks.iter().map(|t| (t.pts[0], *t.pts.last().unwrap())).collect();
+        for (a, b) in &ends {
+            assert!(ends.iter().filter(|(c, d)| c == b || d == b).count() >= 1 && ends.iter().any(|(c, d)| (c, d) != (a, b) && (c == a || d == a || c == b || d == b)), "{ends:?}");
+        }
     }
 
     /// D1: intermediate fix clicks must not emit vias.

@@ -189,7 +189,8 @@ fn simple_shove_1_pushes_the_same_13_tracks_and_leaves_the_board_clean() {
     let ours: Vec<(String, Point, Point)> = pv.displaced_lines.iter().flat_map(|d| d.line.segs().map(|(a, b)| (d.line.net.as_deref().unwrap_or("").to_string(), a, b)).collect::<Vec<_>>()).collect();
     let expected = recorded_segments(&log);
     let hit = expected.iter().filter(|e| ours.iter().any(|o| same_segment(e, o, 3))).count();
-    assert!(hit >= 10, "{hit} of {} recorded segments reproduced within 3 um", expected.len());
+    // 12 of the 28 before springback, when every move shoved from the world as it was
+    assert!(hit >= 24, "{hit} of {} recorded segments reproduced within 3 um", expected.len());
     // and the board it leaves is clean
     let before = violations(&node, &model.board);
     let after = violations(&committed(&node, &pv), &model.board);
@@ -262,7 +263,8 @@ fn issue22749_pushes_the_same_5_tracks_and_leaves_the_board_clean() {
     let ours: Vec<(String, Point, Point)> = pv.displaced_lines.iter().flat_map(|d| d.line.segs().map(|(a, b)| (d.line.net.as_deref().unwrap_or("").to_string(), a, b)).collect::<Vec<_>>()).collect();
     let expected = recorded_segments(&log);
     let hit = expected.iter().filter(|e| ours.iter().any(|o| same_segment(e, o, 3))).count();
-    assert!(hit >= 4, "{hit} of {} recorded segments reproduced within 3 um", expected.len());
+    // all of them since springback (4 of the 11 before it)
+    assert_eq!(hit, expected.len(), "{hit} of {} recorded segments reproduced within 3 um", expected.len());
     let before = violations(&node, &model.board);
     let after = violations(&committed(&node, &pv), &model.board);
     let new_ones: Vec<_> = after.difference(&before).collect();
@@ -307,7 +309,7 @@ fn dragged(node: &Node, d: &Dragger, pv: &DragPreview, to: Point) -> Node {
             }
             // where the drag left the via: the cursor, or further, if a shove or a pushout moved it on
             let end = pv.pts.first().copied().unwrap_or(to);
-            w.add(Item::Via(eda_pns::item::Via { net: d.net.clone(), layers: d.via_layers, pos: end, diameter: d.via_diameter, drill: d.via_drill, source_via: d.source_via.clone(), locked: false }));
+            w.add(Item::Via(eda_pns::item::Via { net: d.net.clone(), layers: d.via_layers, pos: end, diameter: d.via_diameter, drill: d.via_drill, source_via: d.source_via.clone(), locked: false, is_virtual: false }));
             for l in &pv.fanout {
                 w.remove_line_segments(l);
                 w.add_line(l, None, false);

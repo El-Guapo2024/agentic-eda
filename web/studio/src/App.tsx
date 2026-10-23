@@ -30,6 +30,7 @@ import { CommonOverlay } from "./components/CommonOverlay";
 import { CommonToolHost } from "./components/CommonToolHost";
 import { CommonDialogs } from "./components/CommonDialogs";
 import { DesignBlockDialogs } from "./components/designBlocks/DesignBlockDialogs";
+import { SimulatorWindow } from "./components/simulator/SimulatorWindow";
 import { DesignBlocksDock } from "./components/designBlocks/DesignBlocksDock";
 import { useDesignBlocksUi } from "./state/designBlocks";
 import { LibraryTableDialogs } from "./components/libraryTables/LibraryTableDialogs";
@@ -321,6 +322,8 @@ function StudioFrame() {
       <BoardControlDialogs />
       <CommonDialogs />
       <DesignBlockDialogs />
+      {/* The SPICE simulator's window (SIMULATOR_FRAME), over the schematic editor it simulates. */}
+      {state.tab === "schematic" && <SimulatorWindow />}
       <LibraryTableDialogs />
       <ImportGraphicsDialog />
       <ForeignImportDialogs />

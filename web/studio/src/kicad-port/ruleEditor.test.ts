@@ -177,6 +177,18 @@ test("each panel's fields sit where GetFieldPositions puts them", () => {
   for (const p of every) assert.ok(overlaySpec(p)?.bitmap.startsWith("constraint_"), p);
 });
 
+test("the via style's min/max pairs are bracketed as DRC_RE_VIA_STYLE_OVERLAY_PANEL decorates them", () => {
+  const spec = overlaySpec("via_style")!;
+  assert.deepEqual(
+    (spec.decor ?? []).map((d) => d.text),
+    ["(", "-", ")", "(", "-", ")"],
+  );
+  const [open, dash, close] = spec.decor!;
+  const [min, max] = spec.fields;
+  assert.ok(open!.x < min!.x0 && dash!.x > min!.x1 && dash!.x < max!.x0 && close!.x > max!.x1, JSON.stringify(spec.decor));
+  assert.equal(overlaySpec("routing_width")!.decor, undefined);
+});
+
 test("Allow All follows the four angles and sets them", () => {
   let f = toggleOrientation(fields(), "all_degrees", true);
   assert.deepEqual([f.deg0, f.deg90, f.deg180, f.deg270, f.all_degrees], [true, true, true, true, true]);

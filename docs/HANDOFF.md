@@ -39,6 +39,10 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | P25 fix (10-23) | Remove Unused Pads uses `BOARD::LayerDepth` as KiCad computes it. |
 | Reviews (10-23) | P19b and P26 reviewed function by function against KiCad 8303b2ad, with failing tests first: Specctra got 7 fixes (geometry in nm, arcs, custom pads, keepouts, messages), embedded files 12 (the board's font block, Collect's order, the panel's questions word for word). kicad-cli re-saves our `embedded_files` blocks character for character. |
 | P9b (10-23) | The DRC Rule Editor (`pcbnew/drc/rule_editor/`), over the `.kicad_dru`; `Cmd::EditDrcRule`. PARITY-pcb.md section 48 lists where it keeps rules KiCad's editor would lose. Left: Show Matches, Syntax help, auto-completion, drag and drop, units. |
+| P21 (10-23) | The SPICE simulator: kicad-cli's SPICE netlist, `ngspice -b` (`EDA_NGSPICE` or PATH), the Simulation window, Probe and Tune, the exports, the `.wbk` workbook. Reviewed against `eeschema/sim/`; the vectors equal ngspice run by hand on kicad-cli's netlist. Left: plotting while it runs (no libngspice), S-parameter port numbers, potentiometer tuning, IBIS currents. PARITY-sch.md section 38. |
+| Specctra via kicad-cli (10-23) | DSN export through `kicad-cli pcb export specctra` when kicad-cli has it; our exporter is the DEPRECATED fallback (the user's decision). |
+| IDF via kicad-cli (10-23) | File > Export > IDFv3 through `kicad-cli pcb export idf`; GenCAD (already wired) gated the same way. Both are disabled, with the reason, on a kicad-cli without the command. kicad-cli reads `--user-origin-x/-y` in 1/25400 mm with `--units mils`, and `idf_args` compensates; the slow test `idf_takes_the_dialogs_reference_point_in_mils` fails if a later nightly fixes that. |
+| Router leftovers (10-23) | Springback, the four corner modes, virtual vias and copper text as an obstacle, reviewed against `pcbnew/router/`. Left: springback in the dragger (~200 lines) and the pair placer, the mark-obstacles hull snap, and keeping the previous head when the head cannot be resolved. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
@@ -49,7 +53,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-kicad10-items` | KiCad 10's line endings, grid items, via stitching, drill charts, drill maps and drill symbol profile read, written, drawn and edited (HANDOFF "Next tasks" 5, third bullet), ported from KiCad 25ec2335 (`~/src/kicad-src-25ec2335`, the commit of the box's kicad-cli) | done: 4 commits, slow proofs on 7 QA boards and a fixture, 3 chart builds held to kicad-cli's, e2e `kicad10-items.check.js` 6/6 | grid items as routing/placement roles; the Drill Chart Properties and Drill Groups dialogs; backdrills and post-machining in the drill model; microvia stack generators and custom user properties (PARITY-pcb.md section 49) |
+| `task-kicad10-items` | KiCad 10's line endings, grid items, via stitching, drill charts, drill maps and drill symbol profile read, written, drawn and edited (HANDOFF "Next tasks" 5, third bullet), ported from KiCad 25ec2335 (`~/src/kicad-src-25ec2335`, the commit of the box's kicad-cli) | done: 4 commits, slow proofs on 7 QA boards and a fixture, 3 chart builds held to kicad-cli's, e2e `kicad10-items.check.js` 6/6 | grid items as routing/placement roles; the Drill Chart Properties and Drill Groups dialogs; backdrills and post-machining in the drill model; microvia stack generators and custom user properties (PARITY-pcb.md section 50) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -62,16 +66,16 @@ Gates for any of them:
 
 1. ~~**Finish Specctra**~~ merged 2026-10-23 (`9cd36d7`).
 2. ~~**Finish embedded files**, then merge `task-pad-details-wip`~~ both merged 2026-10-23.
-3. **The simulator** (P21; 32 rows of `ui-parity-missing.json`): `kicad-cli sch export netlist --format spice`, then ngspice (`ngspice -b`, or libngspice), parsed into a Simulation panel. ngspice is a separate program, not a crate. KiCad bundles libngspice; on the box, `sudo apt-get install ngspice`. Port the panels from `eeschema/sim/`.
+3. ~~**The simulator**~~ merged 2026-10-23. (P21; 32 rows of `ui-parity-missing.json`): `kicad-cli sch export netlist --format spice`, then ngspice (`ngspice -b`, or libngspice), parsed into a Simulation panel. ngspice is a separate program, not a crate. KiCad bundles libngspice; on the box, `sudo apt-get install ngspice`. Port the panels from `eeschema/sim/`.
 4. ~~**The graphical rule editor**~~ merged 2026-10-23. (P9b, `pcbnew.DRETool.drcRuleEditor`), after the simulator. Custom Rules is edited as text today.
 5. **Details** listed in `GAPS.md`:
-   - the router: springback, rounded corners, virtual vias;
+   - the router: ~~springback, rounded corners, virtual vias~~ on `task-router-details` (springback for the line placer only);
    - the schematic: copying and pasting whole sheets, buses across sheets, a label's own fields;
    - KiCad 10 items the reader skips: line endings, grid items, via stitching, drill charts;
    - browser checks for the older areas (P20);
-   - re-running `tools/parity_report.py` (connectivity is at 84%). On the box (2026-10-23) it needs `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data`, and its connectivity part evaluates 56 boards, against a floor of 58 set on the Mac, which fails the ratchet. Find out which two boards drop out before raising or lowering the floor.
+   - re-running `tools/parity_report.py` (connectivity is at 84%). On the box (2026-10-23) it needs `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data`, and its connectivity part evaluates 56 boards, against a floor of 58 set on the Mac, which fails the ratchet. The two boards are the user's `work/` boards that exist only on the Mac (`work/l1-order`; a worktree has no `work/mcu30` either), so the floor counts boards the box does not have. That is a machine difference, not a regression. A floor that counts only `qa/data` and `examples/` would fix it.
 
-Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Python plugins, the autoplacer and the viewer windows (see `STALE-REASONS.md`); IDF, Hyperlynx and footprint-report export (no kicad-cli exporter; ask the user before porting them as was done for Specctra).
+Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Python plugins, the autoplacer and the viewer windows (see `STALE-REASONS.md`); Hyperlynx and footprint-report export (no kicad-cli exporter, not even in the box's nightly; ask the user before porting them as was done for Specctra). IDFv3 and GenCAD are kicad-cli's (user, 2026-10-23: `task-cli-exports`), offered where the kicad-cli in use has the command and disabled with the reason where it has not.
 
 ## How the work was run
 
@@ -98,6 +102,7 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
   - The Mac ran 10.99.0-5334; the box has nightly 20261021 (25ec2335f2).
   - 5334 writes footprints with `(transform ...)`, stores DRC and ERC exclusions as structured records, gives ERC positions in mm, and crashes plotting a designator-form cross-reference (we write `${/path/uuid:FIELD}`).
   - Rerun the slow suites on a new nightly before trusting them.
+  - The Specctra DSN export takes `kicad-cli pcb export specctra` where kicad-cli has it (the box's nightly does; 5334 has not, so the Mac gets our exporter, `engine: "eda"`). Delete the fallback (`export_dsn`, marked DEPRECATED) once every machine runs a kicad-cli with the command; GAPS.md P19 lists which `crates/kicad/src/specctra/` modules go with it (`export.rs` and the writer tests) and which the SES import keeps (`lexer`, `parse`, `model`, `format`, `geom`, `board`, `session`).
 - **The serde gotcha:** starlark turns on serde_json's `arbitrary_precision`, which breaks the tagged-enum reader on numbers. Read such types field by field.
 - **New required fields break other branches' literals.** Two examples: `Group` has `design_block`, and `LibraryPad` has `stack` (padstacks). A merge can leave a literal without one; `cargo check` finds it, and `Default::default()` fixes it.
 - **`studio_import_foreign` failed once under load:** the server exited before printing its port. The test now prints the server's output and exit status, so the next failure explains itself.
