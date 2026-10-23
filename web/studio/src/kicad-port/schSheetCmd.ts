@@ -11,9 +11,9 @@ import type { Cmd } from "../api/types";
 
 /**
  * `cmd` addressed to the sheet being viewed: wrapped in `on_sheet` when that is not the root; as it is on the root, when it is
- * already addressed, and for Reorganize (which always runs on the root).
+ * already addressed, for Reorganize (which always runs on the root) and for an edit of the embedded files (the schematic's list is `SCHEMATIC`'s, kept on the root).
  */
 export function onCurrentSheet(cmd: Cmd, sheetPath: readonly string[]): Cmd {
-  if (sheetPath.length === 0 || cmd.op === "on_sheet" || cmd.op === "reorganize_sheets") return cmd;
+  if (sheetPath.length === 0 || cmd.op === "on_sheet" || cmd.op === "reorganize_sheets" || cmd.op === "embedded") return cmd;
   return { op: "on_sheet", sheet: sheetPath.join("/"), cmd };
 }

@@ -8,8 +8,9 @@
 // Undo takes it back. Pre-defined Sizes, Teardrops and Dimensions edit the design directly (`set_track_width_presets` ...), as before.
 //
 // Board Editor Layers (`set_board_layers`) keeps the technical and user layers a board has, their names and types; Formatting, Zone Hatch Offsets, Length-tuning Patterns and
-// Tuning Profiles (`set_formatting`, `set_zone_hatch_offsets`, `set_tuning_patterns`, `set_tuning_profiles`) are pages of the same kind. Not ported: Component Classes and Embedded
-// Files -- nothing in the model holds them yet.
+// Tuning Profiles (`set_formatting`, `set_zone_hatch_offsets`, `set_tuning_patterns`, `set_tuning_profiles`) are pages of the same kind. Board Data > Embedded Files is the
+// shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the board's list, the files only footprints hold listed with it; each of its edits is a verb of its own.
+// Not ported: Component Classes -- nothing in the model holds them yet.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
@@ -27,6 +28,7 @@ import { TextVariablesPage } from "./boardSetup/TextVariablesPage";
 import { TuningPatternsPage } from "./boardSetup/TuningPatternsPage";
 import { TuningProfilesPage } from "./boardSetup/TuningProfilesPage";
 import { ZoneHatchOffsetsPage } from "./boardSetup/ZoneHatchOffsetsPage";
+import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
 import "../styles/boardSetup.css";
 
 export type Page =
@@ -45,7 +47,8 @@ export type Page =
   | "tuning_profiles"
   | "classes"
   | "custom_rules"
-  | "severities";
+  | "severities"
+  | "embedded_files";
 
 /** KiCad's page tree (`DIALOG_BOARD_SETUP`'s treebook), with its page names; the pages that are not here have nothing in the model to edit. */
 const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; label: string }> }> = [
@@ -80,7 +83,9 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
       { id: "severities", label: "Violation Severity" },
     ],
   },
+  { title: "Board Data", pages: [{ id: "embedded_files", label: "Embedded Files" }] },
 ];
+const BOARD_OWNER = { kind: "board" } as const;
 const PAGE_IDS: Page[] = TREE.flatMap((g) => g.pages.map((p) => p.id));
 const PAGE_LABEL = Object.fromEntries(TREE.flatMap((g) => g.pages.map((p) => [p.id, p.label]))) as Record<Page, string>;
 
@@ -295,6 +300,7 @@ export function BoardSetupDialog() {
           <NetClassesPage hidden={page !== "classes"} onDirty={markers.classes} />
           <CustomRulesPage hidden={page !== "custom_rules"} onDirty={markers.custom_rules} />
           <SeveritiesPage hidden={page !== "severities"} onDirty={markers.severities} />
+          <EmbeddedFilesPanel owner={BOARD_OWNER} run={api.cmd} hidden={page !== "embedded_files"} version={state.version} />
 
           <section className="bs-page" hidden={page !== "tracks_vias"} aria-label="Pre-defined Sizes">
             <h3 className="bs-title">Pre-defined Sizes</h3>

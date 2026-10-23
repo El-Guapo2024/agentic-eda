@@ -13,6 +13,7 @@ import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
 import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
 import type { MicrowaveCmd } from "./microwaveTypes";
+import type { EmbeddedCmd } from "./embeddedTypes";
 import type { TableCmdWire } from "./tableTypes";
 import type { TuningPattern } from "./tuneTypes";
 
@@ -1784,6 +1785,7 @@ export type Cmd =
   | ({ op: "pcb_item" } & PcbItemCmd)
   /** The microwave tools: a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own (crates/ops/src/microwave.rs) -- see api/microwaveTypes.ts. */
   | ({ op: "microwave" } & MicrowaveCmd)
+  | ({ op: "embedded" } & EmbeddedCmd)
   /** The board's tables (crates/ops/src/pcb_tables.rs): Draw Table, the Table Properties and Table Cell Properties dialogs, rows, columns, merged cells -- see api/tableTypes.ts. */
   | ({ op: "table" } & TableCmdWire)
   | ({ op: "sch_table" } & TableCmdWire)
