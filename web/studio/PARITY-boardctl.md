@@ -79,7 +79,7 @@ These rows of the ten modules have no handler and each says why in `tools/ui-par
 internal events that nothing posts here (`layerChanged`, `angleSnapModeChanged`, `trackViaSizeChanged`,
 `hideDynamicRatsnest`, `updateLocalRatsnest`, `highlightItem`, `drillSetOrigin`); things that need a
 subsystem the studio lacks (design blocks, the Footprint Viewer and Footprint Wizard windows, plugins,
-Specctra DSN/SES, embedded 3D models, hatch fills, net colours, placement rule areas and the multichannel
+Specctra DSN/SES, hatch fills, net colours, placement rule areas and the multichannel
 tools, appending another board, importing a netlist, rescue of autosave files, project open/switch);
 exports kicad-cli cannot do (IDF, Hyperlynx, the footprint report); and the ones that would need an edit verb
 the intent-derived constraint model did not have (net classes, custom DRC rules and renaming a footprint are verbs now: Board Setup,

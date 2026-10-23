@@ -71,7 +71,7 @@ authoritative answer; see `padNumbering.ts`'s own header comment.
 |---|---|---|
 | Name / description / keywords | partial (name is read-only here) | `dialog_footprint_properties_fp_editor.cpp`'s General tab. Renaming a footprint (and updating every board instance's `Part::footprint` string to match) has no `Cmd` yet -- `FootprintLibraryPropertiesDialog.tsx` shows the name but does not let it be edited |
 | Attributes (SMD/THT/exclude from BOM/position files/board only/DNP/allow missing courtyard/allow solder mask bridges) | identical | `FOOTPRINT_ATTR_T` (`footprint.h:83-91`) plus the dialog's two related non-attribute-bit checkboxes -- all eight map onto `FootprintAttributes` one field each |
-| 3D models | **done** (2026-10-13, section 11) | the dialog has a `3D Models` tab (`PANEL_FP_PROPERTIES_3D_MODEL`: the list with each model's offset, scale, rotation, opacity and Show, a path chooser, a preview) where it had one path in a text field; `LibraryFootprint::models3d` is the list and `model` its first path. Left there: the Extruded 3D Body box and the embedded files |
+| 3D models | **done** (2026-10-13, section 11) | the dialog has a `3D Models` tab (`PANEL_FP_PROPERTIES_3D_MODEL`: the list with each model's offset, scale, rotation, opacity and Show, a path chooser, a preview) where it had one path in a text field; `LibraryFootprint::models3d` is the list and `model` its first path. Left there: the Extruded 3D Body box. The Embedded Files tab is done (2026-10-23, `PARITY-pcb.md` section 46) |
 | Reference / Value field visibility | **done** (2026-10-15, section 15) | the Reference and the Value are rows of the fields grid with their own place, layer, size, orientation and look |
 | Fields grid (custom fields beyond Reference/Value) | **done** (2026-10-15, section 15) | `dialog_footprint_properties_fp_editor.cpp`'s Fields grid (`PCB_FIELDS_GRID_TABLE`) |
 | Layers tab (private/custom user layers) | missing | this app's board has a fixed layer set; no private-layer concept to assign from |
@@ -182,7 +182,7 @@ Verified in the browser (port 8826): `e2e/fp-models.check.js` opens `Resistor_SM
 
 **Approximations, and what is left.**
 - A built-in package (`0603`, `SOIC-8`) opened in the editor has no model list: the built-in table carries no model path and the package's generic model is added only when a footprint is placed from the libraries. A footprint of the installed libraries has its models.
-- The Extruded 3D Body box of the tab and the embedded files (`PANEL_EMBEDDED_FILES`) are not ported (`PARITY-pcb.md` section 31).
+- The Extruded 3D Body box of the tab is not ported (`PARITY-pcb.md` section 31). The Embedded Files tab (`PANEL_EMBEDDED_FILES`) is there, on the library footprint's list (`PARITY-pcb.md` section 46).
 - The model chooser lists the folders the studio may read (KiCad's model library, the project's, the ones the path variables name) and the preview draws STEP and VRML.
 
 ## 12. The Footprint Checker (GAPS.md item 29, package P11; `dialog_footprint_checker.cpp`, `footprint.cpp`, `drc_test_provider_footprint_checks.cpp`; 2026-10-13)
