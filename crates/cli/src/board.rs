@@ -2088,13 +2088,14 @@ pub fn run(
             step_with(&dir, cmd, strict, &actor()).map(|s| eprintln!("{s}\nSession file imported and merged OK."))
         }
         "export" if rest.get(1).map(String::as_str) == Some("specctra") => {
-            // `eda board export specctra -o FILE.dsn`: the Specctra DSN of the board, written by our own exporter (kicad-cli has none).
+            // `eda board export specctra -o FILE.dsn`: the Specctra DSN of the board, written by kicad-cli (`pcb export specctra`), or by our own exporter where
+            // this machine's kicad-cli has no such command (`specctra_api::engine`).
             let out = flag(rest, "-o").map(PathBuf::from).ok_or_else(|| fail("board_usage", "export specctra", "usage: eda board export specctra -o <file.dsn> [-C dir]"))?;
-            let warnings = crate::specctra_api::export_to(&dir, &out)?;
+            let (warnings, engine) = crate::specctra_api::export_to(&dir, &out)?;
             for w in &warnings {
                 eprintln!("warning: {w}");
             }
-            eprintln!("BOARD exported OK: {}", out.display());
+            eprintln!("BOARD exported OK: {} (engine: {engine})", out.display());
             Ok(())
         }
         "export" => {

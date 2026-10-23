@@ -3,21 +3,51 @@
 //! with its routing taken away, as one undo step. The slow tier (`EDA_SLOW_TESTS=1`, kicad-cli) holds the board that comes back to kicad-cli's DRC: no violation it did
 //! not have before.
 //!
+//! The DSN is kicad-cli's where kicad-cli has `pcb export specctra`, else our own exporter's (`specctra_api::engine`). The fast tier forces the fallback
+//! (`EDA_KICAD_CLI_NO_SPECCTRA`), so it runs without kicad-cli and holds our exporter; the slow tier exports through kicad-cli.
+//!
 //! The board is `examples/opamp_filter.yaml` placed and routed by `eda pipeline`, in a folder made by `eda board new` (the examples are never written to).
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn eda(args: &[&str]) -> (bool, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_eda")).args(args).output().expect("run eda");
+/// What makes the export take our own exporter, as on a machine whose kicad-cli has no `pcb export specctra` (`specctra_api::NO_CLI_ENV`).
+const NO_CLI: &str = "EDA_KICAD_CLI_NO_SPECCTRA";
+
+fn eda_with(args: &[&str], fallback: bool) -> (bool, String) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_eda"));
+    cmd.args(args);
+    if fallback {
+        cmd.env(NO_CLI, "1");
+    } else {
+        cmd.env_remove(NO_CLI);
+    }
+    let out = cmd.output().expect("run eda");
     (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
 }
 
-fn ok(args: &[&str]) -> String {
-    let (good, log) = eda(args);
+fn eda(args: &[&str]) -> (bool, String) {
+    eda_with(args, false)
+}
+
+fn ok_with(args: &[&str], fallback: bool) -> String {
+    let (good, log) = eda_with(args, fallback);
     assert!(good, "eda {}:\n{log}", args.join(" "));
     log
+}
+
+fn ok(args: &[&str]) -> String {
+    ok_with(args, false)
+}
+
+fn kicad_cli() -> Option<&'static str> {
+    ["/usr/local/bin/kicad-cli", "/usr/bin/kicad-cli", "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"].into_iter().find(|c| Path::new(c).is_file())
+}
+
+/// Whether the kicad-cli of this machine has `pcb export specctra` (its `pcb export --help` lists it).
+fn cli_has_specctra(cli: &str) -> bool {
+    Command::new(cli).args(["pcb", "export", "--help"]).output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().next().is_some_and(|l| l.contains("specctra")))
 }
 
 fn scratch(tag: &str) -> PathBuf {
@@ -47,9 +77,9 @@ fn counts(d: &Value) -> (usize, usize) {
     (d["routing"]["tracks"].as_array().map_or(0, Vec::len), d["routing"]["vias"].as_array().map_or(0, Vec::len))
 }
 
-/// Export, take the routing away, import the session: the board has the routing back (segment for segment), the parts where they were, and one Undo takes the import
-/// back. Answers the board folder and the session file.
-fn round_trip(tag: &str) -> (PathBuf, PathBuf, Value) {
+/// Export (by our own exporter when `fallback`, else by the engine the probe picks), take the routing away, import the session: the board has the routing back
+/// (segment for segment), the parts where they were, and one Undo takes the import back. Answers the board folder and the session file.
+fn round_trip(tag: &str, fallback: bool) -> (PathBuf, PathBuf, Value) {
     let b = routed_board(tag);
     let routed = design(&b);
     let (tracks, vias) = counts(&routed);
@@ -57,8 +87,13 @@ fn round_trip(tag: &str) -> (PathBuf, PathBuf, Value) {
     let segments: usize = routed["routing"]["tracks"].as_array().unwrap().iter().map(|t| t["pts"].as_array().unwrap().len() - 1).sum();
 
     let dsn = b.parent().unwrap().join("opamp.dsn");
-    let log = ok(&["board", "export", "specctra", "-o", dsn.to_str().unwrap(), "-C", b.to_str().unwrap()]);
+    let log = ok_with(&["board", "export", "specctra", "-o", dsn.to_str().unwrap(), "-C", b.to_str().unwrap()], fallback);
     assert!(log.contains("BOARD exported OK"), "{log}");
+    if fallback {
+        assert!(log.contains("(engine: eda)"), "the probe forced off, our own exporter writes the file: {log}");
+    } else if kicad_cli().is_some_and(cli_has_specctra) {
+        assert!(log.contains("(engine: kicad-cli)"), "a kicad-cli with pcb export specctra writes the file: {log}");
+    }
     let text = std::fs::read_to_string(&dsn).unwrap();
     let pcb = eda_kicad::specctra::parse::load_pcb(&text, "opamp.dsn").expect("the DSN reads back");
     assert_eq!(pcb.pcbname, dsn.display().to_string(), "the design is named by the file (`m_pcbname = aFilename`)");
@@ -85,7 +120,8 @@ fn round_trip(tag: &str) -> (PathBuf, PathBuf, Value) {
 
 #[test]
 fn a_routed_board_comes_back_from_the_session_of_its_own_dsn_in_one_undo_step() {
-    let (b, ses, _) = round_trip("fast");
+    // The fallback, our own exporter, with the probe forced off: what a machine whose kicad-cli has no `pcb export specctra` gets.
+    let (b, ses, _) = round_trip("fast", true);
     // A session of another board names a part this one has not got: KiCad's words, and nothing changes.
     let other = std::fs::read_to_string(&ses).unwrap().replacen("(place ", "(place NOPE_", 1);
     let bad = b.parent().unwrap().join("bad.ses");
@@ -105,7 +141,7 @@ fn the_imported_session_makes_no_new_drc_violation() {
         return;
     }
     let drc = |dir: &Path| -> Value { serde_json::from_str(&ok(&["board", "drc", "-C", dir.to_str().unwrap()]).lines().skip_while(|l| !l.starts_with('{')).collect::<Vec<_>>().join("\n")).expect("the DRC report") };
-    let (b, _, routed) = round_trip("slow");
+    let (b, _, routed) = round_trip("slow", false);
     let after = drc(&b);
     // The routed board as the pipeline left it, in a folder of its own.
     let was = b.parent().unwrap().join("was");
@@ -123,8 +159,8 @@ fn the_imported_session_makes_no_new_drc_violation() {
     let _ = std::fs::remove_dir_all(b.parent().unwrap());
 }
 
-/// kicad-cli's own exporter (`kicad-cli pcb export specctra`, which the 10.99 nightly has) on the board file the studio derives, against `eda board export
-/// specctra`: the same text from `(structure` down to `(wiring` -- the layers, the boundary, the rules, the placement, every image and padstack, the nets and their
+/// kicad-cli's own exporter (`kicad-cli pcb export specctra`, which the 10.99 nightly has) on the board file the studio derives, against our own exporter (`eda
+/// board export specctra` with the probe forced off: the fallback, deprecated): the same text from `(structure` down to `(wiring` -- the layers, the boundary, the rules, the placement, every image and padstack, the nets and their
 /// classes. The wiring is left out: the nightly writes a wire per track `(type protect)`, later KiCad than the source this port follows (8303b2ad), which joins the
 /// tracks of a net into paths `(type route)`.
 #[test]
@@ -133,9 +169,8 @@ fn the_dsn_is_kicad_clis_down_to_the_wiring() {
         eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
         return;
     }
-    let cli = ["/usr/local/bin/kicad-cli", "/usr/bin/kicad-cli", "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"].into_iter().find(|c| Path::new(c).is_file());
-    let Some(cli) = cli else {
-        eprintln!("skipped: no kicad-cli");
+    let Some(cli) = kicad_cli().filter(|c| cli_has_specctra(c)) else {
+        eprintln!("skipped: no kicad-cli with pcb export specctra");
         return;
     };
     let b = routed_board("kicad");
@@ -147,7 +182,8 @@ fn the_dsn_is_kicad_clis_down_to_the_wiring() {
     std::fs::create_dir_all(&ours).unwrap();
     let out = Command::new(cli).args(["pcb", "export", "specctra", "-o", theirs.join("b.dsn").to_str().unwrap(), pcb.to_str().unwrap()]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    ok(&["board", "export", "specctra", "-o", ours.join("b.dsn").to_str().unwrap(), "-C", b.to_str().unwrap()]);
+    let log = ok_with(&["board", "export", "specctra", "-o", ours.join("b.dsn").to_str().unwrap(), "-C", b.to_str().unwrap()], true);
+    assert!(log.contains("(engine: eda)"), "{log}");
     let body = |f: &Path| -> String {
         let t = std::fs::read_to_string(f).unwrap();
         let (a, z) = (t.find("  (structure").expect("a structure"), t.find("  (wiring").expect("a wiring"));
@@ -158,4 +194,35 @@ fn the_dsn_is_kicad_clis_down_to_the_wiring() {
     assert!(want == got, "{}", first.unwrap_or_else(|| format!("{} lines against {}", want.lines().count(), got.lines().count())));
     assert!(want.contains("(image ") && want.contains("(padstack ") && want.contains("(net "), "a board with parts and nets");
     let _ = std::fs::remove_dir_all(b.parent().unwrap());
+}
+
+/// `eda board export specctra` where kicad-cli has `pcb export specctra`: kicad-cli writes the file (the engine says so), the design in it is named by the file
+/// as given (`m_pcbname = aFilename`, here a path relative to the folder the command runs in), and our DSN parser reads it back as a board with parts, padstacks,
+/// nets and the routing's wires and vias. A board kicad-cli cannot read is refused in kicad-cli's words.
+#[test]
+fn the_dsn_is_written_by_kicad_cli_and_our_parser_reads_it() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    if !kicad_cli().is_some_and(cli_has_specctra) {
+        eprintln!("skipped: no kicad-cli with pcb export specctra");
+        return;
+    }
+    let b = routed_board("cli");
+    let root = b.parent().unwrap().to_path_buf();
+    let out = Command::new(env!("CARGO_BIN_EXE_eda")).current_dir(&root).env_remove(NO_CLI).args(["board", "export", "specctra", "-o", "routed.dsn", "-C", "board"]).output().unwrap();
+    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success() && log.contains("BOARD exported OK: routed.dsn (engine: kicad-cli)"), "{log}");
+    let text = std::fs::read_to_string(root.join("routed.dsn")).unwrap();
+    let pcb = eda_kicad::specctra::parse::load_pcb(&text, "routed.dsn").expect("our parser reads kicad-cli's DSN");
+    assert_eq!(pcb.pcbname, "routed.dsn", "the design is named by the file as given");
+    assert!(text.contains("(image ") && text.contains("(padstack ") && text.contains("(net "), "a board with parts and nets");
+    let wiring = pcb.wiring.as_ref().expect("the routing is in the wiring");
+    assert!(!wiring.wires.is_empty() && !wiring.wire_vias.is_empty(), "the routed board's wires and vias");
+
+    // kicad-cli's words when it cannot write: a folder it may not create.
+    let (good, log) = eda(&["board", "export", "specctra", "-o", "/proc/no/such/dir/x.dsn", "-C", b.to_str().unwrap()]);
+    assert!(!good && log.contains("Failed to create output directory"), "{log}");
+    let _ = std::fs::remove_dir_all(&root);
 }

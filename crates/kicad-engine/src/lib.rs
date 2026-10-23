@@ -362,6 +362,44 @@ pub fn cli_version(cli: &Path) -> String {
     })
 }
 
+/// The kinds `kicad-cli <scope> export` has, as its `--help` lists them: the choices in braces on the usage line (`Usage: pcb export [--help]
+/// {3dpdf,bom,...,specctra,...}`), else the first word of each line under "Subcommands:" (the help of an argparse without the brace list). A
+/// kicad-cli that does not answer has none.
+pub fn parse_export_kinds(help: &str) -> Vec<String> {
+    let usage = help.lines().find(|l| l.trim_start().starts_with("Usage:")).unwrap_or("");
+    if let (Some(a), Some(z)) = (usage.find('{'), usage.rfind('}')) {
+        if a < z {
+            return usage[a + 1..z].split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect();
+        }
+    }
+    help.lines()
+        .skip_while(|l| l.trim() != "Subcommands:")
+        .skip(1)
+        .take_while(|l| !l.trim().is_empty())
+        .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+        .collect()
+}
+
+/// Whether `kicad-cli <scope> export <kind>` exists in the kicad-cli at `cli`: one `kicad-cli <scope> export --help` per binary and scope per run
+/// of this program, its answer kept like [`cli_version`]'s. Not every kicad-cli has every exporter (`pcb export specctra` came into the 10.99
+/// nightlies after 10.99.0-5334), so a caller with a fallback of its own asks first.
+pub fn cli_has_export(cli: &Path, scope: &str, kind: &str) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), Vec<String>>>> = OnceLock::new();
+    let m = CACHE.get_or_init(Default::default);
+    let key = (cli.to_path_buf(), scope.to_string());
+    let cached = m.lock().ok().and_then(|g| g.get(&key).cloned());
+    let kinds = cached.unwrap_or_else(|| {
+        let mut cmd = cli_command(cli, None);
+        cmd.args([scope, "export", "--help"]);
+        let kinds = output_within(cmd, limit(VERSION_TIMEOUT)).map(|o| parse_export_kinds(&format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))).unwrap_or_default();
+        if let Ok(mut g) = m.lock() {
+            g.insert(key, kinds.clone());
+        }
+        kinds
+    });
+    kinds.iter().any(|k| k == kind)
+}
+
 // ----------------------------------------------------------- the derived files
 
 fn work_dir(work: &Path) -> Result<(), Vec<CheckResult>> {
@@ -1570,6 +1608,37 @@ pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &
     run_export(&cli, "pcb", kind, args, &pcb, &out_dir, DIR_KINDS.contains(&kind), pcb_ext_for(kind, args), &stem, root)
 }
 
+/// What kicad-cli prints on a Specctra export that worked: not a warning. (Read off kicad-cli 10.99 nightly 25ec2335f2; its Specctra job is later than the
+/// KiCad source this port follows, 8303b2ad, which has none.)
+const SPECCTRA_OK: &str = "Successfully created Specctra DSN file";
+
+/// `kicad-cli pcb export specctra -o <output> <board>` (File > Export > Specctra DSN..., `DSN::ExportBoardToSpecctraFile`) on `design`: the derived board
+/// written into `work` as for [`export_pcb`] (named `name`), kicad-cli run in `cwd`. `output` is passed as it is given, because KiCad names the design in
+/// the file by it (`(pcb <output>`, `m_pcbname = aFilename`): the studio's export runs in the folder of the file with the bare file name, `eda board
+/// export specctra -o FILE` in the caller's folder with FILE. The options are the ones `kicad-cli pcb export specctra --help` lists: `--output` and
+/// `--define-var`, which the derived project has no use for.
+///
+/// Returns the lines kicad-cli printed besides its success line: the warnings of `ExportBoardToSpecctraFile` (`wxLogWarning`, such as "Board outline is
+/// malformed. Run DRC for a full analysis."). A failure is kicad-cli's own words ("Failed to create output directory", the `IO_ERROR` text of `FromBOARD`).
+pub fn export_specctra(design: &Design, model: &ConstraintModel, work: &Path, name: &str, cwd: &Path, output: &str) -> Result<Vec<String>, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let (pcb, _) = export_board(design, model, work, &file_stem(name))?;
+    // kicad-cli runs in `cwd`, so the board it reads is named absolutely.
+    let pcb = std::fs::canonicalize(&pcb).unwrap_or(pcb);
+    let target = cwd.join(output);
+    // A file an earlier export left must not pass for this one's.
+    let _ = std::fs::remove_file(&target);
+    let mut cmd = cli_command(&cli, None);
+    cmd.current_dir(cwd).args(["pcb", "export", "specctra", "-o", output]).arg(&pcb);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+    let said: Vec<String> = [&out.stdout, &out.stderr].iter().flat_map(|b| String::from_utf8_lossy(b).lines().map(|l| l.trim().to_string()).collect::<Vec<_>>()).filter(|l| !l.is_empty()).collect();
+    if !out.status.success() || !target.is_file() {
+        let words = said.join("\n");
+        return Err(fail("kicad_cli_export", "specctra", if words.is_empty() { format!("kicad-cli pcb export specctra failed ({})", out.status) } else { words }));
+    }
+    Ok(said.into_iter().filter(|l| l != SPECCTRA_OK).collect())
+}
+
 /// `kicad-cli sch export <kind> [args...]` on `design`'s schematic, into
 /// `<root>/export/kicad/sch-<kind>/` (kinds: `netlist`, `bom`, `pdf`, `svg`,
 /// `dxf`, `ps`, `png`), named after the project like [`export_pcb`].
@@ -1717,6 +1786,16 @@ pub fn bom_plugins_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_export_kinds_are_read_from_the_usage_line_or_the_subcommand_list() {
+        let nightly = "Usage: pcb export [--help] {3dpdf,bom,drill,specctra,step}\n\nExport utilities\n\nSubcommands:\n  3dpdf  Export PDF\n";
+        assert_eq!(parse_export_kinds(nightly), ["3dpdf", "bom", "drill", "specctra", "step"]);
+        let listed = "Usage: pcb export [-h] VAR\n\nSubcommands:\n  drill      Generate Drill Files\n  gerbers    Plot Gerbers\n\nOther\n";
+        assert_eq!(parse_export_kinds(listed), ["drill", "gerbers"]);
+        assert!(parse_export_kinds("").is_empty());
+        assert!(!parse_export_kinds(listed).iter().any(|k| k == "specctra"));
+    }
 
     #[test]
     fn top_level_forms_are_found_past_strings_and_comments_and_unbalanced_text_is_refused() {

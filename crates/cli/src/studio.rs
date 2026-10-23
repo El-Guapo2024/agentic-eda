@@ -1064,8 +1064,8 @@ fn handle(
         ("GET", "/api/footprint_diff") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::footprint_diff(dir, &query_value(target, "ref")).to_string().as_bytes()),
         ("GET", "/api/footprint_associations") => respond(stream, "200 OK", "application/json", crate::board_control_api::footprint_associations(dir, &query_value(target, "ref")).to_string().as_bytes()),
         ("POST", "/api/fab/cmp") => respond(stream, "200 OK", "application/json", crate::board_control_api::export_cmp(dir).to_string().as_bytes()),
-        // File > Export > Specctra DSN... (`crate::specctra_api`): an exporter of our own, not kicad-cli's; a read of the board, answered on the loop.
-        ("POST", "/api/specctra/export") => respond(stream, "200 OK", "application/json", crate::specctra_api::export(dir).to_string().as_bytes()),
+        // File > Export > Specctra DSN...: kicad-cli's `pcb export specctra` where it has it, so off the loop (`offload`) like the other exports.
+        ("POST", "/api/specctra/export") => offload(stream, lane, dir, job, path, &body, |dir, _| crate::specctra_api::export(dir)),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
     }
