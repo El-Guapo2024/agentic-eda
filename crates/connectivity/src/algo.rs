@@ -68,7 +68,7 @@ pub fn build_graph(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
             if !items[i].can_change_net && !items[j].can_change_net && items[i].net != items[j].net {
                 continue;
             }
-            if geom::touches(&items[i].shape, &items[i].anchors, &items[j].shape, &items[j].anchors) {
+            if touch(&items[i], &items[j]) {
                 edges[i].push(j);
                 edges[j].push(i);
             }
@@ -98,6 +98,28 @@ pub fn build_graph(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
     }
 
     ConnGraph { items }
+}
+
+/// `CN_VISITOR::operator()`'s collision of two items. A zone and an item: the item's whole shape (`checkZoneItemConnection`, `ALWAYS_FLASHED`). Two
+/// other items: on each copper layer they share, the shapes they have there (`GetEffectiveShape( layer, flashing )`: a pad or via that removes its unused
+/// copper is its hole on a layer it is `ConditionallyFlashed` on, [`CnItem::shape_on`]); they touch when they collide on one of those layers.
+fn touch(a: &CnItem, b: &CnItem) -> bool {
+    let zone = |i: &CnItem| matches!(i.shape, crate::items::ItemShape::Zone { .. });
+    if (a.never_flashed.is_none() && b.never_flashed.is_none()) || zone(a) || zone(b) {
+        return geom::touches(&a.shape, &a.anchors, &b.shape, &b.anchors);
+    }
+    let mut tried: Vec<(bool, bool)> = Vec::new();
+    for layer in a.layer_lo.max(b.layer_lo)..=a.layer_hi.min(b.layer_hi) {
+        let key = (a.is_hole_on(layer), b.is_hole_on(layer));
+        if tried.contains(&key) {
+            continue;
+        }
+        tried.push(key);
+        if geom::touches(a.shape_on(layer), &a.anchors, b.shape_on(layer), &b.anchors) {
+            return true;
+        }
+    }
+    false
 }
 
 /// A same-net, physically-connected group of items -- see the module docs
@@ -230,6 +252,63 @@ mod tests {
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
         assert_eq!(clusters.len(), 1, "one pad, two tracks: one cluster");
+    }
+
+    /// A pad turned by other than a multiple of 90 degrees is not its bounding box: KiCad collides its true shape (`PAD::GetEffectiveShape`), and a
+    /// via in a corner of the box but off the copper (as next to the 135-degree capacitors of `issue5093`) touches nothing.
+    #[test]
+    fn a_pad_turned_45_degrees_connects_where_its_copper_is_not_its_box() {
+        use eda_model::ir::{Point, Via};
+        use eda_model::{Footprint, Pad, PadKind, PadShape};
+        let (mut design, mut model) = two_pad_model();
+        let pad = Pad { number: "1".into(), at: (0, 0), size: (1000, 400), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        model.footprints.push(Footprint { name: "SKEW".into(), pads: vec![pad], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() });
+        model.parts[0].footprint = Some("SKEW".into());
+        model.parts[0].package = Some("SKEW".into());
+        let fp = &mut design.placement.as_mut().unwrap().footprints[0];
+        fp.rot = 45_000;
+        let c = fp.at;
+        // Along one diagonal is the pad's long axis (inside its copper), along the other 0.49 mm off it (outside the 0.2 mm half width); both in the box.
+        let rt = design.routing.as_mut().unwrap();
+        for (id, dx, dy) in [("v1", 350, 350), ("v2", 350, -350)] {
+            rt.vias.push(Via { id: id.into(), net: "N1".into(), at: Point { x: c.x + dx, y: c.y + dy }, drill: 100, diameter: 200, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        }
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
+        let pad_idx = graph.items.iter().position(|i| matches!(&i.item, ItemRef::Pad { reference, .. } if reference == "R1")).unwrap();
+        let touching: Vec<&str> = graph.items[pad_idx].connected.iter().filter_map(|&j| match &graph.items[j].item {
+            ItemRef::Via { via_id } => Some(via_id.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(touching.len(), 1, "one via is on the copper, the other off it: {touching:?}");
+    }
+
+    /// `CN_VISITOR::operator()`: on a layer where a via removes its unused copper (`ConditionallyFlashed`), it is `NEVER_FLASHED` and collides as its hole
+    /// (`PCB_VIA::GetEffectiveShape`: a circle of the drill), so a track that reaches the ring the via would have there but not the hole does not touch it (`issue5830`).
+    #[test]
+    fn a_via_that_removes_its_unused_layers_touches_a_track_on_an_inner_layer_by_its_hole() {
+        use eda_model::ir::{Point, Via};
+        use eda_model::padstack::UnconnectedLayers;
+        let (mut design, mut model) = two_pad_model();
+        model.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+        let at = Point { x: 10_000, y: 15_000 };
+        let rt = design.routing.as_mut().unwrap();
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at, drill: 400, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        // In1: an end 0.3 mm from the centre, on the 0.4 mm ring but off the 0.2 mm hole (half width 0.05 mm). In2: an end 0.2 mm from it, at the hole.
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "In1.Cu".into(), width: 100, pts: vec![Point { x: at.x + 300, y: at.y }, Point { x: at.x + 3_000, y: at.y }], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "In2.Cu".into(), width: 100, pts: vec![Point { x: at.x - 200, y: at.y }, Point { x: at.x - 3_000, y: at.y }], arc_mid_offset: None });
+        let touching = |design: &eda_model::ir::Design| -> Vec<String> {
+            let graph = build_graph(design, &model, &ZoneCopper::default());
+            let via = graph.items.iter().position(|i| matches!(i.item, ItemRef::Via { .. })).unwrap();
+            graph.items[via].connected.iter().filter_map(|&j| match &graph.items[j].item {
+                ItemRef::TrackSeg { track_id, .. } => Some(track_id.clone()),
+                _ => None,
+            }).collect()
+        };
+        assert_eq!(touching(&design), vec!["t1".to_string(), "t2".to_string()], "a via that keeps every layer is its whole ring on each");
+        let mut extra = eda_model::via_extra::ViaExtra { id: "v1".into(), ..Default::default() };
+        extra.set_unconnected_layers(UnconnectedLayers::RemoveExceptStartAndEnd);
+        design.drawings.get_or_insert_with(Default::default).via_extras.push(extra);
+        assert_eq!(touching(&design), vec!["t2".to_string()], "on the inner layers it is its hole");
     }
 
     #[test]

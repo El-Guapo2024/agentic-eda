@@ -882,6 +882,14 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   non-side-specific layers with the board where KiCad keeps it readable; Automatically select track width does not turn off when a width is picked in the toolbar and the first width key while routing
   does not set `m_TempOverrideTrackWidth` (`PARITY-boardctl.md`).
 
+### 36. Connectivity against kicad-cli
+**Measured, mostly closed.** `tools/parity_report.py` section 1 (`crates/connectivity/tests/parity_connectivity.rs`), `PARITY-pcb.md` section 51.
+- Done 2026-10-23 (`task-connectivity-parity`): the measured set is fixed (the examples and every `qa/data/pcbnew` board, never `work/`), kicad-cli runs on a copy with the ignored checks turned back on, and our counts are capped
+  at its error limits. Fixed in `crates/connectivity`: an arc is one item, a pad turned off a multiple of 90 degrees is measured by its copper, and a pad or via that removes its unused copper is its hole on the layers it is
+  conditionally flashed on.
+- Left (each with its boards in section 51): coordinates in micrometres (sub-micrometre segments of tuned tracks), pads that share a number but not a net, copper graphics with a net, the teardrops kicad-cli's Fill All
+  rebuilds (read from the code, not run: the studio's Fill All would lose the fill of the design's teardrop zones for the same reason, item 13), and a `.kicad_dru` rule that ignores `via_dangling`.
+
 ## Appendix A. The original 30, one verdict each
 
 13 closed, 9 partial, 0 open, 8 out of scope (2026-10-10). Changed since 2026-10-07: #11 and #25 closed, #14 closed on `task-pcb-edit-details` (not merged); #6 and #26 re-worded.
