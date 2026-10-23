@@ -1358,8 +1358,10 @@ pub fn net_label_extent(resolved: &ResolvedNetLabel, ink: TextBox) -> TextBox {
 }
 
 /// Local (box-space, um) attach points for a part's `nc`-kind pins, keyed
-/// by pin index: a nib on the box's own south edge, one `GRID` step past
-/// whichever real ports [`build_ports`] already placed there.
+/// by pin index: a nib on the box's own south edge, the 2.54 mm pin pitch
+/// (two `GRID` steps) past whichever real ports [`build_ports`] already
+/// placed there and apart from each other. (At one `GRID` the no-connect
+/// flag's cross touches the name of the south pin beside it.)
 ///
 /// An `nc` pin never joins a net (no `Wire` ever names it), so it has no
 /// business in [`build_ports`]'s port list — this is a deliberately
@@ -1395,12 +1397,12 @@ pub fn nc_pin_local_points(part: &Part, width: i64, height: i64, resolved: Optio
     }
     let (ports, _) = build_ports(part, width, height, None, 1);
     let south_max_x = ports.iter().filter(|p| p.side == Side::Bottom).map(|p| p.offset).max().unwrap_or(0);
-    let mut x = south_max_x + GRID;
+    let mut x = south_max_x + 2 * GRID;
     let mut out = Vec::new();
     for (i, p) in part.pins.iter().enumerate() {
         if p.kind == PinKind::Nc {
             out.push((i, Point { x, y: height }));
-            x += GRID;
+            x += 2 * GRID;
         }
     }
     out

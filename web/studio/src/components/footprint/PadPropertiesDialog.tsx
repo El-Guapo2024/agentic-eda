@@ -1,9 +1,9 @@
 // Port of pcbnew/dialogs/dialog_pad_properties.cpp (GAPS.md #8 step 3) --
 // shape/size (the nine shape choices, a trapezoid's delta, a chamfer, a custom
 // pad's basic shapes: the rows are the board dialog's own, `PadShapeFields.tsx`),
-// offset, drill, layer presets, clearance/thermal overrides. Not ported: padstack
-// mode (front/inner/back-differs -- this app's board has no inner-copper-layer
-// concept to differ over) and the fabrication-property dropdown
+// offset, drill, layer presets, clearance/thermal overrides, and for a plated
+// through-hole pad the padstack (`kicad-port/padStack.ts`: "Padstack mode", "Edit
+// layer", "Copper layers"). Not ported: the fabrication-property dropdown
 // (BGA/fiducial/testpoint/...; cosmetic metadata with no consumer anywhere in
 // this app yet).
 import { useEffect, useState } from "react";
@@ -13,7 +13,8 @@ import { useStudioState } from "../../state/store";
 import { umFrom, umTo } from "../../state/units";
 import { PAD_CONNECTION_OPTIONS, defaultSpokeAngleDeg, importPadSettings, settingsOf } from "../../kicad-port/padSettings";
 import { chooseShape, libraryFieldsOf, shapeFormOfLibraryPad, type PadShapeChoice, type PadShapeForm } from "../../kicad-port/padShape";
-import { PadPrimitivePanel, PadShapeRows } from "../PadShapeFields";
+import { FRONT, changeMode, checkStack, layerFormOf, padstackControlsShown, stackOf, stackStateOf, withLayerForm, type LayerForm, type PadStackState } from "../../kicad-port/padStack";
+import { CopperLayersRow, PadPrimitivePanel, PadShapeRows, PadStackRows } from "../PadShapeFields";
 
 const KIND_OPTIONS: { value: PadKind; label: string }[] = [
   { value: "smd", label: "SMD" },
@@ -33,7 +34,8 @@ export function PadPropertiesDialog() {
   const state = useFpState();
   const dispatch = useFpDispatch();
   const api = useFpApi();
-  const units = useStudioState().units;
+  const studio = useStudioState();
+  const units = studio.units;
   // `pcbnew.PadTool.defaultPadProperties`: the same dialog on the default pad (`ShowPadPropertiesDialog( nullptr )` -> `m_Pad_Master`), which has
   // no number and no position, and OK stores into the default pad instead of editing a pad of the footprint.
   const defaultMode = state.defaultPadOpen;
@@ -44,6 +46,8 @@ export function PadPropertiesDialog() {
   const [form, setForm] = useState<LibraryPad | null>(null);
   /** The shape of the pad, with what goes with it (`kicad-port/padShape.ts`); laid back on the pad by OK. */
   const [shapeForm, setShapeForm] = useState<PadShapeForm | null>(null);
+  /** The padstack (`kicad-port/padStack.ts`): the mode, the layer being edited and the shapes of the layers but the front, whose shape is `shapeForm` and offset `form.offset`. */
+  const [stack, setStack] = useState<PadStackState | null>(null);
 
   // Populate the editable copy only when the dialog opens on a (possibly
   // different) pad -- not every render, same convention every other
@@ -51,13 +55,15 @@ export function PadPropertiesDialog() {
   // ~700ms poll.
   useEffect(() => {
     if (pad) {
+      const s = shapeFormOfLibraryPad(pad);
       setForm(pad);
-      setShapeForm(shapeFormOfLibraryPad(pad));
+      setShapeForm(s);
+      setStack(stackStateOf(pad.stack, { s, ox: pad.offset.x, oy: pad.offset.y, tokens: [] }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, defaultMode]);
 
-  if ((!defaultMode && !id) || !pad || !form || !shapeForm) return null;
+  if ((!defaultMode && !id) || !pad || !form || !shapeForm || !stack) return null;
 
   const set = <K extends keyof LibraryPad>(key: K, value: LibraryPad[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
   const len = (valueUm: number, onChange: (um: number) => void, width = 80) => (
@@ -66,9 +72,30 @@ export function PadPropertiesDialog() {
     </span>
   );
 
+  // The padstack: the front's shape is the form's own; the layer being edited is the one the shape rows and the offset show (plated through-hole pads only).
+  const boardLayers = (studio.board?.layers ?? ["F.Cu", "B.Cu"]).filter((l) => l.endsWith(".Cu"));
+  const stackShown = padstackControlsShown(form.kind);
+  const frontForm: LayerForm = { s: shapeForm, ox: form.offset.x, oy: form.offset.y, tokens: [] };
+  const editLayer = stackShown ? stack.editLayer : FRONT;
+  const active = layerFormOf(stack, frontForm, editLayer);
+  const setActive = (next: LayerForm) => {
+    const r = withLayerForm(stack, frontForm, editLayer, next);
+    setStack(r.state);
+    setShapeForm(r.front.s);
+    setForm((f) => (f ? { ...f, offset: { x: r.front.ox, y: r.front.oy } } : f));
+  };
+
   const submit = async () => {
     // The shape, the size and what goes with them are the shape form's.
+    const message = stackShown ? checkStack(stack) : null;
+    if (message) {
+      dispatch({ type: "TOAST", message, kind: "error" });
+      return;
+    }
     const edited: LibraryPad = { ...form, ...libraryFieldsOf(shapeForm) };
+    // The padstack travels with the pad (`PAD::SetPadstack`); a pad that has none sends none.
+    const stackNow = stackOf(stack);
+    edited.stack = Object.keys(stackNow).length > 0 ? stackNow : undefined;
     if (defaultMode) {
       // `m_Pad_Master` takes what the dialog holds (the circle / SMD fix-ups of `ImportSettingsFrom` included).
       dispatch({ type: "SET_DEFAULT_PAD", pad: settingsOf(importPadSettings(edited, edited)) });
@@ -126,10 +153,18 @@ export function PadPropertiesDialog() {
               <input type="number" step="any" value={form.rot / 1000} onChange={(e) => Number.isFinite(Number(e.target.value)) && set("rot", Math.round(Number(e.target.value) * 1000))} style={{ width: 80 }} />°
             </span>
 
-            <PadShapeRows form={shapeForm} onForm={setShapeForm} units={units} onChoose={chooseShapeOf} />
+            {stackShown && (
+              <PadStackRows
+                state={stack}
+                boardLayers={boardLayers}
+                onMode={(mode) => setStack(changeMode(stack, mode, frontForm, boardLayers))}
+                onEditLayer={(key) => setStack({ ...stack, editLayer: key })}
+              />
+            )}
+            <PadShapeRows form={active.s} onForm={(next) => setActive({ ...active, s: next })} units={units} onChoose={editLayer === FRONT ? chooseShapeOf : undefined} />
             <span>Offset</span>
             <span>
-              {len(form.offset.x, (x) => set("offset", { ...form.offset, x }))} {len(form.offset.y, (y) => set("offset", { ...form.offset, y }))}
+              {len(active.ox, (x) => setActive({ ...active, ox: x }))} {len(active.oy, (y) => setActive({ ...active, oy: y }))}
             </span>
 
             <span>Layer preset</span>
@@ -147,6 +182,7 @@ export function PadPropertiesDialog() {
             </span>
             <span>Layers</span>
             <span style={{ color: "var(--chrome-text-dim)" }}>{form.layers.join(", ") || "(none set)"}</span>
+            {stackShown && <CopperLayersRow value={stack.unconnected} boardLayers={boardLayers} onChange={(v) => setStack({ ...stack, unconnected: v })} />}
 
             {hasDrill && (
               <>
@@ -177,7 +213,7 @@ export function PadPropertiesDialog() {
             )}
           </div>
 
-          <PadPrimitivePanel form={shapeForm} onForm={setShapeForm} units={units} />
+          <PadPrimitivePanel form={active.s} onForm={(next) => setActive({ ...active, s: next })} units={units} />
 
           <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Clearance overrides and zone connection (blank = inherit)</p>
           <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>

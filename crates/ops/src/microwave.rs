@@ -653,6 +653,7 @@ fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &st
     let pads: Vec<LibraryPad> = (1..=pad_count)
         .map(|n| LibraryPad {
             id: String::new(),
+            stack: Default::default(),
             number: n.to_string(),
             at: Point { x: 0, y: 0 },
             size: (track_width, track_width),
@@ -873,6 +874,7 @@ fn build_inductor(defaults: &TextGraphicsDefaults, start: Point, end: Point, len
     // A pad on each end of the coil: round, the width of the track, numbered 1 at the end point (the anchor) and 2 at the start.
     let round_pad = |number: &str, at: Point| LibraryPad {
         id: String::new(),
+        stack: Default::default(),
         number: number.to_string(),
         at,
         size: (width_um, width_um),

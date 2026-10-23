@@ -54,6 +54,21 @@ pub fn pad_polygons(fp: &FootprintInstance, pad: &Pad, center: Point, max_error:
     crate::shape_poly::union_polyset(&pad_copper(fp, pad, center), max_error)
 }
 
+/// A pad's copper in its footprint's own frame (the footprint at the origin, not turned and seen from the top) as polygons: where a
+/// footprint's free graphics lie against it (`PAD::Recombine`'s `TransformShapeToPolygon( padPoly, layer, 0, maxError, ERROR_INSIDE )`).
+pub fn pad_polygons_in_footprint(pad: &Pad, max_error: Um) -> eda_shape_poly_set::ShapePolySet {
+    let fp = FootprintInstance { id: String::new(), at: Point { x: 0, y: 0 }, rot: 0, side: eda_model::ir::Side::Top, label: eda_model::ir::LabelSide::Above };
+    pad_polygons(&fp, pad, Point { x: pad.at.0, y: pad.at.1 }, max_error)
+}
+
+/// One graphic or basic shape as the polygons `PCB_SHAPE::TransformShapeToPolygon` makes of it at no clearance, the stroke counted
+/// (`EDA_SHAPE::makeEffectiveShapes`): a line is a stadium, an unfilled shape its outline at its width, a filled one its area.
+pub fn shape_polygons(shape: &eda_model::ir::Shape, max_error: Um) -> eda_shape_poly_set::ShapePolySet {
+    let pieces = eda_model::pad_geom::primitive_pieces(shape, (0.0, 0.0), max_error as f64);
+    let parts: Vec<Shape> = pieces.iter().filter_map(piece_shape).collect();
+    crate::shape_poly::union_polyset(&Shape::Compound { parts }, max_error)
+}
+
 /// [`pad_polygons`] as the list of its contours, the outline of each polygon first and then its holes, in micrometres.
 pub fn pad_outline(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: Um) -> Vec<Vec<Point>> {
     pad_polygons(fp, pad, center, max_error).polys.iter().flat_map(|poly| poly.iter().map(|chain| chain.iter().map(|p| Point { x: p.x, y: p.y }).collect::<Vec<_>>())).collect()

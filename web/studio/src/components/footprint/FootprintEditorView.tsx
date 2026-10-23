@@ -2,9 +2,10 @@
 // tree (`FOOTPRINT_TREE_PANE`, far left), the left (options) toolbar, the canvas and the right (drawing) toolbar. The toolbars are the extracted KiCad ones
 // (fp_toolbars.json, drawn by components/Toolbar.tsx with KiCad's icons); the canvas is always there -- with nothing open it is the empty canvas and its
 // grid, like KiCad's, and a footprint is opened from the tree.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { enumeratePopupText, enumerateStart } from "../../kicad-port/padEnumeration";
+import { inPadEditMode, PAD_EDIT_MODE_MESSAGE, padEditLayer } from "../../kicad-port/padEditMode";
 import { FootprintCanvas } from "./FootprintCanvas";
 import { PadPropertiesDialog } from "./PadPropertiesDialog";
 import { FootprintLibraryPropertiesDialog } from "./FootprintPropertiesDialog";
@@ -85,11 +86,27 @@ export function FootprintEditorView() {
     return () => clearTimeout(t);
   }, [state.toast, dispatch]);
 
+  // The pad edit mode is the footprint's own (`LibraryFootprint.pad_edit`, the pad's `ENTERED` flag): whenever it begins or ends -- Ctrl+E, an undo, a redo, a
+  // footprint opened in the mode -- the editor follows, as `PAD_TOOL::OnUndoRedo` does by looking for the flagged pad.
+  const editing = inPadEditMode(state.footprint);
+  const wasEditing = useRef(false);
+  const editedPad = state.footprint?.pads.find((p) => p.id === state.footprint?.pad_edit?.pad);
+  useEffect(() => {
+    if (editing && !wasEditing.current && editedPad) dispatch({ type: "PAD_EDIT_ENTER", layer: padEditLayer(editedPad) });
+    if (!editing && wasEditing.current) dispatch({ type: "PAD_EDIT_EXIT" });
+    wasEditing.current = editing;
+  }, [editing, editedPad, dispatch]);
+
   return (
     <div className="editor-frame footprint-editor-view">
       <div className="main-toolbar-row">
         <Toolbar id="main" editor="footprint" />
       </div>
+      {editing && (
+        <div role="status" data-testid="pad-edit-banner" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12 }}>
+          {PAD_EDIT_MODE_MESSAGE}
+        </div>
+      )}
       {state.enumerate && (
         <div role="status" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12 }}>
           {enumeratePopupText(state.enumerate)}

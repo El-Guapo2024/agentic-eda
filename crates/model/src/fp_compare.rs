@@ -183,14 +183,28 @@ fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 0.000_010
 }
 
+/// The copper layers of the pad's padstack, as `PADSTACK::UniqueLayers` has them: the front, and for a front/inner/back stack the inner layers (named `In1.Cu`, as
+/// `PADSTACK::INNER_LAYERS` is) and the back, for a custom one every layer it names.
+fn stack_roles(a: &Pad) -> Vec<String> {
+    use crate::padstack::PadStackMode;
+    let mut roles = vec!["F.Cu".to_string()];
+    match a.ext.stack.mode {
+        PadStackMode::Normal => {}
+        PadStackMode::FrontInnerBack => roles.extend(["In1.Cu".to_string(), "B.Cu".to_string()]),
+        PadStackMode::Custom => roles.extend(a.ext.stack.layers.keys().cloned()),
+    }
+    roles
+}
+
 /// `padNeedsUpdate` with a reporter: the lines for the pad `a` (the board's) against `lib` (the library's).
 fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
     let name = format!("Pad {}", a.number);
-    let layer = if a.opposite_side { "B.Cu" } else { "F.Cu" };
     if a.at != lib.at {
         out.push(format!("{name} position differs."));
     }
-    if a.opposite_side != lib.opposite_side {
+    // `layerSettingsDiffer`: whether the unconnected layers are removed, and, when they are, whether the outside ones are kept.
+    let (ua, ul) = (a.ext.stack.unconnected, lib.ext.stack.unconnected);
+    if a.opposite_side != lib.opposite_side || ua.removes() != ul.removes() || (ua.removes() && ua.keeps_outer() != ul.keeps_outer()) {
         out.push(format!("{name} layers differ."));
     }
     if a.kind != lib.kind {
@@ -199,28 +213,35 @@ fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
     if a.rot != lib.rot {
         out.push(format!("{name} orientation differs."));
     }
-    if a.shape != lib.shape {
-        out.push(format!("{name} pad shape type differs on layer {layer}."));
-    }
-    if a.size != lib.size {
-        out.push(format!("{name} size differs on layer {layer}."));
-    }
-    if a.ext.trapezoid_delta.unwrap_or((0, 0)) != lib.ext.trapezoid_delta.unwrap_or((0, 0)) {
-        out.push(format!("{name} trapezoid delta differs on layer {layer}."));
-    }
-    if matches!(a.shape, PadShape::RoundRect | PadShape::ChamferedRect) && !close(a.roundrect_ratio.unwrap_or(0.25), lib.roundrect_ratio.unwrap_or(0.25)) {
-        out.push(format!("{name} rounded corners differ on layer {layer}."));
-    }
-    if a.shape == PadShape::ChamferedRect {
-        if !close(a.ext.chamfer_ratio.unwrap_or(0.2), lib.ext.chamfer_ratio.unwrap_or(0.2)) {
-            out.push(format!("{name} chamfered corner sizes differ on layer {layer}."));
+    // Each layer of the board pad's padstack (`a->Padstack().UniqueLayers()`) against what the library's pad has on it.
+    let roles = stack_roles(a);
+    let layer_name = |role: &str| if role == "F.Cu" && a.opposite_side { "B.Cu".to_string() } else { role.to_string() };
+    for role in &roles {
+        let (sa, sl) = (a.shape_for_role(role), lib.shape_for_role(role));
+        let layer = layer_name(role);
+        if sa.shape != sl.shape {
+            out.push(format!("{name} pad shape type differs on layer {layer}."));
         }
-        if a.ext.chamfer_corners != lib.ext.chamfer_corners {
-            out.push(format!("{name} chamfered corners differ on layer {layer}."));
+        if sa.size != sl.size {
+            out.push(format!("{name} size differs on layer {layer}."));
         }
-    }
-    if a.ext.offset.unwrap_or((0, 0)) != lib.ext.offset.unwrap_or((0, 0)) {
-        out.push(format!("{name} shape offset from hole differs on layer {layer}."));
+        if sa.trapezoid_delta.unwrap_or((0, 0)) != sl.trapezoid_delta.unwrap_or((0, 0)) {
+            out.push(format!("{name} trapezoid delta differs on layer {layer}."));
+        }
+        if matches!(sa.shape, PadShape::RoundRect | PadShape::ChamferedRect) && !close(sa.roundrect_ratio.unwrap_or(0.25), sl.roundrect_ratio.unwrap_or(0.25)) {
+            out.push(format!("{name} rounded corners differ on layer {layer}."));
+        }
+        if sa.shape == PadShape::ChamferedRect {
+            if !close(sa.chamfer_ratio.unwrap_or(0.2), sl.chamfer_ratio.unwrap_or(0.2)) {
+                out.push(format!("{name} chamfered corner sizes differ on layer {layer}."));
+            }
+            if sa.chamfer_corners != sl.chamfer_corners {
+                out.push(format!("{name} chamfered corners differ on layer {layer}."));
+            }
+        }
+        if sa.offset.unwrap_or((0, 0)) != sl.offset.unwrap_or((0, 0)) {
+            out.push(format!("{name} shape offset from hole differs on layer {layer}."));
+        }
     }
     if a.drill.is_some() != lib.drill.is_some() || a.drill_slot.is_some() != lib.drill_slot.is_some() {
         out.push(format!("{name} drill shape differs."));
@@ -228,8 +249,10 @@ fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
     if a.drill != lib.drill || a.drill_slot != lib.drill_slot {
         out.push(format!("{name} drill size differs."));
     }
-    if a.ext.custom != lib.ext.custom {
-        out.push(format!("{name} shape primitives differ on layer {layer}."));
+    for role in &roles {
+        if a.shape_for_role(role).custom != lib.shape_for_role(role).custom {
+            out.push(format!("{name} shape primitives differ on layer {}.", layer_name(role)));
+        }
     }
 }
 

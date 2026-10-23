@@ -58,6 +58,8 @@ export function settingsOf(pad: LibraryPad): PadSettings {
     thermal_spoke_width_override: pad.thermal_spoke_width_override,
     zone_connection: pad.zone_connection ?? null,
     thermal_spoke_angle_mdeg: pad.thermal_spoke_angle_mdeg ?? null,
+    // `SetPadstack( aMasterPad.Padstack() )`: the shapes of the pad's other layers and its unconnected-layer mode travel with the rest.
+    stack: pad.stack ? structuredClone(pad.stack) : undefined,
   };
 }
 

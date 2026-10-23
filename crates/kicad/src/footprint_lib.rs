@@ -30,14 +30,24 @@ use crate::sexpr::{self, Sexpr};
 pub const LIBRARY_ROOT_ENV: &str = "EDA_KICAD_FOOTPRINTS";
 
 /// Where KiCad's standard footprint libraries live: `LIBRARY_ROOT_ENV` if
-/// set, else KiCad's own default install location on macOS.
+/// set, else the installed KiCad's (see [`kicad_shared_dir`]).
 pub fn default_footprint_library_root() -> PathBuf {
     if let Ok(p) = std::env::var(LIBRARY_ROOT_ENV) {
         if !p.is_empty() {
             return PathBuf::from(p);
         }
     }
-    PathBuf::from("/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints")
+    kicad_shared_dir("footprints")
+}
+
+/// `sub` (`footprints`, `symbols`, `3dmodels`, `template`) of the installed KiCad's shared data: the macOS bundle's `SharedSupport`, else
+/// `$KICAD_PATH` (what KiCad's Linux packages set, `/usr/share/kicad-nightly` for the nightly), `/usr/share/kicad-nightly`, `/usr/share/kicad`
+/// or `/usr/local/share/kicad`, the first that has it. With none installed, the macOS path, which does not exist.
+pub fn kicad_shared_dir(sub: &str) -> PathBuf {
+    let mac = PathBuf::from("/Applications/KiCad/KiCad.app/Contents/SharedSupport");
+    let env = std::env::var("KICAD_PATH").ok().filter(|p| !p.is_empty()).map(PathBuf::from);
+    let candidates = [Some(mac.clone()), env, Some("/usr/share/kicad-nightly".into()), Some("/usr/share/kicad".into()), Some("/usr/local/share/kicad".into())];
+    candidates.into_iter().flatten().map(|d| d.join(sub)).find(|d| d.is_dir()).unwrap_or_else(|| mac.join(sub))
 }
 
 /// The `.kicad_mod` file a library id (`"Connector_USB:USB_C_Receptacle_
@@ -464,6 +474,10 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
             write!(out, " {}", crate::sexpr_str(l)).unwrap();
         }
         write!(out, ")").unwrap();
+        // `(remove_unused_layers ..) (keep_end_layers ..)` of a plated through-hole pad, after its layers.
+        if pad.kind == eda_model::PadKind::ThroughHole {
+            out.push_str(&crate::padstack_io::unconnected_text(engine.ext.stack.unconnected));
+        }
         if let Some(c) = pad.clearance_override {
             write!(out, " (clearance {})", crate::mm(c)).unwrap();
         }
@@ -485,7 +499,10 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
             write!(out, " (thermal_gap {})", crate::mm(g)).unwrap();
         }
         out.push_str(&shape_text.custom);
-        writeln!(out, " (uuid \"{uuid}\"))").unwrap();
+        write!(out, " (uuid \"{uuid}\")").unwrap();
+        // The other layers' shapes, after the uuid (a library file has no board: every copper layer KiCad's file can name, `MAX_CU_LAYERS`).
+        out.push_str(&crate::padstack_io::write_padstack(&engine, eda_model::ir::Side::Top, &crate::padstack_io::library_copper_layers()));
+        writeln!(out, ")").unwrap();
     }
 
     // The embedded files, before the models as KiCad writes them.
@@ -672,6 +689,7 @@ mod tests {
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            stack: Default::default(),
         }
     }
 
@@ -700,6 +718,7 @@ mod tests {
             anchor: eda_model::ir::Point { x: 0, y: 0 },
             published: false,
             zone_connection: None,
+            pad_edit: None,
         };
 
         let text = export_kicad_mod(&fp);

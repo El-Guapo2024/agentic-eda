@@ -224,6 +224,21 @@ impl Board<'_> {
                 }
             }
         }
+        // The same of every layer of the padstack, and the shapes the layers may have (`PAD::CheckPad` runs for each unique layer).
+        if let Some(stack) = &edit.stack {
+            for (role, shape) in stack.inner.iter().map(|s| ("the inner layers".to_string(), s)).chain(stack.back.iter().map(|s| ("the back layer".to_string(), s))).chain(stack.layers.iter().map(|(k, s)| (k.clone(), s))) {
+                if shape.size.0 < 0 || shape.size.1 < 0 {
+                    return Err(fail("ops_bad_pad", &pad_ref, format!("Pad size on {role} must not be negative.")));
+                }
+                if let Some(c) = &shape.custom {
+                    for (i, prim) in c.primitives.iter().enumerate() {
+                        if let Some(why) = primitive_problem(prim) {
+                            return Err(fail("ops_bad_pad", &pad_ref, format!("Basic shape {} on {role}: {why}", i + 1)));
+                        }
+                    }
+                }
+            }
+        }
         if let Some(r) = edit.solder_paste_margin_ratio {
             // `padValuesOK`: the paste ratio is limited to -50% .. +100%.
             if !(-0.5..=1.0).contains(&r) {
@@ -246,8 +261,11 @@ impl Board<'_> {
         }
         // `PAD::doCheckPad`: "(custom pad shape must resolve to a single polygon)" -- the anchor and the basic shapes make one piece of copper.
         if let Some(pad) = trial.pads.get(pad_index(&trial, &edit.number, nth).unwrap_or(usize::MAX)) {
-            if pad.shape == eda_model::PadShape::Custom && custom_outline_count(pad) > 1 {
-                return Err(fail("ops_bad_pad", &pad_ref, "The custom pad shape must resolve to a single polygon."));
+            for shape in pad.unique_shapes() {
+                let layer_pad = shape.lay_on(pad);
+                if layer_pad.shape == eda_model::PadShape::Custom && custom_outline_count(&layer_pad) > 1 {
+                    return Err(fail("ops_bad_pad", &pad_ref, "The custom pad shape must resolve to a single polygon."));
+                }
             }
         }
         self.edit_slot(part).set_pad(edit);

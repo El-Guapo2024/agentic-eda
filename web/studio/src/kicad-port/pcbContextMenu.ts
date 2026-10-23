@@ -20,7 +20,7 @@
 // and the menus of the tools that take over the right click: pcbnew/router/router_tool.cpp (ROUTER_TOOL::Init, while routing) and
 // pcbnew/tools/drawing_tool.cpp (DRAWING_TOOL::Init, while a graphic, zone, text, dimension or via is being drawn).
 //
-// Not built, because the IR has nothing for them: gate swap, generators (Update All Tuning Patterns). An entry
+// Not built, because the IR has nothing for them: generators (Update All Tuning Patterns). An entry
 // KiCad offers that this studio has not wired is still listed, disabled, as the schematic's menu does (`MenuNodeView` knows which actions have a handler).
 //
 // The entries of the Zoom and Grid submenus, the Track/Via Width list and the like are data, handed in by the caller (`PcbMenuContext`). Pure: no store, no
@@ -77,6 +77,9 @@ export interface PcbSelectionSummary {
   linkedGroup: boolean;
   /** Something selected carries a net (`haveNetCond`: `BOARD_CONNECTED_ITEM` with a net code above 0). */
   hasNet: boolean;
+  /** `GATE_SWAP_MENU`'s reading of the selected pads (kicad-port/gateSwap.ts): two units or more with as many pins as each other (`gateSwapMultipleUnitsOnOneFootprint`), or
+   *  exactly one unit and the names of the units it could be swapped with (`gateSwapSingleUnitOnOneFootprint`; `null` when more than one unit is hit). */
+  gateSwap: { multiple: boolean; targets: readonly string[] | null };
   /** The selection is what `Convert` could make something of (`kicad-port/pcbConvert.ts` `convertAvailability`). */
   convert: { poly: boolean; zone: boolean; keepout: boolean; lines: boolean; outset: boolean; tracks: boolean; arc: boolean };
 }
@@ -114,6 +117,7 @@ export function emptyPcbSummary(): PcbSelectionSummary {
     group: { hasGroup: false, onlyOneGroup: false, hasUngroupedItems: false, hasMember: false },
     linkedGroup: false,
     hasNet: false,
+    gateSwap: { multiple: false, targets: null },
     convert: { poly: false, zone: false, keepout: false, lines: false, outset: false, tracks: false, arc: false },
   };
 }
@@ -343,6 +347,7 @@ const A = {
   flip: "pcbnew.InteractiveEdit.flip",
   swap: "pcbnew.InteractiveEdit.swap",
   swapPadNets: "pcbnew.InteractiveEdit.swapPadNets",
+  swapGateNets: "pcbnew.InteractiveEdit.swapGateNets",
   breakTrack: "pcbnew.InteractiveRouter.BreakTrack",
   filletTracks: "pcbnew.InteractiveEdit.filletTracks",
   packAndMove: "pcbnew.InteractiveEdit.packAndMoveFootprints",
@@ -643,6 +648,11 @@ function convertMenu(): { menu: ConditionalMenu; canCreate: Cond } {
   return { menu, canCreate };
 }
 
+/** `GATE_SWAP_MENU::update`: "Swap with B", "Swap with C" ..., one for each other unit that has as many pins as the one selected; each runs Swap Gate Nets with that unit's name. */
+function gateSwapMenu(s: Sel): MenuNode[] {
+  return (s.gateSwap.targets ?? []).map((name) => item(A.swapGateNets, { label: `Swap with ${name}`, arg: name }));
+}
+
 /** `ZOOM_MENU::update`: "Zoom: 1.00" ..., the one nearest the current zoom checked. The entry `i` is the preset `i + 1` (0 is Auto Zoom, which the menu has none of). */
 function zoomMenu(_s: Sel, c: PcbMenuContext): MenuNode[] {
   return c.zoom.map((z, i) => item(A.zoomPreset, { label: z.label, arg: i + 1, checked: z.checked }));
@@ -705,7 +715,9 @@ export function buildSelectionMenu(): ConditionalMenu {
   menu.addItem(A.flip, notEmpty);
   menu.addItem(A.swap, moreThan(1));
   menu.addItem(A.swapPadNets, and(moreThan(1), whenOnly("pad")));
-  // (Swap Gate Nets and its submenu need the footprint's units, which the IR does not have.)
+  menu.addItem(A.swapGateNets, (s) => s.gateSwap.multiple);
+  // `gateSwapSingleUnitOnOneFootprint`: one unit hit, and some other unit it could swap with (the submenu lists them: `GATE_SWAP_MENU::update`)
+  menu.addMenu("Swap Gate Nets...", gateSwapMenu, (s) => s.gateSwap.targets !== null && s.gateSwap.targets.length > 0);
   menu.addSeparator();
   menu.addItem(A.breakTrack, and(countIs(1), whenOnly(...TRACK_TYPES)));
   menu.addItem(A.filletTracks, whenOnly(...TRACK_TYPES));
