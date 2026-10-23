@@ -26,7 +26,16 @@ fn work(dir: &Path) -> PathBuf {
 pub fn load_with_schematic(dir: &Path) -> Result<(Design, ConstraintModel), Vec<CheckResult>> {
     let (_, mut design, model) = board::load(dir)?;
     if design.schematic.is_none() {
-        design = board::derived_schematic(&design, &model)?;
+        // The derived design is a schematic -- the root and the module sheets' screens -- and nothing else: the board's own sections (the placement and
+        // routing a parity DRC compares, the waivers in `drawings`) stay as they are.
+        let derived = board::derived_schematic(&design, &model)?;
+        design.schematic = derived.schematic;
+        if design.sheet_contents.is_none() {
+            design.sheet_contents = derived.sheet_contents;
+        }
+        if design.bus_aliases.is_empty() {
+            design.bus_aliases = derived.bus_aliases;
+        }
     }
     Ok((design, model))
 }

@@ -14,6 +14,7 @@
 //
 // It works through `window.__eda` (`actions`' ids with `run`, the dialogs by their data-testid, selection with `common.InteractiveSelection.selectItems`, undo with `common.Interactive.undo`) and
 // the verbs' own routes (`/api/cmd` for the edits a dialog of the Schematic tab would send).
+// run-all-checks: board=mcu30-placed minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__fpAssignCheck = { results, done: false, ok: false, wait: null });

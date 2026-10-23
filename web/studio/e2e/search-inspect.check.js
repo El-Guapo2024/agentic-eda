@@ -10,6 +10,7 @@
 //
 // It works through `window.__eda` (`actions`' ids with `run`, the dialogs by their data-testid, selection with `common.InteractiveSelection.selectItems`) and the verbs' own routes
 // (`/api/cmd`). It selects and searches and makes nothing that stays: the edits a scenario makes are undone, and it compares the board with how it was.
+// run-all-checks: board=mcu30-placed   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__searchInspectCheck = { results, done: false, ok: false, wait: null });

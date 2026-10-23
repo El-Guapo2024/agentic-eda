@@ -12,6 +12,7 @@
 //
 // It works through `window.__eda` (select with `common.InteractiveSelection.selectItems`, undo with `common.Interactive.undo`, B with `pcbnew.ZoneFiller.zoneFillAll`, the Zone Manager
 // with `pcbnew.Control.zonesManager`), the dialogs' controls (their `data-testid`s) and what the server holds (`GET /api/fill`, `/api/state`, `/api/board.kicad_pcb`).
+// run-all-checks: board=mcu30-zones minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__zonesCheck = { results, done: false, ok: false, wait: null });
@@ -97,7 +98,8 @@
       t(f.zones.filter((z) => z.id === A.id).every((z) => !z.filled && z.fragments.length === 0), "zone A has no fill any more: it is drawn as an outline until it is filled again");
       t(JSON.stringify(Object.entries(now).filter(([k]) => !k.startsWith(A.id))) === JSON.stringify(Object.entries(before).filter(([k]) => !k.startsWith(A.id))), "zone B keeps its fill");
       t(f.source?.stale === 1 && f.source.zones === f.zones.length - f.zones.filter((z) => z.id === A.id).length, `the source counts the zone out of date (${JSON.stringify(f.source)})`);
-      await sleep(900);
+      // the page learns of the edit with its next poll of the fills, a second or so after the server: wait for it rather than a fixed time
+      for (let i = 0; i < 40 && !notes().some((n) => /1 zone not filled \(B\)/.test(n)); i++) await sleep(200);
       t(notes().some((n) => /1 zone not filled \(B\)/.test(n)), `the status bar counts it (${JSON.stringify(notes())})`);
       t((await rings(A.layer)) === (A.layer === B.layer ? await rings(B.layer) : 0), "and the derived .kicad_pcb is written without its rings, as KiCad writes a zone it has emptied");
       await undo();

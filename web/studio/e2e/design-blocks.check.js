@@ -24,6 +24,7 @@
 // A run takes a few minutes (every edit waits for the server's answer, the previews wait for kicad-cli): read it with `await __designBlocksCheck.wait(30000)` (it returns when the run is done
 // or the time is up) until `.done`. In a hidden pane the browser stops timers and animation frames; the script then drives both from a fetch loop. A hidden pane also tells the canvas its size
 // only after a screenshot: take one after loading the page, or the view the script works from has no size and the setup says so.
+// run-all-checks: board=mcu30 minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__designBlocksCheck = { results, done: false, ok: false, wait: null });

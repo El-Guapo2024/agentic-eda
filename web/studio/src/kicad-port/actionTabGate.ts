@@ -49,6 +49,8 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   // Rotate Counterclockwise / Clockwise (R / Shift+R): the footprint editor's top toolbar rotates the selected pads (actions/editorFrameActions.ts).
   "pcbnew.InteractiveEdit.rotateCcw",
   "pcbnew.InteractiveEdit.rotateCw",
+  // Properties (E): `EDIT_TOOL::Properties`, a pad's Pad Properties or, with nothing selected, Footprint Properties (actions/editorFrameActions.ts).
+  "pcbnew.InteractiveEdit.properties",
 ]);
 
 /** Symbol-editor-frame-only actions (`SYMBOL_EDIT_FRAME`'s tools): enabled on the Symbol tab only. */
@@ -104,6 +106,10 @@ export const SCHEMATIC_AND_SYMBOL_EDITOR: ReadonlySet<string> = new Set([
   // `SCH_DRAWING_TOOLS::ImportGraphics` and `SYMBOL_EDITOR_DRAWING_TOOLS::ImportGraphics` are both `SCH_ACTIONS::importGraphics` (and its drop).
   "eeschema.EditorControl.importGraphics",
   "eeschema.EditorControl.ddImportGraphics",
+  // `SYMBOL_EDITOR_EDIT_TOOL::Properties` and `::Rotate` are bound to the schematic editor's own actions (E, R, Shift+R): actions/editorFrameActions.ts.
+  "eeschema.InteractiveEdit.properties",
+  "eeschema.InteractiveEdit.rotateCCW",
+  "eeschema.InteractiveEdit.rotateCW",
 ]);
 
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {

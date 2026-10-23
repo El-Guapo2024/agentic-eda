@@ -15,6 +15,7 @@
 //
 // It works through `window.__eda` (select with `common.InteractiveSelection.selectItems`, undo with `common.Interactive.undo`, open a dialog with the action that opens it),
 // the dialogs' controls (their `data-testid`s) and the pointer events a user makes on the canvas; the setup edits go straight to `POST /api/cmd`.
+// run-all-checks: board=mcu30-placed minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__pcbEditDetailsCheck = { results, done: false, ok: false, wait: null });

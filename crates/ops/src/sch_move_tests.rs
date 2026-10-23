@@ -943,6 +943,38 @@ fn an_image_moves_by_its_centre_and_turns_about_its_own() {
     assert_eq!(turned.extras.graphics[0].shape, s.extras.graphics[0].shape);
 }
 
+// ------------------------------------------------------------------------------------------------------------------- a wire drawn
+
+fn draw(sch: eda_model::ir::SchematicSection, pts: &[Point]) -> eda_model::ir::SchematicSection {
+    let m = ConstraintModel::default();
+    let mut design = empty_design();
+    design.schematic = Some(sch);
+    let mut b = Board::new(design, &m, 100, 300);
+    b.apply(&Cmd::AddWire { pts: pts.to_vec(), bus: false }).unwrap_or_else(|e| panic!("{e:?}"));
+    b.design().schematic.clone().unwrap()
+}
+
+/// `SCH_LINE_WIRE_BUS_TOOL::finishSegments`: the ends of a new wire, and the points of the sheet that lie on it, get the junction
+/// `IsExplicitJunctionNeeded` asks for (`AddJunction`, which breaks the wire passing through). A wire ending on another's middle is a T: a dot there.
+#[test]
+fn a_wire_drawn_to_the_middle_of_another_gets_a_junction_there() {
+    let mut s = section();
+    s.wires.push(wire("w1", &[p(0, 10 * G), p(12 * G, 10 * G)]));
+    let out = draw(s, &[p(6 * G, 16 * G), p(6 * G, 10 * G)]);
+    assert_eq!(out.junctions.iter().map(|j| j.at).collect::<Vec<_>>(), vec![p(6 * G, 10 * G)], "one junction, at the T");
+    // The wire passing through is broken at the dot, as `AddJunction` -> `BreakSegments` does: here a wire is a polyline, so it keeps its id with a
+    // vertex at the dot (`Scene::finish` joins a wire's pieces that still meet end to end).
+    let w1 = out.wires.iter().find(|w| w.id == "w1").unwrap();
+    assert_eq!(w1.pts, vec![p(0, 10 * G), p(6 * G, 10 * G), p(12 * G, 10 * G)]);
+    assert!(out.wires.iter().any(|w| w.pts == vec![p(6 * G, 16 * G), p(6 * G, 10 * G)]), "the new wire as drawn");
+    // A new wire crossing an old one in the middle of both is not joined (`aBreakCrossings` is for an explicit J only), and one drawn alone gets nothing.
+    let mut s = section();
+    s.wires.push(wire("w1", &[p(0, 10 * G), p(12 * G, 10 * G)]));
+    let out = draw(s, &[p(6 * G, 4 * G), p(6 * G, 16 * G)]);
+    assert!(out.junctions.is_empty(), "a crossing is not a junction: {:?}", out.junctions);
+    assert!(draw(section(), &[p(0, 0), p(5 * G, 0)]).junctions.is_empty());
+}
+
 /// On a sheet this project drew (a symbol placed by the corner of its box), the editor's pins of a turned or mirrored symbol (`Scene::pins_of`: KiCad's
 /// `TRANSFORM` of the orientation) are where the writer bakes them and the tracer finds them (`eda_engine::placed::pin_points_in`), in every one of
 /// KiCad's orientations: what the user wires to is what kicad-cli connects.

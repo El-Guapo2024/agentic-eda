@@ -9,6 +9,8 @@
 import type { Dispatch } from "react";
 import support from "../kicad/editor_toolbar_support.json";
 import { datasheetTarget } from "../kicad-port/itemText";
+import { footprintPropertiesTarget, symbolPropertiesTarget } from "../kicad-port/libEditorEdit";
+import { libFieldName } from "../kicad-port/symFieldLayout";
 import { worldToScreen, zoomAbout, type ViewTransform } from "../kicad-port/view";
 import { getDockLayout, setDockColumnCollapsed } from "../state/dockLayoutStore";
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
@@ -87,7 +89,70 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     };
     m.set("pcbnew.InteractiveEdit.rotateCcw", rotate(1));
     m.set("pcbnew.InteractiveEdit.rotateCw", rotate(-1));
+    // Properties (E): `EDIT_TOOL::Properties` -- the one selected pad's Pad Properties, Footprint Properties with nothing selected (kicad-port/libEditorEdit.ts).
+    // The window-level hotkey runs it, and so do the Edit menu and the context menu; the canvas no longer reads E itself.
+    const footprintProperties = m.get("pcbnew.ModuleEditor.footprintProperties");
+    m.set("pcbnew.InteractiveEdit.properties", () => {
+      const st = ctx.fpApi.getState();
+      if (st.activeTool !== "select") return;
+      const selection = [...st.selection].map((id) => ({ id, kind: ctx.fpApi.padById(id) ? "pad" : "other" }));
+      const target = footprintPropertiesTarget(selection);
+      if (target?.dialog === "pad") ctx.fpDispatch({ type: "SET_PAD_PROPERTIES_ID", id: target.id });
+      else if (target?.dialog === "footprint") footprintProperties?.();
+    });
+    // Delete (`EDIT_TOOL::Remove` in the footprint editor): the selected pads, graphics and texts, each its own verb. The Delete key reaches it through the hotkey
+    // table (the canvas keeps Backspace, which the table does not bind).
+    m.set("common.Interactive.delete", () => {
+      const st = ctx.fpApi.getState();
+      if (st.activeTool !== "select" || st.selection.size === 0) return;
+      for (const id of st.selection) {
+        if (ctx.fpApi.padById(id)) void ctx.fpApi.deletePad(id);
+        else if (ctx.fpApi.graphicById(id)) void ctx.fpApi.deleteGraphic(id);
+        else if (ctx.fpApi.textById(id)) void ctx.fpApi.deleteText(id);
+      }
+      ctx.fpDispatch({ type: "CLEAR_SELECTION" });
+    });
   } else {
+    // Properties (E): `SYMBOL_EDITOR_EDIT_TOOL::Properties` -- a pin's Pin Properties, a shape's own dialog, a field's row of Symbol Properties, Symbol
+    // Properties with nothing selected (kicad-port/libEditorEdit.ts).
+    m.set("eeschema.InteractiveEdit.properties", () => {
+      const st = ctx.symApi.getState();
+      if (st.activeTool !== "select") return;
+      const kind = (id: string) => (ctx.symApi.pinById(id) ? "pin" : libFieldName(id) ? "field" : ctx.symApi.graphicById(id) ? "graphic" : "other");
+      const target = symbolPropertiesTarget([...st.selection].map((id) => ({ id, kind: kind(id) })));
+      if (!target) return;
+      if (target.dialog === "pin") ctx.symDispatch({ type: "SET_PIN_PROPERTIES_ID", id: target.id });
+      else if (target.dialog === "symbol") ctx.symDispatch({ type: "SET_PROPERTIES_OPEN", open: true, field: target.field ? (libFieldName(target.field) ?? undefined) : undefined });
+      else {
+        const g = ctx.symApi.graphicById(target.id);
+        if (!g || g.kind === "text") return;
+        if (g.kind === "text_box") ctx.symDispatch({ type: "SET_TEXT_BOX_DIALOG", dialog: { id: target.id, box: g } });
+        else ctx.symDispatch({ type: "SET_SHAPE_DIALOG_ID", id: target.id });
+      }
+    });
+    // Rotate (R / Shift+R, `SYMBOL_EDITOR_EDIT_TOOL::Rotate`): the selected pins a quarter turn, counter-clockwise or clockwise (shapes do not turn here yet).
+    const rotatePins = (ccw: boolean) => () => {
+      const st = ctx.symApi.getState();
+      if (st.activeTool !== "select") return;
+      for (const id of st.selection) {
+        const p = ctx.symApi.pinById(id);
+        if (!p) continue;
+        const angle = (((p.angle_deg + (ccw ? 90 : -90)) % 360) + 360) % 360;
+        void ctx.symApi.editPin(id, { ...p, angle_deg: angle });
+      }
+    };
+    m.set("eeschema.InteractiveEdit.rotateCCW", rotatePins(true));
+    m.set("eeschema.InteractiveEdit.rotateCW", rotatePins(false));
+    // Delete (`SYMBOL_EDITOR_EDIT_TOOL::DoDelete`): the selected pins and graphics.
+    m.set("common.Interactive.delete", () => {
+      const st = ctx.symApi.getState();
+      if (st.activeTool !== "select" || st.selection.size === 0) return;
+      for (const id of st.selection) {
+        if (ctx.symApi.pinById(id)) void ctx.symApi.deletePin(id);
+        else if (ctx.symApi.graphicById(id)) void ctx.symApi.deleteGraphic(id);
+      }
+      ctx.symDispatch({ type: "CLEAR_SELECTION" });
+    });
     // Selection tool (`ACTIONS::selectionTool`).
     m.set("common.InteractiveSelection.selectionTool", () => ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: "select" }));
     // Show Datasheet (`ACTIONS::showDatasheet`): the open symbol's datasheet field, opened like the schematic's does.

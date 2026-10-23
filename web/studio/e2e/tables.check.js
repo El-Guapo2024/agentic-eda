@@ -14,6 +14,7 @@
 //
 // It works through `window.__eda` (every action by its id, `common.InteractiveSelection.selectItems` to select, `common.Interactive.undo`), the dialog's controls and the pointer events
 // a user makes on the canvas; what the server holds is read back from `GET /api/state` (the board's `drawings.tables`) and `GET /api/schematic` (`tables`).
+// run-all-checks: board=mcu30 minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__tablesCheck = { results, done: false, ok: false, wait: null });

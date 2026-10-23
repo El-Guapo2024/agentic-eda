@@ -21,6 +21,7 @@
 //   { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }
 // A run takes a minute or two (each edit waits for the server's answer): read it with `await __pcbItemsCheck.wait(40000)` (it returns when the run is done or the time is up) until
 // `.done`. In a hidden pane the browser stops timers and animation frames; the script then drives both from a fetch loop.
+// run-all-checks: board=mcu30 minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__pcbItemsCheck = { results, done: false, ok: false, wait: null });

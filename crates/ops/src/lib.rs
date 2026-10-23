@@ -3484,6 +3484,13 @@ impl<'a> Board<'a> {
 
     fn set_pose(&mut self, part: &str, at: Point, rot: u32) -> Result<(), Vec<CheckResult>> {
         let at = self.snap_point(at.x, at.y);
+        self.set_pose_exact(part, at, rot)
+    }
+
+    /// `set_pose` without the placement grid: the item edits (`MoveItems`, `RotateItems`, `FlipItems`) put a footprint where the edit says, as
+    /// `FOOTPRINT::Move` (`m_pos + aMoveVector`), `FOOTPRINT::Rotate` and `FOOTPRINT::Flip` do (pcbnew/footprint.cpp); the editor's tools snapped the pointer
+    /// to the grid already, and Move Exactly and the Properties panel's Position rows take what is typed.
+    pub(crate) fn set_pose_exact(&mut self, part: &str, at: Point, rot: u32) -> Result<(), Vec<CheckResult>> {
         let fps = &mut self.design.placement.as_mut().unwrap().footprints;
         let i = fps.iter().position(|f| f.id == part).expect("caller checked the part is placed");
         fps[i].at = at;
@@ -4645,11 +4652,26 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// The wire tool's commit, `SCH_LINE_WIRE_BUS_TOOL::finishSegments` (eeschema/tools/sch_line_wire_bus_tool.cpp): the wire goes on the sheet, and
+    /// each of its ends and each connection point of the sheet that lies on it gets the junction `IsExplicitJunctionNeeded` asks for (`AddJunction`,
+    /// which breaks a wire passing through the dot). Not here: `simplifyWireList` (the studio's tool drops the null segments before it sends the
+    /// points), the bus unfold (its own command), `SCHEMATIC::CleanUp`'s merging of collinear wires and `TrimWire` across a two-pin symbol.
     fn add_wire(&mut self, pts: Vec<Point>, bus: bool) -> Result<(), Vec<CheckResult>> {
         if pts.len() < 2 {
             return Err(vec![CheckResult::fail("ops_bad_wire", "wire", "a wire needs at least two points")]);
         }
-        self.schematic_mut_or_create().wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus });
+        let model = self.model;
+        let sch = self.schematic_mut_or_create();
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus });
+        let new_wire = sch.wires.len() - 1;
+        let mut scene = sch_scene::Scene::new(sch, model);
+        let segs: Vec<sch_scene::Item> = (0..scene.segs.len()).filter(|&i| scene.segs[i].from.is_some_and(|(w, _)| w == new_wire)).map(sch_scene::Item::Seg).collect();
+        let before = scene.sch.junctions.len();
+        scene.add_junctions_if_needed(&segs);
+        if scene.sch.junctions.len() != before {
+            *sch = scene.finish();
+            sch.assign_missing_ids();
+        }
         Ok(())
     }
 

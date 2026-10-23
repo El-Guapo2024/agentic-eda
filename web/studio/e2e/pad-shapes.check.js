@@ -14,6 +14,7 @@
 //
 // It works through `window.__eda` (select with `common.InteractiveSelection.selectItems`, undo with `common.Interactive.undo`, open the dialog with
 // `pcbnew.InteractiveEdit.properties`), the dialog's controls (their `data-testid`s) and the Properties grid's own inputs.
+// run-all-checks: board=mcu30-placed   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__padShapesCheck = { results, done: false, ok: false, wait: null });

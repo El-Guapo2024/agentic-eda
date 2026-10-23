@@ -184,3 +184,22 @@ half is `crates/kicad/src/library_table.rs` (the format, the variables, how the 
 | Configure Paths | partial | `DIALOG_CONFIGURE_PATHS`: KiCad's variables listed read only (grey where the real environment defines them, which takes precedence; a variable a table uses and nothing defines is listed with a Define button), and the board's own variables editable with `ENV_VAR_NAME_VALIDATOR`'s name rule (capitals, digits, `_`), "Environment variable name / path cannot be empty." and `KIPRJMOD` reserved, a Help text. The board's variables are KiCad's project text variables (`path-variables.json` beside the board), not KiCad's settings, which the studio does not write |
 | Saving into a table library | **not done** | the Symbol and Footprint editors write the project library of `design.json`; Save, Save As and Export do not write a table library's file. A new library made here is empty until a file is put into it |
 
+
+## 15. What the browser checks of the older areas found (GAPS.md item 33, package P20; 2026-10-23)
+
+`tools/run-all-checks.sh` runs every `web/studio/e2e/*.check.js` headless, each on a fresh copy of the board its header names. The five checks P20 added
+(`board-edit`, `sch-edit`, `lib-edit`, `board-setup-rules`, `plot-exports`) found these, each fixed with a test first:
+
+| What | KiCad | Fix |
+|---|---|---|
+| A footprint moved, turned or flipped by an item edit (Move Exactly, the Properties panel's Position, R, F) went to the placer's 0.1 mm grid: Move Exactly by 1.25 mm moved 1.3 | `FOOTPRINT::Move` (`m_pos + aMoveVector`), `FOOTPRINT::Rotate`, `EDIT_TOOL::MoveExact` | `crates/ops/src/pcb_transform.rs`: the item edits use `set_pose_exact`; the placement verbs keep the grid |
+| A wire drawn to the middle of another made no junction | `SCH_LINE_WIRE_BUS_TOOL::finishSegments` -> `IsExplicitJunctionNeeded`, `AddJunction` (`BreakSegments`) | `Board::add_wire` adds the junctions its ends and the points on it need (not `CleanUp`'s merging, not `TrimWire`) |
+| In the Footprint and Symbol Editors, Properties (E), Rotate (Symbol Editor) and Delete as actions were not offered or did nothing; only the canvas's own keys worked | `EDIT_TOOL::Properties`, `SYMBOL_EDITOR_EDIT_TOOL::Properties` / `Rotate` / `DoDelete` | `actions/editorFrameActions.ts`, `kicad-port/libEditorEdit.ts`; the canvases keep Backspace off a Mac |
+| Board Setup > Pre-defined Sizes' Apply was two undo steps | (KiCad's Board Setup is outside the undo list; here every Apply is one step) | `predefinedSizesCmds`: one batch |
+| Escape on a popup menu also closed the dialog the menu was opened in, and cancelled the tool | a wxMenu shown by `PopupMenu` is modal | `kicad-port/popupMenuKeys.ts`, `ContextMenu.tsx` stops the key |
+| A CSV placement file was named `.pos` | `DIALOG_GEN_FOOTPRINT_POSITION::CreateFiles`: `fn.SetExt( wxT( "csv" ) )` | `pcb_ext_for("pos", --format csv)` is `csv` |
+| The DRC's parity test failed on a board with no stored schematic: "design has no placement section" | `--schematic-parity` compares the board with the schematic | `load_with_schematic` takes the derived root and screens into the board's design instead of replacing it |
+
+Found, not fixed: the Symbol Editor's pin tool and New Symbol do not ask first (`SYMBOL_EDITOR_PIN_TOOL::CreatePin` opens Pin Properties, `DIALOG_LIB_NEW_SYMBOL`);
+"Both sides" in Generate Placement Files writes one file, not KiCad's top and bottom ones, and the names lack `-top-pos` / `-all-pos`; the export routes list
+the files modified since a second before the run; the parity DRC of the mcu30 example finds 76 differences between its board and its derived schematic.

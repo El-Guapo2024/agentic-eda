@@ -18,6 +18,7 @@
 //   a board variable reaches a 3D model: GET /api/3dmodel finds a model written with it, and stops finding it when the variable is gone.
 //
 // It returns { ok, failed, results: [{ name, ok, detail }, ...] }. The results also pile up in `window.__libraryTablesCheck.results` (`.done` is set at the end).
+// run-all-checks: board=mcu30   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   window.__libraryTablesCheck = { results, done: false };
@@ -118,7 +119,7 @@
     await sleep(300);
     const globalInputs = [...document.querySelectorAll(".lt-grid input[type=text]")];
     check("the Global tab's cells are read only", globalInputs.length > 0 && globalInputs.every((i) => i.readOnly) && [...document.querySelectorAll(".lt-grid input[type=checkbox], .lt-grid select")].every((i) => i.disabled));
-    check("it says KiCad's global table is never written by the studio", /never writes it/.test(top().querySelector(".lt-note")?.textContent ?? ""), top().querySelector(".lt-note")?.textContent);
+    check("it says KiCad's global table is never written by the studio", /never writes (it|a global table)/.test(top().querySelector(".lt-note")?.textContent ?? ""), top().querySelector(".lt-note")?.textContent);
     check("it has no add, move or delete buttons", !top().querySelector('[aria-label="Add empty row to table"]') && !top().querySelector('[aria-label="Remove library from table"]'));
     if (sym0.global.rows.some((r) => r.type === "Table")) {
       top().querySelector(".lt-status.lt-open").click();

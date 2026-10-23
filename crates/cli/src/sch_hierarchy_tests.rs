@@ -1128,6 +1128,30 @@ fn slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them() {
     }
 }
 
+/// A board whose design stores no schematic yet (a board made by `eda board new`) is checked with the schematic the engine draws for it, and keeps its own
+/// board: the parity DRC (`--schematic-parity`) needs both, the ERC its waivers in `drawings`. It used to be replaced by the bare derived design, so the
+/// DRC dialog's "Test for parity between PCB and schematic" said "design has no placement section" (e2e/drc-review.check.js).
+#[test]
+fn a_board_without_a_stored_schematic_is_loaded_with_the_derived_one_and_keeps_its_board() {
+    let dir = scratch("load_with_schematic");
+    let (intent, model) = example("mcu_board_30plus.yaml");
+    let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+    design.schematic = None;
+    design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 35_000, y: 0 }, Point { x: 35_000, y: 35_000 }, Point { x: 0, y: 35_000 }], footprints: vec![], modules: vec![] });
+    design.drawings = Some(eda_model::ir::DrawingsSection::default());
+    save(&dir, &design).unwrap();
+    let meta = Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+    std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    let (d, _) = crate::kicad_engine::load_with_schematic(&dir).unwrap();
+    assert!(d.schematic.as_ref().is_some_and(|s| !s.sheets.is_empty() || !s.symbols.is_empty()), "the derived schematic");
+    assert_eq!(d.placement.as_ref().map(|p| p.outline.len()), Some(4), "the board's placement is kept");
+    assert!(d.drawings.is_some(), "and its drawings");
+    // the module sheets' screens come with the derived root, as they do for a board whose design is the derived one
+    let alone = crate::board::derived_schematic(&design, &crate::board::load(&dir).unwrap().2).unwrap();
+    assert_eq!(d.sheet_contents.as_ref().map(|c| c.len()), alone.sheet_contents.as_ref().map(|c| c.len()), "the screens of the module sheets");
+    assert!(d.sheet_contents.as_ref().is_some_and(|c| !c.is_empty()), "mcu30 has module sheets");
+}
+
 // ------------------------------------------------------------------- KiCad's QA projects: read, written back, judged by kicad-cli as the original
 
 /// kicad-cli's ERC of the schematic `root` (`kicad-cli sch erc --format json`): each violation's type with the count, over every sheet.

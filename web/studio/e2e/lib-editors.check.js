@@ -11,6 +11,7 @@
 //
 // It works through `window.__eda` (`actions` with `run`, `state()`, `errors()`), the dialogs' `data-testid`s, the verbs' own routes (`/api/cmd`, `/api/footprint`, `/api/symbol`) and the
 // export routes (`/api/footprint/export`, `/api/symbol/export`) for what the derived KiCad files say.
+// run-all-checks: board=mcu30 minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__libEditorsCheck = { results, done: false, ok: false, wait: null });

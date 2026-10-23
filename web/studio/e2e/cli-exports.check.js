@@ -14,6 +14,7 @@
 //   nothing logged an error.
 //
 // It answers through `window.__cliExportsCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
+// run-all-checks: board=opamp-routed   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__cliExportsCheck = { results, done: false, ok: false, wait: null });

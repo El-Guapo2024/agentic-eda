@@ -19,6 +19,7 @@
 //
 // (a copy of this file in web/studio/dist is served by the same server, so `src = await (await fetch("/review.check.js")).text()`). `window.__reviewOnly = ["pcb"]` (or ["sch"]) runs one half.
 // Nothing is downloaded: the page's file save is held back and its text read instead.
+// run-all-checks: board=mcu30-placed minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const eda = window.__eda;
   const results = [];
@@ -332,13 +333,13 @@
       check("its menu offers Exclude all violations of rule 'silk_apart'", labels.some((l) => l.startsWith("Exclude all violations of rule 'silk_apart'")), JSON.stringify(labels));
       check("and the one for the whole check as well", labels.some((l) => l.startsWith("Exclude all '")));
       await pick("Exclude all violations of rule 'silk_apart'");
-      await sleep(1500);
+      await until(() => rows().filter((r) => /rule 'silk_apart'/.test(r.innerText) && r.classList.contains("excluded")).length === ofRule.length, 15000);
       const excludedOfRule = rows().filter((r) => /rule 'silk_apart'/.test(r.innerText) && r.classList.contains("excluded")).length;
       check("it excludes every violation of that rule, and only those", excludedOfRule === ofRule.length && rows().filter((r) => r.classList.contains("excluded")).length === ofRule.length, `${excludedOfRule} of ${ofRule.length}, ${rows().filter((r) => r.classList.contains("excluded")).length} excluded`);
       await rightClick(rows().find((r) => r.classList.contains("excluded")));
       check("an excluded one offers to remove all exclusions of the rule", menuLabels().some((l) => l.startsWith("Remove all exclusions for violations of rule 'silk_apart'")), JSON.stringify(menuLabels()));
       await pick("Remove all exclusions for violations of rule 'silk_apart'");
-      await sleep(1200);
+      await until(() => rows().every((r) => !r.classList.contains("excluded")), 15000);
       check("and removing them puts every one back", rows().every((r) => !r.classList.contains("excluded")));
     }
     await post({ op: "set_custom_rules", text: "" });

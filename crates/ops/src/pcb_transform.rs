@@ -231,7 +231,7 @@ impl Board<'_> {
         for r in &targets.parts {
             let fp = self.require_placed(r)?;
             let (at, rot, side, label) = part_pose(&fp, x);
-            self.set_pose(r, at, rot)?;
+            self.set_pose_exact(r, at, rot)?;
             let list = &mut self.design.placement.as_mut().expect("a Board always carries a placement section").footprints;
             let turned_over = list.iter().find(|f| &f.id == r).is_some_and(|f| f.side != side);
             if let Some(f) = list.iter_mut().find(|f| &f.id == r) {

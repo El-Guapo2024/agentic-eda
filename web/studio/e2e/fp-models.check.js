@@ -15,6 +15,7 @@
 //
 // It works through `window.__eda` (`actions`' ids with `run`, selection with `common.InteractiveSelection.selectItems`, undo with `common.Interactive.undo`), the dialogs' data-testids, the
 // preview's own `data-drawn` / `data-waiting` / `data-missing` on `[data-testid="model-preview"]`, and the verbs' routes (`/api/cmd`, `/api/clipboard/copy` for the board file's text).
+// run-all-checks: board=mcu30-placed minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__fpModelsCheck = { results, done: false, ok: false, wait: null });
@@ -444,6 +445,8 @@
     t(cands().at(-1).textContent === "(keep existing reference)" && cands().at(-1).dataset.path === "", "the last row is (keep existing reference)");
     t(miss().dataset.chosen === "1" && miss().style.fontWeight !== "700", "the missing row is not bold: it has a choice");
     t(await settled("migrate3d-preview"), "the preview loaded");
+    // the preview has settled when it is drawn; under load the drawing can come a moment after
+    await until(() => drawn("migrate3d-preview") === 1, 10000);
     t(drawn("migrate3d-preview") === 1, `and draws the candidate on the footprint: ${drawn("migrate3d-preview")}`);
     // choosing "keep existing" bolds the row and shows the footprint alone
     await click(cands().at(-1), 400);

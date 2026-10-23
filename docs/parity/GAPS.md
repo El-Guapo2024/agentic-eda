@@ -74,7 +74,8 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
      footprint, its pose and its routing (item 26).
   4. *Most earlier parity work was typechecked and unit-tested and never clicked.* Six areas now have a browser check driven through
      `window.__eda` (`web/studio/e2e/`: Appearance, DRC and ERC review, footprint edit and arrays, Properties panel, snap and grid, the 3D viewer);
-     the schematic editors, Board Setup, the choosers, the router, the PCB edit tools, the zones and the hierarchy have none (item 33).
+     the schematic editors, Board Setup, the choosers, the router, the PCB edit tools, the zones and the hierarchy have none (item 33). **Since P20 (2026-10-23) 41 checks
+     cover them, run together by `tools/run-all-checks.sh`; item 33 has the table by package and by PARITY section.**
 - **Docs.** Action level: `UI-ACTIONS.md`, with `STALE-REASONS.md` beside it. Behaviour tables: `web/studio/PARITY-{pcb,sch,3d,fpedit,symedit,boardctl,common}.md`.
   Code level: `CODE-COMPARE-ui.md` (the first 266 handlers; about 310 added since have not been compared) and `CODE-COMPARE-router.md`,
   `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md` (deleted 2026-10-13: the zone fill is KiCad's; item 13). Measured round trip and connectivity: `REPORT.md` (the re-export part re-measured 2026-10-19, after P23: 12 of 12).
@@ -137,7 +138,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 17 | P17 Library editor leftovers | 14, 19, 22 | snap to anchors in the editors, the pad array numbering, derived symbols, a fields grid in Footprint Properties, symbol fields on the canvas, alternate pin functions, the symbol text box, a shape properties dialog | **done** (merged); **reviewed 2026-10-23 on `task-p17-review`** (the round trip of KiCad's libraries, item 19); items 19 and 22 list what is left | L |
 | 18 | P18 Design blocks | 32 | 23 actions; reusable blocks | **done 2026-10-20 on `task-design-blocks` (not merged)**; item 32 lists what is left | L |
 | 19 | P19 Microwave tools and Specctra | 9, 27 | the five microwave tools (and a schematic dropped on the sheet); DSN export and SES import | **microwave half done 2026-10-21 on `task-microwave` (merged); Specctra (P19b) done 2026-10-23 on `task-specctra-wip` (not merged)**: File > Export > Specctra DSN and File > Import > Specctra Session, `eda board export specctra` and `eda board import-ses` | S-M |
-| 20 | P20 Browser checks for the older areas | 33 | most earlier work was never clicked | standing | M each |
+| 20 | P20 Browser checks for the older areas | 33 | most earlier work was never clicked | **2026-10-23 on `task-p20-browser-checks` (not merged)**: 41 checks run headless by `tools/run-all-checks.sh`, five new (the board and schematic editors' basics, the library editors' basics, the rest of Board Setup, plot and fab outputs), eight fixes found on the way; item 33 has the coverage table and what is left | standing | M each |
 | 21 | P21 Simulator | 34 | `eeschema.Simulation.*`, `Simulator.*` | **done 2026-10-23 on `task-simulator` (not merged)**; item 34 lists what is left | XL |
 | 22 | P24 The multichannel tool | 24, 32 | Generate Placement Rule Areas, Repeat Layout, Apply Design Block Layout; a placement rule area is a zone that names a sheet, a class or a group | **done 2026-10-21 on `task-multichannel` (not merged)**; items 24 and 32 list what is left | L |
 
@@ -157,7 +158,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   wires with it. Properties (`E`, a double-click) opens the dialog of the kind (label, text, sheet, wires / buses / bus entries / graphic lines / junctions,
   shapes, rule areas, text boxes, directive labels); strokes and junction looks are drawn and written to the `.kicad_sch` as KiCad writes them, and read back.
 - Measured: 49 Rust tests for the move family, 17 for Properties, 4 in `board.rs` (each verb is one undo step, the nets untouched), 19 `node --test` cases;
-  clicked through on a copy of mcu30. No browser check script yet (item 33).
+  clicked through on a copy of mcu30. Browser checks since P20: `sch-edit`, `sch-groups` (move, turn, mirror as a group), `sch-details` (item 33).
 - Done 2026-10-12 (`task-sch-details`; `PARITY-sch.md` sections 21 to 26): a symbol's pins are items (hover, click, box, the Pins filter, the summary; the net highlight and Select Node start from one) with Swap Pins, Swap Pin Labels and Swap Unit Labels
   (`SchExtras::pin_swaps`, three `SchEdit` verbs, one undo step each); a sheet's pins are items one by one (moved along the border, Sheet Pin Properties, Delete, Alt+S swap; the hierarchy's nets follow); a global or hierarchical label with Auto rotates
   itself when it is placed, edited in Label Properties, moved and dragged (`AutoRotateItem`); a free text has a justification (`SchExtras::text_justify`) that is written, read back and flipped by Rotate and Mirror as `SCH_TEXT` flips it;
@@ -785,11 +786,81 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `common/widgets/{design_block_pane,panel_design_block_chooser}.cpp`, `common/dialogs/{dialog_design_block_properties,panel_design_block_lib_table}.cpp`, `eeschema/sch_design_block_utils.cpp`, `pcbnew/pcb_design_block_utils.cpp`.
 
 ### 33. Browser-check coverage
-**New, standing.** Package P20.
-- `web/studio/e2e/*.check.js` exist for the Appearance panel, the DRC and ERC review, footprint edit and arrays, the Properties panel, snap and grid, the 3D viewer, and the router (`diff-pairs.check.js`, `length-tuning.check.js`, `router-leftovers.check.js`: pairs, tuning, arcs, locks, the posture, a head's via, the time domain). `design-blocks.check.js` (P18, 2026-10-20) covers the Design Blocks panes of both editors: the library, the tree and its menu, placing, saving, updating, Properties, Delete and a group's library link. `multichannel.check.js` (P24, 2026-10-21; its board is `e2e/multichannel-board.yaml`) covers the multichannel tool: Generate Placement Rule Areas, the rule areas' Placement section, Repeat Layout with every option and Apply Design Block Layout. `sch-details.check.js` (P10, 2026-10-12) covers the schematic's pins and Swap Pins, sheet pins, auto-rotating labels and
-  justified text, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text and the pan buttons and auto-pan. Not covered: the rest of schematic editing and the clipboard
-  (items 1, 6, 12), the hierarchy (4), Board Setup (3), the library choosers (5), PCB move, rotate, flip and clipboard (8), zones (13), groups (17), Find (21), the context menu (16). The rule in
-  force: a fix counts when the C++ function is named in the code, the logic has a `kicad-port/*.test.ts`, one user action is one undo step, and a browser check ran.
+**Standing.** Package P20. **2026-10-23 (`task-p20-browser-checks`): 42 checks, all run headless by `tools/run-all-checks.sh` (42 of 42 pass after the KiCad 10 items merge).**
+- The runner builds once, makes each board a check needs once (the header line `// run-all-checks: board=<kind> [minutes=<m>] [ui=<ui>]` names it: `mcu30`,
+  `mcu30-few`, `mcu30-placed`, `mcu30-routed`, `mcu30-zones`, `opamp-routed`, `kicad10-stitch`, `usb-pair`, `tune-board`, `multichannel`, `simulator`), serves a fresh copy with no undo history per
+  check on ports 8810-8814 (`-j N` at once), runs `web/studio/e2e/run-check.mjs` (which now also runs the older one-expression checks and the ones whose `wait()` returns
+  a summary) and prints one line per check; it exits non-zero on any failure. `tools/run-all-checks.sh zones sch-edit` runs some.
+- New in P20: `board-edit.check.js` (select with the pointer, a window, move by drag, M, Escape, Move Exactly, R / Shift+R, F, Del, undo and redo chains, the Properties
+  panel's Position and Orientation), `sch-edit.check.js` (the Symbol Chooser and a click, W, the junction of a T and J, L and the label dialog, Annotate on a selection,
+  the ERC through kicad-cli on the symbol placed), `lib-edit.check.js` (New Footprint, the pad tool, Pad Properties, a pad dragged, turned, deleted, the line tool,
+  Delete Footprint; New Symbol, the pin tool, Pin Properties, a rectangle, a pin dragged, turned, deleted, Delete Symbol), `board-setup-rules.check.js` (Physical Stackup,
+  Solder Mask/Paste, Defaults, Dimensions, Constraints, Pre-defined Sizes, Teardrops, Custom Rules, Violation Severity) and `plot-exports.check.js` (Gerbers, drill,
+  placement, STEP, VRML, IPC-D-356, IPC-2581, ODB++, the board BOM, the schematic's PDF and SVG). Zones (Fill All through kicad-cli) and the 3D viewer were covered
+  already (`zones.check.js`, `viewer3d.check.js`).
+- Found and fixed on the way (each with a unit test first): a footprint moved, turned or flipped by an item edit snapped to the placer's 0.1 mm grid (Move Exactly
+  by 1.25 mm moved 1.3); a wire drawn to the middle of another made no junction (`finishSegments`); in the Footprint and Symbol Editors Properties (E), Rotate and
+  Delete as actions did nothing or were not offered (only the canvas's keys worked); Pre-defined Sizes' Apply was two undo steps; Escape on a popup menu also closed
+  the dialog under it (the DRC window's marker menu); a CSV placement file was named `.pos`; on a board with no stored schematic (every board `eda board new` makes)
+  the DRC's "Test for parity between PCB and schematic" failed with "design has no placement section" (`load_with_schematic` replaced the design by the derived one).
+- Found, not fixed (listed for their packages): the Symbol Editor's pin tool and New Symbol place at once where KiCad asks first (`SYMBOL_EDITOR_PIN_TOOL::CreatePin`
+  opens Pin Properties, `DIALOG_LIB_NEW_SYMBOL`); a symbol placed from the library under a lib_id the design already has keeps the design's definition (library_place.rs,
+  by design), so `Device:R` placed from the chooser on mcu30 draws the built-in R, not KiCad's; "Both sides" in Generate Placement Files writes one file where KiCad
+  writes a top and a bottom one, and the files are not named `-top-pos` / `-all-pos`; the export routes list the files modified since a second before the run, so a
+  second run within that second lists the first one's files too; the parity DRC of the mcu30 example, placed and routed, finds 76 differences between the board and the
+  schematic derived for it (30 footprints the symbols' empty Footprint fields do not name, 8 field mismatches, 38 net conflicts), which a board and a schematic
+  made from one intent should not have (items 2 and 26).
+- Coverage by package (the rows of the plan's table):
+
+| package | checks |
+|---|---|
+| P1 footprint graphics | `fp-graphics` |
+| P2 assignment, exchange, rename | `fp-assign` |
+| P3 library tables | `library-tables`; the choosers: `sch-edit` (Symbol Chooser), `fp-models` (Footprint Chooser's 3D view) |
+| P4 hierarchy | `sch-details` (sheet pins), `sch-details-2` (a screen shown twice, buses across sheets), `design-blocks` (place as a sheet). Not: Import Sheet, the Hierarchy Navigator |
+| P5 router | `diff-pairs`, `length-tuning`, `router-leftovers` |
+| P6 PCB editing details | `pcb-edit-details`, `board-edit` (select, move, rotate, flip, delete, undo) |
+| P7 custom pads | `pad-shapes`, `pad-details` |
+| P8 files in | `files-in`, `import-foreign` (P22) |
+| P9 Board Setup, rule editor | `board-setup-pages`, `board-setup-rules`, `rule-editor`, `embedded-files` (P26) |
+| P10 schematic details | `sch-details`, `sch-details-2`, `sch-groups`, `sch-edit` |
+| P11 search, inspection | `search-inspect` |
+| P12 board outline | none |
+| P13 zones | `zones` |
+| P14 3D models | `fp-models`, `viewer3d`, `embedded-files` |
+| P15 review | `review`, `drc-review` |
+| P16 item kinds | `pcb-items`, `tables` |
+| P17 library editors | `lib-editors`, `lib-edit` |
+| P18 design blocks | `design-blocks` |
+| (P19, P21, P24) | `microwave`, `specctra`, `cli-exports`; `simulator`; `multichannel` |
+
+- Coverage by PARITY section (a section not named has no check; "n/a" is a list of what is not wired):
+  - `PARITY-pcb.md`: 1 view controls none; 2 `snap-grid`; 3, 4 `board-edit`, `pcb-edit-details`; 5 `pcb-edit-details`, `footprint-edit`; 6 `board-edit`, `footprint-edit`;
+    7 context menus and hotkeys none on the board (the DRC window's, the tables' and the schematic's menus are checked); 7a `search-inspect`; 8 `zones`;
+    9 `board-setup-pages`, `board-setup-rules`; 9a `drc-review`; 10 `footprint-edit`, `pcb-items`, `properties-panel`; 11 none; 11a `fp-models`, `library-tables` (a footprint placed);
+    12, 13 `pcb-edit-details`; 14 `properties-panel`, `multichannel`; 15 `board-setup-rules` (the settings; Add All Teardrops none); 16 `pcb-edit-details`; 17 `footprint-edit`;
+    18 `board-setup-rules` (the defaults), `properties-panel`; 19 Board Statistics, Swap Layers none; 20, 21 none; 22 `board-edit`, `pcb-items`, `properties-panel`;
+    23 `properties-panel`, `board-edit`; 24 `appearance-panel`; 25 the outline none; 26 `footprint-edit`; 27 `pad-shapes`; 28 `fp-graphics`; 29 `files-in`; 30 `fp-assign`;
+    31 `fp-models`; 32 `search-inspect`; 33 `review`; 34 `import-foreign`; 35 `router-leftovers`; 36 `design-blocks`; 37 the Rust re-export suite, not a browser check;
+    38 `tables`; 39 `pcb-items`; 40 `multichannel`; 41 `microwave`; 42 Edit Pad as Graphic Shapes none; 43-45 `pad-details`; 46 `specctra`; 47 `embedded-files`;
+    48 `rule-editor`; 49 `cli-exports`. Plot and fab outputs (`PARITY-boardctl.md` 5): `plot-exports`.
+  - `PARITY-sch.md`: 0 n/a; 1 `sch-groups` (move), `sch-details`; 2 `sch-edit`; 3 `sch-edit`, `sch-details` (power symbols); 3a `sch-edit`; 4 `sch-edit`, `drc-review`, `review`;
+    5 `sch-edit`; 6 cross-tab undo none; 7 `sch-details`, `lib-editors`; 8 Find on the sheet none; 9 the pin map none; 10 `plot-exports` (PDF, SVG; the netlist through `simulator`);
+    11 none; 12 `sch-details`, `sch-groups`; 13 none; 14 `sch-details`, `sch-details-2`; 15 `sch-groups` (copy, paste, duplicate); 16 Rust tests; 17 the schematic's
+    Properties panel none; 18 `snap-grid`; 19 Import Sheet none; 19b `board-setup-pages`; 20 `files-in`; 21 `sch-details`; 22 `sch-details`; 23 `sch-details`; 24 `sch-details`;
+    25 `sch-details`; 26 `sch-details`; 27 `sch-details`; 28 `review`; 29 `sch-groups`; 30 `sch-groups`; 31 `sch-details`; 32 none; 33 `import-foreign`; 34 `design-blocks`;
+    35 `tables`; 36 `pcb-items`; 37 `microwave`; 38 `simulator`; 39 `sch-details-2`.
+  - `PARITY-fpedit.md`: 1-4 `lib-edit`; 5 `lib-editors`, `fp-models`; 6 `lib-editors` (the export routes); 7 none; 8 `lib-edit`, `library-tables`; 9 none; 10 `pad-shapes`
+    (on the board); 11 `fp-models`; 12 `search-inspect`; 13-15 `lib-editors`.
+  - `PARITY-symedit.md`: the frontend's tools `lib-edit`; derived symbols, snapping, fields on the canvas, alternate pins, the text box and Shape Properties `lib-editors`;
+    Import Graphics `files-in`; grid overrides none.
+  - `PARITY-3d.md`: 1, 2, 3, 5-8 `viewer3d` (and `fp-models`, `embedded-files` for the models); 4 lighting and background none.
+  - `PARITY-boardctl.md`: 1 `appearance-panel`; 2 `zones`; 3 `search-inspect`; 4 the drill/place origin none; 5 `plot-exports`, `cli-exports`, `specctra`.
+  - `PARITY-common.md`: 1, 2 none; 3 `board-edit` (selection; the delete tool none); 4 `pcb-edit-details`, `sch-groups`; 5 `drc-review`, `review`, `search-inspect`; 6 none;
+    7 `lib-edit`, `library-tables`; 8 `pcb-items`; 9 Page Settings none; 10 `snap-grid`; 13 every check; 13a `files-in`; 14 `library-tables`.
+- Left without a check: the board's view controls and context menu, the schematic's Find and Properties panel, Import Sheet and the Hierarchy Navigator, the board
+  outline (P12), Board Statistics and Swap Layers, Page Settings, the drill/place origin, Edit Pad as Graphic Shapes, the 3D viewer's lighting. The rule in force: a fix
+  counts when the C++ function is named in the code, the logic has a `kicad-port/*.test.ts` (or a Rust test), one user action is one undo step, and a browser check ran.
 
 ### 34. The simulator
 **Done 2026-10-23 on `task-simulator` (package P21).** PARITY-sch.md section 38 has the ports and the tests.
@@ -1205,9 +1276,11 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/microwave/{microwave_tool,microwave_footprint,microwave_inductor,microwave_polygon}.cpp`, `pcbnew/specctra_import_export/{specctra,specctra_export,specctra_import}.cpp`.
 - Conflicts: P7 (custom pads for two rows), P12 (the boundary), `ops` and `runner` hunks.
 
-### P20. Browser checks for the older areas (item 33). Size M each, standing. Rank 20.
-- One `web/studio/e2e/<area>.check.js` per area in the pattern of the six that exist (a copy of a board, `window.__eda`, every edit undone and the board compared): schematic editing and clipboard, hierarchy, Board Setup, the choosers, the router,
-  PCB move, rotate, flip and clipboard, zones, groups, Find, the context menu. Test files only, plus additions to `kicad-port/edaTestHook.ts`.
+### P20. Browser checks for the older areas (item 33). Size M each, standing. Rank 20. **Done 2026-10-23 on `task-p20-browser-checks` (not merged); item 33 lists what is left.**
+- One `web/studio/e2e/<area>.check.js` per area in the pattern of the ones that exist (a copy of a board, `window.__eda`, every edit undone and the board compared). Done: the board
+  editor's basics (`board-edit`), the schematic editor's (`sch-edit`), the library editors' (`lib-edit`), the rest of Board Setup (`board-setup-rules`), plot and fab outputs
+  (`plot-exports`), and `tools/run-all-checks.sh`, which runs all of them on the boards their headers name. Left: the board's view controls and context menu, the schematic's
+  Find and Properties panel, Import Sheet and the Hierarchy Navigator, the board outline, Board Statistics, Swap Layers, Page Settings, the drill/place origin.
 - Conflicts: none beyond `edaTestHook.ts` (a hunk). Can run beside anything.
 
 ### P21. The simulator (item 34). Size XL. Rank 21. Last.

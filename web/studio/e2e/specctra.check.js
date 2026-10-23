@@ -14,6 +14,7 @@
 //   nothing logged an error that was not asked for.
 //
 // It answers through `window.__specctraCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }; read it with `await __specctraCheck.wait(30000)` until `.done`.
+// run-all-checks: board=opamp-routed   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__specctraCheck = { results, done: false, ok: false, wait: null });

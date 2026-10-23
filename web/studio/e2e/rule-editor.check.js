@@ -4,6 +4,7 @@
 // rule and with unsaved changes. Every edit is one `edit_drc_rule` verb; the rules file is read back through `GET /api/rule_editor` and `/api/state`.
 // Run it in the page of a served COPY of a board (it edits and undoes): every verb it sends is undone at the end and the file compared with how it was.
 // It answers through `window.__ruleEditorCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
+// run-all-checks: board=mcu30   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__ruleEditorCheck = { results, done: false, ok: false, wait: null });

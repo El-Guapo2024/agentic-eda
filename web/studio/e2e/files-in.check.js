@@ -23,6 +23,7 @@
 //     the file in it and anything else is ignored.
 //
 // It returns { ok, failed, results: [{ name, ok, detail }, ...] }. The results also pile up in `window.__filesInCheck.results` (`.done` is set at the end).
+// run-all-checks: board=mcu30   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   window.__filesInCheck = { results, done: false };
@@ -381,7 +382,8 @@
       await sleep(900);
       return { prevented: over.defaultPrevented && drop.defaultPrevented, outline };
     };
-    const lastToast = () => [...document.querySelectorAll("div")].find((el) => el.style.zIndex === "3000" && el.style.position === "absolute")?.textContent ?? ""; // the page's toast: a div with no class
+    // The page's toasts: divs with no class. The studio's and the editor tab's own can both be up (the Footprint Editor's says what it imported), so all of them are read.
+    const lastToast = () => [...document.querySelectorAll("div")].filter((el) => el.style.zIndex === "3000" && el.style.position === "absolute").map((el) => el.textContent).join(" | ");
     let d = await dropFiles([{ name: "board.dxf", text: boardDxf }]);
     await waitFor(() => root());
     await sleep(500);
@@ -445,8 +447,16 @@
     check("a DXF dropped on the schematic editor opens its Import Graphics (interactive placement, no layer) with the file", dialogs().includes("Import Graphics") && field("File")?.value === "board.dxf" && !!field("Interactive placement") && !field("Layer"));
     button("Cancel").click();
     await sleep(200);
+    // Since P19 a schematic dropped on the sheet runs Import Sheet with it (`ddAppendFile`; microwave.check.js follows a real one): the drop is taken, not refused, and a file
+    // that is no schematic leaves the sheet as it was.
+    const sheetPrint = async () => { const s = await get("/api/schematic"); return JSON.stringify(["symbols", "wires", "labels", "sheets", "texts"].map((k) => (s[k] ?? []).map((x) => x.id))); };
+    const schBefore = await sheetPrint();
     d = await dropFiles([{ name: "part.kicad_sch", text: "(kicad_sch)" }]);
-    check("a schematic dropped on it is said to be beyond a drop (Import Sheet reads files by their path on the server)", d.prevented && dialogs().length === 0 && /part\.kicad_sch cannot be opened by a drop in the studio\./.test(lastToast()), lastToast());
+    await sleep(800);
+    check("a schematic dropped on it is taken by Import Sheet, not refused as beyond a drop", d.prevented && !/cannot be opened by a drop/.test(lastToast()), JSON.stringify([d, lastToast(), dialogs()]));
+    for (let i = 0; i < 3 && document.querySelector(".dialog"); i++) { (button("Cancel") ?? button("Close"))?.click(); await sleep(250); }
+    if ((await sheetPrint()) !== schBefore) await undoDomain("schematic");
+    check("and the sheet is as it was after it", (await sheetPrint()) === schBefore);
 
     // the Symbol Editor accepts no file
     await clickTab("Symbol");

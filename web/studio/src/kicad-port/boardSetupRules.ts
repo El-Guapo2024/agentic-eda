@@ -21,7 +21,7 @@
 // The default stackup is also computed by the backend (`eda_model::rules::default_stackup`); both are held to the same cases in
 // src/kicad/default_stackups.json (a Rust test fails when the file is stale, boardSetupRules.test.ts when this code disagrees with it).
 
-import type { Constraints, LayerClassDefaults, MaskPaste, NetClass, NetClassSettings, RuleSeverity, Stackup, StackupLayer, StackupSettings, TextGraphicsDefaults, Um } from "../api/types";
+import type { Cmd, Constraints, LayerClassDefaults, MaskPaste, NetClass, NetClassSettings, RuleSeverity, Stackup, StackupLayer, StackupSettings, TextGraphicsDefaults, Um } from "../api/types";
 import { strNumCmp } from "./sheetPages";
 import { globMatch, patternMatches } from "./netPattern";
 
@@ -491,4 +491,12 @@ export function severitiesToSend(items: readonly SeverityItem[], chosen: Readonl
     if (sev !== item.defaultSeverity || item.key in current) out[item.key] = sev;
   }
   return out;
+}
+
+/**
+ * Pre-defined Sizes' Apply: the track widths and the via sizes as one command (`batch`), so the page is one undo step, as every other page of the
+ * dialog is. (KiCad's Board Setup applies `BOARD_DESIGN_SETTINGS` outside the undo list; here every edit is an undoable verb, one per Apply.)
+ */
+export function predefinedSizesCmds(widths: readonly Um[], vias: ReadonlyArray<{ diameter: Um; drill: Um }>): Cmd[] {
+  return [{ op: "batch", cmds: [{ op: "set_track_width_presets", widths: [...widths] }, { op: "set_via_presets", presets: vias.map((v) => ({ ...v })) }] }];
 }

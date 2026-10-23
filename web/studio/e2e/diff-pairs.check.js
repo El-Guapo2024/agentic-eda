@@ -31,6 +31,7 @@
 // `.done`. In a hidden pane the browser stops timers; the script waits with a fetch loop. A run takes one to three minutes (a debug build of the server, and a machine that is busy answers
 // slowly), longer than the Browser pane's javascript tool gives one call: start it (`(0, eval)( src )` returns at once) and poll with `wait(30000)`. A click that lands elsewhere because the page
 // was still settling is made again (`startAt`); the pointer is placed from the layout of that moment and checked against what the studio read (`state().snap.input`).
+// run-all-checks: board=usb-pair   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__diffPairsCheck = { results, done: false, ok: false, wait: null });

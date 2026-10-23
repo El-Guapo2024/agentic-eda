@@ -136,3 +136,16 @@ test("isActionEnabledForTab: the file drops -- Append Board is the board editor'
     assert.equal(isActionEnabledForTab(name, "pcb", true), false, name);
   }
 });
+
+test("isActionEnabledForTab: Properties (E) runs in the editors that register it -- EDIT_TOOL in the board and footprint editors, SYMBOL_EDITOR_EDIT_TOOL in the symbol editor", () => {
+  // `Go( &EDIT_TOOL::Properties, PCB_ACTIONS::properties.MakeEvent() )` is in both pcbnew frames
+  assert.equal(isActionEnabledForTab("pcbnew.InteractiveEdit.properties", "pcb", true), true);
+  assert.equal(isActionEnabledForTab("pcbnew.InteractiveEdit.properties", "footprint", true), true);
+  assert.equal(isActionEnabledForTab("pcbnew.InteractiveEdit.properties", "symbol", true), false);
+  // `Go( &SYMBOL_EDITOR_EDIT_TOOL::Properties, SCH_ACTIONS::properties.MakeEvent() )`, and its Rotate on `rotateCCW` / `rotateCW`
+  for (const name of ["eeschema.InteractiveEdit.properties", "eeschema.InteractiveEdit.rotateCCW", "eeschema.InteractiveEdit.rotateCW"]) {
+    assert.equal(isActionEnabledForTab(name, "schematic", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "symbol", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "footprint", true), false, name);
+  }
+});

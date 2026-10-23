@@ -8,6 +8,7 @@
 // implements for the current selection, everything else the same
 // "(not ported yet)" a disabled menu item gets elsewhere.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { popupMenuKey } from "../../kicad-port/popupMenuKeys";
 
 export interface MenuEntry {
   label: string;
@@ -42,8 +43,15 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
     const onDocDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
+    // Escape dismisses the menu only (kicad-port/popupMenuKeys.ts): stopped here, in the capture phase, it never reaches the window's Escape, which would close
+    // the dialog the menu was opened in or cancel the tool.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      const k = popupMenuKey(e.key);
+      if (k.consume) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      if (k.close) onClose();
     };
     document.addEventListener("pointerdown", onDocDown, true);
     document.addEventListener("keydown", onKey, true);

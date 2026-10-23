@@ -29,6 +29,7 @@
 // It answers through `window.__lengthTuningCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. Read it with `await __lengthTuningCheck.wait(60000)` until `.done`.
 // In a hidden pane the browser stops timers; the script waits with a fetch loop. A run takes a minute or two (a debug build of the server), longer than the Browser pane's javascript tool
 // gives one call: start it (`(0, eval)( src )` returns at once) and poll with `wait(30000)`.
+// run-all-checks: board=tune-board   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__lengthTuningCheck = { results, done: false, ok: false, wait: null });
@@ -81,7 +82,9 @@
   const dialogTitle = () => dialog()?.querySelector(".dialog-header")?.textContent ?? null;
   const setVal = (el, v) => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); };
   const press = async (label) => { const b = [...(dialog()?.querySelectorAll("button") ?? [])].find((x) => x.textContent === label); if (b) b.click(); await quiet(); await sleep(400); };
-  const fields = () => [...(dialog()?.querySelectorAll("input,select") ?? [])];
+  // The dialog's fields in the order this check was written for: target, override, min amplitude, max amplitude, spacing, corner style, radius, side, single-sided.
+  // P5d put the time domain in front (the Length / Delay radio buttons and the target delay after the target; router-leftovers.check.js checks those), so they are left out here.
+  const fields = () => { const f = [...(dialog()?.querySelectorAll("input,select") ?? [])].filter((x) => x.type !== "radio"); if (f.length >= 10) f.splice(1, 1); return f; };
   const leaveTool = async () => { for (let i = 0; i < 3 && E.state().tool !== "select"; i++) { await E.run("common.Interactive.cancel"); await sleep(250); } };
   const undoTo = async (snap) => { for (let i = 0; i < 8 && snapshot(await state()) !== snap; i++) { await E.run("common.Interactive.undo"); await sleep(500); } };
   const scenario = async (name, fn) => {

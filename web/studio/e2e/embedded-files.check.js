@@ -8,6 +8,7 @@
 // switch off and back on). It answers through `window.__embeddedFilesCheck`:
 //   { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }
 // Read it with `await __embeddedFilesCheck.wait(60000)` until `.done`.
+// run-all-checks: board=mcu30-placed   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__embeddedFilesCheck = { results, done: false, ok: false, wait: null });
@@ -40,7 +41,10 @@
     for (const [name, text] of files) dt.items.add(new File([bytesOf(text)], name));
     input.files = dt.files;
     input.dispatchEvent(new Event("change", { bubbles: true }));
-    await sleep(900);
+    await sleep(300);
+    // each file is its own round trip (and a question when its name is taken): wait for the grid to list the ones that went in, not a fixed time
+    await until(() => files.every(([name]) => rows().includes(name)) || !!document.querySelector(".dialog .dialog .dialog-footer, [data-testid^='embedded-files-conflict']"), 8000);
+    await sleep(300);
   };
   const extracted = async (q, name) => {
     const r = await fetch(`/api/embedded/file?${q}&name=${encodeURIComponent(name)}`, { cache: "no-store" });
@@ -147,13 +151,15 @@
     panel().querySelector('tr[data-name="a.txt"]').click();
     await sleep(200);
     tid("embedded-files-remove", panel()).click();
-    await sleep(900);
+    await until(async () => !(await names("owner=board")).includes("a.txt"), 8000);
     t(!(await names("owner=board")).includes("a.txt") && (await names("owner=board")).includes("b.txt"), "the selected row is removed, the other stays");
+    // the panel draws its list again after the first removal: click the row it shows now, and wait for it to be the one selected
+    await until(() => !panel().querySelector('tr[data-name="a.txt"]') && !!panel().querySelector('tr[data-name="b.txt"]'), 8000);
     panel().querySelector('tr[data-name="b.txt"]').click();
-    await sleep(200);
-    await __eda.run("common.Embed.removeFile");
-    await sleep(900);
-    t(!(await names("owner=board")).includes("b.txt"), "Remove File removes the selected row of the panel showing");
+    await until(() => panel().querySelector('tr[data-name="b.txt"]')?.getAttribute("aria-selected") === "true", 5000);
+    const removed = await __eda.run("common.Embed.removeFile");
+    await until(async () => !(await names("owner=board")).includes("b.txt"), 10000);
+    t(!(await names("owner=board")).includes("b.txt"), `Remove File removes the selected row of the panel showing (${JSON.stringify(removed)})`);
     await closeDialogs();
     for (let i = 0; i < 4; i++) await undo();
     t(JSON.stringify(await names("owner=board")) === JSON.stringify(before.board), "four undos: the board's list as it was");
