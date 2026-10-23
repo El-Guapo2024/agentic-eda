@@ -13,7 +13,7 @@
 // `BOARD_COMMIT::Push( "Edit Properties" )`.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
+import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PlacementArea, PlacementSourceType, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
 import { effectiveClassName } from "./boardSetupRules";
@@ -28,6 +28,7 @@ import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../a
 import { registerExtraItemProperties } from "./pcbItemProperties";
 import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
 import { registerTableProperties, tableItemOf, tableItemsOf } from "./pcbTableProperties";
+import { PLACEMENT_SOURCE_CHOICES } from "./multichannel";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -338,6 +339,7 @@ function zoneCmd(z: Zone, patch: Partial<Zone>): Cmd {
     keepout_pads: s.keepout_pads,
     keepout_copper_pour: s.keepout_copper_pour,
     keepout_footprints: s.keepout_footprints,
+    ...(s.placement ? { placement: s.placement } : {}),
   };
 }
 
@@ -940,6 +942,29 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   keepout("Keep Out Pads", "keepout_pads");
   keepout("Keep Out Zone Fills", "keepout_copper_pour");
   keepout("Keep Out Footprints", "keepout_footprints");
+
+  // The Placement group (`ZONE::GetPlacementArea*`): the multichannel tool's source of a rule area.
+  const PLACEMENT = "Placement";
+  const placementOf = (i: PcbItem): PlacementArea => i.zone!.placement ?? { enabled: false, source_type: "sheetname", source: "" };
+  const placementSet = (change: Partial<PlacementArea>) => (i: PcbItem): Cmd[] => {
+    const now = placementOf(i);
+    const next = { ...now, ...change };
+    return next.enabled === now.enabled && next.source_type === now.source_type && next.source === now.source ? [] : [zoneCmd(i.zone!, { placement: next })];
+  };
+  add({ owner: "ZONE", name: "Enable", kind: "bool", get: (i) => placementOf(i).enabled, available: isRuleArea, set: (i, v) => placementSet({ enabled: Boolean(v) })(i) }, PLACEMENT);
+  add(
+    {
+      owner: "ZONE",
+      name: "Source Type",
+      kind: "enum",
+      choices: () => PLACEMENT_SOURCE_CHOICES,
+      get: (i) => placementOf(i).source_type,
+      available: isRuleArea,
+      set: (i, v) => placementSet({ source_type: String(v) as PlacementSourceType })(i),
+    },
+    PLACEMENT
+  );
+  add({ owner: "ZONE", name: "Source Name", kind: "string", get: (i) => placementOf(i).source, available: isRuleArea, set: (i, v) => placementSet({ source: String(v) })(i) }, PLACEMENT);
 
   const FILL = "Fill Style";
   const atLeastMinWidth = (v: PropValue, i: PcbItem): string | null => (num(v) < i.zone!.min_thickness ? "Cannot be less than zone minimum width" : null);

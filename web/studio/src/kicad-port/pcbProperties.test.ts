@@ -250,6 +250,7 @@ test("a copper zone and a rule area: what each has, and none of a zone's positio
   assert.deepEqual(names(b, ["zone_ra"]), [
     ["Basic Properties", ["Locked", "Name"]],
     ["Keepout", ["Keep Out Tracks", "Keep Out Vias", "Keep Out Pads", "Keep Out Zone Fills", "Keep Out Footprints"]],
+    ["Placement", ["Enable", "Source Type", "Source Name"]],
   ]);
 });
 
@@ -431,6 +432,18 @@ test("a zone: one edit_zone with every setting and the one that changed", () => 
   assert.deepEqual(edit(b, ["zone_a"], "Name", "pour"), [{ op: "set_zone_name", id: "zone_a", name: "pour" }]);
   assert.deepEqual(edit(b, ["zone_ra"], "Keep Out Tracks", true).map((c) => (c as { keepout_tracks?: boolean }).keepout_tracks), [true]);
   assert.deepEqual(edit(b, ["zone_ra"], "Keep Out Vias", true), [], "already on");
+});
+
+test("a rule area's Placement rows (the multichannel tool's source) edit the zone's placement and keep the rest", () => {
+  const b = board();
+  const placement = (cmds: ReturnType<typeof edit>) => cmds.map((c) => (c as { placement?: unknown }).placement);
+  assert.deepEqual(placement(edit(b, ["zone_ra"], "Enable", true)), [{ enabled: true, source_type: "sheetname", source: "" }]);
+  assert.deepEqual(placement(edit(b, ["zone_ra"], "Source Type", "group")), [{ enabled: false, source_type: "group", source: "" }]);
+  assert.deepEqual(placement(edit(b, ["zone_ra"], "Source Name", "/ch1/")), [{ enabled: false, source_type: "sheetname", source: "/ch1/" }]);
+  assert.deepEqual(edit(b, ["zone_ra"], "Enable", false), [], "already off");
+  // a copper zone has none
+  assert.equal(rowOf(b, ["zone_a"], "Enable"), undefined);
+  assert.deepEqual(rowOf(b, ["zone_ra"], "Source Type")!.choices?.map((c) => c.label), ["Sheet Name", "Component Class", "Group"]);
 });
 
 test("a hatched zone's hatch rows can be edited, and the validators of the zone dialog hold", () => {

@@ -35,6 +35,10 @@ pub struct ParsedSymbols {
     pub symbols: Vec<LibrarySymbol>,
     /// One line per kind of item that could not be represented and was left out.
     pub warnings: Vec<String>,
+    /// The files each symbol embeds (`(embedded_files ..)`, `(embedded_fonts ..)` inside the symbol), by the symbol's name as `symbols` has it, data as read -- see
+    /// [`eda_model::embedded_files`]. A symbol with none has no entry. They are not part of the [`LibrarySymbol`]: the design keeps them beside it
+    /// (`SymbolLibrarySection::embedded`).
+    pub embedded: std::collections::BTreeMap<String, eda_model::embedded_files::EmbeddedFiles>,
 }
 
 /// Parse a `.kicad_sym` file (`(kicad_symbol_lib ...)`) or a bare run of `(symbol "Name" ...)` forms (what
@@ -93,10 +97,17 @@ pub(crate) fn symbols_of(list: &[Sexpr]) -> ParsedSymbols {
     let items: Vec<(&str, &[Sexpr])> = sexpr::find_all(list, "symbol").filter_map(|it| Some((sexpr::txt(it, 1)?, it))).collect();
 
     let mut warnings = Vec::new();
-    let symbols = items.iter().map(|(name, item)| build(name, item, &mut warnings)).collect();
+    let symbols: Vec<LibrarySymbol> = items.iter().map(|(name, item)| build(name, item, &mut warnings)).collect();
+    let mut embedded = std::collections::BTreeMap::new();
+    for ((_, item), sym) in items.iter().zip(&symbols) {
+        let list = crate::embedded::read_owner(item, &mut warnings);
+        if !list.is_empty() {
+            embedded.insert(sym.lib_id.clone(), list);
+        }
+    }
     warnings.sort();
     warnings.dedup();
-    ParsedSymbols { symbols, warnings }
+    ParsedSymbols { symbols, warnings, embedded }
 }
 
 /// `(hide yes)` or a bare `hide` among `list`'s own children.
@@ -679,7 +690,7 @@ mod tests {
         assert_eq!(parsed.warnings.len(), 1, "{:?}", parsed.warnings);
         assert!(parsed.warnings.iter().any(|w| w.contains("bezier")), "a bezier is still left out, and said so; a text box no longer is");
 
-        let section = eda_model::ir::SymbolLibrarySection { symbols: parsed.symbols };
+        let section = eda_model::ir::SymbolLibrarySection { symbols: parsed.symbols, ..Default::default() };
         let flat = section.flatten("Child").unwrap();
         assert_eq!((flat.pins.len(), flat.graphics.len()), (1, 2), "the base's pin, its rectangle and its text box");
         assert_eq!((flat.datasheet.as_str(), flat.description.as_str()), ("http://x", "derived"));

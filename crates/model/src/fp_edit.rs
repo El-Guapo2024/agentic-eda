@@ -444,6 +444,10 @@ pub struct FootprintEdit {
     /// footprint with no 3D model at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub models3d: Option<Vec<Model3d>>,
+    /// The files the footprint embeds, when the Embedded Files tab set them: the whole list (`FOOTPRINT`'s `EMBEDDED_FILES`; see [`crate::embedded_files`]). `None` is the list the
+    /// footprint has from its board file ([`crate::ir::FootprintExtra::embedded`]); `Some` of an empty list is a footprint that embeds nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedded: Option<crate::embedded_files::EmbeddedFiles>,
 }
 
 impl FootprintEdit {
@@ -453,7 +457,7 @@ impl FootprintEdit {
 
     /// Whether nothing is edited (the entry is then dropped).
     pub fn is_empty(&self) -> bool {
-        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none()
+        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none() && self.embedded.is_none()
     }
 
     /// The edit of the `nth` pad numbered `number`.

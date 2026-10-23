@@ -25,6 +25,9 @@ use crate::sexpr::{self, Sexpr};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParsedFootprint {
     pub footprint: LibraryFootprint,
+    /// The files the footprint embeds (`(embedded_files ..)`, `(embedded_fonts ..)`), data as read -- see [`eda_model::embedded_files`]. They are not part of the
+    /// [`LibraryFootprint`]: the design keeps them beside it (`FootprintLibrarySection::embedded`).
+    pub embedded: eda_model::embedded_files::EmbeddedFiles,
     /// One line per kind of item that could not be represented and was approximated or left out.
     pub warnings: Vec<String>,
 }
@@ -171,9 +174,10 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
         warnings.push("the footprint holds no pad, graphic or text".to_string());
     }
     fp.assign_missing_ids();
+    let embedded = crate::embedded::read_owner(root, &mut warnings);
     warnings.sort();
     warnings.dedup();
-    Ok(ParsedFootprint { footprint: fp, warnings })
+    Ok(ParsedFootprint { footprint: fp, embedded, warnings })
 }
 
 /// A `(property ..)` or `(fp_text reference|value ..)`'s layout, with the text it shows when that is not `own` (the footprint's default text for the field).

@@ -136,7 +136,7 @@ empty, with its grid and a hint, as KiCad's is.
 | Place > Line / Arc / Rectangle / Circle / Polygon / Text | done | the board editor's `DRAWING_TOOL` actions arm this editor's own tools on this tab |
 | Create Footprint... | missing (reason recorded) | the wizards are Python scripts |
 | Footprint Checker | **done** (section 12) | `FOOTPRINT_EDITOR_CONTROL::CheckFootprint`, `DIALOG_FOOTPRINT_CHECKER`: kicad-cli's DRC on a scratch board that holds the footprint |
-| Microwave tools (5) | missing (reason recorded) | each drops a free footprint of its own on the board (and two need custom-shape pads, which the IR has since 2026-10-10: section 10) |
+| Microwave tools (5) | **done on the board** (2026-10-21, `task-microwave`; `PARITY-pcb.md` section 40) | each makes a footprint of its own on the board (`Cmd::Microwave`: `MICROWAVE_TOOL::addMicrowaveFootprint`, `createInductorBetween`; the arc stub's pad is a custom pad, section 10); the tools are the board editor's, and this editor opens what they make like any footprint (Edit Footprint: `fetchFootprint` now gives a pad that names no layer an empty list, which the editor's snap scene read as a list and the page unmounted) |
 
 Bugs found and fixed on the way: Push Pad Properties copied some pad fields and not others (it now takes everything `ImportSettingsFrom`
 does); the default pad a click placed was an SMD pad (KiCad's master is through-hole); the footprint editor's toasts were never

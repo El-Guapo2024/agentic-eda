@@ -109,6 +109,11 @@ pub struct SchExtras {
     /// selected, moved, locked and grouped like any item of the sheet (its id is `tbl_..`), and a click picks one of its cells. Additive: empty and not written for a sheet with none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<crate::table::Table>,
+    /// The files embedded in the schematic (`SCHEMATIC`'s `EMBEDDED_FILES`: Schematic Setup > Schematic Data > Embedded Files, `(embedded_files ..)` and `(embedded_fonts ..)` of the
+    /// root sheet's `.kicad_sch`) -- see [`crate::embedded_files`]. They belong to the schematic, not to a sheet, so only the root sheet's extras hold a list. Additive: empty and not
+    /// written for a schematic with none.
+    #[serde(default, skip_serializing_if = "crate::embedded_files::EmbeddedFiles::is_empty")]
+    pub embedded: crate::embedded_files::EmbeddedFiles,
     /// The groups of this sheet (`SCH_GROUP`, written as `(group "name" (uuid ..) (members ..))`): a named set of the ids of items of the sheet -- a symbol's reference (every
     /// placed unit), the id of a wire, label, text, power symbol, no-connect, bus entry, junction, graphic line, drawn shape or sheet -- and of other groups, so groups nest.
     /// A group has no geometry of its own: its box is its members'. A pin, a field and a sheet pin go along with the item that has them and are never members. The tree is
@@ -409,6 +414,7 @@ impl SchExtras {
             && self.text_justify.is_empty()
             && self.tables.is_empty()
             && self.groups.is_empty()
+            && self.embedded.is_empty()
     }
 
     /// The table `id`, if the sheet has it.

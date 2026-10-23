@@ -41,9 +41,16 @@ export function acceptedExtensions(tab: string): string[] {
   return Object.keys(ACCEPTED[tab] ?? {});
 }
 
+/**
+ * The actions that take every file of the drop that has their extension, not only the first. A schematic dropped on the sheet runs Import Sheet with it (`DdAppendFile`), and the sheets it
+ * places are found beside it by their names (`SCH_EDIT_FRAME::LoadSheetFromFile`): KiCad has the folder, a browser gives the page the files, so the files of the drop go together and the server
+ * puts them side by side (`POST /api/sch/dropped_sheets`).
+ */
+const TAKES_EVERY: ReadonlySet<string> = new Set(["eeschema.EditorControl.ddAppendFile"]);
+
 export interface DropPlan {
-  /** The file to open and the action to run it with: the first accepted file the studio can open. */
-  open: { name: string; action: string } | null;
+  /** The file to open and the action to run it with: the first accepted file the studio can open. `names` is every file of the drop the action takes, the first included, for an action that takes them all. */
+  open: { name: string; action: string; names?: string[] } | null;
   /** Accepted files after the first (KiCad runs each in turn; here one at a time, as an open dialog or a carried placement would meet the next). */
   extra: string[];
   /** Files the frame accepts that this studio cannot open by a drop (no handler), with the action's id. */
@@ -59,7 +66,8 @@ export function planDrop(tab: string, names: readonly string[], isEnabled: (acti
     const action = dropActionFor(tab, name);
     if (!action) plan.ignored.push(name);
     else if (!isEnabled(action)) plan.unavailable.push({ name, action });
-    else if (!plan.open) plan.open = { name, action };
+    else if (!plan.open) plan.open = TAKES_EVERY.has(action) ? { name, action, names: [name] } : { name, action };
+    else if (plan.open.names && plan.open.action === action) plan.open.names.push(name);
     else plan.extra.push(name);
   }
   return plan;

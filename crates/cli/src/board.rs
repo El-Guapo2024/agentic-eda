@@ -76,6 +76,12 @@ mod review_tests;
 #[path = "pcb_items_tests.rs"]
 mod pcb_items_tests;
 #[cfg(test)]
+#[path = "microwave_tests.rs"]
+mod microwave_tests;
+#[cfg(test)]
+#[path = "multichannel_board_tests.rs"]
+mod multichannel_board_tests;
+#[cfg(test)]
 #[path = "table_tests.rs"]
 mod table_tests;
 
@@ -1090,7 +1096,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
     // An import (File > Import > Non-KiCad ...) is not a move: the file is what it is, and the gates do not refuse it.
-    if strictness != Strictness::Off && after > before && !cmd.replaces_board() && !cmd.replaces_schematic() {
+    if strictness != Strictness::Off && after > before && !cmd.replaces_board() && !cmd.replaces_schematic() && !cmd.adds_only_rule_areas() {
         let new: Vec<String> = all_checks(&board, judged)
             .iter()
             .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
@@ -1103,7 +1109,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
             format!("that move takes the board from {before} failure(s) to {after} ({}); refused because --strict", new.join("; ")),
         ));
     }
-    if strictness == Strictness::Judged && !cmd.replaces_board() && !cmd.replaces_schematic() {
+    if strictness == Strictness::Judged && !cmd.replaces_board() && !cmd.replaces_schematic() && !cmd.adds_only_rule_areas() {
         // `--strict` from the CLI also judges with KiCad's own gates: one
         // kicad-cli run on each side of the move.
         if eda_kicad_engine::find_cli().is_none() {
@@ -1394,6 +1400,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
         Cmd::PcbItem(c) => c.describe(),
+        Cmd::Microwave(c) => c.describe(),
+        Cmd::Multichannel(c) => c.describe(),
         Cmd::Table(c) => c.describe(),
         Cmd::SchTable(c) => format!("schematic {}", c.describe()),
         Cmd::AddErcExclusion { check, location, .. } => format!("schematic erc-exclude {check:?} {location:?}"),
@@ -1665,6 +1673,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SchEdit(c) => c.kind(),
         Cmd::SchMove(c) => c.kind(),
         Cmd::PcbItem(c) => c.kind(),
+        Cmd::Microwave(c) => c.kind(),
+        Cmd::Multichannel(c) => c.kind(),
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
         Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
@@ -5170,7 +5180,7 @@ mod tests {
         lib.pins = vec![pin("1", 3.81, 270.0, 0), pin("2", -3.81, 90.0, 0)];
         lib.graphics = vec![rect(1.016, 1), rect(2.032, 2)];
         lib.assign_missing_ids();
-        design.symbol_library = Some(SymbolLibrarySection { symbols: vec![lib] });
+        design.symbol_library = Some(SymbolLibrarySection { symbols: vec![lib], ..Default::default() });
         save(&dir, &design).unwrap();
 
         let on_root = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };

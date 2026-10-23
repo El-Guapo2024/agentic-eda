@@ -395,7 +395,9 @@ export async function fetchFootprint(name: string): Promise<LibraryFootprint> {
   if (f.error) throw new ApiError(f.error);
   // The IR omits an empty `graphics`/`texts`/`fields` list (`skip_serializing_if = "Vec::is_empty"`), so a fresh footprint
   // (New Footprint, or any one nothing has been drawn in yet) arrives without them -- the editor iterates them unconditionally.
-  return { ...f, pads: f.pads ?? [], graphics: f.graphics ?? [], texts: f.texts ?? [], fields: f.fields ?? [] };
+  // A pad's `layers` is omitted the same way when it is empty: the footprints the model makes from its own (the intent's, the ones the microwave tools make) have pads that name none, and the
+  // editor's snap scene and Pad Properties read the list unconditionally.
+  return { ...f, pads: (f.pads ?? []).map((p) => ({ ...p, layers: p.layers ?? [] })), graphics: f.graphics ?? [], texts: f.texts ?? [], fields: f.fields ?? [] };
 }
 
 export async function fetchFootprintLibraryNames(): Promise<FootprintLibraryNames> {

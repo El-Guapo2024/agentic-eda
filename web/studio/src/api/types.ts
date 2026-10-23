@@ -12,6 +12,7 @@
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
 import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
+import type { MicrowaveCmd } from "./microwaveTypes";
 import type { TableCmdWire } from "./tableTypes";
 import type { TuningPattern } from "./tuneTypes";
 
@@ -441,6 +442,33 @@ export interface RuleAreaFields {
   keepout_pads: boolean;
   keepout_copper_pour: boolean;
   keepout_footprints: boolean;
+  /**
+   * The rule area's placement source (`ZONE::GetPlacementAreaEnabled`, `GetPlacementAreaSourceType`, `GetPlacementAreaSource`; GAPS.md items 24 and 32, package P24): the sheet,
+   * component class or group whose footprints the area stands for, which Repeat Layout reads. Absent from a backend that predates it, and for a zone with none.
+   */
+  placement?: PlacementArea;
+}
+
+/** `REPEAT_LAYOUT_OPTIONS` as `Cmd` `repeat_layout` takes them. */
+export interface RepeatLayoutOptions {
+  copy_placement: boolean;
+  copy_routing: boolean;
+  connected_routing_only: boolean;
+  copy_other_items: boolean;
+  group_items: boolean;
+  include_locked_items: boolean;
+  anchor: string | null;
+}
+
+/** `PLACEMENT_SOURCE_T` as the `(placement ..)` of a rule area names it. */
+export type PlacementSourceType = "sheetname" | "component_class" | "group";
+
+/** `ZONE::m_placementAreaEnabled`, `m_placementAreaSourceType`, `m_placementAreaSource`. */
+export interface PlacementArea {
+  enabled: boolean;
+  source_type: PlacementSourceType;
+  /** The sheet path (`/ch1/`), the component class or the group name, by `source_type`. */
+  source: string;
 }
 
 /**
@@ -1499,6 +1527,12 @@ export type Cmd =
   | { op: "link_design_block"; ids: string[]; block: string }
   /** Place Design Block on the board (`PCB_CONTROL::AppendDesignBlock`): the block's board file `text` with its origin at `at`; `as_group` puts what came in in a group named `group_name` and linked to `block`. */
   | { op: "place_design_block"; text: string; at: PointXY; block: string; as_group?: boolean; group_name?: string }
+  /** The multichannel tool (crates/ops/src/multichannel.rs; GAPS.md items 24 and 32, package P24): a rule area for each sheet, class or group ticked in the Generate dialog. */
+  | { op: "multichannel"; verb: "generate_rule_areas"; areas: { kind: "sheet" | "component_class" | "group"; key: string }[]; replace_existing?: boolean; group_items?: boolean }
+  /** Repeat Layout after its dialog: the layout of the rule area `reference` onto the rule areas `targets` that match it (`REPEAT_LAYOUT_OPTIONS`). */
+  | { op: "multichannel"; verb: "repeat_layout"; reference: string; targets: string[]; options?: RepeatLayoutOptions }
+  /** Apply Design Block Layout: the design block `block`'s board file `text` repeated on the footprints of the group `group`, which is linked to it. */
+  | { op: "multichannel"; verb: "apply_design_block_layout"; group: string; block: string; text: string }
   /**
    * Ctrl+T: `pcbnew.Array.createArray` (crates/ops/src/array.rs). `arrange: false` (the dialog's "Duplicate selection") makes a copy of the whole
    * selection for every point of the array but one -- footprints as new parts, tracks, vias, zones, graphics, text, dimensions, groups -- and
@@ -1748,6 +1782,8 @@ export type Cmd =
   | ({ op: "sch_move" } & SchMoveCmd)
   /** The board's text boxes, reference images, points and hatch fills (crates/ops/src/pcb_items.rs) -- see api/pcbItemTypes.ts. */
   | ({ op: "pcb_item" } & PcbItemCmd)
+  /** The microwave tools: a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own (crates/ops/src/microwave.rs) -- see api/microwaveTypes.ts. */
+  | ({ op: "microwave" } & MicrowaveCmd)
   /** The board's tables (crates/ops/src/pcb_tables.rs): Draw Table, the Table Properties and Table Cell Properties dialogs, rows, columns, merged cells -- see api/tableTypes.ts. */
   | ({ op: "table" } & TableCmdWire)
   | ({ op: "sch_table" } & TableCmdWire)
