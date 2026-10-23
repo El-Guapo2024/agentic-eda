@@ -96,8 +96,10 @@ impl<'a> Board<'a> {
                 let existing = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(&name)).or_else(|| publish.iter().find(|p| p.lib_id == name));
                 let clash = match existing {
                     Some(e) => !same_drawing(e, &theirs),
-                    // a library symbol the design has but has not published (a name of an installed library): a different drawing may not take its name
-                    None => self.design_symbol(&name).is_some_and(|k| !same_pins(&theirs, &k)),
+                    // a library symbol the design has but has not published (a name of an installed library): a different drawing may not take its name.
+                    // Only the name the items came with is such a name: a `_N` this loop makes is judged by the design's own library alone (the built-in
+                    // symbols answer every `power:<net>`, so `power:PWR_FLAG_2`, `_3`... would each be "taken" and the loop would never end).
+                    None => name == base && self.design_symbol(&name).is_some_and(|k| !same_pins(&theirs, &k)),
                 };
                 if !clash {
                     break;
