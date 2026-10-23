@@ -11,8 +11,8 @@ use crate::sch_scene::Scene;
 use eda_model::ir::{LabelKind, LabelShape, NetLabel, Provenance, SheetInstance, SheetPin, SymbolInstance, Wire};
 use std::collections::BTreeMap;
 
-const SHEET_AT: Point = Point { x: 100_000, y: 50_000 };
-const SHEET_SIZE: (Nm, Nm) = (40_000, 30_000);
+const SHEET_AT: Point = Point { x: 100_000_000, y: 50_000_000 };
+const SHEET_SIZE: (Nm, Nm) = (40_000_000, 30_000_000);
 
 fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
@@ -35,24 +35,24 @@ fn design() -> Design {
         at: SHEET_AT,
         size: SHEET_SIZE,
         pins: vec![
-            SheetPin { id: "shpin_in".into(), name: "IN".into(), shape: LabelShape::Input, at: p(100_000, 60_000) },
-            SheetPin { id: "shpin_out".into(), name: "OUT".into(), shape: LabelShape::Output, at: p(140_000, 70_000) },
+            SheetPin { id: "shpin_in".into(), name: "IN".into(), shape: LabelShape::Input, at: p(100_000_000, 60_000_000) },
+            SheetPin { id: "shpin_out".into(), name: "OUT".into(), shape: LabelShape::Output, at: p(140_000_000, 70_000_000) },
         ],
         page: String::new(),
     });
     // SIG comes in on a wire to the left border, RES goes out from the right one
-    root.wires.push(wire("wire_in", &[p(80_000, 60_000), p(100_000, 60_000)]));
-    root.labels.push(label("lbl_sig", "SIG", p(80_000, 60_000), LabelKind::Local));
-    root.wires.push(wire("wire_out", &[p(140_000, 70_000), p(160_000, 70_000)]));
-    root.labels.push(label("lbl_res", "RES", p(160_000, 70_000), LabelKind::Local));
+    root.wires.push(wire("wire_in", &[p(80_000_000, 60_000_000), p(100_000_000, 60_000_000)]));
+    root.labels.push(label("lbl_sig", "SIG", p(80_000_000, 60_000_000), LabelKind::Local));
+    root.wires.push(wire("wire_out", &[p(140_000_000, 70_000_000), p(160_000_000, 70_000_000)]));
+    root.labels.push(label("lbl_res", "RES", p(160_000_000, 70_000_000), LabelKind::Local));
     root.assign_missing_ids();
 
     let mut child = eda_model::ir::SchematicSection { imported_from_kicad: true, ..Default::default() };
-    child.symbols.push(SymbolInstance { id: "R1".into(), at: p(20_320, 25_400), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false });
-    child.wires.push(wire("wire_a", &[p(20_320, 21_590), p(20_320, 12_700)]));
-    child.labels.push(label("lbl_in", "IN", p(20_320, 12_700), LabelKind::Hierarchical { shape: LabelShape::Input }));
-    child.wires.push(wire("wire_b", &[p(20_320, 29_210), p(20_320, 38_100)]));
-    child.labels.push(label("lbl_out", "OUT", p(20_320, 38_100), LabelKind::Hierarchical { shape: LabelShape::Output }));
+    child.symbols.push(SymbolInstance { id: "R1".into(), at: p(20_320_000, 25_400_000), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false });
+    child.wires.push(wire("wire_a", &[p(20_320_000, 21_590_000), p(20_320_000, 12_700_000)]));
+    child.labels.push(label("lbl_in", "IN", p(20_320_000, 12_700_000), LabelKind::Hierarchical { shape: LabelShape::Input }));
+    child.wires.push(wire("wire_b", &[p(20_320_000, 29_210_000), p(20_320_000, 38_100_000)]));
+    child.labels.push(label("lbl_out", "OUT", p(20_320_000, 38_100_000), LabelKind::Hierarchical { shape: LabelShape::Output }));
     child.assign_missing_ids();
 
     Design {
@@ -72,7 +72,7 @@ fn design() -> Design {
 
 fn run(d: &Design, cmd: Cmd) -> Result<Design, Vec<eda_model::CheckResult>> {
     let m = ConstraintModel::default();
-    let mut b = Board::new(d.clone(), &m, 100, 300);
+    let mut b = Board::new(d.clone(), &m, 100_000, 300_000);
     b.apply(&cmd)?;
     Ok(b.design().clone())
 }
@@ -134,14 +134,14 @@ fn the_hierarchy_ties_the_pin_to_the_label_of_its_name() {
 fn a_lone_pin_moves_along_its_border_and_the_net_it_was_wired_to_lets_go() {
     let d = design();
     // 5.08 mm down the left border: still on it, still a pin of this sheet; the wire stays where it was (a move leaves wires), so the pin is off it now
-    let after = ok(&d, mv(&["shpin_in"], 0, 5_080));
-    assert_eq!(pin_at(&after, "shpin_in"), p(100_000, 65_080));
-    assert_eq!(root_of(&after).wires.iter().find(|w| w.id == "wire_in").unwrap().pts, vec![p(80_000, 60_000), p(100_000, 60_000)]);
+    let after = ok(&d, mv(&["shpin_in"], 0, 5_080_000));
+    assert_eq!(pin_at(&after, "shpin_in"), p(100_000_000, 65_080_000));
+    assert_eq!(root_of(&after).wires.iter().find(|w| w.id == "wire_in").unwrap().pts, vec![p(80_000_000, 60_000_000), p(100_000_000, 60_000_000)]);
     let n = nets(&after);
     assert_ne!(n["R1.1"], "SIG", "the pin is off the wire: R1.1 is no longer on SIG ({n:?})");
     assert_eq!(n["R1.2"], "RES", "the other pin did not move");
     // and the sheet's other pin, the sheet itself and its file are as they were
-    assert_eq!(pin_at(&after, "shpin_out"), p(140_000, 70_000));
+    assert_eq!(pin_at(&after, "shpin_out"), p(140_000_000, 70_000_000));
     assert_eq!(root_of(&after).sheets[0].at, SHEET_AT);
 }
 
@@ -149,23 +149,23 @@ fn a_lone_pin_moves_along_its_border_and_the_net_it_was_wired_to_lets_go() {
 fn a_pin_pushed_past_the_end_of_its_border_stops_at_the_corner_and_one_dragged_across_goes_to_the_nearest_border() {
     let d = design();
     // far below the bottom-left corner: the pin stays on the left border, at the corner
-    let below = ok(&d, mv(&["shpin_in"], 0, 90_000));
-    assert_eq!(pin_at(&below, "shpin_in"), p(100_000, 80_000));
+    let below = ok(&d, mv(&["shpin_in"], 0, 90_000_000));
+    assert_eq!(pin_at(&below, "shpin_in"), p(100_000_000, 80_000_000));
     // moved to a point nearer the right border than any other: it changes border (`ConstrainOnEdge( aPos, true )`)
-    let across = ok(&d, mv(&["shpin_in"], 36_000, 5_000));
-    assert_eq!(pin_at(&across, "shpin_in"), p(140_000, 65_000));
+    let across = ok(&d, mv(&["shpin_in"], 36_000_000, 5_000_000));
+    assert_eq!(pin_at(&across, "shpin_in"), p(140_000_000, 65_000_000));
     // and then it is on the right border: the pin the writer gives angle 0, KiCad reads it back on that side
-    assert_eq!(pin_at(&across, "shpin_out"), p(140_000, 70_000));
+    assert_eq!(pin_at(&across, "shpin_out"), p(140_000_000, 70_000_000));
 }
 
 #[test]
 fn dragging_the_pin_takes_the_wire_with_it_and_the_net_stays() {
     let d = design();
-    let after = ok(&d, drag(&["shpin_in"], 0, 5_080));
-    assert_eq!(pin_at(&after, "shpin_in"), p(100_000, 65_080));
+    let after = ok(&d, drag(&["shpin_in"], 0, 5_080_000));
+    assert_eq!(pin_at(&after, "shpin_in"), p(100_000_000, 65_080_000));
     // the wire's end followed the pin: it still ends on it
-    let wire = root_of(&after).wires.iter().find(|w| w.pts.contains(&p(100_000, 65_080))).expect("a wire ends at the pin");
-    assert!(wire.pts.contains(&p(80_000, 60_000)) || root_of(&after).wires.len() > 2, "{:?}", root_of(&after).wires);
+    let wire = root_of(&after).wires.iter().find(|w| w.pts.contains(&p(100_000_000, 65_080_000))).expect("a wire ends at the pin");
+    assert!(wire.pts.contains(&p(80_000_000, 60_000_000)) || root_of(&after).wires.len() > 2, "{:?}", root_of(&after).wires);
     let n = nets(&after);
     assert_eq!(n["R1.1"], "SIG", "{n:?}");
 }
@@ -193,13 +193,13 @@ fn renaming_a_pin_ties_it_to_the_label_of_the_new_name() {
     let sheet = &root_of(&renamed).sheets[0];
     let pin = sheet.pins.iter().find(|p| p.id == "shpin_in").unwrap();
     assert_eq!((pin.name.as_str(), pin.shape), ("CLK", LabelShape::Bidirectional));
-    assert_eq!(pin.at, p(100_000, 60_000), "where it is does not change with its name");
+    assert_eq!(pin.at, p(100_000_000, 60_000_000), "where it is does not change with its name");
     let n = nets(&renamed);
     assert_ne!(n["R1.1"], "SIG", "no label of the name CLK in the sheet's file: R1.1 is not on SIG any more ({n:?})");
     // an empty name and a point off the border are refused
     let e = run(&d, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: Some("  ".into()), shape: None, at: None, size_nm: None, bold: None, italic: None }));
     assert!(e.is_err());
-    let e = run(&d, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: None, shape: None, at: Some(p(110_000, 65_000)), size_nm: None, bold: None, italic: None })).unwrap_err();
+    let e = run(&d, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: None, shape: None, at: Some(p(110_000_000, 65_000_000)), size_nm: None, bold: None, italic: None })).unwrap_err();
     assert_eq!(e[0].check, "ops_sheet_pin_off_border");
 }
 
@@ -208,8 +208,8 @@ fn two_pins_of_one_sheet_trade_places_and_with_them_the_nets_they_reach() {
     let d = design();
     let after = ok(&d, Cmd::SwapSchItems { a: "shpin_in".into(), b: "shpin_out".into() });
     // IN is on the right border now and OUT on the left one (a pin's side is where it sits)
-    assert_eq!(pin_at(&after, "shpin_in"), p(140_000, 70_000));
-    assert_eq!(pin_at(&after, "shpin_out"), p(100_000, 60_000));
+    assert_eq!(pin_at(&after, "shpin_in"), p(140_000_000, 70_000_000));
+    assert_eq!(pin_at(&after, "shpin_out"), p(100_000_000, 60_000_000));
     // the wires stayed: SIG now reaches OUT, so R1.2 is on SIG, and RES reaches IN: R1.1 is on RES
     let n = nets(&after);
     assert_eq!((n["R1.1"].as_str(), n["R1.2"].as_str()), ("RES", "SIG"), "{n:?}");
@@ -223,9 +223,9 @@ fn a_sheet_pin_swaps_only_with_another_pin_of_its_sheet() {
         id: "sheet_other".into(),
         name: "Other".into(),
         file: "other.kicad_sch".into(),
-        at: p(100_000, 100_000),
-        size: (40_000, 30_000),
-        pins: vec![SheetPin { id: "shpin_x".into(), name: "X".into(), shape: LabelShape::Input, at: p(100_000, 110_000) }],
+        at: p(100_000_000, 100_000_000),
+        size: (40_000_000, 30_000_000),
+        pins: vec![SheetPin { id: "shpin_x".into(), name: "X".into(), shape: LabelShape::Input, at: p(100_000_000, 110_000_000) }],
         page: String::new(),
     });
     let e = run(&d, Cmd::SwapSchItems { a: "shpin_in".into(), b: "shpin_x".into() }).unwrap_err();
@@ -246,26 +246,26 @@ fn look_edit(id: &str, size_nm: Option<Nm>, bold: Option<bool>, italic: Option<b
 #[test]
 fn a_pins_text_is_set_in_a_size_bold_and_italic_of_its_own_and_the_default_is_no_entry() {
     let d = design();
-    let after = ok(&d, look_edit("shpin_in", Some(2_000), Some(true), Some(true)));
+    let after = ok(&d, look_edit("shpin_in", Some(2_000_000), Some(true), Some(true)));
     let look = root_of(&after).extras.sheet_pin_looks.get("shpin_in").copied().expect("the pin has a look");
-    assert_eq!((look.size_nm, look.bold, look.italic), (2_000, true, true));
+    assert_eq!((look.size_nm, look.bold, look.italic), (2_000_000, true, true));
     assert!(!root_of(&after).extras.sheet_pin_looks.contains_key("shpin_out"), "the other pin is as it was");
     // each member alone leaves the others
     let bolder = ok(&after, look_edit("shpin_in", None, Some(false), None));
     let look = root_of(&bolder).extras.sheet_pin_looks.get("shpin_in").copied().unwrap();
-    assert_eq!((look.size_nm, look.bold, look.italic), (2_000, false, true));
+    assert_eq!((look.size_nm, look.bold, look.italic), (2_000_000, false, true));
     // back to 50 mil, regular, upright: the entry goes
-    let plain = ok(&bolder, look_edit("shpin_in", Some(1_270), None, Some(false)));
+    let plain = ok(&bolder, look_edit("shpin_in", Some(1_270_000), None, Some(false)));
     assert!(root_of(&plain).extras.sheet_pin_looks.is_empty(), "{:?}", root_of(&plain).extras.sheet_pin_looks);
 }
 
 #[test]
 fn a_look_that_is_already_there_is_refused_and_a_size_is_clamped_as_set_text_size_clamps_it() {
     let d = design();
-    let e = run(&d, look_edit("shpin_in", Some(1_270), Some(false), Some(false))).unwrap_err();
+    let e = run(&d, look_edit("shpin_in", Some(1_270_000), Some(false), Some(false))).unwrap_err();
     assert_eq!(e[0].check, "ops_sheet_pin_unchanged", "50 mil, regular and upright is what it has");
     // `TEXT_MIN_SIZE_MM` 0.001 and `TEXT_MAX_SIZE_MM` 250
-    for (size, kept) in [(0, 1), (5, 5), (1_000_001, 250_000)] {
+    for (size, kept) in [(0, 1_000), (5000, 5000), (1_000_001_000, 250_000_000)] {
         let after = ok(&d, look_edit("shpin_in", Some(size), None, None));
         assert_eq!(root_of(&after).extras.sheet_pin_looks["shpin_in"].size_nm, kept, "{size}");
     }
@@ -277,10 +277,10 @@ fn a_look_that_is_already_there_is_refused_and_a_size_is_clamped_as_set_text_siz
 #[test]
 fn the_look_stays_with_a_pin_that_is_renamed_or_moved_and_goes_with_a_pin_or_a_sheet_that_is_deleted() {
     let d = design();
-    let styled = ok(&d, look_edit("shpin_in", Some(2_540), Some(true), None));
+    let styled = ok(&d, look_edit("shpin_in", Some(2_540_000), Some(true), None));
     let renamed = ok(&styled, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: Some("CLK".into()), shape: None, at: None, size_nm: None, bold: None, italic: None }));
     assert!(root_of(&renamed).extras.sheet_pin_looks.contains_key("shpin_in"), "the pin keeps its id, so its look");
-    let moved = ok(&styled, Cmd::SchMove(SchMoveCmd::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000, turns: Vec::new(), about: None }));
+    let moved = ok(&styled, Cmd::SchMove(SchMoveCmd::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000_000, turns: Vec::new(), about: None }));
     assert!(root_of(&moved).extras.sheet_pin_looks.contains_key("shpin_in"));
     let gone = ok(&styled, Cmd::SchEdit(SchCmd::DeleteSheetPin { id: "shpin_in".into() }));
     assert!(root_of(&gone).extras.sheet_pin_looks.is_empty());

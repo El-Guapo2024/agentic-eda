@@ -62,7 +62,7 @@ pub struct ImportSchGraphics {
     pub offset_x_nm: i64,
     #[serde(default)]
     pub offset_y_nm: i64,
-    /// "Default line width", micrometres; 0 is the sheet's default width.
+    /// "Default line width", nanometres; 0 is the sheet's default width.
     #[serde(default)]
     pub line_width_nm: Nm,
 }
@@ -185,14 +185,14 @@ pub struct SchItems {
     pub texts: Vec<SchematicText>,
 }
 
-/// `GRAPHICS_IMPORTER_SCH`'s items for `imported`, in micrometres (`mapper.iu_per_mm` is 1000).
+/// `GRAPHICS_IMPORTER_SCH`'s items for `imported`, in nanometres (`mapper.iu_per_mm` is 1e6; the sheet's writer rounds to its 100 nm unit).
 pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
     let m = *mapper;
     let mut out = SchItems::default();
     // `MapStrokeParams` for a shape: -1 is "no stroke", which this IR draws as a hairline; any other width is mapped.
-    let shape_stroke = |s: &Stroke| -> (Nm, SchLineStyle, Option<SchColor>) { (if s.width == -1.0 { 1 } else { m.line_width(s.width) }, line_style(s.style), s.color.map(sch_color)) };
-    // "Arcs with a too big radius cannot" be handled: radius >= INT_MAX / 2 in KiCad's tenth-of-a-micrometre unit, a tenth of that in this one.
-    let max_radius_nm = i32::MAX as f64 / 2.0 / 10.0;
+    let shape_stroke = |s: &Stroke| -> (Nm, SchLineStyle, Option<SchColor>) { (if s.width == -1.0 { 1_000 } else { m.line_width(s.width) }, line_style(s.style), s.color.map(sch_color)) };
+    // "Arcs with a too big radius cannot" be handled: radius >= INT_MAX / 2 in KiCad's tenth-of-a-micrometre unit, a hundred times that in nanometres.
+    let max_radius_nm = i32::MAX as f64 / 2.0 * 100.0;
     let add_line = |out: &mut SchItems, a: V2, b: V2, stroke: &Stroke| {
         let (pa, pb) = (m.coord(a), m.coord(b));
         // "Skip 0 len lines:"
@@ -398,7 +398,7 @@ pub fn symbol_items(imported: &Imported, mapper: &Mapper, unit: u32, body_style:
 impl Board<'_> {
     /// `Cmd::ImportSchGraphics`: the file's items on the sheet in view.
     pub(crate) fn import_sch_graphics(&mut self, req: &ImportSchGraphics) -> Result<(), Vec<CheckResult>> {
-        let (imported, mapper) = read_and_map(req.format, &req.text, &req.dxf_units, req.scale, (req.offset_x_nm, req.offset_y_nm), req.line_width_nm, 1000.0)?;
+        let (imported, mapper) = read_and_map(req.format, &req.text, &req.dxf_units, req.scale, (req.offset_x_nm, req.offset_y_nm), req.line_width_nm, eda_model::units::PCB_IU_PER_MM)?;
         let items = sch_items(&imported, &mapper);
         if items.lines.is_empty() && items.graphics.is_empty() && items.texts.is_empty() {
             return Err(fail("ops_empty_import", "No graphic items found in file."));

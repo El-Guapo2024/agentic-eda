@@ -31,7 +31,7 @@ fn check(b: &mut Board<'_>, cmd: Cmd) -> String {
 fn a_file_is_added_compressed_and_checksummed_and_decodes_back() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    let content: Vec<u8> = (0..20_000u32).map(|i| (i % 253) as u8).collect();
+    let content: Vec<u8> = (0..20_000u32).map(|i| (i % 253_000) as u8).collect();
     b.apply(&add(EmbeddedOwner::Board, "dir/Some Part.STEP", &content)).unwrap();
     let list = &b.design().drawings.as_ref().unwrap().embedded;
     assert_eq!(list.files.len(), 1);
@@ -109,7 +109,7 @@ fn a_footprint_on_the_board_has_a_list_of_its_own_and_the_board_can_take_a_file_
 #[test]
 fn library_footprints_and_symbols_keep_their_files_and_move_them_with_a_rename() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100, 300);
+    let mut b = Board::new(design(), &m, 100_000, 300_000);
     b.apply(&Cmd::NewFootprint { name: "Mine".into() }).unwrap();
     let owner = EmbeddedOwner::LibraryFootprint { name: "Mine".into() };
     b.apply(&add(owner.clone(), "m.step", b"model")).unwrap();

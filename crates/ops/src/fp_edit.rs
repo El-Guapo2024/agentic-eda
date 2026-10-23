@@ -24,9 +24,9 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
     vec![CheckResult::fail(check, what, msg.into())]
 }
 
-/// `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM` (`include/eda_text.h`), µm.
-const TEXT_MIN_NM: Nm = 1;
-const TEXT_MAX_NM: Nm = 250_000;
+/// `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM` (`include/eda_text.h`), nm.
+const TEXT_MIN_NM: Nm = 1_000;
+const TEXT_MAX_NM: Nm = 250_000_000;
 
 /// `ClampTextPenSize`: the thickest pen a text of this size takes (a quarter of its smaller side).
 fn max_pen(size: (Nm, Nm)) -> Nm {
@@ -40,17 +40,17 @@ impl Board<'_> {
         let (w, h) = l.size;
         for (axis, v) in [("width", w), ("height", h)] {
             if v < TEXT_MIN_NM {
-                return Err(fail("ops_bad_field", what, format!("Text {axis} must be at least {} mm.", TEXT_MIN_NM as f64 / 1000.0)));
+                return Err(fail("ops_bad_field", what, format!("Text {axis} must be at least {} mm.", eda_model::units::to_mm(TEXT_MIN_NM))));
             }
             if v > TEXT_MAX_NM {
-                return Err(fail("ops_bad_field", what, format!("Text {axis} must be at most {} mm.", TEXT_MAX_NM as f64 / 1000.0)));
+                return Err(fail("ops_bad_field", what, format!("Text {axis} must be at most {} mm.", eda_model::units::to_mm(TEXT_MAX_NM))));
             }
         }
         if l.thickness < 0 {
             return Err(fail("ops_bad_field", what, "Text thickness cannot be negative."));
         }
         if l.thickness > max_pen(l.size) {
-            return Err(fail("ops_bad_field", what, format!("Text thickness is too large for the text size. It will be clamped at {} mm.", max_pen(l.size) as f64 / 1000.0)));
+            return Err(fail("ops_bad_field", what, format!("Text thickness is too large for the text size. It will be clamped at {} mm.", eda_model::units::to_mm(max_pen(l.size)))));
         }
         let layer = l.layer.as_str();
         // The board's copper layers and the technical and user layers Board Editor Layers has on (`eda_model::layers`).
@@ -397,5 +397,5 @@ fn primitive_problem(prim: &eda_model::footprint::PadPrimitive) -> Option<String
 /// How many separate pieces of copper a custom pad is: its anchor and basic shapes merged (`PAD::MergePrimitivesAsPolygon`).
 fn custom_outline_count(pad: &eda_model::Pad) -> usize {
     let fp = eda_model::ir::FootprintInstance { id: String::new(), at: eda_model::ir::Point { x: 0, y: 0 }, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() };
-    eda_drc::pad_shape::pad_polygons(&fp, pad, eda_model::ir::Point { x: 0, y: 0 }, 5).polys.len()
+    eda_drc::pad_shape::pad_polygons(&fp, pad, eda_model::ir::Point { x: 0, y: 0 }, 5_000).polys.len()
 }

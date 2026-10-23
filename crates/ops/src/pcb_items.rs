@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM` (`include/eda_text.h`): the glyph sizes the Text Box Properties dialog accepts.
-const TEXT_MIN_SIZE_NM: Nm = 1;
-const TEXT_MAX_SIZE_NM: Nm = 250_000;
+const TEXT_MIN_SIZE_NM: Nm = 1_000;
+const TEXT_MAX_SIZE_NM: Nm = 250_000_000;
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
     vec![CheckResult::fail(check, what, msg.into())]
@@ -152,7 +152,7 @@ impl PcbItemCmd {
 
     /// The one-line description the CLI journal and the activity feed show.
     pub fn describe(&self) -> String {
-        let mm = |v: Nm| format!("{:.3}", v as f64 / 1000.0);
+        let mm = |v: Nm| format!("{:.3}", eda_model::units::to_mm(v));
         match self {
             PcbItemCmd::AddTextBox { text_box: t } => format!("text-box add --layer {} --from {},{} --to {},{} --text {:?}", t.layer, mm(t.start.x), mm(t.start.y), mm(t.end.x), mm(t.end.y), t.text),
             PcbItemCmd::EditTextBox { id, text_box: t } => format!("text-box edit {id} --layer {} --text {:?}", t.layer, t.text),

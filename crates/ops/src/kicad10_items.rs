@@ -94,14 +94,14 @@ impl<'a> Board<'a> {
             }
             None => Vec::new(),
         };
-        let pitch = stitch.pitch_nm * 1000;
+        let pitch = stitch.pitch_nm;
         let desired: BTreeMap<(i64, i64), Point> = vias.iter().map(|p| (p.cell, p.at)).collect();
         // "Determine existing vias we can keep"
         let existing: Vec<Via> = self.design.routing.iter().flat_map(|rt| rt.vias.iter().filter(|v| members.contains(&v.id)).cloned()).collect();
         let mut kept: BTreeMap<(i64, i64), Via> = BTreeMap::new();
         let mut removed: Vec<String> = Vec::new();
         for v in existing {
-            let cell = eda_drc::via_stitch::cell_for_position(&stitch, pitch, (v.at.x * 1000, v.at.y * 1000));
+            let cell = eda_drc::via_stitch::cell_for_position(&stitch, pitch, (v.at.x, v.at.y));
             if desired.contains_key(&cell) && !kept.contains_key(&cell) {
                 kept.insert(cell, v);
             } else {

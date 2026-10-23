@@ -15,7 +15,7 @@ fn design() -> Design {
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         routing: None,
-        placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 50_000, y: 0 }, Point { x: 50_000, y: 50_000 }, Point { x: 0, y: 50_000 }], footprints: vec![], modules: vec![] }),
+        placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 50_000_000, y: 0 }, Point { x: 50_000_000, y: 50_000_000 }, Point { x: 0, y: 50_000_000 }], footprints: vec![], modules: vec![] }),
         drawings: None,
     }
 }
@@ -25,7 +25,7 @@ fn model() -> ConstraintModel {
 }
 
 fn class(name: &str, nets: &[&str], clearance: Nm) -> NetClass {
-    NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(300), clearance: Some(clearance), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }
+    NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(300_000), clearance: Some(clearance), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }
 }
 
 fn overlay_of(b: &Board) -> RulesOverlay {
@@ -42,14 +42,14 @@ fn effective(b: &Board, base: &ConstraintModel) -> ConstraintModel {
 #[test]
 fn a_constraints_edit_is_stored_and_changes_the_effective_floors() {
     let base = model();
-    let mut b = Board::new(design(), &base, 100, 300);
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
     assert!(overlay_of(&b).is_empty(), "nothing is stored until Board Setup is used");
-    let constraints = Constraints { min_clearance_nm: 250, min_track_width_nm: 180, min_copper_edge_clearance_nm: 300, ..Constraints::of(&base.board) };
+    let constraints = Constraints { min_clearance_nm: 250_000, min_track_width_nm: 180_000, min_copper_edge_clearance_nm: 300_000, ..Constraints::of(&base.board) };
     b.apply(&Cmd::SetConstraints { constraints: constraints.clone() }).unwrap();
     assert_eq!(overlay_of(&b).constraints, Some(constraints));
 
     let m = effective(&b, &base);
-    assert_eq!((m.board.min_clearance_nm, m.board.track_width_min_nm, m.board.copper_edge_clearance_nm), (250, 180, Some(300)));
+    assert_eq!((m.board.min_clearance_nm, m.board.track_width_min_nm, m.board.copper_edge_clearance_nm), (250_000, 180_000, Some(300_000)));
     assert!(m.board.constraints_explicit);
     assert_eq!(base.board.min_clearance_nm, 0, "the intent's own rules are untouched");
 }
@@ -69,8 +69,8 @@ fn the_verbs_leave_routing_and_the_other_editors_alone() {
 #[test]
 fn an_out_of_range_constraint_is_refused_with_the_settings_name() {
     let base = model();
-    let mut b = Board::new(design(), &base, 100, 300);
-    let e = b.apply(&Cmd::SetConstraints { constraints: Constraints { min_clearance_nm: 26_000, ..Constraints::of(&base.board) } }).unwrap_err();
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
+    let e = b.apply(&Cmd::SetConstraints { constraints: Constraints { min_clearance_nm: 26_000_000, ..Constraints::of(&base.board) } }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_constraints");
     assert_eq!(e[0].location.as_deref(), Some("min_clearance"), "the dialog puts the message next to this field");
     assert!(overlay_of(&b).is_empty(), "a refused edit stores nothing");
@@ -79,20 +79,20 @@ fn an_out_of_range_constraint_is_refused_with_the_settings_name() {
 #[test]
 fn net_classes_with_patterns_replace_the_boards_classes_and_the_defaults() {
     let mut base = model();
-    base.board.net_classes.push(class("old", &["GND"], 200));
-    let mut b = Board::new(design(), &base, 100, 300);
+    base.board.net_classes.push(class("old", &["GND"], 200_000));
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
     let settings = NetClassSettings {
-        default: NetClass { name: "Default".into(), nets: vec![], track_width: Some(250), clearance: Some(220), via_diameter: Some(700), via_drill: Some(350), ..class("Default", &[], 0) },
-        classes: vec![class("power", &["VBUS", "VBUS_*"], 300), class("fast", &["SPI_?"], 150)],
+        default: NetClass { name: "Default".into(), nets: vec![], track_width: Some(250_000), clearance: Some(220_000), via_diameter: Some(700_000), via_drill: Some(350_000), ..class("Default", &[], 0) },
+        classes: vec![class("power", &["VBUS", "VBUS_*"], 300_000), class("fast", &["SPI_?"], 150_000)],
     };
     b.apply(&Cmd::SetNetClasses { settings }).unwrap();
     let m = effective(&b, &base);
     assert_eq!(m.board.net_classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["power", "fast"]);
-    assert_eq!((m.board.track_width, m.board.clearance, m.board.via_diameter, m.board.via_drill), (250, 220, 700, 350));
-    assert_eq!(m.board.clearance_of("VBUS_RAW"), 300, "a `*` pattern assigns a family of nets");
-    assert_eq!(m.board.clearance_of("SPI_3"), 150, "a `?` pattern is one character");
-    assert_eq!(m.board.clearance_of("SPI_33"), 220, "and no more: the whole name must match");
-    assert_eq!(m.board.clearance_of("GND"), 220, "a net no pattern claims is in the Default class");
+    assert_eq!((m.board.track_width, m.board.clearance, m.board.via_diameter, m.board.via_drill), (250_000, 220_000, 700_000, 350_000));
+    assert_eq!(m.board.clearance_of("VBUS_RAW"), 300_000, "a `*` pattern assigns a family of nets");
+    assert_eq!(m.board.clearance_of("SPI_3"), 150_000, "a `?` pattern is one character");
+    assert_eq!(m.board.clearance_of("SPI_33"), 220_000, "and no more: the whole name must match");
+    assert_eq!(m.board.clearance_of("GND"), 220_000, "a net no pattern claims is in the Default class");
 
     let dup = NetClassSettings { default: class("Default", &[], 0), classes: vec![class("a", &["X"], 1), class("a", &["Y"], 1)] };
     assert_eq!(b.apply(&Cmd::SetNetClasses { settings: dup }).unwrap_err()[0].check, "ops_bad_netclasses");
@@ -101,20 +101,20 @@ fn net_classes_with_patterns_replace_the_boards_classes_and_the_defaults() {
 #[test]
 fn mask_paste_text_defaults_and_severities_validate_and_apply() {
     let base = model();
-    let mut b = Board::new(design(), &base, 100, 300);
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
 
-    let mask = MaskPaste { expansion_nm: 50, min_width_nm: 100, to_copper_clearance_nm: 40, paste_margin_nm: -50, paste_margin_ratio: -0.05, allow_bridges_in_footprints: true, tent_vias_front: false, tent_vias_back: true };
+    let mask = MaskPaste { expansion_nm: 50_000, min_width_nm: 100_000, to_copper_clearance_nm: 40_000, paste_margin_nm: -50_000, paste_margin_ratio: -0.05, allow_bridges_in_footprints: true, tent_vias_front: false, tent_vias_back: true };
     b.apply(&Cmd::SetMaskPaste { settings: mask.clone() }).unwrap();
     assert_eq!(effective(&b, &base).board.solder_mask, mask);
     assert!(b.apply(&Cmd::SetMaskPaste { settings: MaskPaste { paste_margin_ratio: 2.0, ..mask } }).is_err(), "a paste ratio is within -100% .. 100%");
 
     let mut text = TextGraphicsDefaults::default();
-    text.silk.text_height_nm = 1_200;
-    text.silk.text_width_nm = 1_200;
-    text.silk.text_thickness_nm = 200;
+    text.silk.text_height_nm = 1_200_000;
+    text.silk.text_width_nm = 1_200_000;
+    text.silk.text_thickness_nm = 200_000;
     b.apply(&Cmd::SetTextGraphicsDefaults { settings: text }).unwrap();
-    assert_eq!(effective(&b, &base).board.text_graphics.silk.text_height_nm, 1_200);
-    text.silk.text_thickness_nm = 900;
+    assert_eq!(effective(&b, &base).board.text_graphics.silk.text_height_nm, 1_200_000);
+    text.silk.text_thickness_nm = 900_000;
     assert_eq!(b.apply(&Cmd::SetTextGraphicsDefaults { settings: text }).unwrap_err()[0].check, "ops_bad_text_defaults");
 
     let sev: BTreeMap<String, String> = [("clearance", "warning"), ("silk_overlap", "ignore")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
@@ -129,7 +129,7 @@ fn mask_paste_text_defaults_and_severities_validate_and_apply() {
 #[test]
 fn custom_rules_text_is_kept_as_written() {
     let base = model();
-    let mut b = Board::new(design(), &base, 100, 300);
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
     let text = "(version 1)\n(rule \"wide power\"\n  (constraint clearance (min 0.5mm))\n  (condition \"A.NetClass == 'power'\"))\n";
     b.apply(&Cmd::SetCustomRules { text: text.into() }).unwrap();
     assert_eq!(effective(&b, &base).board.custom_rules_text.as_deref(), Some(text));
@@ -142,9 +142,9 @@ fn custom_rules_text_is_kept_as_written() {
 fn a_stackup_edit_changes_the_layers_and_the_thickness_but_not_while_copper_would_be_cut_off() {
     let base = model();
     let mut d = design();
-    let mut four = StackupSettings::new(4, 1_600);
+    let mut four = StackupSettings::new(4, 1_600_000);
     four.stackup.layers.iter_mut().find(|l| l.name == "dielectric 1").unwrap().thickness_mm = Some(0.2);
-    let mut b = Board::new(d.clone(), &base, 100, 300);
+    let mut b = Board::new(d.clone(), &base, 100_000, 300_000);
     b.apply(&Cmd::SetStackup { settings: four.clone() }).unwrap();
     let m = effective(&b, &base);
     assert_eq!(m.board.layers, copper_layer_names(4));
@@ -153,20 +153,20 @@ fn a_stackup_edit_changes_the_layers_and_the_thickness_but_not_while_copper_woul
 
     // Back to two layers is fine on an empty board but refused with a track on In1.Cu.
     let on_four = ConstraintModel { board: m.board.clone(), ..base.clone() };
-    let two = StackupSettings::new(2, 1_600);
+    let two = StackupSettings::new(2, 1_600_000);
     d.routing = Some(RoutingSection {
-        tracks: vec![Track { id: "t1".into(), net: "GND".into(), pins: vec![], layer: "In1.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1_000, y: 0 }], arc_mid_offset: None }],
+        tracks: vec![Track { id: "t1".into(), net: "GND".into(), pins: vec![], layer: "In1.Cu".into(), width: 200_000, pts: vec![Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 }], arc_mid_offset: None }],
         vias: vec![],
         zones: vec![],
         track_width_presets: vec![],
         via_presets: vec![],
         teardrop_settings: Default::default(),
     });
-    let mut routed = Board::new(d, &on_four, 100, 300);
+    let mut routed = Board::new(d, &on_four, 100_000, 300_000);
     let e = routed.apply(&Cmd::SetStackup { settings: two.clone() }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_stackup");
     assert_eq!(e[0].location.as_deref(), Some("In1.Cu"));
-    assert!(Board::new(design(), &on_four, 100, 300).apply(&Cmd::SetStackup { settings: two }).is_ok(), "nothing on the inner layers: they can go");
+    assert!(Board::new(design(), &on_four, 100_000, 300_000).apply(&Cmd::SetStackup { settings: two }).is_ok(), "nothing on the inner layers: they can go");
 
     assert!(b.apply(&Cmd::SetStackup { settings: StackupSettings { copper_layers: 3, ..four } }).is_err(), "a board has an even number of copper layers");
 }
@@ -178,7 +178,7 @@ fn vars(rows: &[(&str, &str)]) -> BTreeMap<String, String> {
 #[test]
 fn text_variables_are_stored_as_a_whole_page() {
     let base = model();
-    let mut b = Board::new(design(), &base, 100, 300);
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
     assert_eq!(overlay_of(&b).text_variables, None, "nothing is stored until the page is used");
     let page = vars(&[("REVISION", "B"), ("Designer name", "Ada"), ("PART_NO", "${REVISION}-12")]);
     b.apply(&Cmd::SetTextVariables { variables: page.clone() }).unwrap();
@@ -193,7 +193,7 @@ fn text_variables_are_stored_as_a_whole_page() {
 #[test]
 fn a_bad_text_variables_page_is_refused_with_the_variables_name_and_stores_nothing() {
     let base = model();
-    let mut b = Board::new(design(), &base, 100, 300);
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
     let kept = vars(&[("REVISION", "B")]);
     b.apply(&Cmd::SetTextVariables { variables: kept.clone() }).unwrap();
     for (bad, location) in [
@@ -224,7 +224,7 @@ fn four_layer_model() -> ConstraintModel {
 #[test]
 fn board_layers_are_stored_as_a_whole_page_and_laid_over_the_board() {
     let base = four_layer_model();
-    let mut b = Board::new(design(), &base, 100, 300);
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
     assert_eq!(overlay_of(&b).board_layers, None, "nothing is stored until the page is used");
     assert!(base.board.layer_setup.is_default(), "a board starts with every standard technical layer");
     let page = layers_page(|s| {
@@ -258,7 +258,7 @@ fn board_layers_are_stored_as_a_whole_page_and_laid_over_the_board() {
 #[test]
 fn a_bad_board_layers_page_is_refused_with_the_layers_name_and_stores_nothing() {
     let base = four_layer_model();
-    let mut b = Board::new(design(), &base, 100, 300);
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
     let kept = layers_page(|s| {
         s.enabled.push("User.1".into());
         s.names.insert("User.1".into(), "Notes".into());
@@ -286,8 +286,8 @@ fn a_bad_board_layers_page_is_refused_with_the_layers_name_and_stores_nothing() 
 #[test]
 fn a_layer_cannot_be_turned_off_while_items_are_on_it_and_can_once_they_are_not() {
     let base = four_layer_model();
-    let mut b = Board::new(design(), &base, 100, 300);
-    let text = Text { id: String::new(), content: "note".into(), at: Point { x: 5_000, y: 5_000 }, angle: 0, layer: "Eco1.User".into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false };
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
+    let text = Text { id: String::new(), content: "note".into(), at: Point { x: 5_000_000, y: 5_000_000 }, angle: 0, layer: "Eco1.User".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: Default::default(), mirror: false };
     b.apply(&Cmd::AddText { text }).unwrap();
     let without_eco1 = layers_page(|s| s.enabled.retain(|l| l != "Eco1.User"));
     let e = b.apply(&Cmd::SetBoardLayers { settings: without_eco1.clone() }).unwrap_err();
@@ -309,9 +309,9 @@ fn nothing_new_goes_on_a_layer_the_board_has_turned_off_and_user_layers_that_are
         s.names.insert("User.3".into(), "Notes".into());
     })
     .canonical();
-    let mut b = Board::new(design(), &base, 100, 300);
-    let line = |layer: &str| Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } };
-    let text = |layer: &str| Text { id: String::new(), content: "t".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: layer.into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false };
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
+    let line = |layer: &str| Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 150_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000_000, y: 0 } };
+    let text = |layer: &str| Text { id: String::new(), content: "t".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: layer.into(), size_nm: 1_000_000, stroke_width: 150_000, justify: Default::default(), mirror: false };
     let e = b.apply(&Cmd::AddShape { shape: line("Eco1.User") }).unwrap_err();
     assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_layer_off", Some("shape")));
     assert!(e[0].hint.as_deref().unwrap().contains("User.Eco1 is not a layer this board has"), "{e:?}");
@@ -320,7 +320,7 @@ fn nothing_new_goes_on_a_layer_the_board_has_turned_off_and_user_layers_that_are
     b.apply(&Cmd::AddText { text: text("User.3") }).unwrap();
     b.apply(&Cmd::AddShape { shape: line("F.SilkS") }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
-    let e = b.apply(&Cmd::EditShape { id, layer: "User.4".into(), stroke_width: 150, filled: false }).unwrap_err();
+    let e = b.apply(&Cmd::EditShape { id, layer: "User.4".into(), stroke_width: 150_000, filled: false }).unwrap_err();
     assert_eq!(e[0].check, "ops_layer_off", "a shape cannot be moved to a layer that is off either");
     assert_eq!(b.design().drawings.as_ref().unwrap().shapes.len() + b.design().drawings.as_ref().unwrap().texts.len(), 3, "the refused ones added nothing");
 }
@@ -328,7 +328,7 @@ fn nothing_new_goes_on_a_layer_the_board_has_turned_off_and_user_layers_that_are
 #[test]
 fn formatting_is_stored_as_a_whole_page_and_a_dash_ratio_a_line_cannot_have_is_refused() {
     let base = four_layer_model();
-    let mut b = Board::new(design(), &base, 100, 300);
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
     assert_eq!(overlay_of(&b).formatting, None);
     let page = FormattingSettings { dash_length_ratio: 8.0, gap_length_ratio: 2.5, apply_to_fp_fields: true, apply_to_fp_shapes: true, ..FormattingSettings::default() };
     b.apply(&Cmd::SetFormatting { settings: page.clone() }).unwrap();
@@ -346,13 +346,13 @@ fn formatting_is_stored_as_a_whole_page_and_a_dash_ratio_a_line_cannot_have_is_r
 #[test]
 fn zone_hatch_offsets_are_the_layers_that_have_one_and_only_copper_layers() {
     let base = four_layer_model();
-    let mut b = Board::new(design(), &base, 100, 300);
-    let offsets: HatchOffsets = [("F.Cu".to_string(), HatchOffset { x_nm: 1_500, y_nm: -2_000 }), ("In1.Cu".to_string(), HatchOffset::default()), ("B.Cu".to_string(), HatchOffset { x_nm: 0, y_nm: 300 })].into();
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
+    let offsets: HatchOffsets = [("F.Cu".to_string(), HatchOffset { x_nm: 1_500_000, y_nm: -2_000_000 }), ("In1.Cu".to_string(), HatchOffset::default()), ("B.Cu".to_string(), HatchOffset { x_nm: 0, y_nm: 300_000 })].into();
     b.apply(&Cmd::SetZoneHatchOffsets { offsets }).unwrap();
     let stored = overlay_of(&b).zone_hatch_offsets.unwrap();
     assert_eq!(stored.keys().collect::<Vec<_>>(), ["B.Cu", "F.Cu"], "a layer set to 0, 0 has none");
     assert_eq!(effective(&b, &base).board.hatch_offsets, stored);
-    for (bad, location) in [(HatchOffsets::from([("F.SilkS".to_string(), HatchOffset { x_nm: 1, y_nm: 0 })]), "F.SilkS"), (HatchOffsets::from([("In9.Cu".to_string(), HatchOffset { x_nm: 1, y_nm: 0 })]), "In9.Cu"), (HatchOffsets::from([("F.Cu".to_string(), HatchOffset { x_nm: 2_000_000, y_nm: 0 })]), "F.Cu")] {
+    for (bad, location) in [(HatchOffsets::from([("F.SilkS".to_string(), HatchOffset { x_nm: 1, y_nm: 0 })]), "F.SilkS"), (HatchOffsets::from([("In9.Cu".to_string(), HatchOffset { x_nm: 1, y_nm: 0 })]), "In9.Cu"), (HatchOffsets::from([("F.Cu".to_string(), HatchOffset { x_nm: 2_000_000_000, y_nm: 0 })]), "F.Cu")] {
         let e = b.apply(&Cmd::SetZoneHatchOffsets { offsets: bad }).unwrap_err();
         assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_bad_hatch_offsets", Some(location)));
         assert_eq!(overlay_of(&b).zone_hatch_offsets.as_ref(), Some(&stored), "a refused page changes nothing");
@@ -362,28 +362,28 @@ fn zone_hatch_offsets_are_the_layers_that_have_one_and_only_copper_layers() {
 #[test]
 fn tuning_patterns_are_stored_as_a_page_and_refused_with_the_setting_they_break() {
     let base = four_layer_model();
-    let mut b = Board::new(design(), &base, 100, 300);
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
     let mut page = TuningPatterns::default();
-    page.diff_pair.spacing_nm = 1_200;
+    page.diff_pair.spacing_nm = 1_200_000;
     page.single_track.corner_style = CornerStyle::Chamfer;
     page.diff_pair_skew.single_sided = true;
     b.apply(&Cmd::SetTuningPatterns { settings: page.clone() }).unwrap();
     assert_eq!(effective(&b, &base).board.tuning_patterns, page);
     let mut bad = page.clone();
-    bad.single_track.min_amplitude_nm = 2_000;
+    bad.single_track.min_amplitude_nm = 2_000_000;
     let e = b.apply(&Cmd::SetTuningPatterns { settings: bad }).unwrap_err();
     assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_bad_tuning_patterns", Some("single_track.min_amplitude")));
     assert_eq!(overlay_of(&b).tuning_patterns, Some(page), "a refused page changes nothing");
 }
 
 fn a_profile(name: &str) -> TuningProfile {
-    TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: 130, diff_pair_gap_nm: 150, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
+    TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: 130_000, diff_pair_gap_nm: 150_000, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
 }
 
 #[test]
 fn tuning_profiles_and_the_profile_each_class_names_are_one_page() {
     let base = four_layer_model();
-    let mut b = Board::new(design(), &base, 100, 300);
+    let mut b = Board::new(design(), &base, 100_000, 300_000);
     let page = TuningProfiles { profiles: vec![a_profile("USB 90")], class_profiles: [("USB".to_string(), "USB 90".to_string()), ("Power".to_string(), String::new()), ("Default".to_string(), "Gone".to_string())].into() };
     b.apply(&Cmd::SetTuningProfiles { settings: page.clone() }).unwrap();
     let stored = overlay_of(&b).tuning_profiles.unwrap();
@@ -407,10 +407,10 @@ fn the_verbs_read_from_the_json_the_studio_sends() {
     let cmd: Cmd = serde_json::from_value(serde_json::json!({
         "op": "set_constraints",
         "constraints": {
-            "min_clearance_nm": 200, "min_connection_nm": 0, "min_track_width_nm": 200, "min_annular_width_nm": 100, "min_via_diameter_nm": 500,
-            "min_through_hole_nm": 300, "min_microvia_diameter_nm": 200, "min_microvia_drill_nm": 100, "min_hole_to_hole_nm": 250,
-            "min_hole_clearance_nm": 250, "min_copper_edge_clearance_nm": 500, "min_silk_clearance_nm": 0, "min_groove_width_nm": 0,
-            "min_silk_text_height_nm": 800, "min_silk_text_thickness_nm": 80, "max_error_nm": 5, "min_resolved_spokes": 2,
+            "min_clearance_nm": 200_000, "min_connection_nm": 0, "min_track_width_nm": 200_000, "min_annular_width_nm": 100_000, "min_via_diameter_nm": 500_000,
+            "min_through_hole_nm": 300_000, "min_microvia_diameter_nm": 200_000, "min_microvia_drill_nm": 100_000, "min_hole_to_hole_nm": 250_000,
+            "min_hole_clearance_nm": 250_000, "min_copper_edge_clearance_nm": 500_000, "min_silk_clearance_nm": 0, "min_groove_width_nm": 0,
+            "min_silk_text_height_nm": 800_000, "min_silk_text_thickness_nm": 80_000, "max_error_nm": 5000, "min_resolved_spokes": 2000,
             "use_height_for_length_calcs": true, "zones_allow_external_fillets": false
         }
     }))
@@ -420,10 +420,10 @@ fn the_verbs_read_from_the_json_the_studio_sends() {
     assert!(matches!(cmd, Cmd::SetMaskPaste { settings } if settings.paste_margin_ratio == -0.05));
     let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_formatting", "settings": { "dash_length_ratio": 10.5, "apply_to_fp_text": true } })).unwrap();
     assert!(matches!(&cmd, Cmd::SetFormatting { settings } if settings.dash_length_ratio == 10.5 && settings.gap_length_ratio == 3.0 && settings.apply_to_fp_text && !settings.apply_to_fp_fields), "what a page leaves out is the default");
-    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_zone_hatch_offsets", "offsets": { "F.Cu": { "x_nm": 100, "y_nm": -50 } } })).unwrap();
-    assert!(matches!(&cmd, Cmd::SetZoneHatchOffsets { offsets } if offsets["F.Cu"] == HatchOffset { x_nm: 100, y_nm: -50 }));
-    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_tuning_patterns", "settings": { "diff_pair": { "min_amplitude_nm": 200, "max_amplitude_nm": 900, "spacing_nm": 1100, "corner_style": "chamfer", "corner_radius_percentage": 50, "single_sided": true } } })).unwrap();
-    assert!(matches!(&cmd, Cmd::SetTuningPatterns { settings } if settings.diff_pair.corner_style == CornerStyle::Chamfer && settings.diff_pair.max_amplitude_nm == 900 && settings.single_track == eda_model::setup_pages::MeanderSettings::single_track()));
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_zone_hatch_offsets", "offsets": { "F.Cu": { "x_nm": 100_000, "y_nm": -50_000 } } })).unwrap();
+    assert!(matches!(&cmd, Cmd::SetZoneHatchOffsets { offsets } if offsets["F.Cu"] == HatchOffset { x_nm: 100_000, y_nm: -50_000 }));
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_tuning_patterns", "settings": { "diff_pair": { "min_amplitude_nm": 200_000, "max_amplitude_nm": 900_000, "spacing_nm": 1_100_000, "corner_style": "chamfer", "corner_radius_percentage": 50_000, "single_sided": true } } })).unwrap();
+    assert!(matches!(&cmd, Cmd::SetTuningPatterns { settings } if settings.diff_pair.corner_style == CornerStyle::Chamfer && settings.diff_pair.max_amplitude_nm == 900_000 && settings.single_track == eda_model::setup_pages::MeanderSettings::single_track()));
     let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_tuning_profiles", "settings": { "profiles": [{ "name": "50 ohm", "profile_type": "single", "layer_entries": [{ "signal_layer": "F.Cu", "delay_as_per_mm": 5600000 }] }], "class_profiles": { "Default": "50 ohm" } } })).unwrap();
     assert!(matches!(&cmd, Cmd::SetTuningProfiles { settings } if settings.profiles[0].layer_entries[0].delay_as_per_mm == 5_600_000 && settings.class_profiles["Default"] == "50 ohm"));
     let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_board_layers", "settings": { "enabled": ["Edge.Cuts", "Margin", "F.CrtYd", "B.CrtYd", "User.1"], "names": { "User.1": "Notes" }, "types": { "In1.Cu": "power", "User.2": "front" } } })).unwrap();

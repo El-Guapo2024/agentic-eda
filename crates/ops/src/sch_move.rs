@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The schematic's connection grid, 50 mil (`GRID_CONNECTABLE`).
-pub const GRID_NM: Nm = 1_270;
+pub const GRID_NM: Nm = 1_270_000;
 
 fn d_true() -> bool {
     true
@@ -134,7 +134,7 @@ impl SchMoveCmd {
 
     /// The one-line description the CLI journal and the activity feed show.
     pub fn describe(&self) -> String {
-        let mm = |v: Nm| format!("{:.2}", v as f64 / 1000.0);
+        let mm = |v: Nm| format!("{:.2}", eda_model::units::to_mm(v));
         let list = |ids: &[String]| ids.join(" ");
         match self {
             SchMoveCmd::Move { ids, dx, dy, .. } => format!("schematic move {} --by {},{}", list(ids), mm(*dx), mm(*dy)),

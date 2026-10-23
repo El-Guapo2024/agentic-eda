@@ -22,10 +22,10 @@ use eda_model::ir::{LibraryFootprint, LibraryPad, LibraryPadShape, PadEditMode, 
 use eda_model::CheckResult;
 
 /// `ZONE_THERMAL_RELIEF_COPPER_WIDTH_MM` (`zones.h`): the width a thermal spoke template gets when the pad sets none.
-const THERMAL_SPOKE_WIDTH_NM: Nm = 500;
+const THERMAL_SPOKE_WIDTH_NM: Nm = 500_000;
 
 /// The error `PAD::Recombine` converts curves to polygons with (`BOARD_DESIGN_SETTINGS::m_MaxError`, 5 micrometres by default).
-const MAX_ERROR_NM: Nm = 5;
+const MAX_ERROR_NM: Nm = 5_000;
 
 /// The layer the pad's shapes are on, and the one a recombine reads: `F.Cu` when the pad is on it, else `B.Cu`, else the first of its layers in
 /// the order the layer lists show (`GetLayerSet().UIOrder().front()`: front copper, inner, back copper, then the technical layers).

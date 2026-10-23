@@ -28,11 +28,11 @@ fn a_footprints_fields_and_attributes_are_stored_replaced_and_dropped_when_they_
     let mut b = board(&m);
     assert!(edit_of(&b, "U1").is_none(), "a board nothing was edited on has no edits");
 
-    let mut reference = layout(1_000, -3_000, "F.Fab");
-    reference.size = (1_200, 800);
-    reference.thickness = 150;
+    let mut reference = layout(1_000_000, -3_000_000, "F.Fab");
+    reference.size = (1_200_000, 800_000);
+    reference.thickness = 150_000;
     reference.halign = -1;
-    let vendor = UserField { name: "Vendor".into(), text: "ACME".into(), layout: layout(0, 2_000, "F.Fab") };
+    let vendor = UserField { name: "Vendor".into(), text: "ACME".into(), layout: layout(0, 2_000_000, "F.Fab") };
     let attrs = FootprintAttrs { kind: FootprintKind::Smd, exclude_from_pos_files: true, dnp: true, ..Default::default() };
     b.apply(&set_fields("U1", Some(reference.clone()), None, Some(vec![vendor.clone()]), Some(attrs))).unwrap();
     let e = edit_of(&b, "U1").unwrap();
@@ -42,7 +42,7 @@ fn a_footprints_fields_and_attributes_are_stored_replaced_and_dropped_when_they_
 
     // A second edit changes what it names and leaves the rest.
     let mut moved = reference.clone();
-    moved.at = p(-500, -3_000);
+    moved.at = p(-500_000, -3_000_000);
     b.apply(&set_fields("U1", Some(moved.clone()), None, None, None)).unwrap();
     let e = edit_of(&b, "U1").unwrap();
     assert_eq!((e.reference.clone(), e.fields.len(), e.attrs), (Some(moved), 1, Some(attrs)));
@@ -57,13 +57,13 @@ fn a_field_the_dialog_would_refuse_is_refused_with_its_message() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     let mut tiny = layout(0, 0, "F.SilkS");
-    tiny.size = (0, 1_000);
+    tiny.size = (0, 1_000_000);
     assert!(refusal(&mut b, set_fields("U1", Some(tiny), None, None, None)).contains("Text width must be at least"));
     let mut huge = layout(0, 0, "F.SilkS");
-    huge.size = (1_000, 300_000);
+    huge.size = (1_000_000, 300_000_000);
     assert!(refusal(&mut b, set_fields("U1", Some(huge), None, None, None)).contains("Text height must be at most"));
     let mut thick = layout(0, 0, "F.SilkS");
-    thick.thickness = 400;
+    thick.thickness = 400_000;
     assert!(refusal(&mut b, set_fields("U1", Some(thick), None, None, None)).contains("thickness is too large"), "a quarter of the 1 mm size is 0.25 mm");
     let mut nowhere = layout(0, 0, "No.Such");
     nowhere.thickness = 0;
@@ -104,15 +104,15 @@ fn a_pad_edit_is_stored_by_number_and_cleared_by_an_empty_one() {
     let mut b = board(&m);
     let mut e = PadEdit::none("2", 1);
     e.shape = Some(PadShape::Oval);
-    e.size = Some((900, 500));
-    e.offset = Some(p(100, -50));
-    e.solder_mask_margin = Some(30);
+    e.size = Some((900_000, 500_000));
+    e.offset = Some(p(100_000, -50_000));
+    e.solder_mask_margin = Some(30_000);
     b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: e.clone() }).unwrap();
     assert_eq!(edit_of(&b, "U1").unwrap().pad("2", 1), Some(&e));
 
     // An edit of the same pad replaces it; one that changes nothing takes it away, and the footprint's edit with it.
     let mut again = PadEdit::none("2", 1);
-    again.size = Some((800, 800));
+    again.size = Some((800_000, 800_000));
     b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: again.clone() }).unwrap();
     assert_eq!(edit_of(&b, "U1").unwrap().pad("2", 1), Some(&again));
     b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: PadEdit::none("2", 1) }).unwrap();
@@ -128,30 +128,30 @@ fn a_pad_edit_that_cannot_be_a_pad_is_refused() {
         f(&mut e);
         Cmd::EditBoardPad { part: "U1".into(), edit: e }
     };
-    assert!(refusal(&mut b, pad(&|e| e.size = Some((0, 500)))).contains("greater than zero"));
+    assert!(refusal(&mut b, pad(&|e| e.size = Some((0, 500_000)))).contains("greater than zero"));
     assert!(refusal(&mut b, pad(&|e| e.roundrect_ratio = Some(0.8))).contains("corner radius"));
     assert!(refusal(&mut b, pad(&|e| e.solder_paste_margin_ratio = Some(-0.9))).contains("paste"));
     assert!(refusal(&mut b, pad(&|e| {
-        e.drill = Some(300);
-        e.drill_slot = Some((300, 600));
+        e.drill = Some(300_000);
+        e.drill_slot = Some((300_000, 600_000));
     }))
     .contains("not both"));
     assert!(refusal(&mut b, pad(&|e| e.kind = Some(PadKind::ThroughHole))).contains("no drill"), "a through-hole pad needs a hole");
     assert!(refusal(&mut b, pad(&|e| {
         e.kind = Some(PadKind::ThroughHole);
-        e.drill = Some(900);
+        e.drill = Some(900_000);
     }))
     .contains("annular ring"), "a hole as big as the 600 um pad leaves no copper");
     let mut other = PadEdit::none("7", 1);
-    other.size = Some((500, 500));
+    other.size = Some((500_000, 500_000));
     assert_eq!(b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: other }).unwrap_err()[0].check, "ops_unknown_pad");
     assert!(edit_of(&b, "U1").is_none());
 
     // And the same pad made right is accepted: a plated hole smaller than the pad, once the pad is big enough.
     b.apply(&pad(&|e| {
         e.kind = Some(PadKind::ThroughHole);
-        e.drill = Some(500);
-        e.size = Some((1_200, 1_200));
+        e.drill = Some(500_000);
+        e.size = Some((1_200_000, 1_200_000));
         e.shape = Some(PadShape::Circle);
     }))
     .unwrap();
@@ -177,11 +177,11 @@ fn a_pad_becomes_a_trapezoid_a_chamfered_rectangle_or_a_custom_pad_and_an_empty_
     // A trapezoid: the shape and its delta.
     let mut e = PadEdit::none("1", 1);
     e.shape = Some(PadShape::Trapezoid);
-    e.size = Some((1_000, 600));
-    e.trapezoid_delta = Some((0, 300));
+    e.size = Some((1_000_000, 600_000));
+    e.trapezoid_delta = Some((0, 300_000));
     b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: e }).unwrap();
     let p = pad_after_edits(&b, &m, "U1", "1");
-    assert_eq!((p.shape, p.size, p.ext.trapezoid_delta), (PadShape::Trapezoid, (1_000, 600), Some((0, 300))));
+    assert_eq!((p.shape, p.size, p.ext.trapezoid_delta), (PadShape::Trapezoid, (1_000_000, 600_000), Some((0, 300_000))));
 
     // A chamfered rectangle (the default ratios of a shape that has none: 0.25 for the rounded corners, 0.2 for the chamfer).
     let mut e = PadEdit::none("1", 1);
@@ -193,7 +193,7 @@ fn a_pad_becomes_a_trapezoid_a_chamfered_rectangle_or_a_custom_pad_and_an_empty_
     assert!(p.ext.chamfer_corners.top_left && !p.ext.chamfer_corners.top_right);
 
     // A custom pad: an anchor and a polygon, a ring and a line.
-    let polygon = PadPrimitive { shape: Shape::Polygon { id: String::new(), layer: String::new(), stroke_width: 0, filled: true, pts: vec![p0(0, 0), p0(1_500, 0), p0(0, 1_500)] }, proxy: false };
+    let polygon = PadPrimitive { shape: Shape::Polygon { id: String::new(), layer: String::new(), stroke_width: 0, filled: true, pts: vec![p0(0, 0), p0(1_500_000, 0), p0(0, 1_500_000)] }, proxy: false };
     let custom = PadCustom { anchor: PadAnchor::Rect, zone: CustomZoneMode::ConvexHull, primitives: vec![polygon] };
     let mut e = PadEdit::none("1", 1);
     e.shape = Some(PadShape::Custom);
@@ -231,7 +231,7 @@ fn a_pad_whose_new_shape_is_not_a_pad_is_refused_in_kicads_words() {
     // `PAD::doCheckPad`: "(trapezoid delta is too large)" -- the 600 um pad cannot lose more than its own width.
     assert!(refusal(&mut b, pad(&|e| {
         e.shape = Some(PadShape::Trapezoid);
-        e.trapezoid_delta = Some((0, 700));
+        e.trapezoid_delta = Some((0, 700_000));
     }))
     .contains("trapezoid delta is too large"));
     assert!(refusal(&mut b, pad(&|e| {
@@ -246,7 +246,7 @@ fn a_pad_whose_new_shape_is_not_a_pad_is_refused_in_kicads_words() {
         e.chamfer_corners = Some(ChamferCorners { top_left: true, top_right: true, ..Default::default() });
     }))
     .contains("corner chamfer is too large"));
-    let line = |a: Point, z: Point| PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100, filled: false, start: a, end: z }, proxy: false };
+    let line = |a: Point, z: Point| PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100_000, filled: false, start: a, end: z }, proxy: false };
     // A zero-length line is no shape.
     assert!(refusal(&mut b, pad(&|e| {
         e.shape = Some(PadShape::Custom);
@@ -256,14 +256,14 @@ fn a_pad_whose_new_shape_is_not_a_pad_is_refused_in_kicads_words() {
     // Shapes far from the anchor make two pieces of copper: "(custom pad shape must resolve to a single polygon)".
     assert!(refusal(&mut b, pad(&|e| {
         e.shape = Some(PadShape::Custom);
-        e.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(5_000, 5_000), p(6_000, 5_000))] });
+        e.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(5_000_000, 5_000_000), p(6_000_000, 5_000_000))] });
     }))
     .contains("single polygon"));
     assert!(edit_of(&b, "U1").is_none(), "nothing was stored");
     // The same line touching the anchor is fine.
     b.apply(&pad(&|e| {
         e.shape = Some(PadShape::Custom);
-        e.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(0, 0), p(2_000, 0))] });
+        e.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(0, 0), p(2_000_000, 0))] });
     }))
     .unwrap();
 }
@@ -276,9 +276,9 @@ fn a_field_moves_on_its_own_by_the_board_delta_whatever_the_footprints_frame() {
     let before = b.field_layout("U2", "Reference").unwrap();
     let fp = pose(&b, "U2");
     let start = before.board_position(&fp);
-    b.apply(&Cmd::MoveItems { ids: ids(&["U2:Reference"]), dx: 1_500, dy: -700 }).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&["U2:Reference"]), dx: 1_500_000, dy: -700_000 }).unwrap();
     let after = edit_of(&b, "U2").unwrap().reference.clone().unwrap();
-    assert_eq!(after.board_position(&fp), p(start.x + 1_500, start.y - 700), "on the board it moved by the delta");
+    assert_eq!(after.board_position(&fp), p(start.x + 1_500_000, start.y - 700_000), "on the board it moved by the delta");
     assert_ne!(after.at, before.at, "in the footprint's own frame the delta is turned back");
     assert_eq!((pose(&b, "U2").at, pose(&b, "U2").rot), (fp.at, fp.rot), "the footprint did not move");
     assert_eq!(after.layer, before.layer);
@@ -294,9 +294,9 @@ fn a_field_turns_about_the_point_asked_and_its_text_with_it() {
     let at = layout.board_position(&fp);
     let angle = layout.board_angle(&fp);
     // 90 degrees clockwise about a point 1 mm to its left: the anchor swings down (clockwise on the screen), and the text turns with it.
-    b.apply(&Cmd::RotateItems { ids: ids(&["U1:Value"]), pivot: p(at.x - 1_000, at.y), angle_millideg: 90_000 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["U1:Value"]), pivot: p(at.x - 1_000_000, at.y), angle_millideg: 90_000 }).unwrap();
     let turned = edit_of(&b, "U1").unwrap().value.clone().unwrap();
-    assert_eq!(turned.board_position(&fp), p(at.x - 1_000, at.y + 1_000));
+    assert_eq!(turned.board_position(&fp), p(at.x - 1_000_000, at.y + 1_000_000));
     assert_eq!(turned.board_angle(&fp), (angle - 90_000).rem_euclid(360_000));
 }
 
@@ -308,12 +308,12 @@ fn a_field_flips_to_the_other_side_with_its_layer_and_mirror() {
     let l = b.field_layout("U1", "Reference").unwrap();
     assert_eq!((l.layer.as_str(), l.mirror), ("F.SilkS", false));
     let at = l.board_position(&fp);
-    b.apply(&Cmd::FlipItems { ids: ids(&["U1:Reference"]), pivot: p(at.x + 2_000, at.y), direction: FlipDirection::LeftRight }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&["U1:Reference"]), pivot: p(at.x + 2_000_000, at.y), direction: FlipDirection::LeftRight }).unwrap();
     let flipped = edit_of(&b, "U1").unwrap().reference.clone().unwrap();
     assert_eq!((flipped.layer.as_str(), flipped.mirror), ("B.SilkS", true));
-    assert_eq!(flipped.board_position(&fp), p(at.x + 4_000, at.y), "mirrored across the pivot");
+    assert_eq!(flipped.board_position(&fp), p(at.x + 4_000_000, at.y), "mirrored across the pivot");
     // Flipping it back is where it started.
-    b.apply(&Cmd::FlipItems { ids: ids(&["U1:Reference"]), pivot: p(at.x + 2_000, at.y), direction: FlipDirection::LeftRight }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&["U1:Reference"]), pivot: p(at.x + 2_000_000, at.y), direction: FlipDirection::LeftRight }).unwrap();
     let back = edit_of(&b, "U1").unwrap().reference.clone().unwrap();
     assert_eq!((back.layer.as_str(), back.mirror, back.board_position(&fp), back.board_angle(&fp)), ("F.SilkS", false, at, l.board_angle(&fp)));
 }
@@ -322,25 +322,25 @@ fn a_field_flips_to_the_other_side_with_its_layer_and_mirror() {
 fn the_fields_of_a_footprint_turn_over_with_it_and_a_field_named_with_its_footprint_is_not_moved_twice() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    let mut reference = layout(0, -3_100, "F.SilkS");
+    let mut reference = layout(0, -3_100_000, "F.SilkS");
     reference.angle = 0;
-    let vendor = UserField { name: "Vendor".into(), text: "ACME".into(), layout: layout(0, 2_000, "F.Fab") };
+    let vendor = UserField { name: "Vendor".into(), text: "ACME".into(), layout: layout(0, 2_000_000, "F.Fab") };
     b.apply(&set_fields("U1", Some(reference), None, Some(vec![vendor]), None)).unwrap();
 
     // Moving the footprint and its field together moves the field once (the footprint carries it).
     let fp = pose(&b, "U1");
     let at = edit_of(&b, "U1").unwrap().reference.clone().unwrap().board_position(&fp);
-    b.apply(&Cmd::MoveItems { ids: ids(&["U1", "U1:Reference"]), dx: 1_000, dy: 0 }).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&["U1", "U1:Reference"]), dx: 1_000_000, dy: 0 }).unwrap();
     let fp2 = pose(&b, "U1");
-    assert_eq!(fp2.at, p(fp.at.x + 1_000, fp.at.y));
-    assert_eq!(edit_of(&b, "U1").unwrap().reference.clone().unwrap().board_position(&fp2), p(at.x + 1_000, at.y));
+    assert_eq!(fp2.at, p(fp.at.x + 1_000_000, fp.at.y));
+    assert_eq!(edit_of(&b, "U1").unwrap().reference.clone().unwrap().board_position(&fp2), p(at.x + 1_000_000, at.y));
 
     // Flipping the footprint flips every field: layer and mirror, nothing else.
     b.apply(&Cmd::FlipItems { ids: ids(&["U1"]), pivot: fp2.at, direction: FlipDirection::LeftRight }).unwrap();
     let e = edit_of(&b, "U1").unwrap();
     assert_eq!(pose(&b, "U1").side, Side::Bottom);
     let r = e.reference.clone().unwrap();
-    assert_eq!((r.layer.as_str(), r.mirror, r.at), ("B.SilkS", true, p(0, -3_100)));
+    assert_eq!((r.layer.as_str(), r.mirror, r.at), ("B.SilkS", true, p(0, -3_100_000)));
     assert_eq!((e.fields[0].layout.layer.as_str(), e.fields[0].layout.mirror), ("B.Fab", true));
     // The legacy single-part flip does the same.
     b.apply(&Cmd::Flip { part: "U1".into() }).unwrap();
@@ -352,8 +352,8 @@ fn the_fields_of_a_footprint_turn_over_with_it_and_a_field_named_with_its_footpr
 fn a_field_of_a_footprint_that_is_not_on_the_board_is_unknown_and_a_deleted_footprint_takes_its_edit() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&set_fields("U2", Some(layout(0, -3_000, "F.SilkS")), None, None, None)).unwrap();
-    b.apply(&Cmd::SetFootprintZoneConnection { part: "U2".into(), zone_connection: Some(eda_model::ir::PadConnection::Full), clearance: Some(300) }).unwrap();
+    b.apply(&set_fields("U2", Some(layout(0, -3_000_000, "F.SilkS")), None, None, None)).unwrap();
+    b.apply(&Cmd::SetFootprintZoneConnection { part: "U2".into(), zone_connection: Some(eda_model::ir::PadConnection::Full), clearance: Some(300_000) }).unwrap();
     assert_eq!(b.apply(&Cmd::MoveItems { ids: ids(&["U9:Reference"]), dx: 1, dy: 0 }).unwrap_err()[0].check, "ops_unknown_item");
     assert_eq!(b.apply(&Cmd::MoveItems { ids: ids(&["U2:Nothing"]), dx: 1, dy: 0 }).unwrap_err()[0].check, "ops_unknown_item", "U2 has no such field");
     b.apply(&Cmd::Rip { part: "U2".into() }).unwrap();
@@ -367,12 +367,12 @@ fn one_field_is_edited_on_its_own_and_edits_of_two_fields_of_one_footprint_compo
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     let user = |name: &str, y: Nm| UserField { name: name.into(), text: format!("{name} text"), layout: layout(0, y, "F.Fab") };
-    b.apply(&set_fields("U1", None, None, Some(vec![user("Vendor", 2_000), user("Rev", 3_000)]), None)).unwrap();
+    b.apply(&set_fields("U1", None, None, Some(vec![user("Vendor", 2_000_000), user("Rev", 3_000_000)]), None)).unwrap();
 
-    let mut vendor = layout(500, 2_500, "F.Fab");
+    let mut vendor = layout(500_000, 2_500_000, "F.Fab");
     vendor.visible = true;
-    let mut rev = layout(-500, 3_500, "F.SilkS");
-    rev.size = (800, 800);
+    let mut rev = layout(-500_000, 3_500_000, "F.SilkS");
+    rev.size = (800_000, 800_000);
     b.apply(&Cmd::Batch {
         cmds: vec![
             Cmd::EditBoardField { part: "U1".into(), name: "Vendor".into(), layout: Some(vendor.clone()), text: Some("ACME".into()) },
@@ -385,7 +385,7 @@ fn one_field_is_edited_on_its_own_and_edits_of_two_fields_of_one_footprint_compo
     assert_eq!((e.fields[1].layout.clone(), e.fields[1].text.as_str()), (rev, "Rev text"), "the second edit did not undo the first");
 
     // The Reference's layout is set; its text is not the board's to change.
-    let mut r = layout(0, -3_000, "F.SilkS");
+    let mut r = layout(0, -3_000_000, "F.SilkS");
     r.bold = true;
     b.apply(&Cmd::EditBoardField { part: "U1".into(), name: "Reference".into(), layout: Some(r.clone()), text: None }).unwrap();
     assert_eq!(edit_of(&b, "U1").unwrap().reference, Some(r.clone()));
@@ -405,48 +405,48 @@ fn a_pad_gets_a_padstack_the_edit_replaces_whole_and_each_layer_is_checked_as_a_
         let mut e = PadEdit::none("1", 1);
         e.kind = Some(PadKind::ThroughHole);
         e.shape = Some(PadShape::Circle);
-        e.size = Some((1_600, 1_600));
-        e.drill = Some(800);
+        e.size = Some((1_600_000, 1_600_000));
+        e.drill = Some(800_000);
         e.stack = Some(stack);
         Cmd::EditBoardPad { part: "U1".into(), edit: e }
     };
 
     // Front/inner/back: the layers' shapes, normalized as a pad's own are (a circle is square), and the unconnected-layer mode with them.
-    let mut inner = PadLayerShape::plain(PadShape::Circle, (1_400, 900));
+    let mut inner = PadLayerShape::plain(PadShape::Circle, (1_400_000, 900_000));
     inner.roundrect_ratio = Some(0.3);
-    let stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(inner), back: Some(PadLayerShape::plain(PadShape::Oval, (2_400, 1_000))), unconnected: UnconnectedLayers::RemoveExceptStartAndEnd, ..Default::default() };
+    let stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(inner), back: Some(PadLayerShape::plain(PadShape::Oval, (2_400_000, 1_000_000))), unconnected: UnconnectedLayers::RemoveExceptStartAndEnd, ..Default::default() };
     b.apply(&through(stack)).unwrap();
     let pad1 = pad_after_edits(&b, &m, "U1", "1");
-    assert_eq!((pad1.shape, pad1.size, pad1.drill), (PadShape::Circle, (1_600, 1_600), Some(800)));
+    assert_eq!((pad1.shape, pad1.size, pad1.drill), (PadShape::Circle, (1_600_000, 1_600_000), Some(800_000)));
     let s = &pad1.ext.stack;
     assert_eq!(s.mode, PadStackMode::FrontInnerBack);
-    assert_eq!(s.inner.as_ref().map(|i| (i.shape, i.size, i.roundrect_ratio)), Some((PadShape::Circle, (1_400, 1_400), None)), "a circle is square and has no corner ratio");
-    assert_eq!(s.back.as_ref().map(|i| i.size), Some((2_400, 1_000)));
+    assert_eq!(s.inner.as_ref().map(|i| (i.shape, i.size, i.roundrect_ratio)), Some((PadShape::Circle, (1_400_000, 1_400_000), None)), "a circle is square and has no corner ratio");
+    assert_eq!(s.back.as_ref().map(|i| i.size), Some((2_400_000, 1_000_000)));
     assert_eq!(s.unconnected, UnconnectedLayers::RemoveExceptStartAndEnd);
     // The stack gives the pad's extents the copper of every layer: the box the placer keeps clear holds the 2.4 mm oval.
     let fp = pose(&b, "U1");
-    assert_eq!(eda_model::footprint::placed_pad_of(&fp, &pad1).size.0, 2_400);
+    assert_eq!(eda_model::footprint::placed_pad_of(&fp, &pad1).size.0, 2_400_000);
 
     // A normal stack has no layers (and takes the old ones away): only the unconnected-layer mode stays.
-    let normal = PadStack { mode: PadStackMode::Normal, inner: Some(PadLayerShape::plain(PadShape::Rect, (900, 900))), unconnected: UnconnectedLayers::RemoveAll, ..Default::default() };
+    let normal = PadStack { mode: PadStackMode::Normal, inner: Some(PadLayerShape::plain(PadShape::Rect, (900_000, 900_000))), unconnected: UnconnectedLayers::RemoveAll, ..Default::default() };
     b.apply(&through(normal)).unwrap();
     let s = pad_after_edits(&b, &m, "U1", "1").ext.stack;
     assert_eq!((s.mode, s.inner.is_none(), s.unconnected), (PadStackMode::Normal, true, UnconnectedLayers::RemoveAll));
 
     // A layer of a custom stack is judged as the pad is: a basic shape that cannot be drawn, copper in two pieces, a chamfer too large.
     let custom_layer = |shape: PadLayerShape| through(PadStack { mode: PadStackMode::Custom, layers: [("In1.Cu".to_string(), shape)].into(), ..Default::default() });
-    let line = |a: Point, z: Point| PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100, filled: false, start: a, end: z }, proxy: false };
-    let mut bad_shape = PadLayerShape::plain(PadShape::Custom, (1_000, 1_000));
+    let line = |a: Point, z: Point| PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100_000, filled: false, start: a, end: z }, proxy: false };
+    let mut bad_shape = PadLayerShape::plain(PadShape::Custom, (1_000_000, 1_000_000));
     bad_shape.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(0, 0), p(0, 0))] });
     assert!(refusal(&mut b, custom_layer(bad_shape)).contains("Basic shape 1 on In1.Cu"));
-    let mut two_pieces = PadLayerShape::plain(PadShape::Custom, (1_000, 1_000));
-    two_pieces.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(5_000, 5_000), p(6_000, 5_000))] });
+    let mut two_pieces = PadLayerShape::plain(PadShape::Custom, (1_000_000, 1_000_000));
+    two_pieces.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(5_000_000, 5_000_000), p(6_000_000, 5_000_000))] });
     assert!(refusal(&mut b, custom_layer(two_pieces)).contains("single polygon"));
-    let mut chamfer = PadLayerShape::plain(PadShape::ChamferedRect, (1_000, 1_000));
+    let mut chamfer = PadLayerShape::plain(PadShape::ChamferedRect, (1_000_000, 1_000_000));
     chamfer.chamfer_ratio = Some(0.7);
     chamfer.chamfer_corners = ChamferCorners { top_left: true, top_right: true, ..Default::default() };
     assert!(refusal(&mut b, custom_layer(chamfer)).contains("corner chamfer is too large"));
-    let negative = PadLayerShape::plain(PadShape::Rect, (-5, 1_000));
+    let negative = PadLayerShape::plain(PadShape::Rect, (-5000, 1_000_000));
     assert!(refusal(&mut b, custom_layer(negative)).contains("must not be negative"));
     // The edit that was refused left the one before it.
     assert_eq!(pad_after_edits(&b, &m, "U1", "1").ext.stack.unconnected, UnconnectedLayers::RemoveAll);
@@ -458,7 +458,7 @@ fn a_footprints_pad_edit_that_differs_from_the_libraries_padstack_is_found_by_pa
     let m = model(&["F.Cu", "B.Cu"]);
     let lib = m.library_footprint_of(m.part("U1").unwrap()).unwrap();
     let mut edited = lib.clone();
-    edited.pads[0].ext.stack = PadStack { mode: PadStackMode::FrontInnerBack, back: Some(PadLayerShape::plain(PadShape::Oval, (2_000, 900))), ..Default::default() };
+    edited.pads[0].ext.stack = PadStack { mode: PadStackMode::FrontInnerBack, back: Some(PadLayerShape::plain(PadShape::Oval, (2_000_000, 900_000))), ..Default::default() };
     let edits = eda_model::fp_edit::pad_edits_between(&lib, &edited);
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0].stack.as_ref().map(|s| s.mode), Some(PadStackMode::FrontInnerBack));

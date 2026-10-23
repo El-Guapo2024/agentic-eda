@@ -9,8 +9,7 @@
 //! Ported from `MICROWAVE_TOOL::createFootprint`, `createBaseFootprint` (`pcbnew/microwave/microwave_footprint.cpp`), `createMicrowaveInductor`,
 //! `BuildCornersList_S_Shape` and `gen_arc` (`microwave_inductor.cpp`), `createPolygonShape` and `MWAVE_POLYGONAL_SHAPE_DLG::ReadDataShapeDescr`
 //! (`microwave_polygon.cpp`), with `PCB_BASE_FRAME::CreateNewFootprint` (`footprint_libraries_utils.cpp`) for the fields every one of them starts from.
-//! KiCad works in nanometres, as `int`s: the arithmetic here is theirs, in nanometres, and only the finished coordinates are rounded to the micrometre
-//! this IR keeps (half away from zero, `KiROUND`'s way).
+//! KiCad works in nanometres, as `int`s: the arithmetic here is theirs, in nanometres, and so are the IR's coordinates.
 
 use super::pcb_transform::FlipDirection;
 use super::Board;
@@ -134,7 +133,7 @@ impl MicrowaveCmd {
 
     /// The one-line description the CLI journal and the activity feed show.
     pub fn describe(&self) -> String {
-        let mm = |v: Nm| format!("{:.3}", v as f64 / 1000.0);
+        let mm = |v: Nm| format!("{:.3}", eda_model::units::to_mm(v));
         match self {
             MicrowaveCmd::Gap { at, size_nm, track_width_nm, .. } => format!("microwave gap --at {},{} --size {} --track-width {}", mm(at.x), mm(at.y), mm(*size_nm), mm(*track_width_nm)),
             MicrowaveCmd::Stub { at, size_nm, track_width_nm, .. } => format!("microwave stub --at {},{} --size {} --track-width {}", mm(at.x), mm(at.y), mm(*size_nm), mm(*track_width_nm)),
@@ -163,8 +162,6 @@ pub const INDUCTOR_NAME: &str = "mw_inductor";
 
 // ------------------------------------------------------------------------------------------------------------------------ KiCad's arithmetic
 
-/// Internal units per micrometre: KiCad's unit is the nanometre.
-const NM_PER_UM: i64 = 1000;
 /// `ARC_HIGH_DEF`: the error `gen_arc` allows an arc approximated by segments, 0.005 mm.
 const ARC_HIGH_DEF_NM: i64 = 5_000;
 /// `pcbIUScale.IU_PER_MM` and the inch the shape file's `Unit=inch` means (`IU_PER_MILS * 1000`).
@@ -174,21 +171,8 @@ const IU_PER_INCH: f64 = 25_400_000.0;
 /// A point in KiCad's units.
 type P = (i64, i64);
 
-fn nm(um: Nm) -> i64 {
-    um * NM_PER_UM
-}
-
-/// A coordinate KiCad holds to the nanometre, in the micrometres this IR holds (half away from zero).
-fn um_of(nm: i64) -> Nm {
-    if nm >= 0 {
-        (nm + NM_PER_UM / 2) / NM_PER_UM
-    } else {
-        -((-nm + NM_PER_UM / 2) / NM_PER_UM)
-    }
-}
-
 fn point_nm(p: P) -> Point {
-    Point { x: um_of(p.0), y: um_of(p.1) }
+    Point { x: p.0, y: p.1 }
 }
 
 /// `KiROUND`: `llround`, half away from zero.
@@ -620,8 +604,8 @@ pub struct Built {
 /// above 0); the attributes `exclude from position files` and `exclude from BOM`; `pad_count` square SMD pads of the track width at the origin, on the front copper layer and nowhere else.
 fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &str, text_size: Nm, pad_count: usize, track_width: Nm) -> Built {
     // `default_pos` of `CreateNewFootprint`: the Reference half a text height above the origin, the Value below it, the next text under that.
-    let silk_h = nm(defaults.text_size_nm("F.SilkS").1);
-    let fab_h = nm(defaults.text_size_nm("F.Fab").1);
+    let silk_h = defaults.text_size_nm("F.SilkS").1;
+    let fab_h = defaults.text_size_nm("F.Fab").1;
     let mut y = 0_i64;
     y -= silk_h / 2;
     let reference_y = y;
@@ -633,7 +617,7 @@ fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &st
     let user_y = y;
 
     let styled = |at_y: i64, layer: &str| {
-        let mut l = FieldLayout::new(Point { x: 0, y: um_of(at_y) }, layer);
+        let mut l = FieldLayout::new(Point { x: 0, y: at_y }, layer);
         l.size = defaults.text_size_nm(layer);
         l.thickness = defaults.text_thickness_nm(layer);
         let (italic, upright) = defaults.text_italic_upright(layer);
@@ -646,7 +630,7 @@ fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &st
     if text_size > 0 {
         for l in [&mut reference, &mut value_layout] {
             l.size = (text_size, text_size);
-            l.thickness = um_of(nm(text_size) / 5);
+            l.thickness = text_size / 5;
         }
     }
 
@@ -683,7 +667,7 @@ fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &st
     let user_text = Text {
         id: String::new(),
         content: "${REFERENCE}".to_string(),
-        at: Point { x: 0, y: um_of(user_y) },
+        at: Point { x: 0, y: user_y },
         angle: 0,
         layer: "F.Fab".to_string(),
         size_nm: user_h,
@@ -700,7 +684,7 @@ fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &st
         reference: Some(reference.clone()),
         value: Some(value_layout.clone()),
         // KiCad's tools make no courtyard, and the file has none (`FootprintExtra::no_courtyard`); the engine would otherwise derive a keep-out from the pads, and the placement gates
-        // would refuse (under Strict) what these footprints are for -- elements that touch and overlap, a stub on its line. A point (1 um) keeps them out of that; the copper is still judged
+        // would refuse (under Strict) what these footprints are for -- elements that touch and overlap, a stub on its line. A point (1 nm) keeps them out of that; the copper is still judged
         // by the routing and DRC checks.
         courtyard: Some((1, 1)),
         ..LibraryFootprint::new_empty(name)
@@ -723,10 +707,10 @@ fn build_gap(defaults: &TextGraphicsDefaults, gap_nm: Nm, track_width: Nm) -> Re
     }
     // The texts take the track width as their size (`text_size = gap_size` is read before the dialog changes `gap_size`).
     let mut built = create_base_footprint(defaults, GAP_NAME, GAP_NAME, track_width, 2, track_width);
-    let (gap, w) = (nm(gap_nm), nm(track_width));
+    let (gap, w) = (gap_nm, track_width);
     let offset_x = -(gap + w) / 2;
-    built.footprint.pads[0].at.x = um_of(offset_x);
-    built.footprint.pads[1].at.x = um_of(offset_x + gap + w);
+    built.footprint.pads[0].at.x = offset_x;
+    built.footprint.pads[1].at.x = offset_x + gap + w;
     Ok(built)
 }
 
@@ -737,10 +721,10 @@ fn build_stub(defaults: &TextGraphicsDefaults, stub_nm: Nm, track_width: Nm) -> 
         return Err(fail("ops_bad_microwave", STUB_NAME, "the size of a stub must be greater than zero"));
     }
     let mut built = create_base_footprint(defaults, STUB_NAME, STUB_NAME, track_width, 2, track_width);
-    let (stub, h) = (nm(stub_nm), nm(track_width));
+    let (stub, h) = (stub_nm, track_width);
     let offset_y = -(stub + h) / 2;
     built.footprint.pads[1].size = (track_width, stub_nm);
-    built.footprint.pads[1].at.y = um_of(offset_y);
+    built.footprint.pads[1].at.y = offset_y;
     Ok(built)
 }
 
@@ -754,7 +738,7 @@ fn build_arc_stub(defaults: &TextGraphicsDefaults, radius_nm: Nm, angle_millideg
     let angle = (angle_millideg.abs().min(180_000)) as f64 / 1000.0;
     // The texts keep the board's default size (`text_size` is 0 for the arc stub).
     let mut built = create_base_footprint(defaults, ARC_STUB_NAME, ARC_STUB_NAME, 0, 1, track_width);
-    let radius = nm(radius_nm);
+    let radius = radius_nm;
 
     let num_points = (angle / 5.0 + 3.0) as i64;
     let mut poly: Vec<P> = Vec::with_capacity(num_points.max(3) as usize);
@@ -785,8 +769,8 @@ fn build_arc_stub(defaults: &TextGraphicsDefaults, radius_nm: Nm, angle_millideg
 fn build_function_shape(defaults: &TextGraphicsDefaults, file: &str, kind: ShapeKind, size_x_nm: Option<Nm>, size_y_nm: Option<Nm>, track_width: Nm) -> Result<Built, Vec<CheckResult>> {
     check_width(POLYGON_NAME, track_width)?;
     let shape = read_shape_file(file);
-    let scale_x = size_x_nm.map_or(shape.scale_x, |v| nm(v) as f64);
-    let mut scale_y = size_y_nm.map_or(shape.scale_y, |v| nm(v) as f64);
+    let scale_x = size_x_nm.map_or(shape.scale_x, |v| v as f64);
+    let mut scale_y = size_y_nm.map_or(shape.scale_y, |v| v as f64);
     if kind == ShapeKind::Mirrored {
         scale_y = -scale_y;
     }
@@ -802,8 +786,8 @@ fn build_function_shape(defaults: &TextGraphicsDefaults, file: &str, kind: Shape
     let mut built = create_base_footprint(defaults, POLYGON_NAME, POLYGON_NAME, 0, 2, track_width);
     // The anchor in the middle of the shape's length.
     let offset = (-size.0 / 2, 0_i64);
-    built.footprint.pads[0].at.x = um_of(offset.0);
-    built.footprint.pads[1].at.x = um_of(offset.0 + size.0);
+    built.footprint.pads[0].at.x = offset.0;
+    built.footprint.pads[1].at.x = offset.0 + size.0;
 
     let mut poly: Vec<P> = Vec::with_capacity(shape.edges.len() * 2 + 2);
     poly.push((offset.0, 0));
@@ -834,16 +818,16 @@ pub fn inductor_corners(start: Point, end: Point, length_nm: Nm, width_nm: Nm) -
     if width_nm <= 0 {
         return Err("the track width must be greater than zero".to_string());
     }
-    let (s, e) = ((nm(start.x), nm(start.y)), (nm(end.x), nm(end.y)));
+    let (s, e) = ((start.x, start.y), (end.x, end.y));
     let min_len = euclidean_norm((e.0 - s.0, e.1 - s.1));
     if min_len == 0 {
         return Err("the two ends of the inductor are the same point".to_string());
     }
-    let length = nm(length_nm);
+    let length = length_nm;
     if length < min_len {
         return Err("Requested length < minimum length".to_string());
     }
-    match build_corners_s_shape(s, e, length, nm(width_nm)) {
+    match build_corners_s_shape(s, e, length, width_nm) {
         SShape::Corners(c) => Ok(c),
         SShape::TooLong => Err("Requested length too large".to_string()),
         SShape::TooShort => Err("Requested length too small".to_string()),
@@ -857,7 +841,7 @@ pub const ILLEGAL_NAME_CHARS: &str = "%$<>\t\n\r\"\\/:";
 /// What `createMicrowaveInductor` makes of the two points, in nanometres, relative to the footprint (whose anchor is the end point): the segments of the coil and the two pads.
 fn build_inductor(defaults: &TextGraphicsDefaults, start: Point, end: Point, length_nm: Nm, name: &str, width_nm: Nm) -> Result<Built, Vec<CheckResult>> {
     check_width(INDUCTOR_NAME, width_nm)?;
-    let (s, e) = ((nm(start.x), nm(start.y)), (nm(end.x), nm(end.y)));
+    let (s, e) = ((start.x, start.y), (end.x, end.y));
     let corners = inductor_corners(start, end, length_nm, width_nm).map_err(|m| fail("ops_bad_microwave", INDUCTOR_NAME, m))?;
     let name = name.trim();
     if name.is_empty() {
@@ -902,8 +886,8 @@ fn build_inductor(defaults: &TextGraphicsDefaults, start: Point, end: Point, len
 
     // The texts at the middle of the coil, one text height above it and below it.
     let mid = ((s.0 + e.0) / 2, (s.1 + e.1) / 2);
-    let silk_h = nm(defaults.text_size_nm("F.SilkS").1);
-    let fab_h = nm(defaults.text_size_nm("F.Fab").1);
+    let silk_h = defaults.text_size_nm("F.SilkS").1;
+    let fab_h = defaults.text_size_nm("F.Fab").1;
     built.reference.at = local((mid.0, mid.1 - silk_h));
     built.value.at = local((mid.0, mid.1 + fab_h));
     built.footprint.reference = Some(built.reference.clone());

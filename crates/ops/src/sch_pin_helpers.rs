@@ -43,7 +43,7 @@ pub enum PinHelper {
 }
 
 /// The default wire grid, 50 mil (`GRID_HELPER_GRIDS::GRID_WIRES` before the user picks another).
-pub const DEFAULT_WIRE_GRID_NM: Nm = 1_270;
+pub const DEFAULT_WIRE_GRID_NM: Nm = 1_270_000;
 
 /// One pin or sheet pin as a helper sees it.
 struct Spot {

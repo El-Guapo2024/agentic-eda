@@ -54,8 +54,8 @@ fn bearing(dx: i64, dy: i64) -> &'static str {
     }
 }
 
-fn mm(um: i64) -> f64 {
-    (um as f64 / 100.0).round() / 10.0
+fn mm(nm: i64) -> f64 {
+    (nm as f64 / 100_000.0).round() / 10.0
 }
 
 /// How much of each ninth of the board is covered, so dead space is

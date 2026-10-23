@@ -12,7 +12,7 @@ fn design() -> Design {
 }
 
 fn board(m: &ConstraintModel) -> Board<'_> {
-    Board::new(design(), m, 100, 300)
+    Board::new(design(), m, 100_000, 300_000)
 }
 
 /// `Lib:Base`: a rectangle, two pins, a datasheet, a footprint and a user field.

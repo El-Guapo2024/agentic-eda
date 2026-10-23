@@ -22,8 +22,8 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 }
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM` of the label and text dialogs: "Don't allow text to disappear".
-const TEXT_SIZE_MIN_NM: Nm = 10;
-const TEXT_SIZE_MAX_NM: Nm = 1_000_000;
+const TEXT_SIZE_MIN_NM: Nm = 10_000;
+const TEXT_SIZE_MAX_NM: Nm = 1_000_000_000;
 
 /// `AutoRotateOnPlacementSupported`: a global label and a hierarchical label rotate themselves, a plain label and a directive label do not.
 pub(crate) fn auto_rotate_supported(kind: &LabelKind) -> bool {
@@ -165,9 +165,9 @@ impl<'m> Scene<'m> {
 }
 
 /// Half the pen `SCH_LINE::GetPenWidth` gives a wire with nothing set (the Default net class's 6 mil; a graphic line's `m_DefaultLineWidth` is 6 mil too) and a bus
-/// (12 mil), in micrometres.
-const HALF_WIRE_PEN_NM: Nm = 76;
-const HALF_BUS_PEN_NM: Nm = 152;
+/// (12 mil), in nanometres.
+const HALF_WIRE_PEN_NM: Nm = 76_200;
+const HALF_BUS_PEN_NM: Nm = 152_400;
 
 /// What Place Label sets on the label it puts down (`createNewLabel`: the properties dialog's result).
 #[derive(Debug, Clone, Default)]

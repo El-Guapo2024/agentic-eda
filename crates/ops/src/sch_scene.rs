@@ -489,8 +489,8 @@ impl<'m> Scene<'m> {
             Item::Seg(i) => Some((Point { x: self.segs[i].a.x.min(self.segs[i].b.x), y: self.segs[i].a.y.min(self.segs[i].b.y) }, Point { x: self.segs[i].a.x.max(self.segs[i].b.x), y: self.segs[i].a.y.max(self.segs[i].b.y) })),
             Item::NoteLine(i) => points_box(&self.sch.lines[i].pts),
             // `DEFAULT_JUNCTION_DIAMETER` 36 mil, `DEFAULT_NOCONNECT_SIZE` 48 mil: the same boxes the studio draws and picks by.
-            Item::Junction(i) => around(self.sch.junctions[i].at, 457),
-            Item::NoConnect(i) => around(self.sch.no_connects[i].at, 610),
+            Item::Junction(i) => around(self.sch.junctions[i].at, 457_200),
+            Item::NoConnect(i) => around(self.sch.no_connects[i].at, 609_600),
             Item::BusEntry(i) => {
                 let b = &self.sch.bus_entries[i];
                 points_box(&[b.at, Point { x: b.at.x + b.size.x, y: b.at.y + b.size.y }])
@@ -1055,14 +1055,14 @@ fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInsta
 fn power_shape(model: &ConstraintModel, p: &eda_model::ir::PowerSymbol) -> SymbolShape {
     match model.symbol_of(&p.lib_id) {
         Some(lib) => lib_shape(&lib, 1),
-        None => SymbolShape { pins: vec![(String::new(), (0, 0))], bbox: Some((-300, -300, 300, 300)), dirs: Vec::new() },
+        None => SymbolShape { pins: vec![(String::new(), (0, 0))], bbox: Some((-300_000, -300_000, 300_000, 300_000)), dirs: Vec::new() },
     }
 }
 
 fn lib_shape(lib: &LibSymbol, unit: u32) -> SymbolShape {
     let on_unit = |u: u32| u == 0 || u == unit;
-    // a library point (mm, y up) to the sheet's frame (micrometres, y down)
-    let um = |x: f64, y: f64| ((x * 1000.0).round() as i64, (-y * 1000.0).round() as i64);
+    // a library point (mm, y up) to the sheet's frame (nanometres on the schematic's 100 nm unit, y down)
+    let um = |x: f64, y: f64| (eda_model::units::sch_from_mm(x), eda_model::units::sch_from_mm(-y));
     let mut pins = Vec::new();
     let mut dirs = Vec::new();
     let mut pts: Vec<(i64, i64)> = Vec::new();
@@ -1111,7 +1111,7 @@ fn lib_shape(lib: &LibSymbol, unit: u32) -> SymbolShape {
 /// The spin a label has when nothing set one: read off the wire that ends at its anchor (`labelShape.ts::inferSpin`, which draws labels
 /// that way). A label no wire ends at reads to the right.
 pub(crate) fn inferred_spin(segs: &[Seg], at: Point) -> LabelSpin {
-    let tol = 50;
+    let tol = 50_000;
     let near = |p: Point| (p.x - at.x).abs() <= tol && (p.y - at.y).abs() <= tol;
     for s in segs.iter().filter(|s| !s.dead) {
         let hit = if near(s.b) {

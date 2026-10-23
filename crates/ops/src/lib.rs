@@ -209,7 +209,10 @@ pub enum Region {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SizeSpec {
     NetClass,
-    Value { um: Nm },
+    Value {
+        #[serde(alias = "um")]
+        nm: Nm,
+    },
 }
 
 /// Same idea as [`SizeSpec`], for a via's diameter+drill pair (which
@@ -723,7 +726,7 @@ pub enum Cmd {
     /// `{"op": "embedded", "verb": "add", "owner": {"kind": "board"}, "name": "part.step", "data": "<base64>"}`.
     Embedded(embedded::EmbeddedCmd),
     /// The microwave tools (`pcbnew.MicrowaveTool.*`, GAPS.md item 9, package P19): a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own, one verb family, see
-    /// [`microwave::MicrowaveCmd`]. On the wire: `{"op": "microwave", "verb": "gap", "at": {..}, "size_nm": 500, "track_width_nm": 250}`.
+    /// [`microwave::MicrowaveCmd`]. On the wire: `{"op": "microwave", "verb": "gap", "at": {..}, "size_nm": 500000, "track_width_nm": 250000}`.
     Microwave(microwave::MicrowaveCmd),
     /// The multichannel tool (GAPS.md items 24 and 32, package P24): Generate Placement Rule Areas, Repeat Layout and Apply Design Block Layout -- one verb family, see
     /// [`multichannel::MultichannelCmd`]. On the wire: `{"op": "multichannel", "verb": "repeat_layout", "reference": "zone_..", "targets": [..]}`.
@@ -3633,7 +3636,7 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail(
                 "ops_bad_via",
                 net,
-                format!("drill {drill} um is not smaller than the {diameter} um pad, so the via has no annular ring"),
+                format!("drill {} mm is not smaller than the {} mm pad, so the via has no annular ring", eda_model::units::to_mm(drill), eda_model::units::to_mm(diameter)),
             )]);
         }
         let rt = self.routing_mut();
@@ -3665,7 +3668,7 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_bad_via", id, "via drill and diameter must be positive")]);
         }
         if drill >= diameter {
-            return Err(vec![CheckResult::fail("ops_bad_via", id, format!("drill {drill} um is not smaller than the {diameter} um pad, so the via has no annular ring"))]);
+            return Err(vec![CheckResult::fail("ops_bad_via", id, format!("drill {} mm is not smaller than the {} mm pad, so the via has no annular ring", eda_model::units::to_mm(drill), eda_model::units::to_mm(diameter)))]);
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_via", id, "the board has no routing yet")])?;
         let v = rt.vias.iter_mut().find(|v| v.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_via", id, "no via with this id")])?;
@@ -3711,7 +3714,7 @@ impl<'a> Board<'a> {
         if let Some(l) = layer {
             self.known_layer(l)?;
         }
-        if let Some(SizeSpec::Value { um }) = track_width {
+        if let Some(SizeSpec::Value { nm: um }) = track_width {
             if *um <= 0 {
                 return Err(vec![CheckResult::fail("ops_bad_track", "edit_tracks_and_vias", "track width must be positive")]);
             }
@@ -3732,7 +3735,7 @@ impl<'a> Board<'a> {
                 if let Some(spec) = track_width {
                     t.width = match spec {
                         SizeSpec::NetClass => model.board.width_of(&t.net),
-                        SizeSpec::Value { um } => *um,
+                        SizeSpec::Value { nm } => *nm,
                     };
                 }
                 if let Some(l) = layer {

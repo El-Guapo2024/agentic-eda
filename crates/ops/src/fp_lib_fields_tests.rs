@@ -52,24 +52,24 @@ fn the_grid_is_stored_with_the_panel_and_a_visibility_is_the_footprints_own() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     b.apply(&Cmd::NewFootprint { name: "Test:F".into() }).unwrap();
-    let mut reference = layout(500, -2500, "F.SilkS");
-    reference.size = (1200, 1000);
+    let mut reference = layout(500_000, -2_500_000, "F.SilkS");
+    reference.size = (1_200_000, 1_000_000);
     reference.text = Some("J**".into());
     reference.visible = false; // the check box says shown: the panel's `reference_visible` wins
-    let mut mpn = layout(1500, 3000, "F.Fab");
+    let mut mpn = layout(1_500_000, 3_000_000, "F.Fab");
     mpn.bold = true;
     mpn.visible = true; // the field says hidden
-    b.apply(&panel("Test:F", "a connector", Some(reference.clone()), Some(layout(0, 2200, "F.Fab")), Some(vec![field("MPN", "ABC-1", false, Some(mpn.clone())), field("Vendor", "ACME", true, None)]))).unwrap();
+    b.apply(&panel("Test:F", "a connector", Some(reference.clone()), Some(layout(0, 2_200_000, "F.Fab")), Some(vec![field("MPN", "ABC-1", false, Some(mpn.clone())), field("Vendor", "ACME", true, None)]))).unwrap();
     let f = fp(&b, "Test:F");
     assert_eq!(f.description, "a connector");
     let r = f.reference.as_ref().expect("the Reference's layout");
-    assert_eq!((r.at, r.size, r.text.as_deref(), r.visible), (p(500, -2500), (1200, 1000), Some("J**"), true), "`reference_visible` is the Show check box");
+    assert_eq!((r.at, r.size, r.text.as_deref(), r.visible), (p(500_000, -2_500_000), (1_200_000, 1_000_000), Some("J**"), true), "`reference_visible` is the Show check box");
     let v = f.value.as_ref().expect("the Value's layout");
     assert!(!v.visible && !f.value_visible, "the Value is hidden, in both places");
     assert_eq!(f.fields.len(), 2);
     assert_eq!((f.fields[0].name.as_str(), f.fields[0].value.as_str(), f.fields[0].visible), ("MPN", "ABC-1", false));
     let l = f.fields[0].layout.as_ref().unwrap();
-    assert_eq!((l.at, l.bold, l.visible), (p(1500, 3000), true, false), "a field's layout follows its own `visible`");
+    assert_eq!((l.at, l.bold, l.visible), (p(1_500_000, 3_000_000), true, false), "a field's layout follows its own `visible`");
     assert!(f.fields[1].layout.is_none(), "a field with no layout keeps none: the file gives it the default");
 }
 
@@ -78,7 +78,7 @@ fn a_panel_that_leaves_the_grid_out_keeps_it_and_an_empty_list_clears_the_fields
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     b.apply(&Cmd::NewFootprint { name: "Test:F".into() }).unwrap();
-    b.apply(&panel("Test:F", "one", Some(layout(0, -2000, "F.SilkS")), None, Some(vec![field("MPN", "x", true, None)]))).unwrap();
+    b.apply(&panel("Test:F", "one", Some(layout(0, -2_000_000, "F.SilkS")), None, Some(vec![field("MPN", "x", true, None)]))).unwrap();
     b.apply(&panel("Test:F", "two", None, None, None)).unwrap();
     let f = fp(&b, "Test:F");
     assert_eq!(f.description, "two");
@@ -97,9 +97,9 @@ fn a_row_the_dialog_would_refuse_is_refused_before_anything_of_the_panel_is_take
     let mut b = board(&m);
     b.apply(&Cmd::NewFootprint { name: "Test:F".into() }).unwrap();
     let mut tiny = layout(0, 0, "F.Fab");
-    tiny.size = (0, 1000);
+    tiny.size = (0, 1_000_000);
     let mut thick = layout(0, 0, "F.Fab");
-    thick.thickness = 900;
+    thick.thickness = 900_000;
     let cases: Vec<(Vec<FootprintField>, &str)> = vec![
         (vec![field("", "text", true, None)], "Fields must have a name."),
         (vec![field(" MPN", "x", true, None)], "starts or ends with a space"),

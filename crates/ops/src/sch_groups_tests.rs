@@ -10,7 +10,7 @@ use crate::sch_move::SchMoveCmd;
 use eda_model::ir::{Group, Junction, LabelKind, NetLabel, NoConnect, PowerSymbol, Provenance, SchLine, SchematicSection, SchematicText, SymbolInstance, Wire};
 use std::collections::BTreeMap;
 
-const G: Nm = 1_270;
+const G: Nm = 1_270_000;
 
 fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
@@ -32,19 +32,19 @@ fn wire(id: &str, pts: &[Point]) -> Wire {
 /// resistors' tops), and R3 and a far-away text outside any group.
 fn sheet() -> SchematicSection {
     let mut s = SchematicSection { imported_from_kicad: true, ..Default::default() };
-    s.symbols.push(sym("R1", p(20_320, 25_400)));
-    s.symbols.push(sym("R2", p(40_640, 25_400)));
-    s.symbols.push(sym("R3", p(101_600, 25_400)));
+    s.symbols.push(sym("R1", p(20_320_000, 25_400_000)));
+    s.symbols.push(sym("R2", p(40_640_000, 25_400_000)));
+    s.symbols.push(sym("R3", p(101_600_000, 25_400_000)));
     // R1's pin 1 to R2's pin 1 (a wire the group holds), and one from R2's pin 2 away to the right (outside every group)
-    s.wires.push(wire("wire_in", &[p(20_320, 21_590), p(20_320, 17_780), p(40_640, 17_780), p(40_640, 21_590)]));
-    s.wires.push(wire("wire_out", &[p(40_640, 29_210), p(40_640, 33_020), p(63_500, 33_020)]));
-    s.labels.push(NetLabel { id: "lbl_a".into(), net: "A".into(), at: p(63_500, 33_020), kind: LabelKind::Local });
-    s.texts.push(SchematicText { id: "txt_a".into(), content: "note".into(), at: p(30_480, 50_800), angle: 0, size_nm: 1_270 });
-    s.texts.push(SchematicText { id: "txt_far".into(), content: "far".into(), at: p(152_400, 50_800), angle: 0, size_nm: 1_270 });
-    s.no_connects.push(NoConnect { id: "nc_a".into(), at: p(20_320, 29_210), pin: String::new() });
-    s.lines.push(SchLine { id: "sln_a".into(), pts: vec![p(10_160, 63_500), p(50_800, 63_500)], width_nm: 0 });
-    s.junctions.push(Junction { id: "jct_a".into(), at: p(30_480, 17_780) });
-    s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(76_200, 38_100), rot: 0, net: "GND".into(), pin: String::new() });
+    s.wires.push(wire("wire_in", &[p(20_320_000, 21_590_000), p(20_320_000, 17_780_000), p(40_640_000, 17_780_000), p(40_640_000, 21_590_000)]));
+    s.wires.push(wire("wire_out", &[p(40_640_000, 29_210_000), p(40_640_000, 33_020_000), p(63_500_000, 33_020_000)]));
+    s.labels.push(NetLabel { id: "lbl_a".into(), net: "A".into(), at: p(63_500_000, 33_020_000), kind: LabelKind::Local });
+    s.texts.push(SchematicText { id: "txt_a".into(), content: "note".into(), at: p(30_480_000, 50_800_000), angle: 0, size_nm: 1_270_000 });
+    s.texts.push(SchematicText { id: "txt_far".into(), content: "far".into(), at: p(152_400_000, 50_800_000), angle: 0, size_nm: 1_270_000 });
+    s.no_connects.push(NoConnect { id: "nc_a".into(), at: p(20_320_000, 29_210_000), pin: String::new() });
+    s.lines.push(SchLine { id: "sln_a".into(), pts: vec![p(10_160_000, 63_500_000), p(50_800_000, 63_500_000)], width_nm: 0 });
+    s.junctions.push(Junction { id: "jct_a".into(), at: p(30_480_000, 17_780_000) });
+    s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(76_200_000, 38_100_000), rot: 0, net: "GND".into(), pin: String::new() });
     s.assign_missing_ids();
     s
 }
@@ -66,7 +66,7 @@ fn design_with(sch: SchematicSection) -> Design {
 }
 
 fn board(m: &ConstraintModel, sch: SchematicSection) -> Board<'_> {
-    Board::new(design_with(sch), m, 100, 300)
+    Board::new(design_with(sch), m, 100_000, 300_000)
 }
 
 fn sch(b: &Board<'_>) -> SchematicSection {
@@ -281,8 +281,8 @@ fn dragging_a_group_stretches_nothing_attached_to_it() {
     held.apply(&Cmd::SchMove(SchMoveCmd::Drag { ids: ids(&["grp_inner"]), vertices: BTreeMap::new(), dx: 0, dy: 3 * G, ortho: true, grid: 0, turns: Vec::new(), about: None })).unwrap();
     let s = sch(&held);
     assert_eq!(s.wires.iter().find(|w| w.id == "wire_out").unwrap().pts, nested().wires[1].pts, "the wire outside the group stays");
-    assert_eq!(symbol_at(&s, "R2"), p(40_640, 25_400 + 3 * G));
-    assert_eq!(symbol_at(&s, "R1"), p(20_320, 25_400 + 3 * G));
+    assert_eq!(symbol_at(&s, "R2"), p(40_640_000, 25_400_000 + 3 * G));
+    assert_eq!(symbol_at(&s, "R1"), p(20_320_000, 25_400_000 + 3 * G));
 }
 
 #[test]
@@ -297,7 +297,7 @@ fn a_lone_group_turns_on_itself_about_the_half_grid_point_nearest_its_centre() {
     assert_eq!(s.symbols.iter().find(|x| x.id == "R2").unwrap().rot, 90_000);
     let (r1, r2) = (symbol_at(&s, "R1"), symbol_at(&s, "R2"));
     // two points 20.32 mm apart on a row are now 20.32 mm apart on a column (R2 above R1: the sheet's y runs down, counter-clockwise takes right to up)
-    assert_eq!((r2.x - r1.x, r2.y - r1.y), (0, -20_320));
+    assert_eq!((r2.x - r1.x, r2.y - r1.y), (0, -20_320_000));
     // R3 is in the outer group, not the inner one: it stays
     assert_eq!(symbol_at(&s, "R3"), symbol_at(&before, "R3"));
     // the tree is unchanged
@@ -333,7 +333,7 @@ fn a_group_with_a_locked_item_below_it_is_no_selection() {
     let mut b = board(&m, s);
     let err = b.apply(&mv(&["grp_outer"], G, 0)).unwrap_err();
     assert_eq!(err[0].check, "ops_locked", "`FilterSelectionForLockedItems`: a locked descendant keeps the whole group still");
-    assert_eq!(symbol_at(&sch(&b), "R1"), p(20_320, 25_400));
+    assert_eq!(symbol_at(&sch(&b), "R1"), p(20_320_000, 25_400_000));
     // locking the group locks what is below it
     let mut s = nested();
     s.extras.set_locked("grp_inner", true);
@@ -382,14 +382,14 @@ fn a_renamed_reference_stays_in_its_group() {
 fn an_item_made_while_a_group_is_entered_joins_it() {
     let m = ConstraintModel::default();
     let mut b = board(&m, nested());
-    let add = Cmd::AddSchText { content: "new".into(), at: p(10_160, 76_200), angle_millideg: 0, size_nm: 1_270 };
+    let add = Cmd::AddSchText { content: "new".into(), at: p(10_160_000, 76_200_000), angle_millideg: 0, size_nm: 1_270_000 };
     b.apply(&Cmd::InGroup { group: "grp_inner".into(), cmd: Box::new(add) }).unwrap();
     let s = sch(&b);
     let new_id = s.texts.iter().find(|t| t.content == "new").unwrap().id.clone();
     assert!(members(&s, "grp_inner").contains(&new_id), "{:?}", s.extras.groups);
     assert_eq!(s.extras.parent_group(&new_id).map(|g| g.id.as_str()), Some("grp_inner"));
     // a group that is gone is not joined, and the command still stands
-    let add2 = Cmd::AddSchText { content: "second".into(), at: p(10_160, 88_900), angle_millideg: 0, size_nm: 1_270 };
+    let add2 = Cmd::AddSchText { content: "second".into(), at: p(10_160_000, 88_900_000), angle_millideg: 0, size_nm: 1_270_000 };
     b.apply(&Cmd::InGroup { group: "grp_gone".into(), cmd: Box::new(add2) }).unwrap();
     assert!(sch(&b).texts.iter().any(|t| t.content == "second"));
 }
@@ -399,14 +399,14 @@ fn groups_belong_to_the_sheet_they_are_on() {
     // a group of a sheet in `sheet_contents` is that sheet's own
     let m = ConstraintModel::default();
     let mut root = sheet();
-    root.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: p(190_500, 12_700), size: (25_400, 12_700), pins: Vec::new(), page: String::new() });
+    root.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: p(190_500_000, 12_700_000), size: (25_400_000, 12_700_000), pins: Vec::new(), page: String::new() });
     let mut d = design_with(root);
     let mut child = SchematicSection { imported_from_kicad: true, ..Default::default() };
-    child.symbols.push(sym("R5", p(20_320, 25_400)));
-    child.symbols.push(sym("R6", p(40_640, 25_400)));
+    child.symbols.push(sym("R5", p(20_320_000, 25_400_000)));
+    child.symbols.push(sym("R6", p(40_640_000, 25_400_000)));
     child.assign_missing_ids();
     d.sheet_contents = Some([("sub.kicad_sch".to_string(), child)].into_iter().collect());
-    let mut b = Board::new(d, &m, 100, 300);
+    let mut b = Board::new(d, &m, 100_000, 300_000);
     b.apply(&Cmd::OnSheet { sheet: "sheet_a".into(), cmd: Box::new(Cmd::SchEdit(V::Group { ids: ids(&["R5", "R6"]) })) }).unwrap();
     assert_eq!(b.design().sheet_contents.as_ref().unwrap()["sub.kicad_sch"].extras.groups.len(), 1);
     assert!(b.design().schematic.as_ref().unwrap().extras.groups.is_empty(), "the root has none");
@@ -426,11 +426,11 @@ use eda_model::sch_clipboard::{PasteMode, SchFragment};
 /// A fragment in KiCad's frame with `inner = {R1, w1}` held by `outer = {inner, R2, l1}`, the way a copy of a group reads back (ids as the reader gave them).
 fn grouped_fragment() -> SchFragment {
     let mut section = SchematicSection { imported_from_kicad: true, ..Default::default() };
-    section.symbols.push(sym("R1", p(100_000, 50_000)));
-    section.symbols.push(sym("R2", p(120_000, 50_000)));
-    section.wires.push(wire("w1", &[p(100_000, 46_190), p(120_000, 46_190)]));
-    section.labels.push(NetLabel { id: "l1".into(), net: "SDA".into(), at: p(130_000, 46_190), kind: LabelKind::Local });
-    section.texts.push(SchematicText { id: "t1".into(), content: "outside".into(), at: p(100_000, 70_000), angle: 0, size_nm: 1_270 });
+    section.symbols.push(sym("R1", p(100_000_000, 50_000_000)));
+    section.symbols.push(sym("R2", p(120_000_000, 50_000_000)));
+    section.wires.push(wire("w1", &[p(100_000_000, 46_190_000), p(120_000_000, 46_190_000)]));
+    section.labels.push(NetLabel { id: "l1".into(), net: "SDA".into(), at: p(130_000_000, 46_190_000), kind: LabelKind::Local });
+    section.texts.push(SchematicText { id: "t1".into(), content: "outside".into(), at: p(100_000_000, 70_000_000), angle: 0, size_nm: 1_270_000 });
     section.extras.groups = vec![Group { id: "grp_a".into(), name: "inner".into(), member_ids: ids(&["R1", "w1"]), design_block: String::new() }, Group { id: "grp_b".into(), name: "outer".into(), member_ids: ids(&["grp_a", "R2", "l1"]), design_block: String::new() }];
     let lib_symbols = ["Device:R"].iter().filter_map(|id| eda_model::symbol::builtin(id)).map(|s| LibrarySymbol::from_engine_symbol(&s)).collect();
     SchFragment { section, lib_symbols, notes: vec![], sheet_screens: Default::default() }
@@ -446,7 +446,7 @@ fn a_pasted_group_tree_comes_in_whole_with_new_ids() {
     // the sheet already has R1 and R2 (and a group of its own): the pasted resistors are numbered anew
     let mut b = board(&m, nested());
     let before = sch(&b).extras.groups.clone();
-    b.apply(&paste(&grouped_fragment(), 0, 20_000)).unwrap();
+    b.apply(&paste(&grouped_fragment(), 0, 20_000_000)).unwrap();
     let s = sch(&b);
     assert_eq!(s.extras.groups.len(), before.len() + 2, "two groups came in: {:?}", s.extras.groups);
     assert_eq!(&s.extras.groups[..before.len()], &before[..], "the groups of the sheet are as they were");
@@ -475,7 +475,7 @@ fn a_pasted_group_tree_comes_in_whole_with_new_ids() {
 fn a_pasted_tree_moves_as_a_tree() {
     // a pasted group is a group like any other: moved by its id, every member goes
     let m = ConstraintModel::default();
-    let mut b = Board::new(design_with(SchematicSection { imported_from_kicad: true, ..Default::default() }), &m, 100, 300);
+    let mut b = Board::new(design_with(SchematicSection { imported_from_kicad: true, ..Default::default() }), &m, 100_000, 300_000);
     b.apply(&paste(&grouped_fragment(), 0, 0)).unwrap();
     let before = sch(&b);
     let outer = before.extras.groups.iter().find(|g| g.name == "outer").unwrap().id.clone();
@@ -493,7 +493,7 @@ fn a_pasted_tree_moves_as_a_tree() {
 fn a_paste_into_an_entered_group_joins_it_as_a_member() {
     let m = ConstraintModel::default();
     let mut b = board(&m, nested());
-    b.apply(&Cmd::InGroup { group: "grp_outer".into(), cmd: Box::new(paste(&grouped_fragment(), 0, 20_000)) }).unwrap();
+    b.apply(&Cmd::InGroup { group: "grp_outer".into(), cmd: Box::new(paste(&grouped_fragment(), 0, 20_000_000)) }).unwrap();
     let s = sch(&b);
     // the pasted tree's top group is a member of the entered group; its own members stay in it
     let top = s.extras.groups.iter().find(|g| g.name == "outer" && g.id != "grp_outer").unwrap();

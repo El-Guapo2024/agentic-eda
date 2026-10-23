@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// `MULTICHANNEL_TOOL::GeneratePotentialRuleAreas`'s margin round the boxes of the footprints: 0.1 mm.
-const AREA_MARGIN_NM: i64 = 100;
+const AREA_MARGIN_NM: i64 = 100_000;
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
     vec![CheckResult::fail(check, what, msg.into())]

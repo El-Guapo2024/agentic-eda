@@ -223,8 +223,8 @@ pub(crate) struct FieldEdit {
 }
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM`: "Don't allow text to disappear; it can be difficult to correct if you can't select it".
-const TEXT_SIZE_MIN_NM: Nm = 10;
-const TEXT_SIZE_MAX_NM: Nm = 1_000_000;
+const TEXT_SIZE_MIN_NM: Nm = 10_000;
+const TEXT_SIZE_MAX_NM: Nm = 1_000_000_000;
 
 impl<'a> Board<'a> {
     /// Field Properties: see [`SchCmd::EditField`](crate::sch_edit::SchCmd::EditField).
@@ -278,7 +278,7 @@ impl<'a> Board<'a> {
         p.name_shown = edit.name_shown.unwrap_or(old.name_shown);
         p.no_autoplace = edit.allow_autoplace.map(|a| !a).unwrap_or(old.no_autoplace);
         // `positioningModified`: the position, the orientation or the justification as they read on the sheet
-        let moved = (anchor.0 - now.at.0).abs() > 0.5 || (anchor.1 - now.at.1).abs() > 0.5 || vertical != now.vertical || h != now.h || v != now.v;
+        let moved = (anchor.0 - now.at.0).abs() > 50.0 || (anchor.1 - now.at.1).abs() > 50.0 || vertical != now.vertical || h != now.h || v != now.v;
         let changed = p != old || edit.text.as_ref().is_some_and(|t| *t != before_text(&before, &key, &name, model));
         if !changed {
             return Err(fail("ops_field_unchanged", id, "the field already has these properties"));

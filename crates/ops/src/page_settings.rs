@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn a_user_size_over_the_boards_limit_is_refused_but_a_schematic_may_have_it() {
-        let big = PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: Some((1_500_000, 900_000)) };
+        let big = PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: Some((1_500_000_000, 900_000_000)) };
         let mut d = design(true);
         assert!(set_board_page(&mut d, &big, &TitleBlock::default()).is_err());
         set_schematic_page(&mut d, &big, &TitleBlock::default()).unwrap();

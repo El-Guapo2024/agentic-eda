@@ -64,8 +64,8 @@ fn empty_design() -> Design {
 
 fn import(text: String, fix: Option<i64>) -> (Design, ConstraintModel) {
     let model = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &model, 100, 300);
-    let req = ImportGraphics { format: GraphicsFormat::Dxf, text, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 100, group: false, fix_tolerance_nm: fix, replace_outline: false };
+    let mut b = Board::new(empty_design(), &model, 100_000, 300_000);
+    let req = ImportGraphics { format: GraphicsFormat::Dxf, text, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 100_000, group: false, fix_tolerance_nm: fix, replace_outline: false };
     b.apply(&Cmd::ImportGraphics(req)).expect("the import applies");
     (b.design().clone(), model)
 }
@@ -162,7 +162,7 @@ fn fix_discontinuities_closes_an_outline_whose_corners_miss() {
     let dir = scratch("gap");
     let pcb = write_board(&dir, &design, &model);
     assert!(has_violation(&drc(&cli, &dir, &pcb), "invalid_outline"), "the gaps are open to kicad-cli");
-    let (design, model) = import(dxf, Some(1_000));
+    let (design, model) = import(dxf, Some(1_000_000));
     let dir = scratch("gap_fixed");
     let pcb = write_board(&dir, &design, &model);
     let report = drc(&cli, &dir, &pcb);
@@ -179,9 +179,9 @@ fn an_svg_outline_is_a_closed_outline_to_kicad_cli_too() {
         return;
     };
     let model = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &model, 100, 300);
+    let mut b = Board::new(empty_design(), &model, 100_000, 300_000);
     let svg = std::fs::read_to_string(format!("{}/../kicad/tests/fixtures/board_outline_rect.svg", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    let req = ImportGraphics { format: GraphicsFormat::Svg, text: svg, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 100, group: false, fix_tolerance_nm: None, replace_outline: false };
+    let req = ImportGraphics { format: GraphicsFormat::Svg, text: svg, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 100_000, group: false, fix_tolerance_nm: None, replace_outline: false };
     b.apply(&Cmd::ImportGraphics(req)).expect("the import applies");
     let dir = scratch("svg");
     let pcb = write_board(&dir, b.design(), &model);

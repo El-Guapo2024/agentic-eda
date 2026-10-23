@@ -123,7 +123,7 @@ fn distances(board: &Board, model: &ConstraintModel, a: &str, b: &str) -> Option
             eda_model::PlacementRule::Proximity { a: ra, b: rb, max_mm, .. }
                 if (ra == a && rb == b) || (ra == b && rb == a) =>
             {
-                Some((*max_mm * 1000.0) as i64)
+                Some(eda_model::units::from_mm(*max_mm))
             }
             _ => None,
         })
@@ -227,9 +227,9 @@ pub fn repair(board: &mut Board, model: &ConstraintModel, max_steps: u32) -> usi
                     fix.mover,
                     fix.toward,
                     fix.check,
-                    fix.apart_nm as f64 / 1000.0,
-                    fix.allowed_nm as f64 / 1000.0,
-                    fix.close_nm() as f64 / 1000.0
+                    eda_model::units::to_mm(fix.apart_nm),
+                    eda_model::units::to_mm(fix.allowed_nm),
+                    eda_model::units::to_mm(fix.close_nm())
                 );
             }
             apply_fix(board, &fix, max_steps);

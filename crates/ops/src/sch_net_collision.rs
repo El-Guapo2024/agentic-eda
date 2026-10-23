@@ -22,10 +22,10 @@ use eda_model::ir::Point;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// `DEFAULT_JUNCTION_DIAM`, 36 mil: the preview junction's effective diameter (`SCH_JUNCTION::GetEffectiveDiameter`), micrometres.
-const JUNCTION_DIAMETER_NM: f64 = 914.4;
-/// "std::max( base * 1.5, 800.0 )" and "std::max( { 800.0, ... } )": 800 nm, micrometres.
-const MIN_RADIUS_NM: f64 = 0.8;
+/// `DEFAULT_JUNCTION_DIAM`, 36 mil: the preview junction's effective diameter (`SCH_JUNCTION::GetEffectiveDiameter`), nanometres.
+const JUNCTION_DIAMETER_NM: f64 = 914_400.0;
+/// "std::max( base * 1.5, 800.0 )" and "std::max( { 800.0, ... } )": 800 nm.
+const MIN_RADIUS_NM: f64 = 800.0;
 
 /// A circle where the held items would join two nets (`COLLISION_MARKER`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -329,8 +329,8 @@ fn pen_width_nm(scene: &Scene, it: Item) -> f64 {
             let stroke = scene.segs[i].from.and_then(|(wi, _)| scene.sch.extras.strokes.get(&scene.meta[wi].id)).map(|s| s.width_nm).filter(|w| *w > 0);
             match stroke {
                 Some(w) => w as f64,
-                None if scene.segs[i].bus => 304.8,
-                None => 152.4,
+                None if scene.segs[i].bus => 304_800.0,
+                None => 152_400.0,
             }
         }
         Item::Label(i) => {

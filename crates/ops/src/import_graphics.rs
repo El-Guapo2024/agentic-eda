@@ -50,7 +50,7 @@ fn d_one() -> f64 {
 }
 
 fn d_dxf_width() -> Nm {
-    200
+    200_000
 }
 
 /// `Cmd::ImportGraphics`: what the Import Graphics dialog (`DIALOG_IMPORT_GRAPHICS`) hands `PlaceImportedGraphics`.
@@ -73,13 +73,13 @@ pub struct ImportGraphics {
     pub offset_x_nm: i64,
     #[serde(default)]
     pub offset_y_nm: i64,
-    /// "DXF default line width", micrometres. Not used for an SVG (its strokes carry their own widths).
+    /// "DXF default line width", nanometres. Not used for an SVG (its strokes carry their own widths).
     #[serde(default = "d_dxf_width")]
     pub line_width_nm: Nm,
     /// "Group imported items".
     #[serde(default)]
     pub group: bool,
-    /// "Fix discontinuities" with its tolerance, micrometres; `None` leaves the shapes as they are.
+    /// "Fix discontinuities" with its tolerance, nanometres; `None` leaves the shapes as they are.
     #[serde(default)]
     pub fix_tolerance_nm: Option<Nm>,
     /// Make the imported Edge.Cuts shapes the board's outline (see the module doc).
@@ -96,7 +96,7 @@ impl ImportGraphics {
     /// The plugin's reading of the file: `Err` when it cannot be read at all.
     pub fn read(&self) -> Result<Imported, String> {
         match self.format {
-            GraphicsFormat::Dxf => read_dxf(&self.text, &DxfOptions { units: self.units()?, line_width_mm: self.line_width_nm as f64 / 1000.0 }),
+            GraphicsFormat::Dxf => read_dxf(&self.text, &DxfOptions { units: self.units()?, line_width_mm: eda_model::units::to_mm(self.line_width_nm) }),
             GraphicsFormat::Svg => eda_kicad::svg_import::read_svg(&self.text),
         }
     }
@@ -106,8 +106,8 @@ impl ImportGraphics {
         Mapper {
             scale: self.scale,
             offset_mm: V2::new(self.offset_x_nm as f64 / 1.0e6, self.offset_y_nm as f64 / 1.0e6),
-            line_width_mm: if self.format == GraphicsFormat::Dxf { self.line_width_nm as f64 / 1000.0 } else { 0.0 },
-            iu_per_mm: 1000.0,
+            line_width_mm: if self.format == GraphicsFormat::Dxf { eda_model::units::to_mm(self.line_width_nm) } else { 0.0 },
+            iu_per_mm: eda_model::units::PCB_IU_PER_MM,
         }
     }
 }
@@ -145,7 +145,7 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
     let m = *mapper;
     let layer = layer.to_string();
     // Arcs with a radius KiCad cannot hold become segments: "radius < MAX_INT / 2" in its nanometres.
-    let max_radius_nm = i32::MAX as f64 / 2.0 / 1000.0;
+    let max_radius_nm = i32::MAX as f64 / 2.0;
     for shape in shapes {
         match shape {
             ImportedShape::Line { start, end, stroke } => add_line(&mut out, &m, &layer, *start, *end, stroke),

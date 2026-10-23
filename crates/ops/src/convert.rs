@@ -43,8 +43,9 @@ pub struct ConvertedPolys {
     pub consumed: Vec<String>,
 }
 
-/// `chainingEpsilon = 100` IU (nm) is a tenth of a micrometre: with integer micrometre coordinates only exact meetings chain.
-const MAX_ERROR_NM: i32 = 5;
+/// `bds.m_MaxError` (`ARC_HIGH_DEF`, 0.005 mm), the error every shape of the conversion is polygonised and inflated to. (KiCad chains
+/// segments whose ends are within `chainingEpsilon = 100` nm; here only exact meetings chain.)
+const MAX_ERROR_NM: i32 = 5_000;
 
 fn pt64(p: Point) -> Point64 {
     Point64::new(p.x, p.y)
@@ -82,7 +83,7 @@ pub fn arc_points(start: Point, mid: Point, end: Point) -> Vec<Point> {
 
 /// A circle as `SHAPE_ARC( centre - (R, 0), centre + (R, 0), centre - (R, 0) )` polygonises: `n` points on the circle.
 fn circle_ring(center: Point, r: i64) -> Vec<Point64> {
-    let n = get_arc_to_segment_count(r.clamp(1, i32::MAX as i64) as i32, 1).max(8) as usize;
+    let n = get_arc_to_segment_count(r.clamp(1, i32::MAX as i64) as i32, MAX_ERROR_NM).max(8) as usize;
     (0..n)
         .map(|k| {
             let a = std::f64::consts::TAU * k as f64 / n as f64;
@@ -99,7 +100,7 @@ fn stadium_ring(a: Point, b: Point, r: i64) -> Vec<Point64> {
         return circle_ring(a, r);
     }
     let base = dy.atan2(dx);
-    let half = (get_arc_to_segment_count(r.clamp(1, i32::MAX as i64) as i32, 1).max(8) as usize / 2).max(2);
+    let half = (get_arc_to_segment_count(r.clamp(1, i32::MAX as i64) as i32, MAX_ERROR_NM).max(8) as usize / 2).max(2);
     let cap = |c: Point, from: f64| -> Vec<Point64> {
         (0..=half)
             .map(|i| {
@@ -137,12 +138,12 @@ fn stroke_closed(ring: &[Point64], width: i64, filled: bool) -> ShapePolySet {
         return base;
     }
     let mut outer = base.clone();
-    outer.inflate(half, CornerStrategy::RoundAllCorners, 1, false);
+    outer.inflate(half, CornerStrategy::RoundAllCorners, MAX_ERROR_NM, false);
     if filled {
         return outer;
     }
     let mut inner = base;
-    inner.deflate(half, CornerStrategy::RoundAllCorners, 1);
+    inner.deflate(half, CornerStrategy::RoundAllCorners, MAX_ERROR_NM);
     if !inner.is_empty() {
         outer.boolean_subtract(&inner);
     }
@@ -407,7 +408,7 @@ pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrate
         open_graphic_polys(&items, &mut consumed, &mut set);
         set.simplify();
         if gap != 0 {
-            set.inflate(gap, CornerStrategy::RoundAllCorners, 1, false);
+            set.inflate(gap, CornerStrategy::RoundAllCorners, MAX_ERROR_NM, false);
         }
     } else {
         let mut chainer = Chainer::new(edges_of(&items));
@@ -483,49 +484,50 @@ mod tests {
 
     #[test]
     fn a_rectangle_is_its_own_outline() {
-        let d = design(vec![rect(0, 0, 10_000, 5_000, 200)]);
+        let d = design(vec![rect(0, 0, 10_000_000, 5_000_000, 200_000)]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.rings[0].len(), 4);
-        assert!((area(&r.rings[0]) - 50_000_000.0).abs() < 1.0);
+        assert!((area(&r.rings[0]) - 50_000_000_000_000.0).abs() < 1e6);
         assert_eq!(r.consumed, ids(&d));
     }
 
     #[test]
     fn a_circle_becomes_a_polygon_on_the_circle() {
-        let d = design(vec![Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, center: Point { x: 1_000, y: 2_000 }, end: Point { x: 6_000, y: 2_000 } }]);
+        let d = design(vec![Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, center: Point { x: 1_000_000, y: 2_000_000 }, end: Point { x: 6_000_000, y: 2_000_000 } }]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
         assert_eq!(r.rings.len(), 1);
         assert!(r.rings[0].len() >= 16);
         for p in &r.rings[0] {
-            let dist = ((p.x - 1_000) as f64).hypot((p.y - 2_000) as f64);
-            assert!((dist - 5_000.0).abs() < 2.0, "{dist}");
+            let dist = ((p.x - 1_000_000) as f64).hypot((p.y - 2_000_000) as f64);
+            assert!((dist - 5_000_000.0).abs() < 2_000.0, "{dist}");
         }
-        let full = std::f64::consts::PI * 25_000_000.0;
-        assert!((area(&r.rings[0]) - full).abs() / full < 0.001);
+        let full = std::f64::consts::PI * 25_000_000_000_000.0;
+        // the polygon of KiCad's `m_MaxError` (5 um, was the 1 um this port took): its area within 0.2 % of the circle's
+        assert!((area(&r.rings[0]) - full).abs() / full < 0.002);
     }
 
     #[test]
     fn four_segments_chain_into_a_square() {
-        let d = design(vec![seg((0, 0), (4_000, 0), 150), seg((4_000, 0), (4_000, 3_000), 150), seg((4_000, 3_000), (0, 3_000), 150), seg((0, 3_000), (0, 0), 150)]);
+        let d = design(vec![seg((0, 0), (4_000_000, 0), 150_000), seg((4_000_000, 0), (4_000_000, 3_000_000), 150_000), seg((4_000_000, 3_000_000), (0, 3_000_000), 150_000), seg((0, 3_000_000), (0, 0), 150_000)]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
         assert_eq!(r.rings.len(), 1, "{:?}", r.rings);
         assert_eq!(r.rings[0].len(), 4);
-        assert!((area(&r.rings[0]) - 12_000_000.0).abs() < 1.0);
+        assert!((area(&r.rings[0]) - 12_000_000_000_000.0).abs() < 1e6);
         assert_eq!(r.consumed.len(), 4);
     }
 
     #[test]
     fn segments_given_in_any_order_still_chain() {
-        let d = design(vec![seg((4_000, 3_000), (0, 3_000), 150), seg((0, 0), (4_000, 0), 150), seg((0, 3_000), (0, 0), 150), seg((4_000, 0), (4_000, 3_000), 150)]);
+        let d = design(vec![seg((4_000_000, 3_000_000), (0, 3_000_000), 150_000), seg((0, 0), (4_000_000, 0), 150_000), seg((0, 3_000_000), (0, 0), 150_000), seg((4_000_000, 0), (4_000_000, 3_000_000), 150_000)]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
         assert_eq!(r.rings.len(), 1);
-        assert!((area(&r.rings[0]) - 12_000_000.0).abs() < 1.0);
+        assert!((area(&r.rings[0]) - 12_000_000_000_000.0).abs() < 1e6);
     }
 
     #[test]
     fn an_open_chain_makes_nothing_and_consumes_nothing() {
-        let d = design(vec![seg((0, 0), (4_000, 0), 150), seg((4_000, 0), (4_000, 3_000), 150)]);
+        let d = design(vec![seg((0, 0), (4_000_000, 0), 150_000), seg((4_000_000, 0), (4_000_000, 3_000_000), 150_000)]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
         assert!(r.rings.is_empty());
         assert!(r.consumed.is_empty());
@@ -533,43 +535,43 @@ mod tests {
 
     #[test]
     fn an_arc_and_its_chord_close_a_half_disc() {
-        let arc = Shape::Arc { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: -5_000, y: 0 }, mid: Point { x: 0, y: -5_000 }, end: Point { x: 5_000, y: 0 } };
-        let chord = seg((5_000, 0), (-5_000, 0), 150);
+        let arc = Shape::Arc { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: -5_000_000, y: 0 }, mid: Point { x: 0, y: -5_000_000 }, end: Point { x: 5_000_000, y: 0 } };
+        let chord = seg((5_000_000, 0), (-5_000_000, 0), 150_000);
         let d = design(vec![arc, chord]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
         assert_eq!(r.rings.len(), 1);
         assert!(r.rings[0].len() > 12, "{} points", r.rings[0].len());
-        let half = std::f64::consts::PI * 25_000_000.0 / 2.0;
+        let half = std::f64::consts::PI * 25_000_000_000_000.0 / 2.0;
         assert!((area(&r.rings[0]) - half).abs() / half < 0.01, "{}", area(&r.rings[0]));
         assert_eq!(r.consumed.len(), 2);
     }
 
     #[test]
     fn the_hull_of_two_crossing_lines_is_one_polygon_with_their_width() {
-        let d = design(vec![seg((0, 0), (10_000, 0), 1_000), seg((5_000, -5_000), (5_000, 5_000), 1_000)]);
+        let d = design(vec![seg((0, 0), (10_000_000, 0), 1_000_000), seg((5_000_000, -5_000_000), (5_000_000, 5_000_000), 1_000_000)]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, 0);
         assert_eq!(r.rings.len(), 1);
         // a plus sign: 2 bars of (10000+1000) x 1000 and (10000+1000) x 1000 overlapping in 1000 x 1000, round caps trim the ends
-        let expected = 2.0 * (10_000.0 * 1_000.0 + std::f64::consts::PI * 500.0 * 500.0) - 1_000_000.0;
+        let expected = 2.0 * (10_000_000.0 * 1_000_000.0 + std::f64::consts::PI * 500_000.0 * 500_000.0) - 1_000_000_000_000.0;
         assert!((area(&r.rings[0]) - expected).abs() / expected < 0.01, "{} vs {}", area(&r.rings[0]), expected);
         assert_eq!(r.consumed.len(), 2);
     }
 
     #[test]
     fn the_hull_gap_grows_the_polygon() {
-        let d = design(vec![seg((0, 0), (10_000, 0), 1_000)]);
+        let d = design(vec![seg((0, 0), (10_000_000, 0), 1_000_000)]);
         let plain = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, 0);
-        let grown = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, 500);
+        let grown = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, 500_000);
         assert!(area(&grown.rings[0]) > area(&plain.rings[0]) * 1.5);
     }
 
     #[test]
     fn the_hull_of_an_outline_rectangle_is_a_ring_bridged_into_one_polygon() {
-        let d = design(vec![rect(0, 0, 10_000, 10_000, 200)]);
+        let d = design(vec![rect(0, 0, 10_000_000, 10_000_000, 200_000)]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, 0);
         assert_eq!(r.rings.len(), 1);
         // (10200^2 - 9800^2) minus the rounded outer corners
-        let expected = 10_200.0_f64.powi(2) - 9_800.0_f64.powi(2);
+        let expected = 10_200_000.0_f64.powi(2) - 9_800_000.0_f64.powi(2);
         assert!((area(&r.rings[0]) - expected).abs() / expected < 0.02, "{}", area(&r.rings[0]));
         assert!(r.rings[0].len() > 8);
     }
@@ -578,8 +580,8 @@ mod tests {
     fn tracks_and_vias_join_the_hull() {
         let mut d = design(vec![]);
         let rt = d.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: "F.Cu".into(), width: 500, pts: vec![Point { x: 0, y: 0 }, Point { x: 4_000, y: 0 }], arc_mid_offset: None });
-        rt.vias.push(Via { id: "v1".into(), net: "N".into(), at: Point { x: 4_000, y: 0 }, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: "F.Cu".into(), width: 500_000, pts: vec![Point { x: 0, y: 0 }, Point { x: 4_000_000, y: 0 }], arc_mid_offset: None });
+        rt.vias.push(Via { id: "v1".into(), net: "N".into(), at: Point { x: 4_000_000, y: 0 }, drill: 300_000, diameter: 800_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let r = polys_from_items(&d, &["t1".to_string(), "v1".to_string()], ConvertStrategy::BoundingHull, 0);
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.consumed, vec!["t1".to_string(), "v1".to_string()]);
@@ -589,7 +591,7 @@ mod tests {
     fn a_zone_outline_is_taken_as_it_is() {
         let mut d = design(vec![]);
         let rt = d.routing.as_mut().unwrap();
-        rt.zones.push(Zone { id: "z1".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 3_000, y: 0 }, Point { x: 3_000, y: 3_000 }], ..Default::default() });
+        rt.zones.push(Zone { id: "z1".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 3_000_000, y: 0 }, Point { x: 3_000_000, y: 3_000_000 }], ..Default::default() });
         let r = polys_from_items(&d, &["z1".to_string()], ConvertStrategy::Centerline, 0);
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.rings[0].len(), 3);
@@ -598,7 +600,7 @@ mod tests {
 
     #[test]
     fn unknown_ids_are_ignored() {
-        let d = design(vec![rect(0, 0, 100, 100, 10)]);
+        let d = design(vec![rect(0, 0, 100_000, 100_000, 10_000)]);
         let r = polys_from_items(&d, &["nope".to_string()], ConvertStrategy::Centerline, 0);
         assert!(r.rings.is_empty() && r.consumed.is_empty());
     }
