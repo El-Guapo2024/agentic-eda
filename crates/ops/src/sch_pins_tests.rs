@@ -120,7 +120,7 @@ fn pin_points(sch: &eda_model::ir::SchematicSection) -> BTreeMap<String, Point> 
 fn traced(sch: &eda_model::ir::SchematicSection) -> Vec<(Vec<String>, Option<String>)> {
     let mut copy = sch.clone();
     let mut screens = vec![eda_engine::nets::ScreenIn { path: Vec::new(), sch: &mut copy, file: String::new(), pins: pin_points(sch) }];
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: None };
+    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: None, bus_members: None };
     let mut out: Vec<(Vec<String>, Option<String>)> = eda_engine::nets::trace_nets_with(&mut screens, &naming).into_iter().map(|t| (t.pins.clone(), t.driven.then(|| t.name.clone()))).collect();
     out.sort();
     out

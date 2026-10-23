@@ -81,7 +81,7 @@
     return JSON.stringify(out);
   };
   const restore = async (baseline) => {
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 24; i++) {
       if ((await snapshot()) === baseline) return i;
       await undo();
     }
@@ -152,6 +152,59 @@
       t(root2.sheets.length === root0.sheets.length, "one undo takes the copy away");
       const back = await sch(orig.id);
       t(back.symbols.every((s) => (s.reference ?? s.id) === s.id), "and the screen is shown once again");
+    });
+
+    // ----- (b) a bus across sheets
+    await scenario("A bus across sheets: a member's nets on the two sheets are one net; Delete of the root's bus parts them, one undo joins them again", async (t) => {
+      const root = await sch("");
+      const mcu = root.sheets.find((s) => s.name.startsWith("MCU"));
+      const led = root.sheets.find((s) => s.name.startsWith("LED"));
+      if (!mcu || !led) { t(false, "the MCU and LED sheets of mcu30"); return; }
+      const pinAt = (sheet, name) => sheet.pins.find((p) => p.name === name)?.at;
+      const pa0 = pinAt(led, "PA0");
+      const pa1 = pinAt(led, "PA1");
+      t(!!pa0 && !!pa1, "the LED sheet has the pins PA0 and PA1");
+      // the pins PA0 and PA1 are on, on each sheet
+      const pinsOn = async (sheetId, net) => (await sch(sheetId)).symbols.flatMap((s) => s.pins.filter((p) => p.net === net).map((p) => `${s.reference ?? s.id}.${p.number}`));
+      const ledPA0 = await pinsOn(led.id, "PA0");
+      const mcuPA0 = await pinsOn(mcu.id, "PA0");
+      t(ledPA0.length > 0 && mcuPA0.length > 0, `PA0 has pins on both sheets (${mcuPA0} / ${ledPA0})`);
+      const netOf = async (sheetId, pin) => { const [ref, num] = pin.split("."); const s = (await sch(sheetId)).symbols.find((x) => (x.reference ?? x.id) === ref); return s?.pins.find((p) => p.number === num)?.net ?? null; };
+      // take the root's wires off the LED sheet's PA0 and PA1: the two sheets' PA0 nets part
+      for (const w of root.wires.filter((w) => w.pts.some((q) => same(q, pa0) || same(q, pa1)))) await post({ op: "delete_wire", id: w.id });
+      await sleep(400);
+      t((await netOf(led.id, ledPA0[0])) !== (await netOf(mcu.id, mcuPA0[0])), "without the root's wire the two sheets' PA0 are apart");
+      // a bus PB[0..1] across the sheets: PB0 and PB1 beside PA0 and PA1 inside each sheet, a bus there with the hierarchical label, a bus pin on each
+      // sheet and a bus on the root between the pins
+      for (const sh of [mcu, led]) {
+        const inside = await sch(sh.id);
+        for (const [pa, pb] of [["PA0", "PB0"], ["PA1", "PB1"]]) {
+          const hl = inside.labels.find((l) => l.net === pa && l.scope === "hierarchical");
+          const r = await post({ op: "add_label", net: pb, at: { x: hl.at[0], y: hl.at[1] }, kind: { scope: "local" } }, sh.id);
+          t(r.ok !== false, `${pb} beside ${pa} in ${sh.name}`);
+        }
+        await post({ op: "add_wire", pts: [{ x: 12700, y: 12700 }, { x: 38100, y: 12700 }], bus: true }, sh.id);
+        await post({ op: "add_label", net: "PB[0..1]", at: { x: 12700, y: 12700 }, kind: { scope: "hierarchical", shape: "bidirectional" } }, sh.id);
+        await post({ op: "sch_edit", verb: "add_sheet_pin", sheet: sh.id, name: "PB[0..1]", shape: "bidirectional", at: { x: sh.at[0] + 2540, y: sh.at[1] } });
+      }
+      const top = Math.min(mcu.at[1], led.at[1]) - 5080;
+      const [m, l] = [[mcu.at[0] + 2540, mcu.at[1]], [led.at[0] + 2540, led.at[1]]];
+      const added = await post({ op: "add_wire", pts: [{ x: m[0], y: m[1] }, { x: m[0], y: top }, { x: l[0], y: top }, { x: l[0], y: l[1] }], bus: true });
+      t(added.ok !== false, "the root's bus between the two pins");
+      await sleep(400);
+      const joined = await netOf(led.id, ledPA0[0]);
+      t(joined !== null && joined === (await netOf(mcu.id, mcuPA0[0])), `through the bus the two sheets' PA0 are one net again (${joined})`);
+      const r2 = await sch("");
+      const busWire = r2.wires.find((w) => w.bus && w.pts.some((q) => same(q, m)));
+      t(!!busWire && (busWire.members ?? []).length === 2 && busWire.net === "PB[0..1]", `the root's bus is PB[0..1] with its two members (${busWire?.net}: ${busWire?.members})`);
+      // the user deletes the root's bus: apart; one undo: one net again
+      await select([busWire.id]);
+      await __eda.run("common.Interactive.delete");
+      await sleep(900);
+      t(!(await sch("")).wires.some((w) => w.id === busWire.id), "Delete takes the root's bus away");
+      t((await netOf(led.id, ledPA0[0])) !== (await netOf(mcu.id, mcuPA0[0])), "and the two sheets' PA0 are apart");
+      await undo();
+      t((await netOf(led.id, ledPA0[0])) === (await netOf(mcu.id, mcuPA0[0])), "one undo brings the bus and the join back");
     });
 
     check.ok = results.every((r) => r.ok);

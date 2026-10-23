@@ -260,8 +260,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`SCH_EDITOR_CONTROL::Paste`: `SetScreen( existingScreen )`), its symbols numbered for the new placement (`updatePastedSymbol`, `ReannotateDuplicates`) and kept in `instance_overrides`;
   the writer gives each symbol a reference per path, the model a part per reference, the tracer a net per placement (`eda_engine::nets`, `trace_design`), the studio the placement's references.
   kicad-cli's netlist of the two placements is the studio's net list (`slow_a_pasted_sheet_shares_its_screen_and_kicad_cli_makes_a_net_per_placement`); a PWR_FLAG no longer joins nets by name.
+- Done 2026-10-23 (`task-sch-details`, P10; `PARITY-sch.md` section 38): **buses across sheets**. A bus is a layer of its own (a wire ending on it is not on it); a bus label, hierarchical
+  label or sheet pin on it names it; each member's nets on the bus's sheet (the nets of the member's name) are one net with the member, and a bus sheet pin and the hierarchical
+  label of its sheet are one bus whose members are matched by index (a vector) or by name (a group): `processSubGraphs`, `propagateToNeighbors`, `matchBusMember`. kicad-cli's
+  netlist of a bus across sheets, with the same and with different names on the two sides, is the studio's (`slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it`).
 - Left: a screen that has sheets of its own is still pasted as a copy (an override is filed under the placement just above the symbol, which nested placements share); Annotate
-  numbers the screen's own references only, not the other placements'; Delete of a placement leaves its overrides (unused) in the screen; buses across sheets are traced as plain wires;
+  numbers the screen's own references only, not the other placements'; Delete of a placement leaves its overrides (unused) in the screen;
   Find does not match a sheet's name, file or pins; Clear Annotation (a design names a part by its reference, so two cannot be `R?`); "Place as group" and a ghost of the contents while they are carried;
   of the drop, one file is imported at a time (the others of the drop that the first does not place are said to be left out; KiCad runs Import Sheet for each in turn) and Choose Schematic opens on the file, where KiCad, given a file, has no chooser and has the sheet or its contents in the hand at once;
   the attribute, library-link and Update / Change Symbol tools act on the sheet in view; a footprint already placed keeps
@@ -971,7 +975,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 ### P4. Schematic hierarchy: the rest (item 4; SR1's sheet half). Size M for what is left. Rank 4. **Merged 2026-10-10 (`task-sch-hierarchy`); item 4 lists what is left.**
 - Done in the branch: Annotate with KiCad's dialog and numbering (`crates/model/src/{annotate,sheet_list}.rs`, `crates/ops/src/sch_annotate.rs`), Find and Replace across sheets, the SVG render and the gates over every sheet.
 - Left: Import Sheet, Draw Sheet from File and the schematic drop (`Cmd::ImportSheet` = `AddSheet` + the file's screen from `import_kicad_sch`, renumbered with `annotate_paste`; a route that reads the file; the drop is done, 2026-10-21, `task-microwave`: item 4); hierarchical sheets
-  in the clipboard; a net per placement of a shared screen (done 2026-10-23, item 4); buses across sheets; Reorganize keeping stored field places, label spins, looks and body styles; browser check for the hierarchy.
+  in the clipboard; a net per placement of a shared screen and buses across sheets (done 2026-10-23, item 4); Reorganize keeping stored field places, label spins, looks and body styles; browser check for the hierarchy.
 - Files: `crates/ops/src/{sheets,sch_clipboard}.rs` and a new `sheet_import.rs`, `crates/engine/src/{nets,hier}`, `crates/cli/src/{board,sch_hierarchy_api}.rs`, `crates/kicad/src/{sch_clipboard,sch_import}.rs`,
   `web/studio/src/components/{SchematicView,panels/HierarchyPanel}.tsx`, `kicad-port/{schSheet,schClipboard,navHistory}.ts`.
 - KiCad: `eeschema/{sch_sheet_path,sch_screen,sch_sheet,connection_graph}.cpp`, `tools/{sch_drawing_tools (ImportSheet, DrawSheet),sch_navigate_tool,sch_editor_control (doCopy, Paste),sch_edit_tool (DdAppendFile)}.cpp`.

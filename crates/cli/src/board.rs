@@ -518,7 +518,10 @@ pub(crate) fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mu
     // The nets in force after the command applied: the design's own list (Reorganize sets one), else the intent's.
     let in_force: Vec<eda_model::Net> = design.nets.clone().unwrap_or_else(|| model.nets.clone());
     let pin_names = shown_pin_names(model);
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names) };
+    // a bus's members: its vector, its group, the design's aliases (`SCH_CONNECTION::ConfigureFromLabel`)
+    let aliases = design.bus_aliases.clone();
+    let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
+    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members) };
     let after = trace_design(design, model, &naming);
     if let Some(before) = before {
         let mut earlier = before.clone();

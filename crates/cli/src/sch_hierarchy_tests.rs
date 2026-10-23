@@ -543,3 +543,106 @@ fn slow_a_pasted_sheet_shares_its_screen_and_kicad_cli_makes_a_net_per_placement
     assert_eq!(back.schematic.as_ref().unwrap().sheets.len(), 1, "one undo takes the placement back");
     assert!(back.sheet_contents.as_ref().unwrap()[&sheet.file].instance_overrides.iter().all(|o| o.parent_sheet_instance_id != second.id));
 }
+
+// ---------------------------------------------------------------------------------------- a bus across sheets
+
+/// A board of four resistors, R1 and R2 on the root and R3 and R4 on a sheet "child", each pin 1 under a label: the members of `bus_label` on the root,
+/// D0 and D1 in the child; on the root a
+/// bus labelled `bus_label` to the sheet pin `D[0..1]`, inside the child a bus with no label yet. Returns the board, the child's placement id and where
+/// the child's hierarchical label `D[0..1]` is to go.
+fn bus_board(name: &str, bus_label: &str) -> (PathBuf, String, Point) {
+    use eda_model::ir::{LabelKind, LabelShape, NetLabel, SheetInstance, SheetPin, Wire};
+    let dir = scratch(name);
+    let intent = dir.join("intent.yaml");
+    let part = |r: &str| format!("  - {{ reference: {r}, value: 10k, package: \"0603\", pins: [{{ number: \"1\", kind: passive }}, {{ number: \"2\", kind: passive }}] }}\n");
+    let yaml = format!("parts:\n{}{}{}{}nets:\n  - {{ name: A, pins: [R1.2, R2.2] }}\n  - {{ name: B, pins: [R3.2, R4.2] }}\n", part("R1"), part("R2"), part("R3"), part("R4"));
+    std::fs::write(&intent, yaml).unwrap();
+    let model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+    let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+    design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
+    let mut root = design.schematic.take().unwrap();
+    let mut child = root.clone();
+    root.symbols.retain(|s| s.id == "R1" || s.id == "R2");
+    child.symbols.retain(|s| s.id == "R3" || s.id == "R4");
+    for sec in [&mut root, &mut child] {
+        sec.wires.clear();
+        sec.labels.clear();
+        sec.power_symbols.clear();
+        sec.no_connects.clear();
+        sec.junctions.clear();
+    }
+    let pin1 = |sec: &eda_model::ir::SchematicSection, r: &str| -> Point {
+        let sym = sec.symbols.iter().find(|s| s.id == r).unwrap();
+        let part = model.part(r).unwrap();
+        eda_engine::placed::pin_points_in(sec, sym, part, model.real_symbol_of_instance(sec, sym, part).as_ref()).into_iter().find(|(n, _)| n == "1").unwrap().1
+    };
+    let label = |net: &str, at: Point, kind: LabelKind| NetLabel { id: String::new(), net: net.into(), at, kind };
+    let wire = |pts: Vec<Point>, bus: bool| Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus };
+    // each pin 1 a short wire out to its label
+    for (sec, refs) in [(&mut root, ["R1", "R2"]), (&mut child, ["R3", "R4"])] {
+        let names = if refs[0] == "R1" { eda_kicad::expand_bus_members(bus_label, &[]).unwrap() } else { vec!["D0".to_string(), "D1".to_string()] };
+        for (r, net) in refs.iter().zip(names) {
+            let at = pin1(sec, r);
+            let end = Point { x: at.x - 5_080, y: at.y };
+            sec.wires.push(wire(vec![at, end], false));
+            sec.labels.push(label(&net, end, LabelKind::Local));
+        }
+    }
+    // the child: a bus from the hierarchical label down
+    let hl = Point { x: 20_320, y: 20_320 };
+    child.wires.push(wire(vec![hl, Point { x: 20_320, y: 40_640 }], true));
+    // the root: the sheet, its bus pin, and a bus label on a stub of bus away from it
+    let sheet_at = Point { x: 152_400, y: 25_400 };
+    let pin_at = Point { x: sheet_at.x, y: sheet_at.y + 5_080 };
+    root.sheets.push(SheetInstance { id: String::new(), name: "child".into(), file: "child.kicad_sch".into(), at: sheet_at, size: (25_400, 20_320), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: pin_at }], page: String::new() });
+    let stub = Point { x: pin_at.x - 25_400, y: pin_at.y };
+    root.wires.push(wire(vec![stub, pin_at], true));
+    root.labels.push(label(bus_label, stub, LabelKind::Local));
+    root.assign_missing_ids();
+    child.assign_missing_ids();
+    let sheet_id = root.sheets[0].id.clone();
+    design.schematic = Some(root);
+    design.sheet_contents = Some([("child.kicad_sch".to_string(), child)].into_iter().collect());
+    save(&dir, &design).unwrap();
+    let meta = Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+    std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    (dir, sheet_id, hl)
+}
+
+/// A bus across sheets: the hierarchical label `D[0..1]` put on the child's bus (one `add_label` on the sheet, one undo step) puts each member's nets on the
+/// two sheets on one net, as kicad-cli's netlist has them (`propagateToNeighbors`, `propagate_bus_neighbors`); a root bus named `X[0..1]` (its nets X0 and
+/// X1) matches the child's D0 and D1 by index (`matchBusMember`). Before the label, and after its undo, the sheets' nets are apart in both.
+#[test]
+fn slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    for bus_label in ["D[0..1]", "X[0..1]"] {
+        let (dir, sheet_id, hl) = bus_board(&format!("slow_bus_{}", &bus_label[..1]), bus_label);
+        // the nets of the pins 1 (the pins 2 are on the intent's nets A and B)
+        let cut = |groups: Vec<Vec<String>>| -> Vec<Vec<String>> {
+            let mut out: Vec<Vec<String>> = groups.into_iter().map(|g| g.into_iter().filter(|p| p.ends_with(".1")).collect::<Vec<_>>()).filter(|g| !g.is_empty()).collect();
+            out.sort();
+            out
+        };
+        let apart = vec![vec!["R1.1".to_string()], vec!["R2.1".into()], vec!["R3.1".into()], vec!["R4.1".into()]];
+        assert_eq!(cut(kicad_net_groups(&dir)), apart, "{bus_label}: kicad-cli has the two sheets apart before the bus is drawn");
+        let add = Cmd::AddLabel { net: "D[0..1]".into(), at: hl, kind: eda_model::ir::LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Bidirectional } };
+        step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(add) }, false, "test").unwrap();
+        let joined = vec![vec!["R1.1".to_string(), "R3.1".into()], vec!["R2.1".to_string(), "R4.1".into()]];
+        let kicad = cut(kicad_net_groups(&dir));
+        assert_eq!(kicad, joined, "{bus_label}: kicad-cli joins each member's nets across the sheets");
+        assert_eq!(cut(our_net_groups(&dir)), joined, "{bus_label}: and so does the studio's net list");
+        let (_, design, _) = load(&dir).unwrap();
+        let name_of = |pin: &str| design.nets.as_ref().unwrap().iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone()).unwrap();
+        assert_eq!(name_of("R3.1"), if bus_label.starts_with('X') { "X0" } else { "D0" }, "the root's member names the net");
+        let kinds = erc_kinds(&dir);
+        // (a bus labelled X[0..1] on a sheet pin D[0..1] is ERC's `bus_to_bus_conflict`: no member in common by name, which the netlist does not mind)
+        let allowed = |k: &str| bus_label.starts_with('X') && k == "bus_to_bus_conflict";
+        assert!(!kinds.keys().any(|k| (k.starts_with("bus_") && !allowed(k)) || k == "net_not_bus_member" || k == "hier_label_mismatch"), "{bus_label}: {kinds:?}");
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(cut(kicad_net_groups(&dir)), apart, "{bus_label}: one undo takes the bus and the joins back");
+        let ours = cut(our_net_groups(&dir));
+        assert!(ours.is_empty() || ours == apart, "{bus_label}: {ours:?}");
+    }
+}

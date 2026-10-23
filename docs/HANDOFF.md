@@ -49,7 +49,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-sch-details` | Next tasks 5, the schematic: a screen shown by two sheets (paste shares it, a net per placement), buses across sheets, a label's own fields (PARITY-sch.md section 38) | (a) done | (b), (c) |
+| `task-sch-details` | Next tasks 5, the schematic: a screen shown by two sheets (paste shares it, a net per placement), buses across sheets, a label's own fields (PARITY-sch.md section 38) | (a), (b) done | (c) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

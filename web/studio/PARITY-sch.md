@@ -1083,6 +1083,18 @@ Added on `task-sch-details`.
 
 Tests: `crates/engine/src/nets.rs` (`a_screen_shown_twice_is_a_net_per_placement`), `crates/cli/src/sch_hierarchy_tests.rs` (`a_copied_sheet_is_pasted_as_a_second_placement_of_its_screen`; slow: `slow_a_pasted_sheet_shares_its_screen_and_kicad_cli_makes_a_net_per_placement`: kicad-cli's netlist of the two placements is the studio's net list, its ERC finds no `duplicate_reference`, one undo takes the placement back), and the first scenario of `e2e/sch-details-2.check.js` (Duplicate of a sheet: the same file, references of its own, nets of its own, one undo).
 
+### Buses across sheets
+
+| Behaviour | Status | KiCad file:function |
+|---|---|---|
+| A bus and a wire | **ported**: a bus wire's points are nodes of a layer of their own: a wire or a pin that ends on a bus is not on it (`SCH_LINE` on `LAYER_BUS` / `LAYER_WIRE`); a label or sheet pin is on the bus when it lands on a bus wire, or names a bus and nothing of the wire layer is there | `CONNECTION_GRAPH::updateItemConnectivity`, `SCH_CONNECTION::ConfigureFromLabel` |
+| The bus's members | **ported**: its driver's name expanded (`eda_kicad::expand_bus_members`: a vector, a group, the design's aliases); on the bus's sheet the nets of a member's name (a local or hierarchical label, a global label or a power symbol of that name) are its neighbours and one net with it, and so are the members of the other labels on the bus; a sheet pin's members count only when the pin is what names the bus (`getDefaultConnection` makes no connection of a sheet pin) | `processSubGraphs` (`m_bus_neighbors`, `add_connections_to_check`) |
+| Across the hierarchy | **ported**: a bus sheet pin and the bus hierarchical label of the same name inside are one bus (a bus never joins a net there, `Type()` must match); its members are matched by index for a vector and by name for a group (then by index), so a root bus `X[0..1]` names the child's D0 net X0 | `propagateToNeighbors`, `propagate_bus_neighbors`, `matchBusMember` |
+| The member's name | **ported**: the best driver of the bus names each member net (a global or power name of a neighbour still wins: `GetDriverPriority( neighbor->m_driver ) >= GLOBAL_POWER_PIN`); a bus wire carries the bus's name, and a bus no net is on takes no name from one | `propagate_bus_neighbors` |
+| Left | Bus entries play no part (as in KiCad's connectivity: the wire's label puts it on a member); a bus to bus entry (`SCH_BUS_BUS_ENTRY`) is not read; the ERC checks of buses are kicad-cli's | |
+
+Tests: `crates/engine/src/nets.rs` (`a_bus_across_sheets_joins_its_members_nets_on_both_sides`), `crates/cli/src/sch_hierarchy_tests.rs` (slow: `slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it`: the hierarchical label put on the child's bus joins each member's nets across the sheets in kicad-cli's netlist and in the studio's net list, for the same name on both sides and for `X[0..1]` over `D[0..1]`; one undo parts them), and the second scenario of `e2e/sch-details-2.check.js` (PA0 of mcu30's MCU and LED sheets joined through a bus `PB[0..1]`, parted by Delete of the root's bus, joined again by one undo).
+
 ## Manual click-through needed
 
 The in-app browser pane could not be used this session (hidden pane, per
