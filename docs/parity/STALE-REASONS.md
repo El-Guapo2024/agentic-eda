@@ -69,7 +69,7 @@ Sized for one agent in one sitting each. Every package deletes its rows from `ui
 
 **SR5. Schematic design blocks** (done on `task-design-blocks`, 2026-10-20, GAPS.md package P18 and item 32: 22 of the 23 rows are wired, and the 23rd, `applyDesignBlockLayout`, on `task-multichannel` (2026-10-21, package P24: the multichannel tool); was: 7 partly stale rows, 16 that hold). Size L. GAPS.md package P18. After library tables (P3: the block library is a table) and SR1 (placing a block is Import Sheet in KiCad: `SCH_DRAWING_TOOLS::ImportSheet` runs for `placeDesignBlock` too).
 
-**SR6. Specctra** (exportSpecctraDSN partly stale; importSpecctraSession holds). Size S-M. GAPS.md package P19: expose `to_dsn` as a download, then write the SES reader; `pcbnew/specctra_import_export/specctra_export.cpp` and `specctra_import.cpp` are the references.
+**SR6. Specctra** (exportSpecctraDSN partly stale; importSpecctraSession holds). **Both wired by P19b on `task-specctra-wip` (2026-10-23): `PARITY-pcb.md` section 46.** Size S-M. GAPS.md package P19: expose `to_dsn` as a download, then write the SES reader; `pcbnew/specctra_import_export/specctra_export.cpp` and `specctra_import.cpp` are the references.
 
 ## 4. Reasons that hold (151)
 
