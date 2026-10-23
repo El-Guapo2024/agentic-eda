@@ -50,16 +50,18 @@ fn kicad_layer_id(layer: &str) -> Option<i64> {
     }
 }
 
-/// `BOARD::LayerDepth( start, end )`: the layers' ids two apart, the back layer counted as the last of the stack.
-fn layer_depth(start: &str, end: &str, copper_layers: usize) -> Option<i64> {
+/// `BOARD::LayerDepth( start, end )`: the two layers' ids put in order, the difference of them, and the back layer, when it comes out as the end, taken for the last of
+/// the stack (`F_Cu + count - 1`). The ids are two apart (`F_Cu` 0, `B_Cu` 2, `In1_Cu` 4), so the back layer is the end only for a via that starts on the front, and the
+/// depth is 1 only for the front to the back of a board of two copper layers: any other pair, one between two inner layers or from an inner layer to the back, is 2 or more.
+pub(super) fn layer_depth(start: &str, end: &str, copper_layers: usize) -> Option<i64> {
     let (mut a, mut b) = (kicad_layer_id(start)?, kicad_layer_id(end)?);
     if a > b {
         std::mem::swap(&mut a, &mut b);
     }
     if b == 2 {
-        b = copper_layers as i64 * 2 - 2;
+        b = copper_layers as i64 - 1;
     }
-    Some((b - a) / 2)
+    Some(b - a)
 }
 
 impl Board<'_> {
