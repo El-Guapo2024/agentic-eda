@@ -726,6 +726,22 @@ fn a_symbol_turned_while_it_is_held_turns_about_the_point_it_is_held_at() {
     assert_eq!((two.symbols[0].rot, two.symbols[0].mirrored, two.symbols[0].mirror_y), (270_000, false, true));
 }
 
+/// `SCH_EDIT_TOOL::Mirror` never reads the held selection's reference point (only Rotate does): two symbols held with the cursor on the first and
+/// mirrored left-right flip about the half-grid point nearest the selection's centre, so they trade places, and not about the cursor.
+#[test]
+fn a_held_selection_mirrors_about_its_centre_not_the_point_it_is_held_at() {
+    let mut s = section();
+    s.symbols.push(sym("R1", p(0, 25_400)));
+    s.symbols.push(sym("R2", p(25_400, 25_400)));
+    let cmd = SchMoveCmd::Move { ids: ids(&["R1", "R2"]), dx: 0, dy: 0, turns: vec![crate::sch_move::Turn::MirrorH], about: Some(p(0, 25_400)) };
+    let held = run_on(s.clone(), cmd);
+    let still = run_on(s, mirror(&["R1", "R2"], false));
+    let at = |sec: &eda_model::ir::SchematicSection| sec.symbols.iter().map(|x| (x.id.clone(), x.at)).collect::<Vec<_>>();
+    assert_eq!(at(&held), at(&still), "the same mirror whether held or not");
+    let r2 = held.symbols.iter().find(|x| x.id == "R2").unwrap();
+    assert!(r2.at.x < 25_400, "R2 crossed the centre: {:?}", r2.at);
+}
+
 #[test]
 fn a_drag_turned_while_it_is_held_turns_the_wires_it_brought_along() {
     let mut s = section();
