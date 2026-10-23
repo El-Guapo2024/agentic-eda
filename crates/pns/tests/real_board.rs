@@ -73,7 +73,7 @@ fn obstacle_course() -> (Design, ConstraintModel) {
         nets: None,
         placement: Some(PlacementSection {
             outline: vec![],
-            footprints: vec![fp("U1", 0, 0, 0), fp("U2", 10_000, 0, 180_000), fp("R1", 3_000, 0, 90_000), fp("R2", 5_000, 0, 90_000), fp("R3", 7_000, 0, 90_000)],
+            footprints: vec![fp("U1", 0, 0, 0), fp("U2", 10_000_000, 0, 180_000_000), fp("R1", 3_000_000, 0, 90_000_000), fp("R2", 5_000_000, 0, 90_000_000), fp("R3", 7_000_000, 0, 90_000_000)],
             modules: vec![],
         }),
         routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),

@@ -164,7 +164,7 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
 }
 
 /// `GetMaxError()` of a board this IR does not say otherwise of: `ARC_HIGH_DEF`, 0.005 mm.
-const TEXT_MAX_ERROR_NM: eda_model::ir::Nm = 5;
+const TEXT_MAX_ERROR_NM: eda_model::ir::Nm = 5_000;
 
 /// The board's copper text as router obstacles: `PNS_KICAD_IFACE_BASE::syncTextItem` for each `PCB_TEXT` on a copper layer
 /// (`syncGraphicalItem`'s `PCB_TEXT_T` case) -- a `SOLID` on that one layer, with no net, not routable ([`Solid::is_text`]), whose shape is

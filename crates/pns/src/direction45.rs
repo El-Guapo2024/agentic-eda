@@ -13,7 +13,7 @@
 //! is `BuildInitialTrace`, computed on the nanometre grid as KiCad's is and
 //! rounded to the IR's micrometres where it becomes points.
 use crate::arcs::ArcPts;
-use crate::kigeom::{ki_round, rotate_d, to_um, ShapeArc, V2};
+use crate::kigeom::{ki_round, rotate_d, ShapeArc, V2};
 use eda_model::ir::{Point, Nm};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -196,7 +196,7 @@ impl Direction45 {
     /// back in micrometres.
     pub fn build_initial_line(&self, p0: Point, p1: Point, start_diagonal: bool, mode: CornerMode) -> Trace {
         let start_diagonal = if *self == Direction45::Undefined { start_diagonal } else { self.is_diagonal() };
-        let (a0, a1) = (crate::kigeom::to_nm(p0), crate::kigeom::to_nm(p1));
+        let (a0, a1) = (p0, p1);
         let (w, h) = ((a1.x - a0.x).abs(), (a1.y - a0.y).abs());
         let (sw, sh) = ((a1.x - a0.x).signum(), (a1.y - a0.y).signum());
         let is90 = mode.is_90();
@@ -349,13 +349,13 @@ impl TraceBuilder {
         for part in self.parts {
             match part {
                 Ok(p) => {
-                    let q = to_um(p);
+                    let q = p;
                     if line.pts.last() != Some(&q) {
                         line.pts.push(q);
                     }
                 }
                 Err(a) => {
-                    let arc = ArcPts::new(to_um(a.start), to_um(a.mid), to_um(a.end));
+                    let arc = ArcPts::new(a.start, a.mid, a.end);
                     // `SHAPE_LINE_CHAIN::Append( SHAPE_ARC )`: an arc whose polyline is one segment ("if( chain.PointCount() > 2 )", the
                     // polygonisation error on the nanometre grid) is not an arc of the chain but its chord
                     if arc.is_degenerate() || a.convert_to_polyline(crate::kigeom::ARC_POLYGONIZATION_MAX_ERROR_NM).len() <= 2 {

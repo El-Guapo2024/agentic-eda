@@ -15,7 +15,6 @@
 
 use crate::chain::{distance, ShapeLineChain};
 use crate::item::{Item, ItemId};
-use crate::kigeom::to_um;
 use crate::line::Line;
 use crate::meander_placer::{chain_of, Tuned};
 use crate::node::Node;
@@ -101,7 +100,7 @@ fn pieces_of(chain: &ShapeLineChain, member_from: usize, member_to: usize, membe
     let flush = |run: &mut Vec<Point>, member: bool, out: &mut Vec<Piece>| {
         let mut pts: Vec<Point> = Vec::new();
         for q in run.drain(..) {
-            let q = to_um(q);
+            let q = q;
             if pts.last() != Some(&q) {
                 pts.push(q);
             }
@@ -121,7 +120,7 @@ fn pieces_of(chain: &ShapeLineChain, member_from: usize, member_to: usize, membe
             }
             flush(&mut run, run_member, &mut out);
             let arc = chain.arc(ai as usize);
-            let (start, mid, end) = (to_um(arc.start), to_um(arc.mid), to_um(arc.end));
+            let (start, mid, end) = (arc.start, arc.mid, arc.end);
             if start != end && start != mid && mid != end {
                 out.push(Piece { shape: PieceShape::Arc { start, mid, end }, member });
             } else {
@@ -215,19 +214,19 @@ mod tests {
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        rules.clearance = 200;
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600), rules }
+        rules.clearance = 200_000;
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600_000), rules }
     }
 
     fn settings(target_nm: i64) -> MeanderSettings {
         let mut s = MeanderSettings::default();
-        s.set_target_length(target_nm * 1000);
+        s.set_target_length(target_nm);
         s.keep_endpoints = true;
         s
     }
 
     fn seg(w: &mut Node, track: &str, k: usize, a: Point, b: Point) -> ItemId {
-        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: 200, source_track: Some((track.into(), k)), locked: false }))
+        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: 200_000, source_track: Some((track.into(), k)), locked: false }))
     }
 
     fn poly_points(e: &LineEdit) -> Vec<Point> {
@@ -256,9 +255,9 @@ mod tests {
     #[test]
     fn a_straight_track_tuned_in_its_middle_becomes_the_line_before_the_meander_and_after() {
         let mut w = Node::new();
-        let s = seg(&mut w, "trk", 0, p(0, 0), p(40_000, 0));
-        let mut placer = MeanderPlacer::start(&w, &env(), s, p(5_000, 0), settings(44_000)).unwrap();
-        assert!(placer.do_move(p(35_000, 0)));
+        let s = seg(&mut w, "trk", 0, p(0, 0), p(40_000_000, 0));
+        let mut placer = MeanderPlacer::start(&w, &env(), s, p(5_000_000, 0), settings(44_000_000)).unwrap();
+        assert!(placer.do_move(p(35_000_000, 0)));
         let line = placer.origin_line().clone();
         let e = line_edit(&w, &line, &placer.tuned(), true).expect("an edit");
         assert_eq!(e.remove_track_ids, vec!["trk".to_string()]);
@@ -266,8 +265,8 @@ mod tests {
         assert_connected(&e);
         let first = &e.pieces[0];
         let last = e.pieces.last().unwrap();
-        assert_eq!(first.shape, PieceShape::Poly(vec![p(0, 0), p(5_000, 0)]));
-        assert_eq!(last.shape, PieceShape::Poly(vec![p(35_000, 0), p(40_000, 0)]));
+        assert_eq!(first.shape, PieceShape::Poly(vec![p(0, 0), p(5_000_000, 0)]));
+        assert_eq!(last.shape, PieceShape::Poly(vec![p(35_000_000, 0), p(40_000_000, 0)]));
         assert!(!first.member && !last.member);
         let members: Vec<&Piece> = e.pieces.iter().filter(|q| q.member).collect();
         assert!(members.len() > 10 && members.len() == e.pieces.len() - 2, "the meander is every piece between: {} of {}", members.len(), e.pieces.len());
@@ -278,46 +277,46 @@ mod tests {
     fn only_the_tracks_the_pattern_touches_are_replaced_and_the_runs_outside_it_stay() {
         let mut w = Node::new();
         // a line of three tracks, the middle one a polyline of three segments (a vertex at 12, 14 and 16 mm)
-        seg(&mut w, "a", 0, p(0, 0), p(10_000, 0));
-        seg(&mut w, "b", 0, p(10_000, 0), p(12_000, 0));
-        let clicked = seg(&mut w, "b", 1, p(12_000, 0), p(14_000, 0));
-        seg(&mut w, "b", 2, p(14_000, 0), p(30_000, 0));
-        seg(&mut w, "c", 0, p(30_000, 0), p(40_000, 0));
-        let mut placer = MeanderPlacer::start(&w, &env(), clicked, p(13_000, 0), settings(0)).unwrap();
+        seg(&mut w, "a", 0, p(0, 0), p(10_000_000, 0));
+        seg(&mut w, "b", 0, p(10_000_000, 0), p(12_000_000, 0));
+        let clicked = seg(&mut w, "b", 1, p(12_000_000, 0), p(14_000_000, 0));
+        seg(&mut w, "b", 2, p(14_000_000, 0), p(30_000_000, 0));
+        seg(&mut w, "c", 0, p(30_000_000, 0), p(40_000_000, 0));
+        let mut placer = MeanderPlacer::start(&w, &env(), clicked, p(13_000_000, 0), settings(0)).unwrap();
         // the pattern runs from 13 mm to 22 mm: segment 1 (12..14) and segment 2 (14..30) of track b are touched; track a and c are not
         placer.update_settings({
             let mut s = settings(0);
             s.set_target_length(placer.orig_path_length() + 3_000_000);
             s
         });
-        assert!(placer.do_move(p(22_000, 0)));
+        assert!(placer.do_move(p(22_000_000, 0)));
         let line = placer.origin_line().clone();
         let e = line_edit(&w, &line, &placer.tuned(), true).expect("an edit");
         assert_eq!(e.remove_track_ids, vec!["b".to_string()], "only b has a segment in the stretch");
         // b's first segment (10..12) is outside the stretch and is handed back
         assert_eq!(e.keep.len(), 1, "{:?}", e.keep);
-        assert_eq!(e.keep[0].pts, vec![p(10_000, 0), p(12_000, 0)]);
+        assert_eq!(e.keep[0].pts, vec![p(10_000_000, 0), p(12_000_000, 0)]);
         assert_connected(&e);
         // the replacement runs from where the first touched segment starts (12 mm) to where the last one ends (30 mm)
         let pts = poly_points(&e);
-        assert_eq!(pts[0], p(12_000, 0));
-        assert_eq!(*pts.last().unwrap(), p(30_000, 0));
+        assert_eq!(pts[0], p(12_000_000, 0));
+        assert_eq!(*pts.last().unwrap(), p(30_000_000, 0));
         assert!(e.pieces.iter().any(|q| q.member) && !e.pieces[0].member && !e.pieces.last().unwrap().member);
     }
 
     #[test]
     fn a_pattern_dragged_back_along_the_line_is_replaced_the_same_way() {
         let mut w = Node::new();
-        let s = seg(&mut w, "a", 0, p(0, 0), p(10_000, 0));
-        seg(&mut w, "b", 0, p(10_000, 0), p(40_000, 0));
+        let s = seg(&mut w, "a", 0, p(0, 0), p(10_000_000, 0));
+        seg(&mut w, "b", 0, p(10_000_000, 0), p(40_000_000, 0));
         // started at 30 mm and taken back to 20 mm: the cut comes in the other order, and the pieces run from the start of the pattern outwards
-        let mut placer = MeanderPlacer::start(&w, &env(), s, p(30_000, 0), settings(0)).unwrap();
+        let mut placer = MeanderPlacer::start(&w, &env(), s, p(30_000_000, 0), settings(0)).unwrap();
         placer.update_settings({
             let mut st = settings(0);
             st.set_target_length(placer.orig_path_length() + 2_000_000);
             st
         });
-        assert!(placer.do_move(p(20_000, 0)));
+        assert!(placer.do_move(p(20_000_000, 0)));
         let line = placer.origin_line().clone();
         let e = line_edit(&w, &line, &placer.tuned(), true).expect("an edit");
         assert_eq!(e.remove_track_ids, vec!["b".to_string()]);
@@ -325,30 +324,30 @@ mod tests {
         assert_connected(&e);
         let pts = poly_points(&e);
         let (lo, hi) = (pts.iter().map(|q| q.x).min().unwrap(), pts.iter().map(|q| q.x).max().unwrap());
-        assert_eq!((lo, hi), (10_000, 40_000), "b is replaced whole: its start to its end");
+        assert_eq!((lo, hi), (10_000_000, 40_000_000), "b is replaced whole: its start to its end");
         assert!(e.pieces.iter().any(|q| q.member));
     }
 
     #[test]
     fn a_line_put_back_has_no_members() {
         let mut w = Node::new();
-        let s = seg(&mut w, "trk", 0, p(0, 0), p(40_000, 0));
-        let mut placer = MeanderPlacer::start(&w, &env(), s, p(5_000, 0), settings(44_000)).unwrap();
-        assert!(placer.do_move(p(35_000, 0)));
+        let s = seg(&mut w, "trk", 0, p(0, 0), p(40_000_000, 0));
+        let mut placer = MeanderPlacer::start(&w, &env(), s, p(5_000_000, 0), settings(44_000_000)).unwrap();
+        assert!(placer.do_move(p(35_000_000, 0)));
         let line = placer.origin_line().clone();
         let mut t = placer.tuned();
         // the stretch back to straight: the baseline from the pattern's start to its end
-        t.tuned = ShapeLineChain::from_points(&[crate::kigeom::to_nm(p(5_000, 0)), crate::kigeom::to_nm(p(35_000, 0))]);
+        t.tuned = ShapeLineChain::from_points(&[p(5_000_000, 0), p(35_000_000, 0)]);
         let e = line_edit(&w, &line, &t, false).expect("an edit");
         assert!(e.pieces.iter().all(|q| !q.member));
-        assert_eq!(poly_points(&e), vec![p(0, 0), p(5_000, 0), p(35_000, 0), p(40_000, 0)]);
+        assert_eq!(poly_points(&e), vec![p(0, 0), p(5_000_000, 0), p(35_000_000, 0), p(40_000_000, 0)]);
     }
 
     #[test]
     fn nothing_cut_is_no_edit() {
         let mut w = Node::new();
-        let s = seg(&mut w, "trk", 0, p(0, 0), p(40_000, 0));
-        let placer = MeanderPlacer::start(&w, &env(), s, p(5_000, 0), settings(44_000)).unwrap();
+        let s = seg(&mut w, "trk", 0, p(0, 0), p(40_000_000, 0));
+        let placer = MeanderPlacer::start(&w, &env(), s, p(5_000_000, 0), settings(44_000_000)).unwrap();
         let line = placer.origin_line().clone();
         assert!(line_edit(&w, &line, &Tuned::default(), true).is_none());
     }

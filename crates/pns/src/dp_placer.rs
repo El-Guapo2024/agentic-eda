@@ -988,7 +988,7 @@ mod tests {
 
     /// Clearance 200, a USB class with a 200-wide pair at a gap of 250 (pitch 450).
     fn rules() -> BoardRules {
-        serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\nnet_classes:\n  - name: usb\n    nets: [\"USB_*\"]\n    diff_pair_width: 200\n    diff_pair_gap: 250\n").unwrap()
+        serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\nnet_classes:\n  - name: usb\n    nets: [\"USB_*\"]\n    diff_pair_width: 200000\n    diff_pair_gap: 250000\n").unwrap()
     }
 
     #[allow(dead_code)]
@@ -1011,10 +1011,10 @@ mod tests {
     /// Two SMD pad pairs 10 mm apart: USB_DP/USB_DN at x = 0 and x = 10000, 1000 apart in y.
     fn two_pad_pairs() -> (Node, ItemId) {
         let mut node = Node::new();
-        let start = smd_pad(&mut node, "USB_DP", p(0, 0), 250);
-        smd_pad(&mut node, "USB_DN", p(0, 1000), 250);
-        smd_pad(&mut node, "USB_DP", p(10_000, 0), 250);
-        smd_pad(&mut node, "USB_DN", p(10_000, 1000), 250);
+        let start = smd_pad(&mut node, "USB_DP", p(0, 0), 250_000);
+        smd_pad(&mut node, "USB_DN", p(0, 1_000_000), 250_000);
+        smd_pad(&mut node, "USB_DP", p(10_000_000, 0), 250_000);
+        smd_pad(&mut node, "USB_DN", p(10_000_000, 1_000_000), 250_000);
         (node, start)
     }
 
@@ -1026,11 +1026,11 @@ mod tests {
     fn the_pair_starts_on_the_item_and_its_coupled_partner_whichever_net_was_clicked() {
         let (node, dp_pad) = two_pad_pairs();
         let found = find_dp_primitive_pair(&node, dp_pad).unwrap();
-        assert_eq!((found.pair.anchor_p, found.pair.anchor_n), (p(0, 0), p(0, 1000)), "P is the net named P, N the one named N");
+        assert_eq!((found.pair.anchor_p, found.pair.anchor_n), (p(0, 0), p(0, 1_000_000)), "P is the net named P, N the one named N");
         // clicking the N pad gives the same pair, P first
-        let dn_pad = node.iter().find(|(_, it)| matches!(it, Item::Solid(s) if s.pos == p(0, 1000))).map(|(id, _)| id).unwrap();
+        let dn_pad = node.iter().find(|(_, it)| matches!(it, Item::Solid(s) if s.pos == p(0, 1_000_000))).map(|(id, _)| id).unwrap();
         let again = find_dp_primitive_pair(&node, dn_pad).unwrap();
-        assert_eq!((again.pair.anchor_p, again.pair.anchor_n, again.id_p, again.id_n), (p(0, 0), p(0, 1000), found.id_p, found.id_n));
+        assert_eq!((again.pair.anchor_p, again.pair.anchor_n, again.id_p, again.id_n), (p(0, 0), p(0, 1_000_000), found.id_p, found.id_n));
         // the nearest of the coupled net is the partner: a farther USB_DN pad does not matter
         assert_eq!(found.id_n, dn_pad);
     }
@@ -1038,32 +1038,32 @@ mod tests {
     #[test]
     fn a_net_that_is_not_half_of_a_pair_is_refused_with_kicads_message() {
         let mut node = Node::new();
-        let id = smd_pad(&mut node, "GND", p(0, 0), 250);
+        let id = smd_pad(&mut node, "GND", p(0, 0), 250_000);
         assert!(find_dp_primitive_pair(&node, id).unwrap_err().contains("Unable to find complementary differential pair nets"));
-        let lone = smd_pad(&mut node, "USB_DP", p(5000, 0), 250);
+        let lone = smd_pad(&mut node, "USB_DP", p(5_000_000, 0), 250_000);
         assert!(find_dp_primitive_pair(&node, lone).unwrap_err().contains("coupled net \"USB_DN\""), "no USB_DN anywhere");
     }
 
     #[test]
     fn a_track_can_start_a_pair_only_at_its_dangling_end() {
         let mut node = Node::new();
-        let t_p = track(&mut node, "USB_DP", p(0, 0), p(2000, 0), 150);
-        let t_n = track(&mut node, "USB_DN", p(0, 400), p(2000, 400), 150);
+        let t_p = track(&mut node, "USB_DP", p(0, 0), p(2_000_000, 0), 150_000);
+        let t_n = track(&mut node, "USB_DN", p(0, 400_000), p(2_000_000, 400_000), 150_000);
         // joints in the middle of both: the pair is two segments a line, and only their outer ends are free
-        let (p1, p2) = node.split_segment(t_p, p(1000, 0)).unwrap();
-        let (n1, n2) = node.split_segment(t_n, p(1000, 400)).unwrap();
+        let (p1, p2) = node.split_segment(t_p, p(1_000_000, 0)).unwrap();
+        let (n1, n2) = node.split_segment(t_n, p(1_000_000, 400_000)).unwrap();
         let found = find_dp_primitive_pair(&node, p2).expect("the end of P and the nearest free end of N");
-        assert_eq!((found.pair.anchor_p, found.pair.anchor_n), (p(2000, 0), p(2000, 400)));
+        assert_eq!((found.pair.anchor_p, found.pair.anchor_n), (p(2_000_000, 0), p(2_000_000, 400_000)));
         assert!(found.pair.directional());
         assert_eq!((found.id_p, found.id_n), (p2, n2));
         // from the other end: the first halves
         let other = find_dp_primitive_pair(&node, n1).unwrap();
-        assert_eq!((other.pair.anchor_p, other.pair.anchor_n), (p(0, 0), p(0, 400)));
+        assert_eq!((other.pair.anchor_p, other.pair.anchor_n), (p(0, 0), p(0, 400_000)));
         let _ = p1;
         // a segment with no free end -- one a third track meets at the far end too -- is no start
-        node.add(Item::Segment(Segment { net: net_of("USB_DP"), layer: 0, a: p(1000, 0), b: p(1000, -500), width: 150, source_track: None, locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("USB_DP"), layer: 0, a: p(1_000_000, 0), b: p(1_000_000, -500_000), width: 150_000, source_track: None, locked: false }));
         assert!(dangling_anchor(&node, node.get(p2).unwrap()).is_some(), "the far end is still free");
-        node.add(Item::Segment(Segment { net: net_of("USB_DP"), layer: 0, a: p(2000, 0), b: p(2500, 0), width: 150, source_track: None, locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("USB_DP"), layer: 0, a: p(2_000_000, 0), b: p(2_500_000, 0), width: 150_000, source_track: None, locked: false }));
         assert!(find_dp_primitive_pair(&node, p2).unwrap_err().contains("make sure you are at the end"), "P is joined at both ends now");
     }
 
@@ -1072,24 +1072,24 @@ mod tests {
         let (node, start) = two_pad_pairs();
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
-        assert_eq!(dp.sizes.pitch(), 450);
+        assert_eq!(dp.sizes.pitch(), 450_000);
         // the cursor on the far pair's P pad: the end item is found, the pair snaps onto both pads
-        assert!(dp.move_to(&rules, &settings, p(10_000, 0)));
+        assert!(dp.move_to(&rules, &settings, p(10_000_000, 0)));
         let pv = dp.preview();
         assert!(!pv.colliding && pv.snapped_end, "{pv:?}");
-        assert_eq!((pv.head_a.first(), pv.head_a.last()), (Some(p(0, 0)), Some(p(10_000, 0))));
-        assert_eq!((pv.head_b.first(), pv.head_b.last()), (Some(p(0, 1000)), Some(p(10_000, 1000))));
+        assert_eq!((pv.head_a.first(), pv.head_a.last()), (Some(p(0, 0)), Some(p(10_000_000, 0))));
+        assert_eq!((pv.head_b.first(), pv.head_b.last()), (Some(p(0, 1_000_000)), Some(p(10_000_000, 1_000_000))));
         // the two lines run side by side at the pitch for most of the way
         let mut trace = dp.current_trace.clone();
-        trace.width = 200;
-        trace.set_gap(250);
-        assert!(trace.coupled_length() > 8_000.0, "coupled {}", trace.coupled_length());
+        trace.width = 200_000;
+        trace.set_gap(250_000);
+        assert!(trace.coupled_length() > 8_000_000.0, "coupled {}", trace.coupled_length());
         // fixing it there finishes the route
-        assert!(matches!(dp.fix_route(&rules, &settings, p(10_000, 0), false), Some(FixOutcome::Fixed { real_end: true })));
+        assert!(matches!(dp.fix_route(&rules, &settings, p(10_000_000, 0), false), Some(FixOutcome::Fixed { real_end: true })));
         assert!(dp.idle);
-        let commit = dp.finish(&rules, &settings, p(10_000, 0)).expect("already finished");
+        let commit = dp.finish(&rules, &settings, p(10_000_000, 0)).expect("already finished");
         assert_eq!(commit.legs.len(), 1);
-        assert_eq!((commit.legs[0].p.first(), commit.legs[0].p.last()), (Some(&p(0, 0)), Some(&p(10_000, 0))));
+        assert_eq!((commit.legs[0].p.first(), commit.legs[0].p.last()), (Some(&p(0, 0)), Some(&p(10_000_000, 0))));
     }
 
     /// The least edge-to-edge distance between the lines of the head (a gap, not a pitch).
@@ -1112,7 +1112,7 @@ mod tests {
     /// length the lines run beside each other at it (`DIFF_PAIR::CoupledLength`).
     fn assert_coupled(pv: &DiffPairPreview, min_share: f64) {
         let gap = min_gap(&pv.head_a.pts, pv.width, &pv.head_b.pts, pv.width);
-        assert!(gap >= pv.gap as f64 - 1.5, "the lines come within {gap} of each other, the gap is {}\n P {:?}\n N {:?}", pv.gap, pv.head_a.pts, pv.head_b.pts);
+        assert!(gap >= pv.gap as f64 - 100.0, "the lines come within {gap} of each other, the gap is {}\n P {:?}\n N {:?}", pv.gap, pv.head_a.pts, pv.head_b.pts);
         let mut dp = DiffPair { p: pv.head_a.pts.clone(), n: pv.head_b.pts.clone(), width: pv.width, ..DiffPair::default() };
         dp.set_gap(pv.gap);
         let share = dp.coupled_length() / dp.total_length();
@@ -1122,41 +1122,41 @@ mod tests {
     #[test]
     fn marking_obstacles_only_reports_a_pad_in_the_way() {
         let (mut node, start) = two_pad_pairs();
-        pad(&mut node, "GND", p(5000, -100), 400);
+        pad(&mut node, "GND", p(5_000_000, -100_000), 400_000);
         let (rules, settings) = (rules(), mode(Mode::MarkObstacles));
         let mut dp = placer(&node, start);
-        assert!(!dp.move_to(&rules, &settings, p(10_000, 0)));
+        assert!(!dp.move_to(&rules, &settings, p(10_000_000, 0)));
         let pv = dp.preview();
         assert!(pv.colliding, "the straight pair runs into the pad");
         assert_eq!(pv.head_a.pts.len(), 4, "and is drawn as it is, not walked");
-        assert!(dp.fix_route(&rules, &settings, p(10_000, 0), false).is_none(), "a violation is not fixed ...");
+        assert!(dp.fix_route(&rules, &settings, p(10_000_000, 0), false).is_none(), "a violation is not fixed ...");
         let allowed = RoutingSettings { can_violate_drc: true, ..settings };
-        assert!(dp.fix_route(&rules, &allowed, p(10_000, 0), false).is_some(), "... unless violations are allowed");
+        assert!(dp.fix_route(&rules, &allowed, p(10_000_000, 0), false).is_some(), "... unless violations are allowed");
     }
 
     #[test]
     fn a_pair_walks_around_a_pad_together_and_keeps_its_gap() {
         // a pad just outside the P line (y = 300): the pair has to give way to it, both lines on the same side
         let (mut node, start) = two_pad_pairs();
-        let gnd = pad(&mut node, "GND", p(5000, -100), 400);
+        let gnd = pad(&mut node, "GND", p(5_000_000, -100_000), 400_000);
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
-        assert!(dp.move_to(&rules, &settings, p(10_000, 0)), "a way around exists");
+        assert!(dp.move_to(&rules, &settings, p(10_000_000, 0)), "a way around exists");
         let pv = dp.preview();
         assert!(!pv.colliding && pv.snapped_end);
-        assert_eq!((pv.head_a.first(), pv.head_a.last()), (Some(p(0, 0)), Some(p(10_000, 0))), "ends where it began");
-        assert_eq!((pv.head_b.first(), pv.head_b.last()), (Some(p(0, 1000)), Some(p(10_000, 1000))));
+        assert_eq!((pv.head_a.first(), pv.head_a.last()), (Some(p(0, 0)), Some(p(10_000_000, 0))), "ends where it began");
+        assert_eq!((pv.head_b.first(), pv.head_b.last()), (Some(p(0, 1_000_000)), Some(p(10_000_000, 1_000_000))));
         let item = node.get(gnd).unwrap().clone();
         for (line, name) in [(&pv.head_a, "P"), (&pv.head_b, "N")] {
             let gap = gap_to_item(&line.pts, pv.width, &item);
-            assert!(gap >= 200.0 - 1.0, "{name} comes within {gap} of the pad: {:?}", line.pts);
+            assert!(gap >= 200_000.0 - 500.0, "{name} comes within {gap} of the pad: {:?}", line.pts);
         }
         assert_coupled(&pv, 0.85);
         // it really did bend: more than the two fan-out corners at each end
         assert!(pv.head_a.pts.len() > 4 && pv.head_b.pts.len() > 4);
         // the pair as a whole moved, not one line: both bump away from the pad (down, y grows)
         let y_max = |l: &Line| l.pts.iter().map(|q| q.y).max().unwrap();
-        assert!(y_max(&pv.head_a) >= 500 && y_max(&pv.head_b) >= 900, "P {:?} N {:?}", pv.head_a.pts, pv.head_b.pts);
+        assert!(y_max(&pv.head_a) >= 500_000 && y_max(&pv.head_b) >= 900_000, "P {:?} N {:?}", pv.head_a.pts, pv.head_b.pts);
     }
 
     /// `tryWalkDp`: when neither walk works, KiCad's `if( bestScore > 0.0 )` is true all the same and the pair takes the default `DIFF_PAIR`, two
@@ -1165,25 +1165,25 @@ mod tests {
     #[test]
     fn a_pair_that_cannot_be_walked_loses_its_head_as_kicads_trywalkdp_empties_it() {
         let (mut node, start) = two_pad_pairs();
-        pad(&mut node, "GND", p(5000, -100), 400);
+        pad(&mut node, "GND", p(5_000_000, -100_000), 400_000);
         let rules = rules();
         // one step of walking is not enough to get round the pad
         let impatient = |m: Mode| RoutingSettings { walkaround_iteration_limit: 1, ..mode(m) };
         let mut dp = placer(&node, start);
         let walk = impatient(Mode::Walkaround);
-        assert!(dp.move_to(&rules, &walk, p(10_000, 0)), "KiCad's tryWalkDp says true, and `m_fitOk` follows it");
+        assert!(dp.move_to(&rules, &walk, p(10_000_000, 0)), "KiCad's tryWalkDp says true, and `m_fitOk` follows it");
         let pv = dp.preview();
         assert!(pv.head_a.pts.is_empty() && pv.head_b.pts.is_empty(), "the pair is emptied: {pv:?}");
         assert!(!pv.colliding, "and not flagged");
-        assert!(dp.fix_route(&rules, &walk, p(10_000, 0), false).is_none(), "an empty head is not a leg");
+        assert!(dp.fix_route(&rules, &walk, p(10_000_000, 0), false).is_none(), "an empty head is not a leg");
         assert!(dp.legs().is_empty());
         // the same cursor with patience: the pair is back
-        assert!(dp.move_to(&rules, &mode(Mode::Walkaround), p(10_000, 0)));
+        assert!(dp.move_to(&rules, &mode(Mode::Walkaround), p(10_000_000, 0)));
         assert!(dp.preview().head_a.pts.len() > 2);
         // Shove: two empty heads fail the shove, so the pair does not fit
         let mut dp = placer(&node, start);
         let shove = impatient(Mode::Shove);
-        assert!(!dp.move_to(&rules, &shove, p(10_000, 0)));
+        assert!(!dp.move_to(&rules, &shove, p(10_000_000, 0)));
         let pv = dp.preview();
         assert!(pv.head_a.pts.is_empty() && pv.colliding, "{pv:?}");
     }
@@ -1192,30 +1192,30 @@ mod tests {
     fn a_pair_shoves_a_track_and_keeps_its_gap() {
         // a GND track in a U whose bottom (y = 150) dips into the pair's lane
         let (mut node, start) = two_pad_pairs();
-        for (i, w) in [p(3000, -1500), p(3000, 150), p(7000, 150), p(7000, -1500)].windows(2).enumerate() {
-            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: w[0], b: w[1], width: 200, source_track: Some(("u".into(), i)), locked: false }));
+        for (i, w) in [p(3_000_000, -1_500_000), p(3_000_000, 150_000), p(7_000_000, 150_000), p(7_000_000, -1_500_000)].windows(2).enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: w[0], b: w[1], width: 200_000, source_track: Some(("u".into(), i)), locked: false }));
         }
         let (rules, settings) = (rules(), mode(Mode::Shove));
         let mut dp = placer(&node, start);
-        assert!(dp.move_to(&rules, &settings, p(10_000, 0)), "the track can be pushed");
+        assert!(dp.move_to(&rules, &settings, p(10_000_000, 0)), "the track can be pushed");
         let pv = dp.preview();
         assert!(!pv.colliding && pv.snapped_end);
         // the pair itself did not give way: it is the straight pair of the free-space case
-        assert_eq!(pv.head_a.pts, vec![p(0, 0), p(274, 274), p(9726, 274), p(10_000, 0)]);
-        assert_eq!(pv.head_b.pts, vec![p(0, 1000), p(274, 726), p(9726, 726), p(10_000, 1000)]);
+        assert_eq!(pv.head_a.pts, vec![p(0, 0), p(274_999, 274_999), p(9_725_001, 274_999), p(10_000_000, 0)]);
+        assert_eq!(pv.head_b.pts, vec![p(0, 1_000_000), p(274_999, 725_001), p(9_725_001, 725_001), p(10_000_000, 1_000_000)]);
         assert_coupled(&pv, 0.9);
         // the track gave way: it is one displaced IR track, replaced by a line that keeps the clearance from both lines
         assert_eq!(pv.displaced_lines.len(), 1, "{:?}", pv.displaced_lines);
         assert_eq!(pv.displaced_lines[0].source_track.as_deref(), Some("u"));
         let moved = &pv.displaced_lines[0].line;
-        assert_eq!((moved.first(), moved.last()), (Some(p(3000, -1500)), Some(p(7000, -1500))), "its ends stayed");
+        assert_eq!((moved.first(), moved.last()), (Some(p(3_000_000, -1_500_000)), Some(p(7_000_000, -1_500_000))), "its ends stayed");
         for (line, name) in [(&pv.head_a, "P"), (&pv.head_b, "N")] {
-            let gap = min_gap(&line.pts, pv.width, &moved.pts, 200);
-            assert!(gap >= 199.0, "{name} is {gap} from the shoved track\n {:?}", moved.pts);
+            let gap = min_gap(&line.pts, pv.width, &moved.pts, 200_000);
+            assert!(gap >= 199_000.0, "{name} is {gap} from the shoved track\n {:?}", moved.pts);
         }
         // fixing and finishing carries it into the commit
-        assert!(matches!(dp.fix_route(&rules, &settings, p(10_000, 0), false), Some(FixOutcome::Fixed { real_end: true })));
-        let commit = dp.finish(&rules, &settings, p(10_000, 0)).unwrap();
+        assert!(matches!(dp.fix_route(&rules, &settings, p(10_000_000, 0), false), Some(FixOutcome::Fixed { real_end: true })));
+        let commit = dp.finish(&rules, &settings, p(10_000_000, 0)).unwrap();
         assert_eq!(commit.displaced_tracks.len(), 1);
         assert_eq!(commit.displaced_tracks[0].0, "u");
         assert_eq!(commit.displaced_tracks[0].1.len(), 1);
@@ -1225,24 +1225,24 @@ mod tests {
     fn a_fixed_leg_keeps_showing_the_track_it_shoved() {
         // a GND track in a short U whose bottom dips into the pair's lane only between x = 3000 and 4000
         let (mut node, start) = two_pad_pairs();
-        for (i, w) in [p(3000, -1500), p(3000, 150), p(4000, 150), p(4000, -1500)].windows(2).enumerate() {
-            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: w[0], b: w[1], width: 200, source_track: Some(("u".into(), i)), locked: false }));
+        for (i, w) in [p(3_000_000, -1_500_000), p(3_000_000, 150_000), p(4_000_000, 150_000), p(4_000_000, -1_500_000)].windows(2).enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: w[0], b: w[1], width: 200_000, source_track: Some(("u".into(), i)), locked: false }));
         }
         let (rules, settings) = (rules(), mode(Mode::Shove));
         let mut dp = placer(&node, start);
-        assert!(dp.move_to(&rules, &settings, p(5000, 500)));
+        assert!(dp.move_to(&rules, &settings, p(5_000_000, 500_000)));
         let shoved = dp.preview().displaced_lines.iter().map(|d| (d.source_track.clone(), d.line.pts.clone())).collect::<Vec<_>>();
         assert_eq!(shoved.len(), 1, "{shoved:?}");
-        assert!(matches!(dp.fix_route(&rules, &settings, p(5000, 500), false), Some(FixOutcome::Fixed { real_end: false })));
+        assert!(matches!(dp.fix_route(&rules, &settings, p(5_000_000, 500_000), false), Some(FixOutcome::Fixed { real_end: false })));
         // the next head is on from there and clear of the track: it pushes nothing, the leg before it has moved the track, and it is still drawn pushed, once
-        assert!(dp.move_to(&rules, &settings, p(9000, 500)));
+        assert!(dp.move_to(&rules, &settings, p(9_000_000, 500_000)));
         assert!(dp.shoved_lines.is_empty(), "this head pushes nothing itself: the track is in the world where the fixed leg left it");
         let pv = dp.preview();
         assert_eq!(pv.displaced_lines.len(), 1, "{:?}", pv.displaced_lines);
         assert_eq!(pv.displaced_lines[0].source_track.as_deref(), Some("u"));
         assert_eq!(pv.displaced_lines[0].line.pts, shoved[0].1, "the pushed track is where the fixed leg left it");
         // and what the commit takes is the same track
-        let commit = dp.finish(&rules, &settings, p(9000, 500)).unwrap();
+        let commit = dp.finish(&rules, &settings, p(9_000_000, 500_000)).unwrap();
         assert_eq!(commit.displaced_tracks.len(), 1);
         assert_eq!((commit.displaced_tracks[0].0.as_str(), commit.displaced_tracks[0].1[0].pts.clone()), ("u", shoved[0].1.clone()));
     }
@@ -1250,19 +1250,19 @@ mod tests {
     #[test]
     fn the_same_track_is_walked_around_in_walk_around_mode() {
         let (mut node, start) = two_pad_pairs();
-        for (i, w) in [p(3000, -1500), p(3000, 150), p(7000, 150), p(7000, -1500)].windows(2).enumerate() {
-            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: w[0], b: w[1], width: 200, source_track: Some(("u".into(), i)), locked: false }));
+        for (i, w) in [p(3_000_000, -1_500_000), p(3_000_000, 150_000), p(7_000_000, 150_000), p(7_000_000, -1_500_000)].windows(2).enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: w[0], b: w[1], width: 200_000, source_track: Some(("u".into(), i)), locked: false }));
         }
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
-        assert!(dp.move_to(&rules, &settings, p(10_000, 0)));
+        assert!(dp.move_to(&rules, &settings, p(10_000_000, 0)));
         let pv = dp.preview();
         assert!(!pv.colliding && pv.displaced_lines.is_empty(), "nothing is moved");
         assert_coupled(&pv, 0.85);
         for (line, name) in [(&pv.head_a, "P"), (&pv.head_b, "N")] {
-            for w in [(p(3000, -1500), p(3000, 150)), (p(3000, 150), p(7000, 150)), (p(7000, 150), p(7000, -1500))] {
-                let gap = min_gap(&line.pts, pv.width, &[w.0, w.1], 200);
-                assert!(gap >= 199.0, "{name} is {gap} from the track: {:?}", line.pts);
+            for w in [(p(3_000_000, -1_500_000), p(3_000_000, 150_000)), (p(3_000_000, 150_000), p(7_000_000, 150_000)), (p(7_000_000, 150_000), p(7_000_000, -1_500_000))] {
+                let gap = min_gap(&line.pts, pv.width, &[w.0, w.1], 200_000);
+                assert!(gap >= 199_000.0, "{name} is {gap} from the track: {:?}", line.pts);
             }
         }
     }
@@ -1272,22 +1272,22 @@ mod tests {
         // rectangular pads (1.0 x 0.6 mm) on a diagonal: (0,0) and (700,700). The gateways with entry lines -- the two lines leave the
         // pads side by side, along the pads' long side -- are only built for pads that line up like this.
         let mut node = Node::new();
-        let rect = |c: Point| Shape::Rect { x0: c.x - 500, y0: c.y - 300, x1: c.x + 500, y1: c.y + 300 };
+        let rect = |c: Point| Shape::Rect { x0: c.x - 500_000, y0: c.y - 300_000, x1: c.x + 500_000, y1: c.y + 300_000 };
         let start = node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(0), pos: p(0, 0), shape: rect(p(0, 0)), source: "J1.1".into(), edge: false }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(0), pos: p(700, 700), shape: rect(p(700, 700)), source: "J1.2".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(0), pos: p(700_000, 700_000), shape: rect(p(700_000, 700_000)), source: "J1.2".into(), edge: false }));
         let found = find_dp_primitive_pair(&node, start).unwrap();
-        let mut gws = DpGateways::new(400);
+        let mut gws = DpGateways::new(400_000);
         gws.build_from_primitive_pair(&found.pair, false);
         let fans: Vec<&crate::diff_pair::DpGateway> = gws.gateways.iter().filter(|g| g.priority >= 99).collect();
         assert_eq!(fans.len(), 4, "two fan-outs (ortho and diagonal distance) each way: {:?}", gws.gateways.iter().map(|g| g.priority).collect::<Vec<_>>());
-        assert!(fans.iter().all(|g| g.has_entry_lines && g.entry_p[0] == p(0, 0) && g.entry_n[0] == p(700, 700)), "the entry lines start on the pads");
+        assert!(fans.iter().all(|g| g.has_entry_lines && g.entry_p[0] == p(0, 0) && g.entry_n[0] == p(700_000, 700_000)), "the entry lines start on the pads");
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
         // to the right of both pads: the lines leave the pads and run side by side
-        assert!(dp.move_to(&rules, &settings, p(7000, 350)));
+        assert!(dp.move_to(&rules, &settings, p(7_000_000, 350_000)));
         let pv = dp.preview();
         assert!(!pv.colliding);
-        assert_eq!((pv.head_a.first(), pv.head_b.first()), (Some(p(0, 0)), Some(p(700, 700))), "from the pad centres");
+        assert_eq!((pv.head_a.first(), pv.head_b.first()), (Some(p(0, 0)), Some(p(700_000, 700_000))), "from the pad centres");
         assert_coupled(&pv, 0.7);
         // every segment is horizontal, vertical or diagonal
         for line in [&pv.head_a, &pv.head_b] {
@@ -1302,17 +1302,17 @@ mod tests {
     fn a_pair_of_vias_is_placed_a_via_gap_apart_and_the_route_goes_on_on_the_other_layer() {
         let (mut node, start) = two_pad_pairs();
         // the start pads are SMD on F.Cu; the far pair is on B.Cu
-        let far: Vec<ItemId> = node.iter().filter(|(_, it)| matches!(it, Item::Solid(s) if s.pos.x == 10_000)).map(|(id, _)| id).collect();
+        let far: Vec<ItemId> = node.iter().filter(|(_, it)| matches!(it, Item::Solid(s) if s.pos.x == 10_000_000)).map(|(id, _)| id).collect();
         for id in far {
             node.remove(id);
         }
-        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(1), pos: p(10_000, 0), shape: Shape::Circle { c: p(10_000, 0), r: 250 }, source: "far P".into(), edge: false }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(1), pos: p(10_000, 1000), shape: Shape::Circle { c: p(10_000, 1000), r: 250 }, source: "far N".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(1), pos: p(10_000_000, 0), shape: Shape::Circle { c: p(10_000_000, 0), r: 250_000 }, source: "far P".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(1), pos: p(10_000_000, 1_000_000), shape: Shape::Circle { c: p(10_000_000, 1_000_000), r: 250_000 }, source: "far N".into(), edge: false }));
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
         dp.toggle_via(true, None, None, Some(1));
         assert!(dp.is_placing_via());
-        assert!(dp.move_to(&rules, &settings, p(5000, 500)));
+        assert!(dp.move_to(&rules, &settings, p(5_000_000, 500_000)));
         let pv = dp.preview();
         assert!(!pv.colliding, "{pv:?}");
         assert_eq!(pv.vias.len(), 2, "one via per net");
@@ -1322,43 +1322,43 @@ mod tests {
         // `viaGap()`: the vias are the via gap (the larger of the pair's 250 and the hole-to-hole spacing) apart, edge to edge
         let centres = vnorm(vsub(via_p.pos, via_n.pos));
         let wanted = dp.sizes.via_gap_total() + dp.sizes.via_diameter;
-        assert!(centres >= wanted - 2 && centres <= wanted + 4, "centres {centres}, wanted about {wanted}");
+        assert!(centres >= wanted - 2000 && centres <= wanted + 4000, "centres {centres}, wanted about {wanted}");
         assert_eq!(pv.head_a.last(), Some(via_p.pos), "each line ends in its via");
         assert_eq!(pv.head_b.last(), Some(via_n.pos));
         // fix: the pair of vias is placed and the route goes on from them, on B.Cu
-        assert!(matches!(dp.fix_route(&rules, &settings, p(5000, 500), false), Some(FixOutcome::Fixed { real_end: false })));
+        assert!(matches!(dp.fix_route(&rules, &settings, p(5_000_000, 500_000), false), Some(FixOutcome::Fixed { real_end: false })));
         assert_eq!(dp.current_layer(), 1);
         assert!(!dp.is_placing_via());
         assert_eq!(dp.legs().len(), 1);
         assert!(dp.legs()[0].vias.is_some());
-        assert!(dp.move_to(&rules, &settings, p(10_000, 0)), "on to the far pads");
+        assert!(dp.move_to(&rules, &settings, p(10_000_000, 0)), "on to the far pads");
         let pv = dp.preview();
         assert_eq!(pv.layer, 1);
         assert!(pv.snapped_end && !pv.colliding);
         assert_eq!(pv.head_a.first(), Some(via_p.pos), "from the via");
         assert_eq!(pv.fixed_vias.len(), 2);
-        let commit = dp.finish(&rules, &settings, p(10_000, 0)).unwrap();
+        let commit = dp.finish(&rules, &settings, p(10_000_000, 0)).unwrap();
         assert_eq!(commit.legs.len(), 2);
         assert_eq!((commit.legs[0].layer, commit.legs[1].layer), (0, 1));
-        assert_eq!(commit.legs[1].p.last(), Some(&p(10_000, 0)));
+        assert_eq!(commit.legs[1].p.last(), Some(&p(10_000_000, 0)));
     }
 
     #[test]
     fn a_pair_of_vias_is_pushed_off_a_pad_in_walk_around_mode() {
         let (mut node, start) = two_pad_pairs();
-        pad(&mut node, "GND", p(5000, 500), 300);
+        pad(&mut node, "GND", p(5_000_000, 500_000), 300_000);
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
         dp.toggle_via(true, None, None, Some(1));
         // the cursor is just beside the pad's centre: `propagateDpHeadForces` moves the pair's end off it
-        assert!(dp.move_to(&rules, &settings, p(5000, 700)));
+        assert!(dp.move_to(&rules, &settings, p(5_000_000, 700_000)));
         let pv = dp.preview();
         assert!(!pv.colliding, "{pv:?}");
         assert_eq!(pv.vias.len(), 2);
         let gnd = node.iter().find(|(_, it)| matches!(it, Item::Solid(s) if s.net.as_deref() == Some("GND"))).map(|(_, it)| it.clone()).unwrap();
         for v in &pv.vias {
             let gap = Shape::Circle { c: v.pos, r: v.diameter / 2 }.gap_to(&gnd.shape(0));
-            assert!(gap >= 199.0, "a via is {gap} from the pad");
+            assert!(gap >= 199_000.0, "a via is {gap} from the pad");
         }
     }
 
@@ -1368,12 +1368,12 @@ mod tests {
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
         assert!(!dp.undo_last_segment(), "nothing to take back yet");
-        dp.move_to(&rules, &settings, p(4000, 500));
-        assert!(matches!(dp.fix_route(&rules, &settings, p(4000, 500), false), Some(FixOutcome::Fixed { real_end: false })));
+        dp.move_to(&rules, &settings, p(4_000_000, 500_000));
+        assert!(matches!(dp.fix_route(&rules, &settings, p(4_000_000, 500_000), false), Some(FixOutcome::Fixed { real_end: false })));
         assert_eq!(dp.legs().len(), 1);
         let first_end = dp.legs()[0].p.last().copied().unwrap();
-        dp.move_to(&rules, &settings, p(6000, 700));
-        assert!(dp.fix_route(&rules, &settings, p(6000, 700), false).is_some());
+        dp.move_to(&rules, &settings, p(6_000_000, 700_000));
+        assert!(dp.fix_route(&rules, &settings, p(6_000_000, 700_000), false).is_some());
         assert_eq!(dp.legs().len(), 2);
         assert_eq!(dp.legs()[1].p.first(), Some(&first_end), "the second leg goes on from the first");
         assert!(dp.undo_last_segment());
@@ -1381,7 +1381,7 @@ mod tests {
         assert!(dp.undo_last_segment());
         assert!(dp.legs().is_empty() && !dp.undo_last_segment());
         // and the route can be started over from the pads
-        dp.move_to(&rules, &settings, p(4000, 500));
+        dp.move_to(&rules, &settings, p(4_000_000, 500_000));
         assert_eq!(dp.preview().head_a.first(), Some(p(0, 0)));
     }
 
@@ -1392,7 +1392,7 @@ mod tests {
         let (node, start) = two_pad_pairs();
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
-        let target = p(1000, -2000);
+        let target = p(1_000_000, -2_000_000);
         assert!(dp.move_to(&rules, &settings, target));
         let before = dp.preview().head_a.pts.clone();
         dp.flip_posture();
@@ -1409,13 +1409,13 @@ mod tests {
     #[test]
     fn a_gap_below_the_clearance_is_raised_to_it_but_the_dialog_may_ask_for_less() {
         // the model's fallback gap is 180 um, under its 200 um clearance
-        let plain: BoardRules = serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap();
+        let plain: BoardRules = serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\n").unwrap();
         let sizes = DpSizes::resolve(&plain, "A_P", "A_N");
-        assert_eq!((sizes.width, sizes.gap), (200, 200), "the 125 um fallback width is under the board's 200 um minimum track width too");
+        assert_eq!((sizes.width, sizes.gap), (200_000, 200_000), "the 125 um fallback width is under the board's 200 um minimum track width too");
         let (node, start) = two_pad_pairs();
         let mut dp = DiffPairPlacer::start(&node, &plain, &RoutingSettings::default(), start, 0, LayerRange::new(0, 1)).unwrap();
-        dp.set_dimensions(None, Some(150), None);
-        assert_eq!(dp.sizes.gap, 150, "typed in: kept");
+        dp.set_dimensions(None, Some(150_000), None);
+        assert_eq!(dp.sizes.gap, 150_000, "typed in: kept");
     }
 }
 

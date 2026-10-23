@@ -16,7 +16,7 @@ use eda_model::ir::{Point, Nm};
 /// `ADVANCED_CFG::m_MaxTangentAngleDeviation`: how far (degrees) a track may be off the arc's tangent and still be the one it is a fillet of.
 pub const MAX_TANGENT_ANGLE_DEVIATION: f64 = 1.0;
 /// `ADVANCED_CFG::m_MaxTrackLengthToKeep` (0.0005 mm): a track the drag leaves shorter than this is removed.
-pub const MAX_TRACK_LENGTH_TO_KEEP_NM: f64 = 0.5;
+pub const MAX_TRACK_LENGTH_TO_KEEP_NM: f64 = 500.0;
 
 type V = (f64, f64);
 

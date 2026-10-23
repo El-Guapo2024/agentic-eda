@@ -16,7 +16,7 @@ use crate::chain::ShapeLineChain;
 use crate::delay::DelayParams;
 use crate::diff_pair::{dp_coupled_net_name, dp_net_polarity};
 use crate::item::{net_of, Item, ItemId, Net};
-use crate::kigeom::{common_parallel_projection, ki_round, to_nm, to_um, Seg};
+use crate::kigeom::{common_parallel_projection, ki_round, Seg};
 use crate::line::Line;
 use crate::meander::{tune_line_length, MeanderEnv, MeanderSettings, MeanderShape, MeanderSide, MeanderType, MeanderedLine};
 use crate::meander_placer::{chain_collides, chain_of, Tuned, TuningStatus};
@@ -73,7 +73,7 @@ pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
 
     let seg_nm = |id: ItemId| -> Option<(Seg, i64)> {
         match world.get(id) {
-            Some(Item::Segment(s)) => Some((Seg::new(to_nm(s.a), to_nm(s.b)), s.width * 1000)),
+            Some(Item::Segment(s)) => Some((Seg::new(s.a, s.b), s.width)),
             _ => None,
         }
     };
@@ -135,7 +135,7 @@ pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
             let disp = (r.b.x - c.b.x, r.b.y - c.b.y);
             let cross = dir.0 as i128 * disp.1 as i128 - dir.1 as i128 * disp.0 as i128;
             let norm = crate::kigeom::norm_i(dir.0, dir.1).max(1) as i128;
-            (cross.abs() / norm) as i64 - lp.width * 1000
+            (cross.abs() / norm) as i64 - lp.width
         }
         _ => -1,
     };
@@ -329,10 +329,10 @@ impl DpMeanderPlacer {
     /// `DP_MEANDER_PLACER::Start( aP, aStartItem )`.
     pub fn start(world: &Node, env: &LengthEnv, start: ItemId, at: Point, settings: MeanderSettings) -> Result<DpMeanderPlacer, String> {
         let Some(Item::Segment(seg)) = world.get(start) else { return Err("Please select a track whose length you want to tune.".into()) };
-        let current_start = Seg::new(to_nm(seg.a), to_nm(seg.b)).nearest_point(to_nm(at));
+        let current_start = Seg::new(seg.a, seg.b).nearest_point(at);
         let mut pair = assemble_diff_pair(world, start).ok_or(NO_PAIR)?;
         if pair.gap < 0 {
-            pair.gap = env.rules.diff_pair_gap_of(pair.net_p.as_deref().unwrap_or("")) * 1000;
+            pair.gap = env.rules.diff_pair_gap_of(pair.net_p.as_deref().unwrap_or(""));
         }
         if pair.p.segment_ids.is_empty() || pair.n.segment_ids.is_empty() {
             return Err("Unable to find the lines of the pair.".into());
@@ -355,7 +355,7 @@ impl DpMeanderPlacer {
             initial_segment: start,
             cp: chain_of(&pair.p),
             cn: chain_of(&pair.n),
-            width_nm: pair.width * 1000,
+            width_nm: pair.width,
             pair,
             path_p,
             path_n,
@@ -406,7 +406,7 @@ impl DpMeanderPlacer {
     }
 
     pub fn current_start(&self) -> Point {
-        to_um(self.current_start)
+        self.current_start
     }
 
     /// `origPathLength()`: the pair is as long as its longer net, nanometres.
@@ -476,7 +476,7 @@ impl DpMeanderPlacer {
 
     pub fn spacing_step(&mut self, sign: i64) {
         let s = self.settings.spacing + sign * self.settings.step;
-        let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None) * 1000;
+        let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None);
         self.settings.spacing = s.max(self.width_nm + clearance);
     }
 
@@ -527,7 +527,7 @@ impl DpMeanderPlacer {
     /// `Move( aP, aEndItem )`.
     pub fn do_move(&mut self, to: Point) -> bool {
         self.calculate_time_domain_targets();
-        let p = to_nm(to);
+        let p = to;
         if self.current_start == p {
             return false;
         }
@@ -556,7 +556,7 @@ impl DpMeanderPlacer {
             return false;
         }
 
-        let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None) * 1000;
+        let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None);
         let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net_p: self.pair.net_p.clone(), net_n: self.pair.net_n.clone(), layer: self.pair.p.layer, width_nm: self.pair.width };
         let mut result = MeanderedLine::new(true);
         result.set_width(self.width_nm);
@@ -687,34 +687,34 @@ mod tests {
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        rules.clearance = 150;
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600), rules }
+        rules.clearance = 150_000;
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600_000), rules }
     }
 
     fn pad(net: &str, at: Point) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: 300 }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: 300_000 }, source: "U1.1".into(), edge: false })
     }
 
     fn seg(net: &str, a: Point, b: Point) -> Item {
-        Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width: 200, source_track: None, locked: false })
+        Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width: 200_000, source_track: None, locked: false })
     }
 
     /// USB_P and USB_N, 40 mm long, 0.5 mm apart (centre to centre 0.4 mm: gap 0.2 mm).
     fn board() -> (Node, ItemId, ItemId) {
         let mut w = Node::new();
-        for (net, y) in [("USB_P", 0), ("USB_N", 400)] {
+        for (net, y) in [("USB_P", 0), ("USB_N", 400_000)] {
             w.add(pad(net, p(0, y)));
-            w.add(pad(net, p(40_000, y)));
+            w.add(pad(net, p(40_000_000, y)));
         }
-        let a = w.add(seg("USB_P", p(0, 0), p(40_000, 0)));
-        let b = w.add(seg("USB_N", p(0, 400), p(40_000, 400)));
+        let a = w.add(seg("USB_P", p(0, 0), p(40_000_000, 0)));
+        let b = w.add(seg("USB_N", p(0, 400_000), p(40_000_000, 400_000)));
         (w, a, b)
     }
 
     fn settings(target_nm: i64) -> MeanderSettings {
         let mut s = MeanderSettings::default();
         s.spacing = 1_000_000;
-        s.set_target_length(target_nm * 1000);
+        s.set_target_length(target_nm);
         s.keep_endpoints = true;
         s
     }
@@ -724,7 +724,7 @@ mod tests {
         let (w, a, b) = board();
         let pair = assemble_diff_pair(&w, a).expect("a pair");
         assert_eq!((pair.net_p.as_deref(), pair.net_n.as_deref()), (Some("USB_P"), Some("USB_N")));
-        assert_eq!(pair.width, 200);
+        assert_eq!(pair.width, 200_000);
         assert_eq!(pair.gap, 200_000, "0.4 mm between the centres less a width");
         // from the N line the pair is the same, P first
         let from_n = assemble_diff_pair(&w, b).expect("a pair");
@@ -738,9 +738,9 @@ mod tests {
     #[test]
     fn a_pair_is_lengthened_together_and_stays_a_pitch_apart() {
         let (w, a, _) = board();
-        let mut placer = DpMeanderPlacer::start(&w, &env(), a, p(5_000, 0), settings(43_000)).expect("a placer");
+        let mut placer = DpMeanderPlacer::start(&w, &env(), a, p(5_000_000, 0), settings(43_000_000)).expect("a placer");
         assert_eq!(placer.orig_path_length(), 40_000_000);
-        assert!(placer.do_move(p(35_000, 0)));
+        assert!(placer.do_move(p(35_000_000, 0)));
         let len = placer.tuning_length_result();
         assert!((len - 43_000_000).abs() < 100_000, "{len}");
         assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
@@ -769,7 +769,7 @@ mod tests {
             profile_type: ProfileType::Differential,
             target_impedance: 90.0,
             enable_time_domain_tuning: true,
-            layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200, diff_pair_gap_nm: 200, delay_as_per_mm: 6_100_000 }],
+            layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200_000, diff_pair_gap_nm: 200_000, delay_as_per_mm: 6_100_000 }],
             via_propagation_delay_as: 0,
             via_overrides: vec![],
         };
@@ -779,11 +779,11 @@ mod tests {
         s.keep_endpoints = true;
         s.is_time_domain = true;
         s.set_target_length_delay(280 * crate::delay::ATTOSECONDS_PER_PS);
-        let mut placer = DpMeanderPlacer::start(&w, &e, a, p(5_000, 0), s).expect("a placer");
+        let mut placer = DpMeanderPlacer::start(&w, &e, a, p(5_000_000, 0), s).expect("a placer");
         // 40 mm at 6.1 ps/mm is 244 ps; 280 ps is 45.90 mm
         assert_eq!(placer.orig_path_delay(), 244_000_000);
         assert!((placer.settings().target_length.opt() - 45_901_639).abs() < 5, "{}", placer.settings().target_length.opt());
-        assert!(placer.do_move(p(35_000, 0)));
+        assert!(placer.do_move(p(35_000_000, 0)));
         assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
         let delay = placer.tuning_delay_result();
         assert!((delay - 280_000_000).abs() < 300_000, "the pair takes {delay} as");
@@ -794,7 +794,7 @@ mod tests {
     fn a_net_that_is_not_in_a_pair_is_refused_with_kicads_words() {
         let mut w = Node::new();
         let s = w.add(seg("CLK", p(0, 0), p(1_000, 0)));
-        let e = DpMeanderPlacer::start(&w, &env(), s, p(0, 0), settings(2_000)).err().expect("an error");
+        let e = DpMeanderPlacer::start(&w, &env(), s, p(0, 0), settings(2_000_000)).err().expect("an error");
         assert!(e.starts_with("Unable to find complementary differential pair net for length tuning"), "{e}");
     }
 

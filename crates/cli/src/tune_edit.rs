@@ -24,7 +24,7 @@ use eda_pns::chain::ShapeLineChain;
 use eda_pns::dp_meander_placer::{assemble_diff_pair, skew_setup, DpMeanderPlacer, NO_PAIR, NO_PAIR_FOR_SKEW};
 use eda_pns::from_ir::build_node_for_tuning as build_node;
 use eda_pns::item::{Item, ItemId};
-use eda_pns::kigeom::{to_nm, to_um, Seg};
+use eda_pns::kigeom::Seg;
 use eda_pns::layer::LayerMap;
 use eda_pns::line::Line;
 use eda_pns::meander::{MeanderSettings, MeanderSide, MeanderStyle, MinOptMax, LENGTH_UNCONSTRAINED};
@@ -140,7 +140,7 @@ pub fn default_pattern(model: &ConstraintModel, kind: TuningMode, layer: &str) -
         single_sided: s.single_sided,
         override_custom_rules: false,
         target_length: TargetRange::unconstrained(),
-        target_skew: TargetRange { min: -100, opt: 0, max: 100 },
+        target_skew: TargetRange { min: -100_000, opt: 0, max: 100_000 },
         is_time_domain: false,
         target_delay: TargetRange::delay_unconstrained(),
         target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
@@ -163,7 +163,7 @@ fn int(v: &Value, key: &str) -> Option<i64> {
 /// A target as the dialog sends it: a number (the target, with the default tolerance round it), an object `{min?, opt?, max?}`, or null (no target).
 fn range_of(v: &Value, skew: bool) -> Option<TargetRange> {
     if v.is_null() {
-        return Some(if skew { TargetRange { min: -100, opt: 0, max: 100 } } else { TargetRange::unconstrained() });
+        return Some(if skew { TargetRange { min: -100_000, opt: 0, max: 100_000 } } else { TargetRange::unconstrained() });
     }
     if let Some(n) = v.as_f64() {
         return Some(TargetRange::around(n.round() as i64));
@@ -245,9 +245,9 @@ pub fn apply_settings(p: &mut TuningPattern, v: &Value) {
 /// `PNS::MEANDER_SETTINGS` (nanometres) for a pattern.
 pub fn meander_settings(p: &TuningPattern) -> MeanderSettings {
     let mut s = MeanderSettings::default();
-    s.min_amplitude = p.min_amplitude * 1000;
-    s.max_amplitude = p.max_amplitude * 1000;
-    s.spacing = p.spacing * 1000;
+    s.min_amplitude = p.min_amplitude;
+    s.max_amplitude = p.max_amplitude;
+    s.spacing = p.spacing;
     s.corner_radius_percentage = p.corner_radius_percent as i64;
     s.corner_style = if p.rounded { MeanderStyle::Round } else { MeanderStyle::Chamfer };
     s.single_sided = p.single_sided;
@@ -266,9 +266,9 @@ pub fn meander_settings(p: &TuningPattern) -> MeanderSettings {
             m.set_min(0);
             m.set_max(LENGTH_UNCONSTRAINED);
         } else {
-            m.set_opt(r.opt * 1000);
-            m.set_min(r.min * 1000);
-            m.set_max(r.max * 1000);
+            m.set_opt(r.opt);
+            m.set_min(r.min);
+            m.set_max(r.max);
         }
         m
     };
@@ -290,8 +290,8 @@ pub fn meander_settings(p: &TuningPattern) -> MeanderSettings {
 
 /// What the placer changed of a pattern's settings (the amplitude and spacing keys, a flipped initial side), back into the pattern.
 fn sync_back(p: &mut TuningPattern, s: &MeanderSettings) {
-    p.max_amplitude = s.max_amplitude / 1000;
-    p.spacing = s.spacing / 1000;
+    p.max_amplitude = s.max_amplitude;
+    p.spacing = s.spacing;
     p.initial_side = match s.initial_side {
         MeanderSide::Left => PatternSide::Left,
         MeanderSide::Default => PatternSide::Default,
@@ -664,7 +664,7 @@ impl Tuner {
         if base.a == base.b {
             return None;
         }
-        Some(if base.side(to_nm(end)) < 0 { PatternSide::Left } else { PatternSide::Right })
+        Some(if base.side(end) < 0 { PatternSide::Left } else { PatternSide::Right })
     }
 
     /// The cursor is at `to`: the placer fits the meander from the start of the pattern to there (`EditStart`, `Update`). `follow_cursor` says whether the side the first
@@ -675,14 +675,14 @@ impl Tuner {
             let side = match &self.placer {
                 Placer::Single(p) => {
                     let chain = chain_of(p.origin_line());
-                    let (_, raw, _) = chain.split3(to_nm(p.current_start()), to_nm(to));
+                    let (_, raw, _) = chain.split3(p.current_start(), to);
                     self.side_from_end(&raw, None, to)
                 }
                 Placer::Pair(p) => {
                     let (cp, cn) = (chain_of(&p.pair().p), chain_of(&p.pair().n));
-                    let start = to_nm(p.current_start());
-                    let (_, raw_p, _) = cp.split3(start, to_nm(to));
-                    let (_, raw_n, _) = cn.split3(start, to_nm(to));
+                    let start = p.current_start();
+                    let (_, raw_p, _) = cp.split3(start, to);
+                    let (_, raw_n, _) = cn.split3(start, to);
                     if self.own_is_p {
                         self.side_from_end(&raw_p, Some(&raw_n), to)
                     } else {
@@ -756,11 +756,11 @@ impl Tuner {
 
     /// The pattern's record of the cut it was made on (`m_origin`, `m_end`, `m_baseLine`, `m_baseLineCoupled`) and of the result (`m_tuningLength`, `m_tuningStatus`).
     fn record_cut(&mut self, primary: &ShapeLineChain, coupled: Option<&ShapeLineChain>, length: i64, status: TuningStatus) {
-        let pts = |c: &ShapeLineChain| c.points().iter().map(|p| to_um(*p)).collect::<Vec<Point>>();
+        let pts = |c: &ShapeLineChain| c.points().to_vec();
         if primary.point_count() >= 2 {
             self.pattern.base_line = pts(primary);
-            self.pattern.origin = to_um(primary.c_point(0));
-            self.pattern.end = to_um(primary.c_last_point());
+            self.pattern.origin = primary.c_point(0);
+            self.pattern.end = primary.c_last_point();
         }
         self.pattern.base_line_coupled = match (self.pattern.mode, coupled) {
             (TuningMode::DiffPair | TuningMode::DiffPairSkew, Some(c)) if c.point_count() >= 2 => pts(c),
@@ -768,7 +768,7 @@ impl Tuner {
         };
         if let Placer::Pair(p) = &self.placer {
             self.pattern.last_track_width = p.pair().width;
-            self.pattern.last_diff_pair_gap = p.pair().gap.max(0) / 1000;
+            self.pattern.last_diff_pair_gap = p.pair().gap.max(0);
         }
         self.pattern.last_tuning_length = length;
         self.pattern.last_status = status.name().to_string();
@@ -886,7 +886,7 @@ fn line_of_baseline(scene: &Scene, baseline: &[Point], layer: &str) -> Option<Li
         let Some(item) = segment_near(scene, at, layer, baseline) else { continue };
         let Some(line) = scene.world.assemble_line_with(item, eda_pns::tuning_path::assemble_opts()) else { continue };
         let chain = chain_of(&line);
-        if chain.point_on_edge(to_nm(first), 1_000) && chain.point_on_edge(to_nm(last), 1_000) {
+        if chain.point_on_edge(first, 1_000) && chain.point_on_edge(last, 1_000) {
             return Some(line);
         }
     }
@@ -897,12 +897,12 @@ fn line_of_baseline(scene: &Scene, baseline: &[Point], layer: &str) -> Option<Li
 fn baseline_edit(scene: &Scene, pattern: &TuningPattern, baseline: &[Point]) -> Result<(Line, LineEdit), String> {
     let line = line_of_baseline(scene, baseline, &pattern.layer).ok_or("Unable to find the tracks this tuning pattern was made on: they have been moved or edited since.")?;
     let chain = chain_of(&line);
-    let (first, last) = (to_nm(baseline[0]), to_nm(*baseline.last().unwrap()));
+    let (first, last) = (baseline[0], (*baseline.last().unwrap()));
     let (pre, raw, post) = chain.split3(first, last);
     if raw.point_count() < 2 {
         return Err("The tuning pattern has nothing between its start and its end.".into());
     }
-    let mut straight = ShapeLineChain::from_points(&baseline.iter().map(|p| to_nm(*p)).collect::<Vec<_>>());
+    let mut straight = ShapeLineChain::from_points(baseline);
     // the baseline starts and ends where the cut did: the points of the line nearest its two ends
     straight.set_point(0, raw.c_point(0));
     let n = straight.point_count() - 1;
@@ -1123,7 +1123,7 @@ fn line_distance(a: Point, b: Point, q: Point) -> f64 {
 pub fn apply_handle(p: &mut TuningPattern, handle: usize, pos: Point) {
     let (off, off_end) = centerline_offsets(p);
     let (a, b) = base_segment(p);
-    let ten = |v: f64| ((v / 10.0).round() as i64) * 10;
+    let ten = |v: f64| ((v / 10_000.0).round() as i64) * 10_000;
     match handle {
         0 => p.origin = Point { x: pos.x - off.x, y: pos.y - off.y },
         1 => p.end = Point { x: pos.x - off_end.x, y: pos.y - off_end.y },
@@ -1134,7 +1134,7 @@ pub fn apply_handle(p: &mut TuningPattern, handle: usize, pos: Point) {
             }
             p.max_amplitude = ten(value).max(1);
             // `base.Side( wHandle ) < 0` is the left
-            let side = Seg::new(to_nm(a), to_nm(b)).side(to_nm(pos));
+            let side = Seg::new(a, b).side(pos);
             p.initial_side = if side < 0 { PatternSide::Left } else { PatternSide::Right };
         }
         3 => {

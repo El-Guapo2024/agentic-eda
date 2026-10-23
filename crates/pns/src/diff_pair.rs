@@ -11,10 +11,9 @@
 //!
 //! ## Units
 //!
-//! KiCad's coordinates are nanometres and this IR's are micrometres, so the few tolerances KiCad states in nm are restated here:
-//! `checkGap`'s 100 nm slack is [`GAP_CHECK_SLACK`] (1 um, the resolution), the 22.5 degree gateway's 5 nm alignment test is
-//! exact, and the +-10 um coupled-gap tolerance (`RANGED_NUM( m_gap, 10000, 10000 )`) is the same 10 in either unit. The guide
-//! segments of `BuildGeneric` (+-100 nm) are +-100 um here: only their *lines* matter (`IntersectLines`, `Collinear`), never their length.
+//! KiCad's coordinates are nanometres and so are this IR's: `checkGap`'s 100 nm slack is [`GAP_CHECK_SLACK`], the 22.5 degree
+//! gateway's alignment test is KiCad's 5 nm, and the +-10 um coupled-gap tolerance (`RANGED_NUM( m_gap, 10000, 10000 )`) is
+//! [`GAP_TOLERANCE_NM`].
 //!
 //! ## Pair detection and sizing
 //!
@@ -390,10 +389,10 @@ impl RangedNum {
 }
 
 /// `DIFF_PAIR::SetGap`: `RANGED_NUM<int>( m_gap, 10000, 10000 )`, 10 um either way.
-pub const GAP_TOLERANCE_NM: Nm = 10;
+pub const GAP_TOLERANCE_NM: Nm = 10_000;
 
-/// `checkGap`'s `SEG::Square( gap - 100 )`: 100 nm of slack, which at this IR's resolution is one micrometre.
-pub const GAP_CHECK_SLACK: Nm = 1;
+/// `checkGap`'s `SEG::Square( gap - 100 )`: 100 nm of slack.
+pub const GAP_CHECK_SLACK: Nm = 100;
 
 /// `checkGap`: no segment of `p` is nearer to a segment of `n` than `gap` (less the slack).
 fn check_gap(p: &[Point], n: &[Point], gap: Nm) -> bool {
@@ -645,7 +644,7 @@ impl DpGateways {
         }
         // "If we're at a "normal" angle (cardinal or 45-degree-diagonal), then add gateways that angle the anchor points by
         // 22.5-degrees for connection to tracks which are at +/- 45 degrees from the existing direction."
-        const EPSILON: Nm = 1; // KiCad's 5 nm: exactly aligned at this resolution
+        const EPSILON: Nm = 5;
         const SIN_22_5: f64 = 0.38268;
         const SIN_23_5: f64 = 0.39875;
         let add_angled = |this: &mut Self, length: Nm, priority: i32| {
@@ -1167,17 +1166,17 @@ mod tests {
 
     #[test]
     fn offset_polyline_keeps_a_straight_line_straight() {
-        let centerline = vec![p(0, 0), p(1000, 0)];
-        let offset = offset_polyline(&centerline, 100);
+        let centerline = vec![p(0, 0), p(1_000_000, 0)];
+        let offset = offset_polyline(&centerline, 100_000);
         // E direction: perpendicular (dy,-dx)/len = (0,-1) for a +100 offset -- shifts "up" (negative y).
-        assert_eq!(offset, vec![p(0, -100), p(1000, -100)]);
+        assert_eq!(offset, vec![p(0, -100_000), p(1_000_000, -100_000)]);
     }
 
     #[test]
     fn offset_polyline_miters_a_corner_instead_of_gapping_it() {
         // A 90-degree corner (E then S).
-        let centerline = vec![p(0, 0), p(1000, 0), p(1000, 1000)];
-        let offset = offset_polyline(&centerline, 100);
+        let centerline = vec![p(0, 0), p(1_000_000, 0), p(1_000_000, 1_000_000)];
+        let offset = offset_polyline(&centerline, 100_000);
         assert_eq!(offset.len(), 3, "still exactly one corner, not a gap/overlap at the join");
         let (a, b, c) = (offset[0], offset[1], offset[2]);
         assert_eq!(a.y, b.y, "first offset leg stays horizontal");
@@ -1186,68 +1185,68 @@ mod tests {
 
     #[test]
     fn a_gap_vector_is_the_shortest_that_doubles_to_the_length() {
-        // along a diagonal: (a, a) doubled is 2a * sqrt 2 = 299.8 for a = 106, which `EuclideanNorm` rounds to 300
-        let v = make_gap_vector((300, 300), 300);
-        assert_eq!(v, (106, 106));
-        assert!(vnorm((v.0 * 2, v.1 * 2)) >= 300 && vnorm((v.0 * 2 - 2, v.1 * 2 - 2)) < 300);
-        assert_eq!(make_gap_vector((0, 0), 300), (0, 0));
-        assert_eq!(make_gap_vector((-5, 0), 300), (-150, 0));
-        assert_eq!(make_gap_vector((7, 0), 0), (0, 0));
+        // along a diagonal: (a, a) doubled is 2a * sqrt 2 = 299_999.4 for a = 106_066, which `EuclideanNorm` rounds to 300_000
+        let v = make_gap_vector((300_000, 300_000), 300_000);
+        assert_eq!(v, (106_066, 106_066));
+        assert!(vnorm((v.0 * 2, v.1 * 2)) >= 300_000 && vnorm((v.0 * 2 - 2, v.1 * 2 - 2)) < 300_000);
+        assert_eq!(make_gap_vector((0, 0), 300_000), (0, 0));
+        assert_eq!(make_gap_vector((-5000, 0), 300_000), (-150_000, 0));
+        assert_eq!(make_gap_vector((7000, 0), 0), (0, 0));
     }
 
     #[test]
     fn two_pads_on_a_row_get_the_gateways_straight_out_and_diagonal_from_between_them() {
         // pitch 300, pads 1000 apart on a row: KiCad's `BuildGeneric` gives the midpoint exits (priority 2: far apart), the
         // side-by exits, and the diagonal/straight crossings
-        let mut gws = DpGateways::new(300);
-        gws.build_generic(p(0, 0), p(1000, 0), true, false);
+        let mut gws = DpGateways::new(300_000);
+        gws.build_generic(p(0, 0), p(1_000_000, 0), true, false);
         assert!(!gws.gateways.is_empty());
         assert!(gws.gateways.iter().all(|g| g.has_entry_lines), "build_entries gave every one its entry lines");
         let mid = gws.gateways.iter().find(|g| g.priority == 2 && g.allowed_entry_angles == ANG_RIGHT).expect("the midpoint exit");
         // centred between the pads. KiCad builds it from `makeGapVector( p0_n - p0_p, m_gap / 2 )`, so its anchors are half a pitch
         // apart, not a pitch: `checkGap` refuses every pair of lines that starts there (kept as it is)
-        assert_eq!((mid.anchor_p.x, mid.anchor_n.x), (425, 575));
+        assert_eq!((mid.anchor_p.x, mid.anchor_n.x), (425_000, 575_000));
         assert_eq!(mid.anchor_p.y, mid.anchor_n.y);
         // every straight-straight crossing is one pad's horizontal with the other's vertical: priority 10 (pads far apart)
         assert!(gws.gateways.iter().any(|g| g.priority == 10));
         // every other gateway's two anchors are at least the gap (less rounding) apart
         for g in gws.gateways.iter().filter(|g| g.allowed_entry_angles != ANG_RIGHT) {
-            assert!(vnorm(vsub(g.anchor_p, g.anchor_n)) >= 300 - 3, "{g:?}");
+            assert!(vnorm(vsub(g.anchor_p, g.anchor_n)) >= 300_000 - 3000, "{g:?}");
         }
     }
 
     #[test]
     fn via_mode_leaves_out_the_midpoint_and_mixed_gateways() {
-        let mut plain = DpGateways::new(300);
-        plain.build_generic(p(0, 0), p(0, 600), true, false);
-        let mut vias = DpGateways::new(300);
-        vias.build_generic(p(0, 0), p(0, 600), true, true);
+        let mut plain = DpGateways::new(300_000);
+        plain.build_generic(p(0, 0), p(0, 600_000), true, false);
+        let mut vias = DpGateways::new(300_000);
+        vias.build_generic(p(0, 0), p(0, 600_000), true, true);
         assert!(vias.gateways.len() < plain.gateways.len());
         assert!(vias.gateways.iter().all(|g| g.priority >= 10), "only the crossings of the lines through the two vias");
     }
 
     #[test]
     fn the_cursor_gets_eight_gateways_a_gap_apart() {
-        let mut gws = DpGateways::new(300);
+        let mut gws = DpGateways::new(300_000);
         gws.set_fit_vias(false, 0, None);
-        gws.build_for_cursor(p(5000, 5000));
+        gws.build_for_cursor(p(5_000_000, 5_000_000));
         assert_eq!(gws.gateways.len(), 8, "four diagonal pairs and four straight ones");
         for g in &gws.gateways {
             let mid = midpoint(g.anchor_p, g.anchor_n);
-            assert_eq!(mid, p(5000, 5000), "centred on the cursor");
-            assert!(vnorm(vsub(g.anchor_p, g.anchor_n)) >= 300, "a pitch apart");
+            assert_eq!(mid, p(5_000_000, 5_000_000), "centred on the cursor");
+            assert!(vnorm(vsub(g.anchor_p, g.anchor_n)) >= 300_000, "a pitch apart");
         }
         // with vias: the pitch is the via gap plus a via
-        let mut v = DpGateways::new(300);
-        v.set_fit_vias(true, 600, Some(250));
-        v.build_for_cursor(p(5000, 5000));
+        let mut v = DpGateways::new(300_000);
+        v.set_fit_vias(true, 600_000, Some(250_000));
+        v.build_for_cursor(p(5_000_000, 5_000_000));
         assert!(!v.gateways.is_empty());
         assert!(v.gateways.iter().all(|g| g.has_entry_lines));
     }
 
     #[test]
     fn filtering_by_orientation_drops_the_gateways_that_line_up_with_the_reference() {
-        let mut gws = DpGateways::new(300);
+        let mut gws = DpGateways::new(300_000);
         gws.set_fit_vias(false, 0, None);
         gws.build_for_cursor(p(0, 0));
         // pairs lined up straight or reversed with a heading north: the vertical offsets (ANG_STRAIGHT | ANG_HALF_FULL)
@@ -1262,47 +1261,47 @@ mod tests {
     #[test]
     fn a_straight_pair_between_two_pad_pairs_keeps_the_gap_the_whole_way() {
         // two pads at the start, 600 apart, and two at the end: pitch 300
-        let (start, end) = (DpPrimitivePair::from_anchors(p(0, 0), p(0, 600)), DpPrimitivePair::from_anchors(p(10_000, 0), p(10_000, 600)));
-        let mut entry = DpGateways::new(300);
+        let (start, end) = (DpPrimitivePair::from_anchors(p(0, 0), p(0, 600_000)), DpPrimitivePair::from_anchors(p(10_000_000, 0), p(10_000_000, 600_000)));
+        let mut entry = DpGateways::new(300_000);
         entry.build_from_primitive_pair(&start, false);
-        let mut target = DpGateways::new(300);
+        let mut target = DpGateways::new(300_000);
         target.build_from_primitive_pair(&end, false);
         let mut dp = DiffPair::default();
         assert!(entry.fit_gateways(&target, false, &mut dp));
-        assert_eq!((dp.p.first(), dp.n.first()), (Some(&p(0, 0)), Some(&p(0, 600))));
-        assert_eq!((dp.p.last(), dp.n.last()), (Some(&p(10_000, 0)), Some(&p(10_000, 600))));
+        assert_eq!((dp.p.first(), dp.n.first()), (Some(&p(0, 0)), Some(&p(0, 600_000))));
+        assert_eq!((dp.p.last(), dp.n.last()), (Some(&p(10_000_000, 0)), Some(&p(10_000_000, 600_000))));
         // every segment of P keeps the pitch from every segment of N
-        assert!(check_gap(&dp.p, &dp.n, 300));
+        assert!(check_gap(&dp.p, &dp.n, 300_000));
         assert!(!chains_intersect(&dp.p, &dp.n));
         // the two lines are coupled for most of their length once they run at the pitch
-        dp.width = 100;
-        dp.set_gap(200);
-        assert!(dp.coupled_length() > 6_000.0, "coupled {}", dp.coupled_length());
+        dp.width = 100_000;
+        dp.set_gap(200_000);
+        assert!(dp.coupled_length() > 6_000_000.0, "coupled {}", dp.coupled_length());
     }
 
     #[test]
-    fn the_gap_check_is_the_pitch_less_a_micrometre() {
-        let p_line = [p(0, 0), p(1000, 0)];
-        assert!(check_gap(&p_line, &[p(0, 300), p(1000, 300)], 300));
-        assert!(check_gap(&p_line, &[p(0, 299), p(1000, 299)], 300), "100 nm of slack is one micrometre here");
-        assert!(!check_gap(&p_line, &[p(0, 298), p(1000, 298)], 300));
-        assert!(!check_gap(&p_line, &[p(500, 100), p(500, -100)], 300), "crossing");
+    fn the_gap_check_is_the_pitch_less_100_nm() {
+        let p_line = [p(0, 0), p(1_000_000, 0)];
+        assert!(check_gap(&p_line, &[p(0, 300_000), p(1_000_000, 300_000)], 300_000));
+        assert!(check_gap(&p_line, &[p(0, 299_900), p(1_000_000, 299_900)], 300_000), "100 nm of slack");
+        assert!(!check_gap(&p_line, &[p(0, 299_899), p(1_000_000, 299_899)], 300_000));
+        assert!(!check_gap(&p_line, &[p(500_000, 100_000), p(500_000, -100_000)], 300_000), "crossing");
     }
 
     #[test]
     fn connection_angles_are_checked_per_line_against_the_allowed_mask() {
         let mut a = DiffPair::default();
-        a.p = vec![p(0, 0), p(1000, 0)];
-        a.n = vec![p(0, 300), p(1000, 300)];
+        a.p = vec![p(0, 0), p(1_000_000, 0)];
+        a.n = vec![p(0, 300_000), p(1_000_000, 300_000)];
         let mut straight = DiffPair::default();
-        straight.p = vec![p(1000, 0), p(2000, 0)];
-        straight.n = vec![p(1000, 300), p(2000, 300)];
+        straight.p = vec![p(1_000_000, 0), p(2_000_000, 0)];
+        straight.n = vec![p(1_000_000, 300_000), p(2_000_000, 300_000)];
         let mut obtuse = DiffPair::default();
-        obtuse.p = vec![p(1000, 0), p(2000, 1000)];
-        obtuse.n = vec![p(1000, 300), p(2000, 1300)];
+        obtuse.p = vec![p(1_000_000, 0), p(2_000_000, 1_000_000)];
+        obtuse.n = vec![p(1_000_000, 300_000), p(2_000_000, 1_300_000)];
         let mut right = DiffPair::default();
-        right.p = vec![p(1000, 0), p(1000, 1000)];
-        right.n = vec![p(1000, 300), p(1000, 1300)];
+        right.p = vec![p(1_000_000, 0), p(1_000_000, 1_000_000)];
+        right.n = vec![p(1_000_000, 300_000), p(1_000_000, 1_300_000)];
         assert!(a.check_connection_angle(&straight, ANG_STRAIGHT));
         assert!(!a.check_connection_angle(&straight, ANG_OBTUSE));
         assert!(a.check_connection_angle(&obtuse, ANG_OBTUSE));
@@ -1314,30 +1313,30 @@ mod tests {
 
     #[test]
     fn two_parallel_tracks_point_the_pair_along_themselves_and_two_pads_across() {
-        let seg = |net: &str, a: Point, b: Point| Item::Segment(Segment { net: crate::item::net_of(net), layer: 0, a, b, width: 100, source_track: None, locked: false });
-        let tracks = DpPrimitivePair::new(seg("P", p(0, 0), p(1000, 0)), seg("N", p(0, 300), p(1000, 300)));
-        let (mid, dir) = tracks.cursor_orientation(p(5000, 5000));
-        assert_eq!(mid, p(1000, 150));
-        assert_eq!(dir, (300, 0), "the heading of the tracks, as long as the pair is wide");
+        let seg = |net: &str, a: Point, b: Point| Item::Segment(Segment { net: crate::item::net_of(net), layer: 0, a, b, width: 100_000, source_track: None, locked: false });
+        let tracks = DpPrimitivePair::new(seg("P", p(0, 0), p(1_000_000, 0)), seg("N", p(0, 300_000), p(1_000_000, 300_000)));
+        let (mid, dir) = tracks.cursor_orientation(p(5_000_000, 5_000_000));
+        assert_eq!(mid, p(1_000_000, 150_000));
+        assert_eq!(dir, (300_000, 0), "the heading of the tracks, as long as the pair is wide");
         // not parallel: perpendicular to the line through the two ends, on the cursor's side
-        let skew = DpPrimitivePair::new(seg("P", p(0, 0), p(1000, 0)), seg("N", p(0, 300), p(1000, 600)));
-        let (_, dir) = skew.cursor_orientation(p(5000, 0));
-        assert_eq!(dir, (600, 0), "perpendicular to the line through the two ends (0, -600), turned toward the cursor");
-        let (_, away) = skew.cursor_orientation(p(-5000, 0));
-        assert_eq!(away, (-600, 0));
-        let pads = DpPrimitivePair::from_anchors(p(0, 0), p(0, 300));
-        assert_eq!(pads.cursor_orientation(p(5000, 0)).1, (0, 0), "no items, no orientation");
+        let skew = DpPrimitivePair::new(seg("P", p(0, 0), p(1_000_000, 0)), seg("N", p(0, 300_000), p(1_000_000, 600_000)));
+        let (_, dir) = skew.cursor_orientation(p(5_000_000, 0));
+        assert_eq!(dir, (600_000, 0), "perpendicular to the line through the two ends (0, -600), turned toward the cursor");
+        let (_, away) = skew.cursor_orientation(p(-5_000_000, 0));
+        assert_eq!(away, (-600_000, 0));
+        let pads = DpPrimitivePair::from_anchors(p(0, 0), p(0, 300_000));
+        assert_eq!(pads.cursor_orientation(p(5_000_000, 0)).1, (0, 0), "no items, no orientation");
     }
 
     #[test]
     fn the_ending_primitives_of_a_pair_are_its_last_segments_with_the_anchors_at_their_ends() {
         let mut dp = DiffPair::default();
-        dp.p = vec![p(0, 0), p(1000, 0), p(2000, 1000)];
-        dp.n = vec![p(0, 300), p(1000, 300), p(2000, 1300)];
+        dp.p = vec![p(0, 0), p(1_000_000, 0), p(2_000_000, 1_000_000)];
+        dp.n = vec![p(0, 300_000), p(1_000_000, 300_000), p(2_000_000, 1_300_000)];
         dp.set_nets(crate::item::net_of("P"), crate::item::net_of("N"));
-        dp.width = 100;
+        dp.width = 100_000;
         let e = dp.ending_primitives();
-        assert_eq!((e.anchor_p, e.anchor_n), (p(2000, 1000), p(2000, 1300)));
+        assert_eq!((e.anchor_p, e.anchor_n), (p(2_000_000, 1_000_000), p(2_000_000, 1_300_000)));
         assert!(e.directional());
         assert_eq!(e.dir_p(), Direction45::SE, "the heading the pair goes on in");
     }
@@ -1345,14 +1344,14 @@ mod tests {
     #[test]
     fn coupled_length_counts_only_the_stretches_beside_each_other_at_the_gap() {
         let mut dp = DiffPair::default();
-        dp.width = 100;
-        dp.set_gap(200);
+        dp.width = 100_000;
+        dp.set_gap(200_000);
         // P along y = 0, N along y = 300 for x in 0..1000 (centre pitch 300 = width 100 + gap 200), then N bends away
-        dp.p = vec![p(0, 0), p(2000, 0)];
-        dp.n = vec![p(0, 300), p(1000, 300), p(2000, 1300)];
+        dp.p = vec![p(0, 0), p(2_000_000, 0)];
+        dp.n = vec![p(0, 300_000), p(1_000_000, 300_000), p(2_000_000, 1_300_000)];
         let coupled = dp.coupled_length();
-        assert!((coupled - 1000.0).abs() <= 1.0, "{coupled}");
+        assert!((coupled - 1_000_000.0).abs() <= 1.0, "{coupled}");
         // the lengths: P 2000, N 1000 + 1414 = 2414
-        assert!((dp.skew() - (2000.0 - 2414.0)).abs() <= 1.0, "{}", dp.skew());
+        assert!((dp.skew() - (1_000_000.0 - 1_000_000.0 * std::f64::consts::SQRT_2)).abs() <= 1.0, "{}", dp.skew());
     }
 }

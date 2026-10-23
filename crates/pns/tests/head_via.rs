@@ -19,13 +19,13 @@ fn part(r: &str) -> Part {
 }
 
 fn track(id: &str, net: &str, layer: &str, pts: &[Point]) -> Track {
-    Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: 200, pts: pts.to_vec(), arc_mid_offset: None }
+    Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: 200_000, pts: pts.to_vec(), arc_mid_offset: None }
 }
 
 /// Two parts far from the action, a SIG stub on F.Cu ending at (-9000, 0), and the tracks given.
 fn board(tracks: Vec<Track>) -> (Design, ConstraintModel) {
     let model = ConstraintModel { parts: vec![part("R1"), part("R2")], nets: vec![IrNet { name: "SIG".into(), pins: vec!["R1.1".into(), "R2.1".into()] }], ..Default::default() };
-    let mut all = vec![track("t_sig", "SIG", "F.Cu", &[p(-10_000, 0), p(-9000, 0)])];
+    let mut all = vec![track("t_sig", "SIG", "F.Cu", &[p(-10_000_000, 0), p(-9_000_000, 0)])];
     all.extend(tracks);
     let design = Design {
         footprint_library: None,
@@ -38,7 +38,7 @@ fn board(tracks: Vec<Track>) -> (Design, ConstraintModel) {
         nets: None,
         placement: Some(PlacementSection {
             outline: vec![],
-            footprints: vec![FootprintInstance { id: "R1".into(), at: p(-9000, 30_000), rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: p(9000, 30_000), rot: 0, side: Side::Top, label: LabelSide::Above }],
+            footprints: vec![FootprintInstance { id: "R1".into(), at: p(-9_000_000, 30_000_000), rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: p(9_000_000, 30_000_000), rot: 0, side: Side::Top, label: LabelSide::Above }],
             modules: vec![],
         }),
         routing: Some(RoutingSection { tracks: all, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
@@ -74,23 +74,23 @@ fn violations(design: &Design, model: &ConstraintModel) -> HashSet<(ItemId, Item
 /// `V` while routing on F.Cu: the route goes on on B.Cu from the via; a GND track on B.Cu runs 50 um inside the via's clearance ring.
 #[test]
 fn a_route_with_a_via_pushes_the_track_on_the_other_layer_the_via_sits_on() {
-    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(-3000, -4000), p(-3000, 4000)])]);
+    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(-3_000_000, -4_000_000), p(-3_000_000, 4_000_000)])]);
     // the via at (-3000 - 300 - 100 - 50 - 300, 0) is 50 um short of the clearance ring of the GND track
-    let via_at = p(-3450, 0);
+    let via_at = p(-3_450_000, 0);
     assert!(violations(&design, &model).is_empty(), "the board starts clean");
     let mut router = Router::new(&design, &model);
     router.settings.mode = Mode::Shove;
-    router.start(p(-9000, 0), "F.Cu", 200).expect("starts on the end of the SIG stub");
-    router.toggle_via(true, 600, 300, Some(1));
+    router.start(p(-9_000_000, 0), "F.Cu", 200_000).expect("starts on the end of the SIG stub");
+    router.toggle_via(true, 600_000, 300_000, Some(1));
     let pv = router.preview(via_at).expect("a route in progress");
     assert!(!pv.colliding, "{pv:?}");
-    assert_eq!(pv.via, Some((via_at, 600, 300)), "the via is where the head ends");
+    assert_eq!(pv.via, Some((via_at, 600_000, 300_000)), "the via is where the head ends");
     assert_eq!(pv.head.last(), Some(via_at));
     assert_eq!(pv.displaced_lines.len(), 1, "the track under the via is pushed: {:?}", pv.displaced_lines);
 
     // `V` armed: the click fixes the head with its via and the route goes on on B.Cu; finishing it commits all of it as one
     assert!(router.fix(via_at).is_some());
-    let commit = router.finish(p(-3450, 3000)).expect("the route goes on on the other layer");
+    let commit = router.finish(p(-3_450_000, 3_000_000)).expect("the route goes on on the other layer");
     assert_eq!(commit.vias.len(), 1);
     assert_eq!((commit.vias[0].at, commit.vias[0].from_layer.as_str(), commit.vias[0].to_layer.as_str()), (via_at, "F.Cu", "B.Cu"));
     assert!(commit.remove_track_ids.contains(&"t_gnd".to_string()), "{:?}", commit.remove_track_ids);
@@ -102,13 +102,13 @@ fn a_route_with_a_via_pushes_the_track_on_the_other_layer_the_via_sits_on() {
 /// The same board in Walk around: the via is pushed off the track instead (`VIA::PushoutForce` with every kind), nothing is displaced.
 #[test]
 fn the_same_via_in_walkaround_mode_moves_the_via_not_the_track() {
-    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(-3000, -4000), p(-3000, 4000)])]);
+    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(-3_000_000, -4_000_000), p(-3_000_000, 4_000_000)])]);
     let mut router = Router::new(&design, &model);
     router.settings.mode = Mode::Walkaround;
-    router.start(p(-9000, 0), "F.Cu", 200).unwrap();
-    router.toggle_via(true, 600, 300, Some(1));
-    let pv = router.preview(p(-3450, 0)).expect("a route in progress");
+    router.start(p(-9_000_000, 0), "F.Cu", 200_000).unwrap();
+    router.toggle_via(true, 600_000, 300_000, Some(1));
+    let pv = router.preview(p(-3_450_000, 0)).expect("a route in progress");
     assert!(!pv.colliding && pv.displaced_lines.is_empty(), "{pv:?}");
     let (at, _, _) = pv.via.expect("a via");
-    assert_ne!(at, p(-3450, 0), "the via was pushed off the track");
+    assert_ne!(at, p(-3_450_000, 0), "the via was pushed off the track");
 }

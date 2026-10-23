@@ -31,7 +31,7 @@ use std::collections::HashMap;
 
 /// `ANCHOR_SNAP_NM`-equivalent used for picking a *start* item -- see
 /// `line_placer::SNAP_NM` for the same radius used at the route's end.
-const START_SNAP_NM: Nm = 500;
+const START_SNAP_NM: Nm = 500_000;
 
 /// A track cut in two where a route starts or ends in the middle of one (`SplitAdjacentSegments`, `SplitAdjacentArcs`): the commit gives the IR
 /// track `track` a vertex at `at`, or, for an arc track, cuts it into two arc tracks there.
@@ -972,7 +972,7 @@ mod tests {
             provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
-            placement: Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "R1".into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: Point { x: 6000, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above }], modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "R1".into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: Point { x: 6_000_000, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above }], modules: vec![] }),
             routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
@@ -992,8 +992,8 @@ mod tests {
             nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] }),
             routing: Some(RoutingSection {
-                tracks: vec![eda_model::ir::Track { id: "trkA".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }],
-                vias: vec![eda_model::ir::Via { id: "viaA".into(), net: "GND".into(), at: Point { x: 5000, y: 0 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
+                tracks: vec![eda_model::ir::Track { id: "trkA".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 }], arc_mid_offset: None }],
+                vias: vec![eda_model::ir::Via { id: "viaA".into(), net: "GND".into(), at: Point { x: 5_000_000, y: 0 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
                 zones: vec![],
                 track_width_presets: vec![],
                 via_presets: vec![],
@@ -1008,16 +1008,16 @@ mod tests {
     fn drag_moves_a_track_end_and_commits_it_in_place_of_the_original() {
         let (design, model) = track_and_via_board();
         let mut router = Router::new(&design, &model);
-        router.drag_start(Point { x: 1000, y: 0 }, "F.Cu").expect("must grab the track's free end");
+        router.drag_start(Point { x: 1_000_000, y: 0 }, "F.Cu").expect("must grab the track's free end");
         assert!(router.is_dragging());
-        let preview = router.drag_preview(Point { x: 1000, y: 2000 }).expect("preview while dragging");
+        let preview = router.drag_preview(Point { x: 1_000_000, y: 2_000_000 }).expect("preview while dragging");
         assert!(!preview.colliding);
-        let commit = router.drag_finish(Point { x: 1000, y: 2000 }).expect("collision-free drag must commit");
+        let commit = router.drag_finish(Point { x: 1_000_000, y: 2_000_000 }).expect("collision-free drag must commit");
         assert!(!router.is_dragging());
         assert_eq!(commit.remove_track_ids, vec!["trkA"]);
         assert_eq!(commit.tracks.len(), 1);
         // `dragCorner45`: the dragged end is at the cursor and the track reaches it by 45-degree legs, not one leg at 63 degrees
-        assert_eq!(commit.tracks[0].pts, vec![Point { x: 0, y: 0 }, Point { x: 0, y: 1000 }, Point { x: 1000, y: 2000 }]);
+        assert_eq!(commit.tracks[0].pts, vec![Point { x: 0, y: 0 }, Point { x: 0, y: 1_000_000 }, Point { x: 1_000_000, y: 2_000_000 }]);
     }
 
     #[test]
@@ -1025,17 +1025,17 @@ mod tests {
         let (design, model) = track_and_via_board();
         let mut router = Router::new(&design, &model);
         router.settings.mode = crate::settings::Mode::Shove;
-        router.drag_start(Point { x: 1000, y: 0 }, "F.Cu").unwrap();
+        router.drag_start(Point { x: 1_000_000, y: 0 }, "F.Cu").unwrap();
         // Drag the track's free end straight across the board, through
         // the via's position -- shove must push the via aside.
-        let to = Point { x: 10_000, y: 0 };
+        let to = Point { x: 10_000_000, y: 0 };
         let preview = router.drag_preview(to).expect("preview while dragging");
         assert!(!preview.colliding, "shove must clear the via, not just report a collision");
         let commit = router.drag_finish(to).expect("collision-free shoved drag must commit");
         assert!(commit.remove_via_ids.contains(&"viaA".to_string()));
-        let moved_via = commit.vias.iter().find(|v| v.at != Point { x: 5000, y: 0 }).expect("the via must have moved");
-        assert_eq!(moved_via.diameter, 600, "a shoved via's real diameter must survive, not the 0 placeholder");
-        assert_eq!(moved_via.drill, 300);
+        let moved_via = commit.vias.iter().find(|v| v.at != Point { x: 5_000_000, y: 0 }).expect("the via must have moved");
+        assert_eq!(moved_via.diameter, 600_000, "a shoved via's real diameter must survive, not the 0 placeholder");
+        assert_eq!(moved_via.drill, 300_000);
         assert_eq!(moved_via.net, "GND");
     }
 
@@ -1047,8 +1047,8 @@ mod tests {
         design.drawings = Some(eda_model::ir::DrawingsSection { via_extras: vec![eda_model::via_extra::ViaExtra { id: "viaA".into(), kind: ViaKind::Blind, tokens: vec![] }], ..Default::default() });
         let mut router = Router::new(&design, &model);
         router.settings.mode = crate::settings::Mode::Shove;
-        router.drag_start(Point { x: 1000, y: 0 }, "F.Cu").unwrap();
-        let to = Point { x: 10_000, y: 0 };
+        router.drag_start(Point { x: 1_000_000, y: 0 }, "F.Cu").unwrap();
+        let to = Point { x: 10_000_000, y: 0 };
         router.drag_preview(to).expect("preview while dragging");
         let commit = router.drag_finish(to).expect("the shoved drag commits");
         let i = commit.vias.iter().position(|v| v.net == "GND").expect("the via is put back");
@@ -1056,7 +1056,7 @@ mod tests {
         let (design, model) = track_and_via_board();
         let mut router = Router::new(&design, &model);
         router.settings.mode = crate::settings::Mode::Shove;
-        router.drag_start(Point { x: 1000, y: 0 }, "F.Cu").unwrap();
+        router.drag_start(Point { x: 1_000_000, y: 0 }, "F.Cu").unwrap();
         router.drag_preview(to);
         assert!(router.drag_finish(to).unwrap().via_kinds.is_empty(), "a through via has no entry");
     }
@@ -1067,31 +1067,31 @@ mod tests {
     #[test]
     fn a_pushed_line_on_two_ir_tracks_is_replaced_by_one_track_in_the_commit() {
         let (mut design, model) = two_pad_board();
-        let track = |id: &str, a: Point, b: Point| eda_model::ir::Track { id: id.into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None };
-        design.routing.as_mut().unwrap().tracks = vec![track("ta", Point { x: 2500, y: -2000 }, Point { x: 2500, y: -500 }), track("tb", Point { x: 2500, y: -500 }, Point { x: 2500, y: 2000 })];
+        let track = |id: &str, a: Point, b: Point| eda_model::ir::Track { id: id.into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, b], arc_mid_offset: None };
+        design.routing.as_mut().unwrap().tracks = vec![track("ta", Point { x: 2_500_000, y: -2_000_000 }, Point { x: 2_500_000, y: -500_000 }), track("tb", Point { x: 2_500_000, y: -500_000 }, Point { x: 2_500_000, y: 2_000_000 })];
         let mut router = Router::new(&design, &model);
         router.settings.mode = crate::settings::Mode::Shove;
-        router.start(Point { x: -825, y: 0 }, "F.Cu", 200).expect("starts on R1.1");
-        let preview = router.preview(Point { x: 4500, y: 0 }).expect("a route is in progress");
+        router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).expect("starts on R1.1");
+        let preview = router.preview(Point { x: 4_500_000, y: 0 }).expect("a route is in progress");
         assert!(!preview.colliding);
         assert_eq!(preview.displaced_lines.iter().filter(|d| d.line.point_count() >= 2).count(), 1, "one new shape");
-        let commit = router.finish(Point { x: 4500, y: 0 }).expect("the pushed route commits");
+        let commit = router.finish(Point { x: 4_500_000, y: 0 }).expect("the pushed route commits");
         let mut removed = commit.remove_track_ids.clone();
         removed.sort();
         assert_eq!(removed, vec!["ta", "tb"], "both tracks the line stood on are removed");
         let gnd: Vec<_> = commit.tracks.iter().filter(|t| t.net == "GND").collect();
         assert_eq!(gnd.len(), 1, "and one polyline replaces them");
-        assert_eq!(gnd[0].width, 200);
-        assert_eq!(gnd[0].pts.first(), Some(&Point { x: 2500, y: -2000 }));
-        assert_eq!(gnd[0].pts.last(), Some(&Point { x: 2500, y: 2000 }));
+        assert_eq!(gnd[0].width, 200_000);
+        assert_eq!(gnd[0].pts.first(), Some(&Point { x: 2_500_000, y: -2_000_000 }));
+        assert_eq!(gnd[0].pts.last(), Some(&Point { x: 2_500_000, y: 2_000_000 }));
     }
 
     /// A SIG track `trkA` (0,0)-(4000,0) on F.Cu, 200 wide, and a SIG via `viaB` at (8000, 3000) to route to.
     fn track_and_a_via_of_the_same_net() -> (Design, ConstraintModel) {
         let (mut design, model) = track_and_via_board();
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks = vec![eda_model::ir::Track { id: "trkA".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 4000, y: 0 }], arc_mid_offset: None }];
-        rt.vias = vec![eda_model::ir::Via { id: "viaB".into(), net: "SIG".into(), at: Point { x: 8000, y: 3000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }];
+        rt.tracks = vec![eda_model::ir::Track { id: "trkA".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 0, y: 0 }, Point { x: 4_000_000, y: 0 }], arc_mid_offset: None }];
+        rt.vias = vec![eda_model::ir::Via { id: "viaB".into(), net: "SIG".into(), at: Point { x: 8_000_000, y: 3_000_000 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }];
         (design, model)
     }
 
@@ -1113,12 +1113,12 @@ mod tests {
     fn a_route_can_start_in_the_middle_of_a_track() {
         let (design, model) = track_and_a_via_of_the_same_net();
         let mut router = Router::new(&design, &model);
-        router.start(Point { x: 2000, y: 0 }, "F.Cu", 200).expect("the middle of trkA is something to route from");
+        router.start(Point { x: 2_000_000, y: 0 }, "F.Cu", 200_000).expect("the middle of trkA is something to route from");
         assert_eq!(router.current_net().as_deref(), Some("SIG"));
-        let via = Point { x: 8000, y: 3000 };
+        let via = Point { x: 8_000_000, y: 3_000_000 };
         let pv = router.preview(via).expect("a route");
         assert!(!pv.colliding);
-        assert_eq!(pv.head.first(), Some(Point { x: 2000, y: 0 }), "the head leaves the middle of the track");
+        assert_eq!(pv.head.first(), Some(Point { x: 2_000_000, y: 0 }), "the head leaves the middle of the track");
         assert_eq!(pv.head.last(), Some(via));
         assert_eq!(pv.snapped_end, Some(via));
         assert!(matches!(router.fix(via), Some(FixOutcome::Fixed { real_end: true })));
@@ -1126,13 +1126,13 @@ mod tests {
         // the track is replaced by itself with a vertex at the start
         assert_eq!(commit.remove_track_ids, vec!["trkA"]);
         let split = commit.tracks.iter().find(|t| t.pts.first() == Some(&Point { x: 0, y: 0 })).expect("the cut track");
-        assert_eq!(split.pts, vec![Point { x: 0, y: 0 }, Point { x: 2000, y: 0 }, Point { x: 4000, y: 0 }]);
-        assert_eq!((split.net.as_str(), split.layer.as_str(), split.width), ("SIG", "F.Cu", 200));
-        let route = commit.tracks.iter().find(|t| t.pts.first() == Some(&Point { x: 2000, y: 0 })).expect("the route");
+        assert_eq!(split.pts, vec![Point { x: 0, y: 0 }, Point { x: 2_000_000, y: 0 }, Point { x: 4_000_000, y: 0 }]);
+        assert_eq!((split.net.as_str(), split.layer.as_str(), split.width), ("SIG", "F.Cu", 200_000));
+        let route = commit.tracks.iter().find(|t| t.pts.first() == Some(&Point { x: 2_000_000, y: 0 })).expect("the route");
         assert_eq!(route.pts.last(), Some(&via));
         // and in the board that results, the new route and both halves of the track meet at one joint
         let (after, _) = crate::from_ir::build_node(&committed(&design, &commit), &model);
-        let joint = after.joint_at(Point { x: 2000, y: 0 }, &net_of("SIG")).expect("a joint where the route starts");
+        let joint = after.joint_at(Point { x: 2_000_000, y: 0 }, &net_of("SIG")).expect("a joint where the route starts");
         let segments = joint.links.iter().filter(|&&id| matches!(after.get(id), Some(Item::Segment(_)))).count();
         assert_eq!(segments, 3, "the two halves of the track and the route");
         // three segments of one width meet there with no pad or via: no virtual via (`FixupVirtualVias` never counts `n_seg`)
@@ -1144,12 +1144,12 @@ mod tests {
     fn a_route_that_places_nothing_does_not_cut_the_track() {
         let (design, model) = track_and_a_via_of_the_same_net();
         let mut router = Router::new(&design, &model);
-        router.start(Point { x: 2000, y: 0 }, "F.Cu", 200).unwrap();
-        let commit = router.finish(Point { x: 2000, y: 0 }).expect("nothing to refuse");
+        router.start(Point { x: 2_000_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        let commit = router.finish(Point { x: 2_000_000, y: 0 }).expect("nothing to refuse");
         assert!(commit.tracks.is_empty() && commit.remove_track_ids.is_empty(), "{commit:?}");
         // cancelled: the router's own world was never cut
         let mut again = Router::new(&design, &model);
-        again.start(Point { x: 2000, y: 0 }, "F.Cu", 200).unwrap();
+        again.start(Point { x: 2_000_000, y: 0 }, "F.Cu", 200_000).unwrap();
         again.cancel();
         assert!(again.world.iter().filter(|(_, it)| matches!(it, Item::Segment(_))).count() == 1, "the world still has the one segment");
     }
@@ -1159,10 +1159,10 @@ mod tests {
     fn near_a_tracks_end_the_route_starts_at_the_end_and_cuts_nothing() {
         let (design, model) = track_and_a_via_of_the_same_net();
         let mut router = Router::new(&design, &model);
-        router.start(Point { x: 3950, y: 20 }, "F.Cu", 200).expect("the end");
-        let pv = router.preview(Point { x: 8000, y: 3000 }).unwrap();
-        assert_eq!(pv.head.first(), Some(Point { x: 4000, y: 0 }));
-        let commit = router.finish(Point { x: 8000, y: 3000 }).unwrap();
+        router.start(Point { x: 3_950_000, y: 20_000 }, "F.Cu", 200_000).expect("the end");
+        let pv = router.preview(Point { x: 8_000_000, y: 3_000_000 }).unwrap();
+        assert_eq!(pv.head.first(), Some(Point { x: 4_000_000, y: 0 }));
+        let commit = router.finish(Point { x: 8_000_000, y: 3_000_000 }).unwrap();
         assert!(!commit.remove_track_ids.contains(&"trkA".to_string()), "the track is not touched: {commit:?}");
     }
 
@@ -1171,13 +1171,13 @@ mod tests {
     #[test]
     fn a_start_on_the_tracks_centre_line_beats_a_pad_beside_it_and_an_unsnapped_one_still_snaps() {
         let (mut design, model) = track_and_a_via_of_the_same_net();
-        design.routing.as_mut().unwrap().vias.push(eda_model::ir::Via { id: "near".into(), net: "SIG".into(), at: Point { x: 2200, y: 300 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.routing.as_mut().unwrap().vias.push(eda_model::ir::Via { id: "near".into(), net: "SIG".into(), at: Point { x: 2_200_000, y: 300_000 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let mut router = Router::new(&design, &model);
-        router.start(Point { x: 2000, y: 0 }, "F.Cu", 200).unwrap();
-        assert_eq!(router.preview(Point { x: 8000, y: 3000 }).unwrap().head.first(), Some(Point { x: 2000, y: 0 }), "on the centre line: the track");
+        router.start(Point { x: 2_000_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        assert_eq!(router.preview(Point { x: 8_000_000, y: 3_000_000 }).unwrap().head.first(), Some(Point { x: 2_000_000, y: 0 }), "on the centre line: the track");
         // 300 um above the track and 100 um from the via: no track under it, the via is within the snap
-        router.start(Point { x: 2100, y: 300 }, "F.Cu", 200).unwrap();
-        assert_eq!(router.preview(Point { x: 8000, y: 3000 }).unwrap().head.first(), Some(Point { x: 2200, y: 300 }), "the via's centre");
+        router.start(Point { x: 2_100_000, y: 300_000 }, "F.Cu", 200_000).unwrap();
+        assert_eq!(router.preview(Point { x: 8_000_000, y: 3_000_000 }).unwrap().head.first(), Some(Point { x: 2_200_000, y: 300_000 }), "the via's centre");
     }
 
     /// A route ends in the middle of a same-net track the cursor is on (`snap_to_tracks`), and the track is cut there.
@@ -1185,12 +1185,12 @@ mod tests {
     fn a_route_can_end_in_the_middle_of_a_track() {
         let (design, model) = track_and_a_via_of_the_same_net();
         let mut router = Router::new(&design, &model);
-        router.start(Point { x: 8000, y: 3000 }, "B.Cu", 200).expect("starts on the via");
-        let middle = Point { x: 3000, y: 0 };
+        router.start(Point { x: 8_000_000, y: 3_000_000 }, "B.Cu", 200_000).expect("starts on the via");
+        let middle = Point { x: 3_000_000, y: 0 };
         let pv = router.preview(middle).unwrap();
         // the via spans both layers, the track is on F.Cu: the route is on B.Cu and cannot end on a F.Cu track
         assert_eq!(pv.snapped_end, None, "a track on another layer is not an end");
-        router.start(Point { x: 8000, y: 3000 }, "F.Cu", 200).unwrap();
+        router.start(Point { x: 8_000_000, y: 3_000_000 }, "F.Cu", 200_000).unwrap();
         let pv = router.preview(middle).unwrap();
         assert!(!pv.colliding);
         assert_eq!(pv.snapped_end, Some(middle));
@@ -1200,7 +1200,7 @@ mod tests {
         let commit = router.finish(middle).expect("commits");
         assert_eq!(commit.remove_track_ids, vec!["trkA"]);
         let cut = commit.tracks.iter().find(|t| t.pts.first() == Some(&Point { x: 0, y: 0 })).expect("the cut track");
-        assert_eq!(cut.pts, vec![Point { x: 0, y: 0 }, middle, Point { x: 4000, y: 0 }]);
+        assert_eq!(cut.pts, vec![Point { x: 0, y: 0 }, middle, Point { x: 4_000_000, y: 0 }]);
         let (after, _) = crate::from_ir::build_node(&committed(&design, &commit), &model);
         assert_eq!(after.joint_at(middle, &net_of("SIG")).map(|j| j.links.iter().filter(|&&id| matches!(after.get(id), Some(Item::Segment(_)))).count()), Some(3));
     }
@@ -1211,8 +1211,8 @@ mod tests {
         let (design, model) = track_and_a_via_of_the_same_net();
         let mut router = Router::new(&design, &model);
         router.settings.snap_to_tracks = false;
-        router.start(Point { x: 8000, y: 3000 }, "F.Cu", 200).unwrap();
-        let pv = router.preview(Point { x: 3000, y: 0 }).unwrap();
+        router.start(Point { x: 8_000_000, y: 3_000_000 }, "F.Cu", 200_000).unwrap();
+        let pv = router.preview(Point { x: 3_000_000, y: 0 }).unwrap();
         assert_eq!((pv.snapped_end, pv.snapped_segment), (None, None));
     }
 
@@ -1221,13 +1221,13 @@ mod tests {
     #[test]
     fn a_route_that_runs_along_the_track_it_ends_on_ends_where_it_meets_it() {
         let (mut design, model) = track_and_a_via_of_the_same_net();
-        design.routing.as_mut().unwrap().vias[0].at = Point { x: 8000, y: 0 };
+        design.routing.as_mut().unwrap().vias[0].at = Point { x: 8_000_000, y: 0 };
         let mut router = Router::new(&design, &model);
-        router.start(Point { x: 8000, y: 0 }, "F.Cu", 200).unwrap();
+        router.start(Point { x: 8_000_000, y: 0 }, "F.Cu", 200_000).unwrap();
         // the cursor is on the track, 1 mm in from its end, with the route coming from the right along the same line
-        let pv = router.preview(Point { x: 3000, y: 0 }).unwrap();
-        assert_eq!(pv.head.last(), Some(Point { x: 4000, y: 0 }), "it ends at the track's end, not 1 mm along it: {:?}", pv.head.pts);
-        assert_eq!(pv.snapped_end, Some(Point { x: 4000, y: 0 }));
+        let pv = router.preview(Point { x: 3_000_000, y: 0 }).unwrap();
+        assert_eq!(pv.head.last(), Some(Point { x: 4_000_000, y: 0 }), "it ends at the track's end, not 1 mm along it: {:?}", pv.head.pts);
+        assert_eq!(pv.snapped_end, Some(Point { x: 4_000_000, y: 0 }));
     }
 
     /// `ROUTER::ContinueFromEnd`: from the other pad of the connection -- before anything is fixed, and after the first fix, when
@@ -1235,20 +1235,20 @@ mod tests {
     #[test]
     fn route_from_other_end_restarts_at_the_far_pad_and_commits_what_is_fixed() {
         let (design, model) = two_pad_board();
-        let (r1, r2) = (Point { x: -825, y: 0 }, Point { x: 5175, y: 0 });
+        let (r1, r2) = (Point { x: -825_000, y: 0 }, Point { x: 5_175_000, y: 0 });
         let mut router = Router::new(&design, &model);
-        router.start(r1, "F.Cu", 200).unwrap();
+        router.start(r1, "F.Cu", 200_000).unwrap();
         // nothing fixed yet: the connection's other end is R2.1, and the route heads for where the old head ended
-        let cursor = Point { x: 3000, y: 800 };
+        let cursor = Point { x: 3_000_000, y: 800_000 };
         let head_end = |router: &Router, at: Point| router.preview(at).unwrap().head.last().unwrap();
         let first = router.continue_from_end(cursor).expect("R2.1 is unconnected");
-        assert_eq!((first.from, first.to, first.layer.as_str(), first.net.as_str(), first.width), (r2, head_end(&router, cursor), "F.Cu", "SIG", 200));
+        assert_eq!((first.from, first.to, first.layer.as_str(), first.net.as_str(), first.width), (r2, head_end(&router, cursor), "F.Cu", "SIG", 200_000));
         assert!(first.commit.tracks.is_empty() && first.commit.remove_track_ids.is_empty(), "nothing was placed, so nothing is committed");
         assert!(router.is_routing(), "the session is untouched: the caller replaces it");
         // fix the first leg: R1.1 is connected to the fixed end now, and the far end is still R2.1
-        let fixed_at = Point { x: 2000, y: 800 };
+        let fixed_at = Point { x: 2_000_000, y: 800_000 };
         assert!(matches!(router.fix(fixed_at), Some(FixOutcome::Fixed { real_end: false })));
-        let cursor = Point { x: 3500, y: 1500 };
+        let cursor = Point { x: 3_500_000, y: 1_500_000 };
         let second = router.continue_from_end(cursor).expect("R2.1 is still unconnected");
         assert_eq!(second.from, r2);
         assert_eq!(second.to, head_end(&router, cursor), "the head ended at the cursor");
@@ -1269,10 +1269,10 @@ mod tests {
     #[test]
     fn route_from_other_end_with_nothing_left_unconnected_says_so() {
         let (mut design, model) = two_pad_board();
-        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: -825, y: 0 }, Point { x: 5175, y: 0 }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: -825_000, y: 0 }, Point { x: 5_175_000, y: 0 }], arc_mid_offset: None });
         let mut router = Router::new(&design, &model);
-        router.start(Point { x: -825, y: 0 }, "F.Cu", 200).unwrap();
-        let err = router.continue_from_end(Point { x: 1000, y: 0 }).expect_err("everything is connected");
+        router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        let err = router.continue_from_end(Point { x: 1_000_000, y: 0 }).expect_err("everything is connected");
         assert!(err.contains("nothing is left"), "{err}");
     }
 
@@ -1280,7 +1280,7 @@ mod tests {
     fn start_fails_off_any_item() {
         let (design, model) = two_pad_board();
         let mut router = Router::new(&design, &model);
-        assert!(router.start(Point { x: 50_000, y: 50_000 }, "F.Cu", 200).is_err());
+        assert!(router.start(Point { x: 50_000_000, y: 50_000_000 }, "F.Cu", 200_000).is_err());
         assert!(!router.is_routing());
     }
 
@@ -1289,18 +1289,18 @@ mod tests {
         let (design, model) = two_pad_board();
         let mut router = Router::new(&design, &model);
         // R1 pin 1 local pos for a two_pad 0603 footprint is (-825, 0); R2 is at board (6000,0) so its pin 1 is at (6000-825,0)=(5175,0).
-        let start_pos = Point { x: -825, y: 0 };
-        router.start(start_pos, "F.Cu", 200).expect("must start on R1.1");
+        let start_pos = Point { x: -825_000, y: 0 };
+        router.start(start_pos, "F.Cu", 200_000).expect("must start on R1.1");
         assert!(router.is_routing());
-        let pv = router.preview(Point { x: 5175, y: 0 }).expect("preview while routing");
+        let pv = router.preview(Point { x: 5_175_000, y: 0 }).expect("preview while routing");
         assert!(!pv.colliding);
-        let commit = router.finish(Point { x: 5175, y: 0 }).expect("must finish onto R2.1");
+        let commit = router.finish(Point { x: 5_175_000, y: 0 }).expect("must finish onto R2.1");
         assert!(!router.is_routing());
         assert_eq!(commit.tracks.len(), 1);
         assert_eq!(commit.tracks[0].net, "SIG");
         assert_eq!(commit.tracks[0].layer, "F.Cu");
         assert_eq!(commit.tracks[0].pts.first(), Some(&start_pos));
-        assert_eq!(commit.tracks[0].pts.last(), Some(&Point { x: 5175, y: 0 }));
+        assert_eq!(commit.tracks[0].pts.last(), Some(&Point { x: 5_175_000, y: 0 }));
     }
 
     /// Track Corner Mode arc 45 (`ROUNDED_45`): the corner of a route is an arc track of the commit, between two polylines.
@@ -1309,9 +1309,9 @@ mod tests {
         let (design, model) = two_pad_board();
         let mut router = Router::new(&design, &model);
         router.settings.corner_mode = crate::direction45::CornerMode::Rounded45;
-        router.start(Point { x: -825, y: 0 }, "F.Cu", 200).unwrap();
-        router.fix(Point { x: 3000, y: -2000 }).expect("a route is in progress");
-        let commit = router.finish(Point { x: 5175, y: 0 }).expect("must finish");
+        router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        router.fix(Point { x: 3_000_000, y: -2_000_000 }).expect("a route is in progress");
+        let commit = router.finish(Point { x: 5_175_000, y: 0 }).expect("must finish");
         let arcs: Vec<_> = commit.tracks.iter().filter(|t| t.arc().is_some()).collect();
         assert_eq!(arcs.len(), 2, "one arc a leg: {:?}", commit.tracks.iter().map(|t| (t.pts.len(), t.arc_mid_offset)).collect::<Vec<_>>());
         // the pieces join end to end
@@ -1326,10 +1326,10 @@ mod tests {
     fn multi_click_route_emits_no_fake_vias() {
         let (design, model) = two_pad_board();
         let mut router = Router::new(&design, &model);
-        router.start(Point { x: -825, y: 0 }, "F.Cu", 200).unwrap();
-        router.fix(Point { x: 2000, y: 0 });
-        router.fix(Point { x: 2000, y: 1000 });
-        let commit = router.finish(Point { x: 5175, y: 0 }).expect("must finish");
+        router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        router.fix(Point { x: 2_000_000, y: 0 });
+        router.fix(Point { x: 2_000_000, y: 1_000_000 });
+        let commit = router.finish(Point { x: 5_175_000, y: 0 }).expect("must finish");
         assert!(commit.tracks.len() >= 3);
         assert!(commit.vias.is_empty(), "got vias: {:?}", commit.vias);
     }
@@ -1338,10 +1338,10 @@ mod tests {
     fn cancel_drops_the_session_without_a_commit() {
         let (design, model) = two_pad_board();
         let mut router = Router::new(&design, &model);
-        router.start(Point { x: -825, y: 0 }, "F.Cu", 200).unwrap();
+        router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
         router.cancel();
         assert!(!router.is_routing());
-        assert!(router.finish(Point { x: 5175, y: 0 }).is_none());
+        assert!(router.finish(Point { x: 5_175_000, y: 0 }).is_none());
     }
 
     #[test]
@@ -1349,37 +1349,37 @@ mod tests {
         let (design, mut model) = two_pad_board();
         model.nets = vec![IrNet { name: "USB_DP".into(), pins: vec!["R1.1".into(), "R2.1".into()] }, IrNet { name: "USB_DN".into(), pins: vec!["R1.2".into(), "R2.2".into()] }];
         let mut router = Router::new(&design, &model);
-        assert!(!router.set_diff_pair_dimensions(Some(200), Some(300)), "no pair is running yet");
-        router.start_diff_pair(Point { x: -825, y: 0 }, "F.Cu").expect("R1.1 and R1.2 are a pair");
-        let at = Point { x: 3000, y: 0 };
+        assert!(!router.set_diff_pair_dimensions(Some(200_000), Some(300_000)), "no pair is running yet");
+        router.start_diff_pair(Point { x: -825_000, y: 0 }, "F.Cu").expect("R1.1 and R1.2 are a pair");
+        let at = Point { x: 3_000_000, y: 0 };
         let before = router.diff_pair_preview(at).expect("preview");
         // the model's own 125 um width is under the board's 200 um minimum track width, and its 180 um gap under the 200 um clearance:
         // the pair is raised to both
-        assert_eq!(before.width, 200, "the net class's own width (raised to the minimum) until the dialog says otherwise");
+        assert_eq!(before.width, 200_000, "the net class's own width (raised to the minimum) until the dialog says otherwise");
         let pitch_of = |p: &crate::dp_placer::DiffPairPreview| {
             let (a, b) = (p.head_a.last().unwrap(), p.head_b.last().unwrap());
             (((a.x - b.x) as f64).powi(2) + ((a.y - b.y) as f64).powi(2)).sqrt()
         };
         // the pair ends a pitch apart (the gateways' offsets are whole micrometres: within a few of it)
-        let near = |actual: f64, pitch: i64| actual >= pitch as f64 - 1.0 && actual <= pitch as f64 + 3.0;
-        assert!(near(pitch_of(&before), 200 + 200), "{}", pitch_of(&before));
-        assert!(router.set_diff_pair_dimensions(Some(200), Some(300)));
+        let near = |actual: f64, pitch: i64| actual >= pitch as f64 - 10.0 && actual <= pitch as f64 + 10.0;
+        assert!(near(pitch_of(&before), 200_000 + 200_000), "{}", pitch_of(&before));
+        assert!(router.set_diff_pair_dimensions(Some(200_000), Some(300_000)));
         let after = router.diff_pair_preview(at).expect("preview");
-        assert_eq!(after.width, 200);
-        assert!(near(pitch_of(&after), 200 + 300), "the lines sit width + gap apart: {}", pitch_of(&after));
+        assert_eq!(after.width, 200_000);
+        assert!(near(pitch_of(&after), 200_000 + 300_000), "the lines sit width + gap apart: {}", pitch_of(&after));
         // Zero or negative values are ignored (the dialog refuses a gap of 0).
-        assert!(router.set_diff_pair_dimensions(Some(0), Some(-5)));
-        assert_eq!(router.diff_pair_preview(at).unwrap().width, 200);
+        assert!(router.set_diff_pair_dimensions(Some(0), Some(-5000)));
+        assert_eq!(router.diff_pair_preview(at).unwrap().width, 200_000);
         // `None` leaves a value as it is.
-        router.set_diff_pair_dimensions(None, Some(400));
-        assert!(near(pitch_of(&router.diff_pair_preview(at).unwrap()), 200 + 400));
+        router.set_diff_pair_dimensions(None, Some(400_000));
+        assert!(near(pitch_of(&router.diff_pair_preview(at).unwrap()), 200_000 + 400_000));
     }
 
     #[test]
     fn undo_last_segment_on_a_fresh_session_is_a_safe_no_op() {
         let (design, model) = two_pad_board();
         let mut router = Router::new(&design, &model);
-        router.start(Point { x: -825, y: 0 }, "F.Cu", 200).unwrap();
+        router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
         assert!(!router.undo_last_segment());
     }
 }
