@@ -221,21 +221,31 @@ export const isStandardSymbolField = (name: string): boolean => STANDARD_SYMBOL_
 /** The user-defined fields among the fields of a symbol, in the order the backend lists them. */
 export const userFieldsOf = <T extends Pick<SchField, "name">>(fields: readonly T[] | undefined): T[] => (fields ?? []).filter((f) => !isStandardSymbolField(f.name));
 
-/** The name a new field starts with (`GetUserFieldName( ndx )`: `Field<N>`, N the number of fields the symbol has, `taken` being their names), the first that no field has. */
+/**
+ * The name a new field starts with (`DIALOG_SYMBOL_PROPERTIES::OnAddField`: `GetUserFieldName( m_fields->size() )`, `Field<N>`). KiCad's `m_fields` holds the five
+ * mandatory fields (Reference, Value, Footprint, Datasheet and Description: `MANDATORY_FIELDS`) and the user fields, so a plain resistor's first is `Field5`. `taken`
+ * is the names the dialog lists (four standard ones, Description not among them, and the user fields). A name a field has already is passed over, which KiCad does
+ * not do (its grid would then refuse the duplicate): a field is kept by its name here.
+ */
 export function newUserFieldName(taken: readonly string[]): string {
   const lower = new Set(taken.map((n) => n.trim().toLowerCase()));
-  for (let n = lower.size; ; n++) {
+  const listed = lower.size + (lower.has("description") ? 0 : 1);
+  for (let n = listed; ; n++) {
     const name = `Field${n}`;
     if (!lower.has(name.toLowerCase())) return name;
   }
 }
 
-/** Why `name` cannot be the name of a field the symbol has not yet (`taken`: the names of the fields it has), or null when it can. */
+/**
+ * Why `name` cannot be the name of a field the symbol has not yet (`taken`: the names of the fields it has), or null when it can: `Validate`'s "Fields must have a
+ * name." and `OnGridCellChanging`'s "Field name '%s' already in use." (a name compared without regard to case, `CmpNoCase`). A name with `{` or `}` is refused
+ * besides (the Symbol Fields Table reads `${...}` as a generated column, and a field is kept by its name here); KiCad's dialog takes it.
+ */
 export function userFieldNameError(name: string, taken: readonly string[]): string | null {
   const n = name.trim();
-  if (n === "") return "A field needs a name.";
+  if (n === "") return "Fields must have a name.";
   if (n.includes("{") || n.includes("}")) return `"${n}" is not a valid field name.`;
-  if (isStandardSymbolField(n) || taken.some((t) => t.trim().toLowerCase() === n.toLowerCase())) return `A field named "${n}" already exists.`;
+  if (isStandardSymbolField(n) || n.toLowerCase() === "description" || taken.some((t) => t.trim().toLowerCase() === n.toLowerCase())) return `Field name '${n}' already in use.`;
   return null;
 }
 
@@ -247,3 +257,14 @@ export const removeUserFieldCmd = (id: string, name: string): Cmd => ({ op: "sch
 
 /** Set the text of the field `name` of the item `owner` (Field Properties with only the text changed). */
 export const fieldTextCmd = (owner: string, name: string, text: string): Cmd => ({ op: "sch_edit", verb: "edit_field", id: fieldId(owner, name), text }) as unknown as Cmd;
+
+/**
+ * `SCH_EDIT_TOOL::editFieldText`'s caption for Field Properties: "Edit %s Field" with the title-capped default name of a mandatory field (`TitleCaps(
+ * GetDefaultFieldName( id ) )`, so a sheet's "Sheet name" is "Edit Sheet Name Field"), "Edit '%s' Field" with the name of any other field.
+ */
+export function fieldDialogCaption(name: string, ofSheet: boolean): string {
+  const sheetNames: Record<string, string> = { Sheetname: "Sheet Name", Sheetfile: "Sheet File" };
+  if (ofSheet && sheetNames[name]) return `Edit ${sheetNames[name]} Field`;
+  if (isStandardSymbolField(name) || name.toLowerCase() === "description") return `Edit ${name} Field`;
+  return `Edit '${name}' Field`;
+}

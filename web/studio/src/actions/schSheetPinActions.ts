@@ -75,7 +75,8 @@ export function registerSchSheetPinActions(registry: ActionMap, ctx: SchEditCont
       if (!sheet) return;
       void loadHierLabels(state.currentSheetPath, sheet.id).then((labels) => {
         const pins = hasUndefinedPins(sheet.pins, labels) ? pinsToCleanUp(sheet.pins, labels).map((p) => ({ id: p.id, name: p.name })) : [];
-        if (pins.length === 0) return info("Every pin of this sheet has a matching hierarchical label.");
+        // "if( !sheet || !sheet->HasUndefinedPins() ) return 0;": nothing to clean up says nothing
+        if (pins.length === 0) return;
         dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "cleanup_pins", sheetId: sheet.id, sheetName: sheet.name, pins } });
       });
     })

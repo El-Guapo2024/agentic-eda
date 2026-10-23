@@ -39,6 +39,14 @@ test("a diagonal line is horizontal up to 45 degrees (-45 < angle <= 45) and ver
   assert.equal(labelOrientationForPoint(s, [45_720, 0], "up"), "up", "-45 is not above -45: vertical, and the end of an upward line is its top");
 });
 
+test("a line counts wherever its bounding box (the ends grown by half its pen) holds the point, as the R-tree's Overlapping( aPosition ) does", () => {
+  const s = scene({ lines: [line([0, 0], [10_000, 10_000])] });
+  assert.equal(labelOrientationForPoint(s, [5_000, 2_000], "right"), "left", "inside a diagonal line's box: 45 degrees is horizontal, not the end");
+  const w = scene({ lines: [line([0, 0], [10_160, 0])] });
+  assert.equal(labelOrientationForPoint(w, [5_080, 70], "up"), "left", "within half of a wire's 6 mil");
+  assert.equal(labelOrientationForPoint(w, [5_080, 200], "up"), "up", "beyond it");
+});
+
 test("a pin asks for the spin that points away from its symbol's body, and wins over a wire that ends on it (symbols come after lines)", () => {
   assert.equal(pinSpinStyle([0, 1]), "up", "the body is below the pin: the label reads up");
   assert.equal(pinSpinStyle([0, -1]), "bottom");

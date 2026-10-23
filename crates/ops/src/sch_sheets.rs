@@ -111,19 +111,15 @@ impl<'a> Board<'a> {
         if let Some(file) = content.root.sheets.iter().find_map(|sh| tree_of(&sh.file, &|f| content.screens.get(f).cloned(), &mut order, &mut Vec::new()).err()) {
             out.push(SheetFileFinding { severity: "error", text: format!("The sheet changes cannot be made because the schematic '{label}' places '{file}', which has itself as a parent somewhere in its hierarchy.") });
         }
-        // `checkForNoFullyDefinedLibIds`
-        let loose: BTreeSet<&str> = content
-            .all_screens()
-            .flat_map(|(_, s)| s.symbols.iter().map(|x| x.lib_id.as_str()).chain(s.power_symbols.iter().map(|p| p.lib_id.as_str())))
-            .filter(|id| !id.is_empty() && !eda_model::is_synthetic_lib_id(id) && !id.split_once(':').is_some_and(|(l, n)| !l.is_empty() && !n.is_empty()))
-            .collect();
-        if !loose.is_empty() {
-            let shown: Vec<&str> = loose.iter().copied().take(4).collect();
+        // `checkForNoFullyDefinedLibIds`: `SCH_SCREENS::HasNoFullyDefinedLibIds` refuses a file whose symbols, every one of them, name no library ("return true
+        // (i.e. has no fully defined symbol) only if at least one symbol is found"); one symbol with a library nickname lets the file in
+        let ids: Vec<&str> = content.all_screens().flat_map(|(_, s)| s.symbols.iter().map(|x| x.lib_id.as_str()).chain(s.power_symbols.iter().map(|p| p.lib_id.as_str()))).collect();
+        let nickname = |id: &str| id.split_once(':').is_some_and(|(l, n)| !l.is_empty() && !n.is_empty());
+        if !ids.is_empty() && !ids.iter().any(|id| nickname(id) || eda_model::is_synthetic_lib_id(id)) {
             out.push(SheetFileFinding {
                 severity: "error",
                 text: format!(
-                    "The schematic '{label}' has not had its symbol library links remapped to the symbol library table ({}). The project this schematic belongs to must first be remapped before it can be imported into the current project.",
-                    shown.join(", ")
+                    "The schematic '{label}' has not had its symbol library links remapped to the symbol library table.  The project this schematic belongs to must first be remapped before it can be imported into the current project."
                 ),
             });
         }
@@ -480,13 +476,42 @@ impl<'a> Board<'a> {
         sheets.sort_by(|a, b| str_num_cmp(&a.name, &b.name));
         let mut names: BTreeSet<String> = self.schematic_mut_or_create().sheets.iter().map(|s| s.name.clone()).collect();
         for sh in sheets {
+            // `TestForRecursion`: the sheet's file, or that of a sheet inside it, is the screen the paste lands on (or one above it): KiCad drops the sheet
+            // and says so. A verb cannot say and go on, so the paste is refused with KiCad's words.
+            let mut tree: BTreeSet<String> = BTreeSet::new();
+            let mut todo = vec![sh.file.clone()];
+            while let Some(f) = todo.pop() {
+                if tree.insert(f.clone()) {
+                    if let Some(sc) = fragment.sheet_screens.get(&f).or_else(|| self.design.sheet_contents.as_ref().and_then(|c| c.get(&f))) {
+                        todo.extend(sc.sheets.iter().map(|x| x.file.clone()));
+                    }
+                }
+            }
+            let above: BTreeSet<String> = match self.focus.as_deref() {
+                Some(here) => eda_model::sheet_list::walk(&self.design).iter().filter(|e| e.file == here).flat_map(|e| (1..=e.path.len()).filter_map(|k| eda_model::sheet_list::placement_at(&self.design, &e.path[..k]).map(|p| p.file.clone()))).collect(),
+                None => BTreeSet::new(),
+            };
+            if !tree.is_disjoint(&above) {
+                return Err(vec![CheckResult::fail("ops_sheet_recursion", &sh.name, format!("The pasted sheet '{}'\nwas dropped because the destination already has the sheet or one of its subsheets as a parent.", sh.file))]);
+            }
             let name = unique_sheet_name(&names, &sh.name);
             names.insert(name.clone());
-            if self.share_pasted_sheet(sh, (dx, dy), &name, mode)? {
-                continue;
+            if !self.share_pasted_sheet(sh, (dx, dy), &name, mode)? {
+                let inc = Incoming { placement: sh.clone(), screens: &fragment.sheet_screens, lib_symbols: &fragment.lib_symbols };
+                self.add_sheet_tree(inc, (dx, dy), &name, None, &Numbering::Paste(mode))?;
             }
-            let inc = Incoming { placement: sh.clone(), screens: &fragment.sheet_screens, lib_symbols: &fragment.lib_symbols };
-            self.add_sheet_tree(inc, (dx, dy), &name, None, &Numbering::Paste(mode))?;
+            // the pins come with the sheet whole (`SCH_SHEET_PIN` is an `EDA_TEXT`): their text's size, bold and italic too
+            let looks: Vec<Option<eda_model::sch_extras::LabelLook>> = sh.pins.iter().map(|p| fragment.section.extras.sheet_pin_looks.get(&p.id).copied()).collect();
+            if looks.iter().any(Option::is_some) {
+                let sch = self.schematic_mut()?;
+                sch.assign_missing_ids();
+                let new_pins: Vec<String> = sch.sheets.iter().rev().find(|s| s.name == name).map(|s| s.pins.iter().map(|p| p.id.clone()).collect()).unwrap_or_default();
+                for (id, look) in new_pins.into_iter().zip(looks) {
+                    if let Some(look) = look {
+                        sch.extras.sheet_pin_looks.insert(id, look);
+                    }
+                }
+            }
         }
         Ok(())
     }

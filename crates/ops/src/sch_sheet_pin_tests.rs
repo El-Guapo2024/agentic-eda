@@ -260,13 +260,14 @@ fn a_pins_text_is_set_in_a_size_bold_and_italic_of_its_own_and_the_default_is_no
 }
 
 #[test]
-fn a_look_that_is_already_there_or_a_size_that_would_vanish_is_refused() {
+fn a_look_that_is_already_there_is_refused_and_a_size_is_clamped_as_set_text_size_clamps_it() {
     let d = design();
     let e = run(&d, look_edit("shpin_in", Some(1_270), Some(false), Some(false))).unwrap_err();
     assert_eq!(e[0].check, "ops_sheet_pin_unchanged", "50 mil, regular and upright is what it has");
-    for size in [0, 5, 1_000_001] {
-        let e = run(&d, look_edit("shpin_in", Some(size), None, None)).unwrap_err();
-        assert_eq!(e[0].check, "ops_bad_text_size", "{size}");
+    // `TEXT_MIN_SIZE_MM` 0.001 and `TEXT_MAX_SIZE_MM` 250
+    for (size, kept) in [(0, 1), (5, 5), (1_000_001, 250_000)] {
+        let after = ok(&d, look_edit("shpin_in", Some(size), None, None));
+        assert_eq!(root_of(&after).extras.sheet_pin_looks["shpin_in"].size_um, kept, "{size}");
     }
     let styled = ok(&d, look_edit("shpin_in", None, Some(true), None));
     let e = run(&styled, look_edit("shpin_in", None, Some(true), None)).unwrap_err();

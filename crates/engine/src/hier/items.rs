@@ -559,14 +559,15 @@ pub fn side_of_dir(dir: (i64, i64)) -> Side {
     }
 }
 
-/// The turn that makes a power glyph run on out along `side`: a ground glyph hangs down at rest and a supply glyph (or a flag) rises; the engine's
-/// `rot` turns clockwise on the sheet, so a quarter takes "down" to "left".
+/// The turn that makes a power glyph run on out along `side`: a ground glyph hangs down at rest and a supply glyph (or a flag) rises; `rot` is
+/// KiCad's angle, counter-clockwise on the sheet (`TRANSFORM`), so a quarter takes "down" to "right".
 pub fn outward_rot(rises_at_rest: bool, side: Side) -> u32 {
     match (rises_at_rest, side) {
         (false, Side::Bottom) | (true, Side::Top) => 0,
         (false, Side::Top) | (true, Side::Bottom) => 180_000,
-        (false, Side::Left) | (true, Side::Right) => 90_000,
-        (false, Side::Right) | (true, Side::Left) => 270_000,
+        // KiCad's angle, counter-clockwise on the sheet: a glyph that hangs down points right after a quarter turn
+        (false, Side::Right) | (true, Side::Left) => 90_000,
+        (false, Side::Left) | (true, Side::Right) => 270_000,
     }
 }
 

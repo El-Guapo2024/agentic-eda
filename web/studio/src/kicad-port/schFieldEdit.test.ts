@@ -4,7 +4,7 @@ import { applyPatch } from "./schMove";
 import { fixtureTable } from "./tableFixture";
 import type { Schematic, SchField } from "../api/types";
 import type { SchMovePatch } from "../api/schEditTypes";
-import { addUserFieldCmd, autoplaceCmd, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeUm, fieldVisibilityCmds, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText, fieldTextCmd, isStandardSymbolField, newUserFieldName, removeUserFieldCmd, userFieldNameError, userFieldsOf } from "./schFieldEdit";
+import { addUserFieldCmd, autoplaceCmd, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeUm, fieldVisibilityCmds, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText, fieldTextCmd, isStandardSymbolField, newUserFieldName, fieldDialogCaption, removeUserFieldCmd, userFieldNameError, userFieldsOf } from "./schFieldEdit";
 
 // the width of a text in these tests: 600 um a character at 1270 um, in proportion to the size
 const measure = (text: string, size: number) => text.length * 0.5 * size;
@@ -189,13 +189,16 @@ test("a field of a symbol that is not one of the four standard ones is user-defi
 });
 
 test("a new field is called Field<N> and the name is checked against the fields the symbol has", () => {
-  assert.equal(newUserFieldName(["Reference", "Value", "Footprint", "Datasheet"]), "Field4");
-  assert.equal(newUserFieldName(["Reference", "Value", "Footprint", "Datasheet", "Field5"]), "Field6", "the first that no field has");
-  assert.equal(newUserFieldName(["Reference", "Value", "Footprint", "Datasheet", "field5"]), "Field6", "whatever the case");
-  assert.equal(userFieldNameError("MPN", ["MPN"]), 'A field named "MPN" already exists.');
-  assert.equal(userFieldNameError("mpn", ["MPN"]), 'A field named "mpn" already exists.');
-  assert.equal(userFieldNameError("value", []), 'A field named "value" already exists.');
-  assert.equal(userFieldNameError("  ", []), "A field needs a name.");
+  // `GetUserFieldName( m_fields->size() )` over the five mandatory fields: a plain resistor's first new field is Field5
+  assert.equal(newUserFieldName(["Reference", "Value", "Footprint", "Datasheet"]), "Field5");
+  assert.equal(newUserFieldName(["Reference", "Value", "Footprint", "Datasheet", "MPN"]), "Field6");
+  assert.equal(newUserFieldName(["Reference", "Value", "Footprint", "Datasheet", "Field6"]), "Field7", "the first that no field has");
+  assert.equal(newUserFieldName(["Reference", "Value", "Footprint", "Datasheet", "field6"]), "Field7", "whatever the case");
+  assert.equal(userFieldNameError("MPN", ["MPN"]), "Field name 'MPN' already in use.");
+  assert.equal(userFieldNameError("mpn", ["MPN"]), "Field name 'mpn' already in use.");
+  assert.equal(userFieldNameError("value", []), "Field name 'value' already in use.");
+  assert.equal(userFieldNameError("Description", []), "Field name 'Description' already in use.");
+  assert.equal(userFieldNameError("  ", []), "Fields must have a name.");
   assert.equal(userFieldNameError("${X}", []), '"${X}" is not a valid field name.');
   assert.equal(userFieldNameError(" Maker ", ["MPN"]), null);
 });
@@ -217,4 +220,11 @@ test("a held table is shown as the server laid it out for where it would be; a t
   assert.equal(out.tables![1], other);
   // a patch of an older server, or of a sheet with no table, leaves the tables as they are
   assert.equal(applyPatch(sch, { ...patch, tables: undefined }).tables![0], moved);
+});
+
+test("Field Properties is captioned as editFieldText does: a mandatory field by its title-capped name, any other quoted", () => {
+  assert.equal(fieldDialogCaption("Value", false), "Edit Value Field");
+  assert.equal(fieldDialogCaption("Sheetname", true), "Edit Sheet Name Field");
+  assert.equal(fieldDialogCaption("Sheetfile", true), "Edit Sheet File Field");
+  assert.equal(fieldDialogCaption("MPN", false), "Edit 'MPN' Field");
 });

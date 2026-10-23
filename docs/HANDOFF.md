@@ -57,6 +57,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-p10-review` | Review of P4 and P10/P10b against KiCad's code (PARITY-sch.md section 40): symbols turned and mirrored by KiCad's `TRANSFORM` in the tracer, the writer and the fields; a cache copy per orientation; the Import Sheet hang; labels, Mirror, auto-rotate, fields, sheet pins, Annotate; KiCad's 130 QA schematics judged by kicad-cli after a round trip (87 alike) | done | the "left" rows of section 40 |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

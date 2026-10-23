@@ -121,17 +121,17 @@ impl Lin {
     fn transpose(self) -> Lin {
         Lin([[self.0[0][0], self.0[1][0]], [self.0[0][1], self.0[1][1]]])
     }
-    /// The turn and mirror of a placed symbol (`placed::bake_offset` without the translation): the mirror first, about the box's vertical
-    /// axis, then the turn.
+    /// The turn and mirror of a placed symbol (`placed::bake_offset` without the translation): KiCad's `TRANSFORM`, the turn (counter-clockwise on
+    /// the sheet) and then the mirror.
     fn of_symbol(rot_millideg: u32, mirrored: bool) -> Lin {
         let m = if mirrored { Lin([[-1, 0], [0, 1]]) } else { Lin([[1, 0], [0, 1]]) };
         let r = match rot_millideg % 360_000 {
-            90_000 => Lin([[0, -1], [1, 0]]),
+            90_000 => Lin([[0, 1], [-1, 0]]),
             180_000 => Lin([[-1, 0], [0, -1]]),
-            270_000 => Lin([[0, 1], [-1, 0]]),
+            270_000 => Lin([[0, -1], [1, 0]]),
             _ => Lin([[1, 0], [0, 1]]),
         };
-        r.mul(m)
+        m.mul(r)
     }
     /// A text turned a quarter counter-clockwise on the sheet (`RotatePoint`: (x, y) goes to (y, -x)).
     fn text_turn(vertical: bool) -> Lin {
@@ -436,7 +436,7 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
     let st = SymbolGeom::pin_style();
     let count = |s: Side| geom.pins.iter().filter(|p| pin_side(p.orient) == s).count();
     let mut order = [(Side::Right, count(Side::Right)), (Side::Top, count(Side::Top)), (Side::Left, count(Side::Left)), (Side::Bottom, count(Side::Bottom))];
-    // `getPreferredSides`: a symbol mirrored left to right swaps right and left, and a long thin one prefers the top and bottom
+    // `getPreferredSides`: `h_mirrored` swaps right and left, and a long thin one prefers the top and bottom
     if mirrored {
         order.swap(0, 2);
     }
@@ -618,8 +618,14 @@ pub fn autoplace_symbol_manual(sym: &SymbolInstance, geom: &SymbolGeom, specs: &
 /// The placements of the fields named by `specs`: the fields that are shown and allow it are placed, a field that does not allow it keeps its
 /// placement in `kept`, a hidden one takes the first placed one's place.
 fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], kept: &[FieldPlacement], force: Option<(Side, i64)>, manual: Option<&Surroundings>) -> Vec<FieldPlacement> {
-    let movable: Vec<&FieldSpec> = specs.iter().filter(|s| s.visible && s.can_autoplace).collect();
-    let placed = autoplace_page(geom, sym.at, sym.mirrored, &movable, force, manual);
+    // `AUTOPLACER` takes `GetFields( m_fields, aVisibleOnly = true )`, which skips a field that is hidden or has no text
+    // (`if( !field.IsVisible() || field.GetText().IsEmpty() ) continue;`): an empty field takes no row of the box
+    let movable: Vec<&FieldSpec> = specs.iter().filter(|s| s.visible && s.can_autoplace && !s.text.is_empty()).collect();
+    let (rot, mirrored) = crate::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
+    // `getPreferredSides`' `h_mirrored`: `GetOrientation()` has `SYM_MIRROR_X` at 0 or 180 degrees, which of the twelve orientations (the first that
+    // gives the matrix) is the one that flips top and bottom alone -- a half turn and a left-right mirror, folded
+    let h_mirrored = (rot, mirrored) == (180_000, true);
+    let placed = autoplace_page(geom, sym.at, h_mirrored, &movable, force, manual);
     let style = |mut p: FieldPlacement, spec: &FieldSpec| {
         p.size_um = spec.size_um;
         p.bold = spec.bold;
@@ -630,9 +636,9 @@ fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], ke
     };
     let mut by_name = std::collections::BTreeMap::new();
     for (spec, (anchor, h, v)) in movable.iter().zip(placed) {
-        by_name.insert(spec.name.clone(), style(local_placement(sym.at, sym.rot, sym.mirrored, geom.width, &spec.name, anchor, h, v, true), spec));
+        by_name.insert(spec.name.clone(), style(local_placement(sym.at, rot, mirrored, geom.width, &spec.name, anchor, h, v, true), spec));
     }
-    let first = specs.iter().find(|s| s.visible && s.can_autoplace).and_then(|s| by_name.get(&s.name)).cloned();
+    let first = movable.first().and_then(|s| by_name.get(&s.name)).cloned();
     specs
         .iter()
         .map(|s| {
@@ -685,7 +691,8 @@ pub fn symbol_placements(sch: &SchematicSection, sym: &SymbolInstance, geom: &Sy
 pub fn symbol_fields(sch: &SchematicSection, sym: &SymbolInstance, part: Option<&Part>, resolved: Option<&LibSymbol>, geom: &SymbolGeom) -> Vec<PageField> {
     let specs = symbol_specs_in(sch, sym, part, resolved.map(|r| r.datasheet.as_str()).unwrap_or(""));
     let placements = symbol_placements(sch, sym, geom, &specs);
-    specs.iter().zip(placements.iter()).map(|(spec, p)| page_field(sym.at, sym.rot, sym.mirrored, geom.width, p, &spec.text)).collect()
+    let (rot, mirrored) = crate::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
+    specs.iter().zip(placements.iter()).map(|(spec, p)| page_field(sym.at, rot, mirrored, geom.width, p, &spec.text)).collect()
 }
 
 /// The Reference and Value of a symbol (the fields that are shown) where the section keeps their placements; `None` for a symbol it keeps none
@@ -819,7 +826,8 @@ impl Pending {
             .zip(self.candidates[c].iter())
             .filter(|(spec, p)| spec.visible && p.visible && !spec.text.is_empty())
             .map(|(spec, p)| {
-                let f = page_field(self.sym.at, self.sym.rot, self.sym.mirrored, self.geom.width, p, &spec.text);
+                let (rot, mirrored) = crate::symgeom::kicad_turn(self.sym.rot, self.sym.mirrored, self.sym.mirror_y);
+                let f = page_field(self.sym.at, rot, mirrored, self.geom.width, p, &spec.text);
                 field_rect(&f)
             })
             .collect()
