@@ -445,6 +445,8 @@
     t(cands().at(-1).textContent === "(keep existing reference)" && cands().at(-1).dataset.path === "", "the last row is (keep existing reference)");
     t(miss().dataset.chosen === "1" && miss().style.fontWeight !== "700", "the missing row is not bold: it has a choice");
     t(await settled("migrate3d-preview"), "the preview loaded");
+    // the preview has settled when it is drawn; under load the drawing can come a moment after
+    await until(() => drawn("migrate3d-preview") === 1, 10000);
     t(drawn("migrate3d-preview") === 1, `and draws the candidate on the footprint: ${drawn("migrate3d-preview")}`);
     // choosing "keep existing" bolds the row and shows the footprint alone
     await click(cands().at(-1), 400);
