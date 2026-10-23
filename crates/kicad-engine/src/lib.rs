@@ -1535,7 +1535,7 @@ fn pcb_ext(kind: &str) -> &'static str {
 
 /// The extension kicad-cli's output carries for these arguments. ODB++ and IPC-2581 are named by the compression asked
 /// for, since kicad-cli writes whatever name it is given: an ODB++ is a `.zip` or a `.tgz`, or (`--compression none`) a
-/// folder with no extension; an IPC-2581 is an `.xml`, or a `.zip` when compressed.
+/// folder with no extension; an IPC-2581 is an `.xml`, or a `.zip` when compressed. A placement file is named by its format.
 fn pcb_ext_for(kind: &str, args: &[String]) -> &'static str {
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
     match kind {
@@ -1545,6 +1545,8 @@ fn pcb_ext_for(kind: &str, args: &[String]) -> &'static str {
             _ => "zip",
         },
         "ipc2581" if args.iter().any(|a| a == "--compress") => "zip",
+        // `DIALOG_GEN_FOOTPRINT_POSITION::CreateFiles`: a CSV placement file is a `.csv`; the ASCII one (kicad-cli's default) a `.pos`.
+        "pos" if value("--format") == Some("csv") => "csv",
         _ => pcb_ext(kind),
     }
 }
@@ -2289,6 +2291,16 @@ fi"#;
         assert_eq!(pcb_ext_for("ipc2581", &a(&["--units", "in", "--compress"])), "zip");
         assert_eq!(pcb_ext_for("step", &a(&["--compress"])), "step", "only those two are named by their options");
         assert_eq!(pcb_ext_for("gencad", &a(&[])), "cad");
+    }
+
+    /// `DIALOG_GEN_FOOTPRINT_POSITION::CreateAsciiFiles` / `CreateFiles` (pcbnew/dialogs/dialog_gen_footprint_position.cpp): a CSV placement file is a
+    /// `.csv` (`fn.SetExt( wxT( "csv" ) )`), an ASCII one a `.pos` (`FILEEXT::FootprintPlaceFileExtension`).
+    #[test]
+    fn a_csv_placement_file_is_a_csv_and_an_ascii_one_a_pos() {
+        let a = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(pcb_ext_for("pos", &a(&["--format", "csv", "--side", "both"])), "csv");
+        assert_eq!(pcb_ext_for("pos", &a(&["--format", "ascii", "--side", "front"])), "pos");
+        assert_eq!(pcb_ext_for("pos", &a(&[])), "pos", "kicad-cli's own default format is ascii");
     }
 
     #[test]
