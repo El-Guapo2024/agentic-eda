@@ -53,3 +53,11 @@ pub fn export_to(dir: &Path, file: &Path) -> Result<Vec<String>, Vec<eda_model::
     std::fs::write(file, &out.text).map_err(|e| vec![eda_model::CheckResult::fail("specctra.write", &file.display().to_string(), format!("cannot write {}: {e}", file.display()))])?;
     Ok(out.warnings)
 }
+
+/// `eda board import-ses FILE`: the command File > Import > Specctra Session... sends, made of the file's text (`ImportSpecctraSession( fullFileName )`); the file's name is
+/// the one the messages give.
+pub fn import_cmd(file: &Path) -> Result<eda_ops::Cmd, Vec<eda_model::CheckResult>> {
+    let session = std::fs::read_to_string(file).map_err(|e| vec![eda_model::CheckResult::fail("specctra.read", &file.display().to_string(), format!("cannot read {}: {e}", file.display()))])?;
+    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("session.ses").to_string();
+    Ok(eda_ops::Cmd::Specctra { session, name })
+}
