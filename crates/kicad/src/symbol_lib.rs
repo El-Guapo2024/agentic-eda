@@ -31,14 +31,14 @@ use crate::sexpr::{self, Sexpr};
 pub const SYMBOL_LIBRARY_ROOT_ENV: &str = "EDA_KICAD_SYMBOLS";
 
 /// Where KiCad's standard symbol libraries live: `SYMBOL_LIBRARY_ROOT_ENV`
-/// if set, else KiCad's own default install location on macOS.
+/// if set, else the installed KiCad's (`kicad_shared_dir`).
 pub fn default_symbol_library_root() -> PathBuf {
     if let Ok(p) = std::env::var(SYMBOL_LIBRARY_ROOT_ENV) {
         if !p.is_empty() {
             return PathBuf::from(p);
         }
     }
-    PathBuf::from("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols")
+    crate::footprint_lib::kicad_shared_dir("symbols")
 }
 
 /// The `.kicad_sym` file a library name (`"Device"`, `"Regulator_Linear"`)

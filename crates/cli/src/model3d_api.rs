@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 // ----------------------------------------------------------------------- where the models are
 
-/// Where KiCad's installed 3D model library lives, in precedence order: `EDA_KICAD_3DMODELS_DIR`, then the macOS bundle -- the directory
+/// Where KiCad's installed 3D model library lives, in precedence order: `EDA_KICAD_3DMODELS_DIR`, then the installed KiCad's (`eda_kicad::kicad_shared_dir`) -- the directory
 /// `${KICAD10_3DMODEL_DIR}` stands for.
 pub fn models_dir() -> PathBuf {
     if let Ok(p) = std::env::var("EDA_KICAD_3DMODELS_DIR") {
@@ -36,7 +36,7 @@ pub fn models_dir() -> PathBuf {
             return PathBuf::from(p);
         }
     }
-    PathBuf::from("/Applications/KiCad/KiCad.app/Contents/SharedSupport/3dmodels")
+    eda_kicad::kicad_shared_dir("3dmodels")
 }
 
 /// The directories a model may be read from: KiCad's 3D model library, the board's own directory (`${KIPRJMOD}`, and what a relative path is relative to) and
@@ -698,7 +698,8 @@ mod tests {
         for (target, status) in [
             (format!("/api/3dmodel?name={}", enc("${KICAD10_3DMODEL_DIR}/../outside/secret.wrl")), "403 Forbidden"),
             ("/api/3dmodel?name=%2e%2e%2foutside%2fsecret.wrl".to_string(), "403 Forbidden"),
-            ("/api/3dmodel?name=..%2F..%2F..%2Fetc%2Fpasswd".to_string(), "404 Not Found"),
+            // 404 where the temp directory is deep (macOS), 403 where the climb reaches the real /etc/passwd (Linux's /tmp): refused either way.
+            ("/api/3dmodel?name=..%2F..%2F..%2Fetc%2Fpasswd".to_string(), "403 Forbidden|404 Not Found"),
             (format!("/api/3dmodel?name={}", enc(&t.root.join("outside/secret.wrl").to_string_lossy())), "403 Forbidden"),
             (format!("/api/3dmodel?name={}", enc("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/link.wrl")), "403 Forbidden"),
             (format!("/api/3dmodel?name={}", enc("${KIPRJMOD}/design.json")), "403 Forbidden"),
@@ -708,7 +709,7 @@ mod tests {
             (format!("/api/3dmodel?name={}", enc("Lib.3dshapes/missing.wrl")), "404 Not Found"),
         ] {
             let r = get(&target);
-            assert_eq!(r.status, status, "{target}: {}", String::from_utf8_lossy(&r.body));
+            assert!(status.split('|').any(|s| s == r.status), "{target}: {} {}", r.status, String::from_utf8_lossy(&r.body));
             let body = String::from_utf8_lossy(&r.body);
             assert!(!body.contains("SECRET") && !body.contains("secret\":\"design") && !body.contains("root:"), "{target} leaked a file: {body}");
         }

@@ -11,4 +11,7 @@ OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
 node_modules/.bin/tsc -p tsconfig.test.json --outDir "$OUT"
-node --test "$OUT" tools/lib/*.test.js
+# The files are listed, not the directory: Node 20 searched a directory
+# given to --test, Node 22 takes each argument as a file or glob.
+mapfile -t tests < <(find "$OUT" -name '*.test.js' | sort)
+node --test "${tests[@]}" tools/lib/*.test.js
