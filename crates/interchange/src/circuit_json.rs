@@ -21,8 +21,8 @@ use eda_model::ir::Design;
 use eda_model::{CheckResult, ConstraintModel, Part};
 use serde_json::{json, Value};
 
-fn um_to_mm(um: i64) -> f64 {
-    (um as f64) / 1000.0
+fn um_to_mm(nm: i64) -> f64 {
+    eda_model::units::to_mm(nm)
 }
 
 /// Map our KiCad-style stackup layer names ("F.Cu", "B.Cu", "In1.Cu", ...)
@@ -462,8 +462,8 @@ mod tests {
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
                 symbols: vec![
-                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at: Point { x: 1_000, y: 2_000 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "C1".into(), at: Point { x: 3_000, y: 2_000 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at: Point { x: 1_000_000, y: 2_000_000 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "C1".into(), at: Point { x: 3_000_000, y: 2_000_000 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
                 ],
                 wires: vec![],
                 labels: vec![],
@@ -583,7 +583,7 @@ mod tests {
             id: String::new(),
             net: "VIN".into(),
             pins: vec![],
-            pts: vec![Point { x: 1_000, y: 2_000 }, Point { x: 3_000, y: 2_000 }],
+            pts: vec![Point { x: 1_000_000, y: 2_000_000 }, Point { x: 3_000_000, y: 2_000_000 }],
             bus: false,
         });
         let v = to_circuit_json(&d, &m).unwrap();
@@ -607,8 +607,8 @@ mod tests {
                 pads: vec![
                     eda_model::Pad { opposite_side: false, ext: Default::default(),
                         number: "1".into(),
-                        at: (-800_000 / 1000, 0),
-                        size: (900, 900),
+                        at: (-800_000, 0),
+                        size: (900_000, 900_000),
                         shape: eda_model::PadShape::Rect,
                         kind: eda_model::PadKind::Smd,
                         drill: None,
@@ -618,8 +618,8 @@ mod tests {
                     },
                     eda_model::Pad { opposite_side: false, ext: Default::default(),
                         number: "2".into(),
-                        at: (800_000 / 1000, 0),
-                        size: (900, 900),
+                        at: (800_000, 0),
+                        size: (900_000, 900_000),
                         shape: eda_model::PadShape::Rect,
                         kind: eda_model::PadKind::Smd,
                         drill: None,
@@ -638,10 +638,10 @@ mod tests {
         };
         let mut d = design();
         d.placement = Some(PlacementSection {
-            outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 10_000 }],
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 10_000_000 }],
             footprints: vec![eda_model::ir::FootprintInstance {
                 id: "R1".into(),
-                at: Point { x: 5_000, y: 5_000 },
+                at: Point { x: 5_000_000, y: 5_000_000 },
                 rot: 0,
                 side: Side::Top, label: Default::default()
             }],

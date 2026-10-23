@@ -22,8 +22,8 @@ use eda_place::Placer;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Bookshelf unit used for the bridge, µm.
-pub const UNIT_NM: i64 = 100;
+/// Bookshelf unit used for the bridge, nm (100 um).
+pub const UNIT_NM: i64 = 100_000;
 
 #[derive(Debug, Clone)]
 pub struct CypressOptions {
@@ -150,7 +150,7 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
     inside
 }
 
-/// Edge-to-edge gap between two axis-aligned courtyard rects (µm), 0 when
+/// Edge-to-edge gap between two axis-aligned courtyard rects (nm), 0 when
 /// they overlap on an axis. Matches `eda-gates`' `Rect::gap` semantics for
 /// the `placement_proximity` check.
 fn rect_gap(a: (i64, i64, i64, i64), b: (i64, i64, i64, i64)) -> f64 {
@@ -289,7 +289,7 @@ fn find_spot(
         let Some(mover_ct) = placed_courtyard(model, mover_part, &candidate_fp) else { continue };
         let Some(mover_ko) = placed_keepout(model, outline, mover_part, &candidate_fp) else { continue };
         if let Some((other_ct, max_mm)) = gap_check {
-            if rect_gap(mover_ct, other_ct) / 1000.0 > max_mm {
+            if rect_gap(mover_ct, other_ct) / 1e6 > max_mm {
                 continue;
             }
         }
@@ -322,7 +322,7 @@ fn violations_for(model: &ConstraintModel, design: &Design, id: &str) -> usize {
         .iter()
         .filter(|r| match r {
             PlacementRule::Proximity { a, b, max_mm, .. } if a == id || b == id => match (ct(a), ct(b)) {
-                (Some(ca), Some(cb)) => rect_gap(ca, cb) / 1000.0 > *max_mm,
+                (Some(ca), Some(cb)) => rect_gap(ca, cb) / 1e6 > *max_mm,
                 _ => false,
             },
             _ => false,
@@ -344,7 +344,7 @@ fn rules_ok_for(model: &ConstraintModel, design: &Design, ids: &[&str]) -> bool 
         let (Some(fa), Some(fb)) = (fp_of(a), fp_of(b)) else { continue };
         let (Some(pa), Some(pb)) = (model.part(a), model.part(b)) else { continue };
         let (Some(ca), Some(cb)) = (placed_courtyard(model, pa, fa), placed_courtyard(model, pb, fb)) else { continue };
-        if rect_gap(ca, cb) / 1000.0 > *max_mm {
+        if rect_gap(ca, cb) / 1e6 > *max_mm {
             return false;
         }
     }
@@ -383,7 +383,7 @@ fn try_ripple(
     is_legal: &dyn Fn(&Design) -> bool,
 ) -> Option<Design> {
     const MAX_BLOCKERS: usize = 2;
-    const RIPPLE_RADIUS_NM: i64 = 6_000; // how far a blocker may look for its own new spot
+    const RIPPLE_RADIUS_NM: i64 = 6_000_000; // how far a blocker may look for its own new spot
     // Each attempted candidate costs up to MAX_BLOCKERS full find_spot
     // searches; an unsatisfiable rule otherwise walks every candidate in
     // the halo (l3 U7/C15: the legaliser sat in this loop for 15+ min).
@@ -422,7 +422,7 @@ fn try_ripple(
         candidate_fp.rot = rot as u32;
         let Some(mover_ct) = placed_courtyard(model, mover_part, &candidate_fp) else { continue };
         let Some(mover_ko) = placed_keepout(model, &placement.outline, mover_part, &candidate_fp) else { continue };
-        if rect_gap(mover_ct, anchor_ct) / 1000.0 > max_mm {
+        if rect_gap(mover_ct, anchor_ct) / 1e6 > max_mm {
             continue;
         }
         // Blockers: other placed parts (same side) whose courtyard
@@ -529,8 +529,8 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
 /// candidates for the frozen one (which used to burn half an hour on a
 /// 25 µm grid proving the obvious).
 pub fn legalize_proximity_pass_frozen(design: &Design, model: &ConstraintModel, is_legal: &dyn Fn(&Design) -> bool, frozen: &BTreeSet<String>) -> Design {
-    const STEP_NM: i64 = 100;
-    const FINE_STEP_NM: i64 = 25;
+    const STEP_NM: i64 = 100_000;
+    const FINE_STEP_NM: i64 = 25_000;
     let mut out = design.clone();
     let Some(placement) = out.placement.clone() else { return out };
     let outline = &placement.outline;
@@ -549,7 +549,7 @@ pub fn legalize_proximity_pass_frozen(design: &Design, model: &ConstraintModel, 
     }
     for rule in &model.placement_rules {
         let PlacementRule::Proximity { a, b, max_mm, .. } = rule else { continue };
-        let max_nm = (*max_mm * 1000.0) as i64;
+        let max_nm = (*max_mm * 1e6) as i64;
         let (Some(fa), Some(fb)) =
             (out.placement.as_ref().unwrap().footprints.iter().find(|f| &f.id == a).cloned(),
              out.placement.as_ref().unwrap().footprints.iter().find(|f| &f.id == b).cloned())
@@ -558,7 +558,7 @@ pub fn legalize_proximity_pass_frozen(design: &Design, model: &ConstraintModel, 
         };
         let (Some(pa), Some(pb)) = (model.part(a), model.part(b)) else { continue };
         let (Some(ca), Some(cb)) = (placed_courtyard(model, pa, &fa), placed_courtyard(model, pb, &fb)) else { continue };
-        if rect_gap(ca, cb) / 1000.0 <= *max_mm {
+        if rect_gap(ca, cb) / 1e6 <= *max_mm {
             continue; // already satisfied, don't perturb a fine placement
         }
 
@@ -704,10 +704,10 @@ fn run_cypress(bs: &Bookshelf, seed: u64, o: &CypressOptions, tag: &str) -> Resu
     Ok((pl, cfg_path))
 }
 
-/// Spacing, µm, kept between two connectors pinned along one edge.
-const EDGE_SPACING_NM: i64 = 1000;
+/// Spacing, nm, kept between two connectors pinned along one edge.
+const EDGE_SPACING_NM: i64 = 1_000_000;
 /// Extra distance charged to an edge a connector must turn 90° to lie on.
-const ROTATE_PENALTY_NM: i64 = 10_000;
+const ROTATE_PENALTY_NM: i64 = 10_000_000;
 
 /// Pin every edge connector to the board edge nearest to where Cypress's
 /// free run left it (long side along the edge, per
@@ -862,7 +862,7 @@ pub fn pin_connectors_to_edges(design: &Design, model: &ConstraintModel) -> Resu
                 fails.push(CheckResult::fail(
                     "edge_connectors_overflow",
                     edge_name,
-                    format!("connectors {} do not fit along this edge ({} µm short); widen the board or move one to another edge", names.join(", "), over),
+                    format!("connectors {} do not fit along this edge ({:.3} mm short); widen the board or move one to another edge", names.join(", "), eda_model::units::to_mm(over)),
                 ).with_detail(serde_json::json!({ "suggest": "board.outline", "edge": edge_name, "short_nm": over })));
             }
         }
@@ -902,7 +902,7 @@ fn with_decoupling_rules(model: &ConstraintModel, placed: &Design) -> Constraint
             .min();
         let Some((_, _, u)) = pick else { continue };
         *dealt.entry(u.clone()).or_default() += 1;
-        m.placement_rules.push(PlacementRule::Proximity { a: c, b: u, max_mm: eda_model::DECOUPLING_MAX_GAP_NM as f64 / 1000.0, reason: Some("decoupling cap and the IC it decouples".into()) });
+        m.placement_rules.push(PlacementRule::Proximity { a: c, b: u, max_mm: eda_model::units::to_mm(eda_model::DECOUPLING_MAX_GAP_NM), reason: Some("decoupling cap and the IC it decouples".into()) });
     }
     m
 }
@@ -965,7 +965,7 @@ fn total_violations(model: &ConstraintModel, design: &Design) -> usize {
         .iter()
         .filter(|r| match r {
             PlacementRule::Proximity { a, b, max_mm, .. } => match (ct(a), ct(b)) {
-                (Some(ca), Some(cb)) => rect_gap(ca, cb) / 1000.0 > *max_mm,
+                (Some(ca), Some(cb)) => rect_gap(ca, cb) / 1e6 > *max_mm,
                 _ => false,
             },
             _ => false,

@@ -71,13 +71,13 @@ fn plotted_text(svg: &str) -> Vec<(String, [f64; 4])> {
             }
             p = &q[end..];
         }
-        out.push((text, [x0 * 1000.0, y0 * 1000.0, x1 * 1000.0, y1 * 1000.0]));
+        out.push((text, [x0 * 1e6, y0 * 1e6, x1 * 1e6, y1 * 1e6]));
         rest = &after[group_end..];
     }
     out
 }
 
-/// The straight lines of the plot that are not glyph strokes, in micrometres, ends in reading order.
+/// The straight lines of the plot that are not glyph strokes, in nanometres, ends in reading order.
 fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
     let mut bare = String::new();
     let mut rest = svg;
@@ -99,8 +99,8 @@ fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
             continue;
         }
         if let [x0, y0, x1, y1] = numbers(&format!("M{d}"))[..] {
-            let um = |v: f64| (v * 1000.0).round() as i64;
-            let (a, b) = ((um(x0), um(y0)), (um(x1), um(y1)));
+            let nm = |v: f64| (v * 1e6).round() as i64;
+            let (a, b) = ((nm(x0), nm(y0)), (nm(x1), nm(y1)));
             let (a, b) = if a <= b { (a, b) } else { (b, a) };
             out.push([a.0, a.1, b.0, b.1]);
         }
@@ -163,11 +163,11 @@ fn assert_text_placed_as_kicad_cli_plots_it(t: &Table, svg: &str, what: &str) {
     for w in &wanted {
         let Some(got) = nearest(&plotted, w) else { panic!("{what}: kicad-cli plots no {:?}; it plotted {:?}", w.0, plotted.iter().map(|p| &p.0).collect::<Vec<_>>()) };
         for k in 0..4 {
-            assert!((got.1[k] - w.1[k]).abs() <= 8.0, "{what}: {:?} is inked at {:?} in kicad-cli's plot and at {:?} here ({k})", w.0, got.1, w.1);
+            assert!((got.1[k] - w.1[k]).abs() <= 1_000.0, "{what}: {:?} is inked at {:?} in kicad-cli's plot and at {:?} here ({k})", w.0, got.1, w.1);
         }
         worst = worst.max((0..4).map(|k| (got.1[k] - w.1[k]).abs()).fold(0.0, f64::max));
     }
-    eprintln!("{what}: {} lines of text inked within {worst:.1} um of kicad-cli's plot", wanted.len());
+    eprintln!("{what}: {} lines of text inked within {:.1} um of kicad-cli's plot", wanted.len(), worst / 1000.0);
 }
 
 fn assert_borders_drawn_as_kicad_cli_plots_them(t: &Table, svg: &str, what: &str) {
@@ -183,7 +183,7 @@ fn assert_borders_drawn_as_kicad_cli_plots_them(t: &Table, svg: &str, what: &str
         .collect();
     assert!(!expected.is_empty());
     for line in &expected {
-        assert!(lines.iter().any(|l| l.iter().zip(line).all(|(a, b)| (a - b).abs() <= 3)), "{what}: kicad-cli draws no line {line:?}; it drew {lines:?}");
+        assert!(lines.iter().any(|l| l.iter().zip(line).all(|(a, b)| (a - b).abs() <= 100)), "{what}: kicad-cli draws no line {line:?}; it drew {lines:?}");
     }
 }
 
@@ -200,7 +200,7 @@ fn sheet_of(tables: Vec<Table>) -> Design {
 
 /// A 3 x 2 table: left and top, centred, right and bottom text; one cell of several lines; a bold one; a variable.
 fn lying_table() -> Table {
-    let mut t = Table::new_sch_grid(Point { x: 30_000, y: 40_000 }, 2, 3, 30_000, 8_000, 1_270);
+    let mut t = Table::new_sch_grid(Point { x: 30_000_000, y: 40_000_000 }, 2, 3, 30_000_000, 8_000_000, 1_270_000);
     let texts = ["Header", "Value", "centred", "r ight\nbottom", "a long text that must be broken to the width of its column", "${ROW}:${COL} ${ADDR}"];
     for (cell, text) in t.cells.iter_mut().zip(texts) {
         cell.text = text.to_string();
@@ -210,9 +210,9 @@ fn lying_table() -> Table {
     t.cells[3].style.h_align = TextJustify::Right;
     t.cells[3].style.v_align = TextVAlign::Bottom;
     t.cells[1].style.bold = true;
-    t.cells[1].style.height_nm = 1_800;
-    t.cells[1].style.width_nm = 1_800;
-    t.cells[4].style.thickness_nm = 300;
+    t.cells[1].style.height_nm = 1_800_000;
+    t.cells[1].style.width_nm = 1_800_000;
+    t.cells[4].style.thickness_nm = 300_000;
     t
 }
 
@@ -223,7 +223,7 @@ fn kicad_cli_plots_a_table_we_wrote_on_a_sheet_the_way_it_was_laid_out() {
     let standing = {
         // The same grid turned a quarter: the text stands, anchored along the height of the cell.
         let mut t = lying_table();
-        t.at = Point { x: 150_000, y: 120_000 };
+        t.at = Point { x: 150_000_000, y: 120_000_000 };
         t.angle = 90_000;
         t
     };

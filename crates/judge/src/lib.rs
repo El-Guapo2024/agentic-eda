@@ -98,18 +98,18 @@ pub fn render_board_svg(design: &Design, model: &ConstraintModel, with_routing: 
     if x0 == i64::MAX {
         return Err(unavailable("placement has no outline"));
     }
-    let m = 2000;
+    let m = 2_000_000;
     let (vx, vy, vw, vh) = (x0 - m, y0 - m, x1 - x0 + 2 * m, y1 - y0 + 2 * m);
     let mut s = String::new();
-    s.push_str(&format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{vx} {vy} {vw} {vh}\" width=\"{}\" height=\"{}\">\n", vw / 20, vh / 20));
-    s.push_str("<rect x=\"-1e9\" y=\"-1e9\" width=\"2e9\" height=\"2e9\" fill=\"#0d1b12\"/>\n");
+    s.push_str(&format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{vx} {vy} {vw} {vh}\" width=\"{}\" height=\"{}\">\n", vw / 20_000, vh / 20_000));
+    s.push_str("<rect x=\"-1e12\" y=\"-1e12\" width=\"2e12\" height=\"2e12\" fill=\"#0d1b12\"/>\n");
     let pts: Vec<String> = pl.outline.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
-    s.push_str(&format!("<polygon points=\"{}\" fill=\"#123d1f\" stroke=\"#f2d34b\" stroke-width=\"150\"/>\n", pts.join(" ")));
+    s.push_str(&format!("<polygon points=\"{}\" fill=\"#123d1f\" stroke=\"#f2d34b\" stroke-width=\"150000\"/>\n", pts.join(" ")));
     let fs = model.board.refdes_font(&pl.outline);
     for fp in &pl.footprints {
         let part = match model.part(&fp.id) { Some(p) => p, None => continue };
         if let Some((cx0, cy0, cx1, cy1)) = placed_courtyard(model, part, fp) {
-            s.push_str(&format!("<rect x=\"{cx0}\" y=\"{cy0}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"#c8c8c8\" stroke-width=\"60\" stroke-dasharray=\"300 200\"/>\n", cx1 - cx0, cy1 - cy0));
+            s.push_str(&format!("<rect x=\"{cx0}\" y=\"{cy0}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"#c8c8c8\" stroke-width=\"60000\" stroke-dasharray=\"300000 200000\"/>\n", cx1 - cx0, cy1 - cy0));
             let bx = eda_model::footprint::refdes_box_side((cx0, cy0, cx1, cy1), &fp.id, fs, eda_model::footprint::outline_top(&pl.outline), fp.label);
             s.push_str(&format!("<text x=\"{}\" y=\"{}\" font-size=\"{fs}\" fill=\"#ffffff\" text-anchor=\"middle\" font-family=\"sans-serif\">{}</text>\n", (bx.0 + bx.2) / 2, eda_model::footprint::refdes_baseline(bx, fs), fp.id));
         }

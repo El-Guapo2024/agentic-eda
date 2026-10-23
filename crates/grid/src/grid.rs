@@ -20,7 +20,7 @@ pub enum Occ {
 struct Cell {
     net_id: u32,
     kind: Occ,
-    /// Half-extent (µm) of the *widest* copper this cell actually holds.
+    /// Half-extent (nm) of the *widest* copper this cell actually holds.
     ///
     /// Not derivable from `kind`: a net's escape track legitimately runs
     /// over its own pad, and `kind` deliberately stays `Pad` there (rip-up
@@ -40,7 +40,7 @@ const MULTI: u32 = u32::MAX - 1;
 /// KiCad's default board-setup copper-to-edge clearance, enforced by
 /// `kicad-cli pcb drc` against Edge.Cuts.
 /// Default copper-to-edge clearance (see `RoutingTuning::edge_clearance_nm`).
-pub const EDGE_CLEARANCE_NM: Nm = 500;
+pub const EDGE_CLEARANCE_NM: Nm = 500_000;
 
 fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
     let (ax, ay, bx, by, px, py) = (a.x as f64, a.y as f64, b.x as f64, b.y as f64, p.x as f64, p.y as f64);
@@ -130,7 +130,7 @@ pub struct Grid {
     /// Precomputed point-in-polygon per cell (`cy * cells_x + cx`), so the
     /// flood never re-runs the polygon test.
     inside: Vec<bool>,
-    /// Precomputed distance (µm) from each cell centre to the nearest
+    /// Precomputed distance (nm) from each cell centre to the nearest
     /// outline edge, for the copper-to-edge clearance.
     edge_dist: Vec<Nm>,
     /// Net name interning: index <-> name.
@@ -143,7 +143,7 @@ impl Grid {
         Self::with_widths(outline, grid_nm, clearance_nm, grid_nm, grid_nm, num_layers)
     }
 
-    /// Full constructor: `track_width` and `via_diameter` in µm feed the
+    /// Full constructor: `track_width` and `via_diameter` in nm feed the
     /// kind-aware clearance in [`Grid::passable_as`].
     pub fn with_widths(outline: Vec<Point>, grid_nm: Nm, clearance_nm: Nm, track_width: Nm, via_diameter: Nm, num_layers: usize) -> Self {
         // An empty outline used to fall through to a 1x1-cell board on
@@ -155,7 +155,7 @@ impl Grid {
         // layer count is the depth of every lookup. Same reasoning as the
         // outline: a caller that gets here with either at zero has already
         // skipped BoardRules::validate, and a crash is the honest outcome.
-        assert!(grid_nm > 0, "Grid::with_widths needs a positive pitch, got {grid_nm} um");
+        assert!(grid_nm > 0, "Grid::with_widths needs a positive pitch, got {grid_nm} nm");
         assert!(num_layers > 0, "Grid::with_widths needs at least one copper layer");
         let min_x = outline.iter().map(|p| p.x).min().expect("outline non-empty");
         let min_y = outline.iter().map(|p| p.y).min().expect("outline non-empty");

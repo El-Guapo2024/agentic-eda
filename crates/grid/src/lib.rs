@@ -73,7 +73,7 @@ fn pad_cells(grid: &Grid, pad: &PadInfo) -> Vec<(i64, i64)> {
 }
 
 /// Smallest facing-edge gap between two SMD pads of the same footprint
-/// (adjacent pins on the same package), µm; `i64::MAX` when the board has
+/// (adjacent pins on the same package), nm; `i64::MAX` when the board has
 /// no multi-pad SMD footprint. Decides whether the grid needs refining to
 /// see a fine-pitch part's escapes at all.
 fn smallest_same_footprint_gap(pads: &HashMap<String, PadInfo>) -> i64 {
@@ -288,7 +288,7 @@ pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &
     // established performance.
     let min_pad_gap = smallest_same_footprint_gap(&pads);
     let mut eff_rules = rules.clone();
-    if rules.grid > 130 && min_pad_gap < rules.grid {
+    if rules.grid > 130_000 && min_pad_gap < rules.grid {
         eff_rules.grid = rules.grid / 2;
     }
     if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
@@ -421,11 +421,11 @@ pub fn preflight(design: &Design, model: &ConstraintModel, rules: &RouteRules) -
             eprintln!("{}", grid.dump_why(cx, cy, pad.layers[0], &pad.net, 14));
         }
         if !reached {
-            let um = best_pocket as f64 * (rules.grid as f64 / 1000.0).powi(2);
+            let mm2 = best_pocket as f64 * (rules.grid as f64 / 1e6).powi(2);
             out.push(CheckResult::fail(
                 "placement_pad_reach",
                 refpin,
-                format!("pad is sealed in by placement: its free pocket is {best_pocket} cells (~{um:.1} mm²) with no via site and no same-net pad reachable"),
+                format!("pad is sealed in by placement: its free pocket is {best_pocket} cells (~{mm2:.1} mm²) with no via site and no same-net pad reachable"),
             ));
         }
     }

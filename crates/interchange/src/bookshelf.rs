@@ -8,7 +8,7 @@
 //! own gates and HPWL — exactly like `eda-place`.
 //!
 //! Conventions (matching NVlabs' own `pcb-util/bookshelf_converter.py`):
-//! * integer units; we use `unit_nm` micrometres per unit (default 100),
+//! * integer units; we use `unit_nm` nanometres per unit (default 100_000: 100 um),
 //! * node size = courtyard, pin offsets relative to the node centre,
 //! * every node movable (NumTerminals 0), orientation `N`,
 //! * `.scl` rows of height 1 tiling the outline bounding box, so any
@@ -152,7 +152,7 @@ pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, 
         let ko = keepout_side((-hw_r, -hh_r, hw_r, hh_r), &part.reference, font, i64::MIN, label);
         let (ox, oy) = ((ko.0 + ko.2) / 2, (ko.1 + ko.3) / 2);
         // Sizes round UP: Cypress packs nodes flush on its integer grid, so a
-        // rounded-down courtyard would overlap its neighbour at µm precision.
+        // rounded-down courtyard would overlap its neighbour at nm precision.
         let w = div_ceil(ko.2 - ko.0, unit).max(1);
         let h = div_ceil(ko.3 - ko.1, unit).max(1);
         writeln!(nodes, "{} {} {}{}", part.reference, w, h, if is_fixed { " terminal" } else { "" }).unwrap();
@@ -284,7 +284,7 @@ pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, 
 }
 
 /// Read a Bookshelf `.pl` (as written by DREAMPlace/Cypress) back into a
-/// placement: lower-left corners in units → centres in µm, relative to the
+/// placement: lower-left corners in units → centres in nm, relative to the
 /// outline origin used at export. Rotation from the orientation token
 /// (`N`=0, `W`=90, `S`=180, `E`=270; `F*` flips to the bottom side).
 /// Words the UCLA Bookshelf lexer reserves (matched case-insensitively).
@@ -403,7 +403,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let outline = vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 15_000 }, Point { x: 0, y: 15_000 }];
+        let outline = vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 15_000_000 }, Point { x: 0, y: 15_000_000 }];
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: eda_model::ir::SCHEMA_VERSION,
@@ -412,9 +412,9 @@ mod tests {
             placement: Some(PlacementSection {
                 outline,
                 footprints: vec![
-                    FootprintInstance { id: "U1".into(), at: Point { x: 10_000, y: 7_500 }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "C1".into(), at: Point { x: 3_000, y: 3_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "R1".into(), at: Point { x: 17_000, y: 12_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "U1".into(), at: Point { x: 10_000_000, y: 7_500_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "C1".into(), at: Point { x: 3_000_000, y: 3_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R1".into(), at: Point { x: 17_000_000, y: 12_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: Vec::new(),
             }),
@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn writes_all_six_files_with_headers() {
         let (d, m) = fixture();
-        let bs = to_bookshelf(&d, &m, "t", 100).unwrap();
+        let bs = to_bookshelf(&d, &m, "t", 100_000).unwrap();
         assert!(bs.aux.starts_with("RowBasedPlacement : t.nodes t.nets t.wts t.pl t.scl"));
         assert!(bs.nodes.contains("NumNodes : 3"));
         assert!(bs.nets.contains("NumNets : 2") && bs.nets.contains("NumPins : 5"));
@@ -442,14 +442,14 @@ mod tests {
         let (d, m) = fixture();
         let mut m = m;
         m.placement_rules.push(eda_model::PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 3.0 , reason: None });
-        let bs = to_bookshelf_weighted(&d, &m, "t", 100, 77.0).unwrap();
+        let bs = to_bookshelf_weighted(&d, &m, "t", 100_000, 77.0).unwrap();
         assert!(bs.nets.contains("NetDegree : 2 prox0"));
         assert!(bs.nets.contains("U1 I :"));
         // Weight scales with slack: 2 mm / 3 mm of the base 77.
         assert!(bs.wts.contains("prox0 51.333"), "{}", bs.wts);
         // A tight rule gets the full weight.
         m.placement_rules[0] = eda_model::PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 1.0 , reason: None };
-        let bs = to_bookshelf_weighted(&d, &m, "t", 100, 77.0).unwrap();
+        let bs = to_bookshelf_weighted(&d, &m, "t", 100_000, 77.0).unwrap();
         assert!(bs.wts.contains("prox0 77.000"), "{}", bs.wts);
     }
 
@@ -462,11 +462,11 @@ mod tests {
             f.label = LabelSide::Below;
         }
         let fixed: BTreeSet<String> = ["U1".to_string()].into_iter().collect();
-        let bs = to_bookshelf_fixed(&d, &m, "t", 100, 1.0, &fixed).unwrap();
+        let bs = to_bookshelf_fixed(&d, &m, "t", 100_000, 1.0, &fixed).unwrap();
         assert!(bs.nodes.contains("NumTerminals : 1"));
         assert!(bs.nodes.lines().any(|l| l.starts_with("U1 ") && l.ends_with(" terminal")), "{}", bs.nodes);
         assert!(bs.pl.lines().any(|l| l.starts_with("U1 ") && l.contains(": W /FIXED")), "{}", bs.pl);
-        let back = from_bookshelf_pl_fixed(&bs.pl, &d, &m, 100, &fixed).unwrap();
+        let back = from_bookshelf_pl_fixed(&bs.pl, &d, &m, 100_000, &fixed).unwrap();
         let u1 = back.placement.unwrap().footprints.into_iter().find(|f| f.id == "U1").unwrap();
         assert_eq!(u1.rot, 90_000);
         assert_eq!(u1.label, LabelSide::Below);
@@ -475,11 +475,11 @@ mod tests {
     #[test]
     fn pl_round_trip_recovers_centres() {
         let (d, m) = fixture();
-        let bs = to_bookshelf(&d, &m, "t", 100).unwrap();
-        let back = from_bookshelf_pl(&bs.pl, &d, &m, 100).unwrap();
+        let bs = to_bookshelf(&d, &m, "t", 100_000).unwrap();
+        let back = from_bookshelf_pl(&bs.pl, &d, &m, 100_000).unwrap();
         for f in &back.placement.as_ref().unwrap().footprints {
             let orig = d.placement.as_ref().unwrap().footprints.iter().find(|o| o.id == f.id).unwrap();
-            assert!((f.at.x - orig.at.x).abs() <= 100 && (f.at.y - orig.at.y).abs() <= 100, "{}: {:?} vs {:?}", f.id, f.at, orig.at);
+            assert!((f.at.x - orig.at.x).abs() <= 100_000 && (f.at.y - orig.at.y).abs() <= 100_000, "{}: {:?} vs {:?}", f.id, f.at, orig.at);
         }
     }
 
@@ -487,7 +487,7 @@ mod tests {
     fn orientation_tokens_map_to_rotation_and_side() {
         let (d, m) = fixture();
         let pl = "UCLA pl 1.0\nU1 10 10 : W\nC1 0 0 : FN\nR1 5 5 : S\n";
-        let back = from_bookshelf_pl(pl, &d, &m, 100).unwrap();
+        let back = from_bookshelf_pl(pl, &d, &m, 100_000).unwrap();
         let p = back.placement.unwrap();
         let get = |id: &str| p.footprints.iter().find(|f| f.id == id).unwrap().clone();
         assert_eq!(get("U1").rot, 90_000);
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn missing_node_is_an_error() {
         let (d, m) = fixture();
-        let err = from_bookshelf_pl("UCLA pl 1.0\nU1 0 0 : N\n", &d, &m, 100).unwrap_err();
+        let err = from_bookshelf_pl("UCLA pl 1.0\nU1 0 0 : N\n", &d, &m, 100_000).unwrap_err();
         assert_eq!(err[0].check, "bookshelf_missing_nodes");
     }
 }

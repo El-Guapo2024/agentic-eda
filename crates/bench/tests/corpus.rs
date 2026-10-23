@@ -289,7 +289,7 @@ fn corpus_runs_every_seed() {
 
     let seeds = [0u64, 1, 2];
     let mut rows: Vec<String> = Vec::new();
-    rows.push("| case | seed | stage | fail checks | crossing hint | hpwl (um) | tracks | vias | wall (ms) |".into());
+    rows.push("| case | seed | stage | fail checks | crossing hint | hpwl (nm) | tracks | vias | wall (ms) |".into());
     rows.push("|---|---|---|---|---|---|---|---|---|".into());
 
     let mut unexpected: Vec<String> = Vec::new();
