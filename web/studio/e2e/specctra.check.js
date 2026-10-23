@@ -6,8 +6,8 @@
 //
 // What it checks:
 //   both actions are offered on the PCB tab;
-//   Export: the DSN is the board's (`(pcb ..` named by the file, its parser, the board's layers, a wire for every routed net, its vias), saved as `<board>.dsn`, and the
-//     status says "BOARD exported OK.";
+//   Export: the DSN is the board's (`(pcb ..` named by the file, its parser, the board's layers, a wire for every routed net, its vias), saved as `<board>.dsn`, the
+//     status says "BOARD exported OK.", and the server's reply names the engine that wrote it (`kicad-cli` or `eda`);
 //   Import: a session made from that DSN's wiring (what a router that keeps the routing sends back) is put on the board as ONE undo step -- the same segments as before,
 //     the same vias, "Session file imported and merged OK." -- and Undo brings the board's own tracks back, Redo the imported ones;
 //   a session KiCad refuses (a layer the board has not got) is refused in KiCad's words and the board is untouched;
@@ -102,6 +102,9 @@
     const vias = forms(dsn.slice(dsn.indexOf("(wiring")), "(via ").length;
     t(wires > 0 && vias === original.vias.length, `${wires} wires, ${vias} vias in the wiring (the board has ${original.vias.length} vias)`);
     t(/^BOARD exported OK\./.test(r.toast?.message ?? r.toast ?? ""), `the status: ${JSON.stringify(r.toast)}`);
+    // The reply names the engine that wrote the file (kicad-cli where it has `pcb export specctra`, else our own exporter); the page shows the same either way.
+    const reply = await fetch("/api/specctra/export", { method: "POST", body: "{}" }).then((x) => x.json());
+    t(reply.ok && ["kicad-cli", "eda"].includes(reply.engine) && reply.text === dsn, `the reply's engine: ${reply.engine}, the same text as the download`);
   });
 
   await scenario("Import Specctra Session... puts the session's wires and vias on the board as one undo step", async (t) => {

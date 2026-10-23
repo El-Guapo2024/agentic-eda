@@ -1,6 +1,6 @@
 // The File > Export entries whose kicad-cli command an older kicad-cli lacks: IDFv3... (`kicad-cli pcb export idf`, newer than the Mac's
 // 10.99.0-5334) and GenCAD... (`kicad-cli pcb export gencad`). The server probes the kicad-cli in use once (`GET /api/fab/exporters`,
-// `eda_kicad_engine::cli_export_kinds`) and names the ones it lacks with the reason; an entry whose command is missing is disabled, and its
+// `eda_kicad_engine::cli_has_export`) and names the ones it lacks with the reason; an entry whose command is missing is disabled, and its
 // tooltip says why ("This kicad-cli (10.99.0) has no IDF exporter; KiCad 10.99 nightly or later has one."). Pure: `state/cliExporters.ts`
 // holds the server's answer, and the action runner, the menu and the test hook ask here.
 

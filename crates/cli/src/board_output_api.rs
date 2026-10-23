@@ -294,8 +294,8 @@ pub fn idf(dir: &Path, body: &[u8]) -> Value {
 }
 
 /// `GET /api/fab/exporters`: `{ engine, unavailable: { <kind>: <reason> } }` for the exporters a kicad-cli may lack
-/// (`kicad_engine::OPTIONAL_PCB_EXPORTS`), each probed once per process (`eda_kicad_engine::cli_export_kinds`); a kind it has, or one the
-/// probe cannot tell about, is not listed.
+/// (`kicad_engine::OPTIONAL_PCB_EXPORTS`), each probed once per process (`eda_kicad_engine::cli_has_export`); a kind it has (or any, with no
+/// kicad-cli at all) is not listed.
 pub fn exporters() -> Value {
     let engine = eda_kicad_engine::find_cli().map(|c| format!("kicad-cli {}", eda_kicad_engine::cli_version(&c)));
     let unavailable: serde_json::Map<String, Value> = kicad_engine::OPTIONAL_PCB_EXPORTS.iter().filter_map(|(kind, _)| kicad_engine::missing_pcb_export(kind).map(|why| (kind.to_string(), Value::String(why)))).collect();

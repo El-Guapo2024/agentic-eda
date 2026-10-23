@@ -135,18 +135,20 @@ pub(crate) fn project_name(dir: &Path) -> String {
 /// `pcb export` command, with the name a message calls each one by.
 pub const OPTIONAL_PCB_EXPORTS: [(&str, &str); 2] = [("idf", "IDF"), ("gencad", "GenCAD")];
 
-/// Why `kicad-cli pcb export <kind>` cannot run here, or `None` when it can (or the probe cannot tell: see
-/// `eda_kicad_engine::cli_has_export`): "This kicad-cli (10.99.0) has no IDF exporter; KiCad 10.99 nightly or later has one."
+/// Why `kicad-cli pcb export <kind>` cannot run here, or `None` when it can: "This kicad-cli (10.99.0) has no IDF exporter; KiCad 10.99
+/// nightly or later has one." Only the kinds of [`OPTIONAL_PCB_EXPORTS`] are asked about (`eda_kicad_engine::cli_has_export`, one
+/// `kicad-cli pcb export --help` per binary per process); with no kicad-cli at all nothing is refused here, and the export says it is missing.
 pub fn missing_pcb_export(kind: &str) -> Option<String> {
-    if eda_kicad_engine::cli_has_export("pcb", kind)? {
+    let (_, name) = OPTIONAL_PCB_EXPORTS.iter().find(|(k, _)| *k == kind)?;
+    let cli = eda_kicad_engine::find_cli()?;
+    if eda_kicad_engine::cli_has_export(&cli, "pcb", kind) {
         return None;
     }
-    let name = OPTIONAL_PCB_EXPORTS.iter().find(|(k, _)| *k == kind).map_or_else(|| format!("`pcb export {kind}`"), |(_, n)| n.to_string());
-    let version = eda_kicad_engine::find_cli().map(|c| eda_kicad_engine::cli_version(&c)).filter(|v| !v.is_empty());
-    Some(format!("This kicad-cli{} has no {name} exporter; KiCad 10.99 nightly or later has one.", version.map(|v| format!(" ({v})")).unwrap_or_default()))
+    let version = eda_kicad_engine::cli_version(&cli);
+    Some(format!("This kicad-cli{} has no {name} exporter; KiCad 10.99 nightly or later has one.", if version.is_empty() { String::new() } else { format!(" ({version})") }))
 }
 
-/// `kicad-cli pcb export <kind> [args...]`: `{ ok, engine, files }`. A kind this kicad-cli does not have is refused with
+/// `kicad-cli pcb export <kind> [args...]`: `{ ok, engine, files }`. IDF or GenCAD on a kicad-cli that does not have it is refused with
 /// [`missing_pcb_export`]'s reason before anything is written.
 pub fn export(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
     if let Some(why) = missing_pcb_export(kind) {
