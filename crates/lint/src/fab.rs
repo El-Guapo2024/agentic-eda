@@ -96,11 +96,11 @@ mod tests {
     fn fixture() -> (Design, ConstraintModel) {
         let model = ConstraintModel { parts: vec![part("R1", Some("RC0402")), part("R10", Some("RC0402")), part("R2", Some("RC0402"))], ..Default::default() };
         let placement = PlacementSection {
-            outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }],
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 0 }, Point { x: 10_000_000, y: 10_000_000 }],
             footprints: vec![
-                FootprintInstance { id: "R1".into(), at: Point { x: 1_000, y: 2_000 }, rot: 90_000, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "R10".into(), at: Point { x: 3_000, y: 4_000 }, rot: 0, side: Side::Bottom, label: Default::default() },
-                FootprintInstance { id: "R2".into(), at: Point { x: 5_000, y: 6_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "R1".into(), at: Point { x: 1_000_000, y: 2_000_000 }, rot: 90_000, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "R10".into(), at: Point { x: 3_000_000, y: 4_000_000 }, rot: 0, side: Side::Bottom, label: Default::default() },
+                FootprintInstance { id: "R2".into(), at: Point { x: 5_000_000, y: 6_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
             ],
             modules: Vec::new(),
         };

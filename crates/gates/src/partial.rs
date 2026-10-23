@@ -157,9 +157,9 @@ mod tests {
             placement: Some(PlacementSection {
                 outline: vec![
                     Point { x: 0, y: 0 },
-                    Point { x: 100_000, y: 0 },
-                    Point { x: 100_000, y: 100_000 },
-                    Point { x: 0, y: 100_000 },
+                    Point { x: 100_000_000, y: 0 },
+                    Point { x: 100_000_000, y: 100_000_000 },
+                    Point { x: 0, y: 100_000_000 },
                 ],
                 footprints: fps,
                 modules: Vec::new(),
@@ -173,7 +173,7 @@ mod tests {
         // The whole reason this module exists: the finished-board gate
         // reports 88 failures on a board that is merely 12 parts in.
         let m = model_of(&["U1", "U2", "U3"], &[], vec![]);
-        let d = design_with(vec![fp("U1", 10_000, 10_000)]);
+        let d = design_with(vec![fp("U1", 10_000_000, 10_000_000)]);
 
         let full = super::super::pcb::check_placement(&d, &m);
         assert!(
@@ -196,7 +196,7 @@ mod tests {
         // kicad-cli answers it, in `crate::kicad`, not in this per-step
         // gate.)
         let m = model_of(&["U1", "U2", "U3"], &[], vec![]);
-        let d = design_with(vec![fp("U1", 10_000, 10_000), fp("U2", 100, 100)]);
+        let d = design_with(vec![fp("U1", 10_000_000, 10_000_000), fp("U2", 100_000, 100_000)]);
         let checks = check_placement_partial(&d, &m);
         assert!(
             checks.iter().any(|c| c.check == "placement_within_outline" && matches!(c.status, eda_model::CheckStatus::Fail)),
@@ -213,7 +213,7 @@ mod tests {
             &[],
             vec![PlacementRule::Proximity { a: "U1".into(), b: "U2".into(), max_mm: 1.0, reason: None }],
         );
-        let d = design_with(vec![fp("U1", 10_000, 10_000)]);
+        let d = design_with(vec![fp("U1", 10_000_000, 10_000_000)]);
         let checks = check_placement_partial(&d, &m);
         assert!(
             !checks.iter().any(|c| c.check == "placement_proximity" && matches!(c.status, eda_model::CheckStatus::Fail)),
@@ -229,7 +229,7 @@ mod tests {
             vec![PlacementRule::Proximity { a: "U1".into(), b: "U2".into(), max_mm: 1.0, reason: None }],
         );
         // 60mm apart against a 1mm rule.
-        let d = design_with(vec![fp("U1", 10_000, 10_000), fp("U2", 70_000, 10_000)]);
+        let d = design_with(vec![fp("U1", 10_000_000, 10_000_000), fp("U2", 70_000_000, 10_000_000)]);
         let checks = check_placement_partial(&d, &m);
         assert!(
             checks.iter().any(|c| c.check == "placement_proximity" && matches!(c.status, eda_model::CheckStatus::Fail)),
@@ -242,7 +242,7 @@ mod tests {
         // Two of four parts always look compact. Judging the net now
         // would pass something about to fail.
         let m = model_of(&["U1", "U2", "U3", "U4"], &[("N1", &["U1", "U2", "U3", "U4"])], vec![]);
-        let d = design_with(vec![fp("U1", 10_000, 10_000), fp("U2", 12_000, 10_000)]);
+        let d = design_with(vec![fp("U1", 10_000_000, 10_000_000), fp("U2", 12_000_000, 10_000_000)]);
         let sub = narrow(&m, &["U1", "U2"].into_iter().collect());
         assert!(sub.nets.is_empty(), "a net with unplaced members must be withheld, not measured");
         let _ = check_placement_partial(&d, &m);
@@ -255,7 +255,7 @@ mod tests {
         // unfinished board, and reporting it every step buries the
         // failures that matter.
         let m = model_of(&["U1", "U2", "U3", "U4"], &[], vec![]);
-        let d = design_with(vec![fp("U1", 5_000, 5_000), fp("U2", 8_000, 5_000)]);
+        let d = design_with(vec![fp("U1", 5_000_000, 5_000_000), fp("U2", 8_000_000, 5_000_000)]);
         let checks = check_placement_partial(&d, &m);
         assert!(
             !checks.iter().any(|c| c.check == "placement_board_use"),

@@ -328,8 +328,8 @@ fn check_label_over_wire(sch: &SchematicSection, model: &ConstraintModel, out: &
     for (name, bbox) in &boxes {
         for w in &sch.wires {
             for seg in w.pts.windows(2) {
-                let (ax, ay) = (seg[0].x as f64 / 1000.0, seg[0].y as f64 / 1000.0);
-                let (bx, by) = (seg[1].x as f64 / 1000.0, seg[1].y as f64 / 1000.0);
+                let (ax, ay) = (seg[0].x as f64 / 1e6, seg[0].y as f64 / 1e6);
+                let (bx, by) = (seg[1].x as f64 / 1e6, seg[1].y as f64 / 1e6);
                 if geometry::segment_crosses_box(ax, ay, bx, by, bbox) {
                     out.push(CheckResult {
                         check: "schematic_label_over_wire".into(),
@@ -396,10 +396,10 @@ fn check_value_label_distance(sch: &SchematicSection, model: &ConstraintModel, o
     for sym in &sch.symbols {
         let Some(part) = model.part(&sym.id) else { continue };
         let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref(), sym.unit);
-        let x = sym.at.x as f64 / 1000.0;
-        let y = sym.at.y as f64 / 1000.0;
-        let w = width as f64 / 1000.0;
-        let h = height as f64 / 1000.0;
+        let x = sym.at.x as f64 / 1e6;
+        let y = sym.at.y as f64 / 1e6;
+        let w = width as f64 / 1e6;
+        let h = height as f64 / 1e6;
         let (box_x0, box_x1, box_y0, box_y1) = (x, x + w, y, y + h);
 
         let mut check_one = |name: &str, tx0: f64, ty0: f64, tx1: f64, ty1: f64| {
@@ -459,7 +459,7 @@ fn collect_symbol_boxes(sch: &SchematicSection, model: &ConstraintModel) -> Vec<
         .filter_map(|sym| {
             let part = model.part(&sym.id)?;
             let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref(), sym.unit);
-            Some(geometry::symbol_box_mm(sym.at.x as f64 / 1000.0, sym.at.y as f64 / 1000.0, width, height))
+            Some(geometry::symbol_box_mm(sym.at.x as f64 / 1e6, sym.at.y as f64 / 1e6, width, height))
         })
         .collect()
 }
@@ -488,10 +488,10 @@ fn collect_text_boxes_and_label_extents(sch: &SchematicSection, model: &Constrai
     for sym in &sch.symbols {
         let Some(part) = model.part(&sym.id) else { continue };
         let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref(), sym.unit);
-        let x = sym.at.x as f64 / 1000.0;
-        let y = sym.at.y as f64 / 1000.0;
-        let _w = width as f64 / 1000.0;
-        let h = height as f64 / 1000.0;
+        let x = sym.at.x as f64 / 1e6;
+        let y = sym.at.y as f64 / 1e6;
+        let _w = width as f64 / 1e6;
+        let h = height as f64 / 1e6;
 
         // A symbol whose fields have places of their own (a derivation stores them where KiCad's Autoplace Fields puts them) has its
         // reference and value there; `eda-render` draws them there too.
@@ -542,8 +542,8 @@ fn collect_text_boxes_and_label_extents(sch: &SchematicSection, model: &Constrai
         let resolved = model.real_symbol_of(&sym.lib_id, part);
         let (width, height) = geometry::node_size(part, resolved.as_ref(), sym.unit);
         let (ports, pin_port) = geometry::build_ports(part, width, height, resolved.as_ref(), sym.unit);
-        let sym_x = sym.at.x as f64 / 1000.0;
-        let sym_y = sym.at.y as f64 / 1000.0;
+        let sym_x = sym.at.x as f64 / 1e6;
+        let sym_y = sym.at.y as f64 / 1e6;
         for (pin_idx, port_idx) in pin_port.iter().enumerate() {
             let Some(port_idx) = port_idx else { continue };
             let pin = &part.pins[pin_idx];
@@ -597,14 +597,14 @@ fn check_offgrid(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
     let mut ok = true;
     for s in &sch.symbols {
         if s.at.x % GRID != 0 || s.at.y % GRID != 0 {
-            out.push(CheckResult::fail("schematic_offgrid", s.id.clone(), format!("symbol position {:?} is not on the {GRID}um grid", s.at)));
+            out.push(CheckResult::fail("schematic_offgrid", s.id.clone(), format!("symbol position {:?} is not on the {GRID} nm grid", s.at)));
             ok = false;
         }
     }
     for w in &sch.wires {
         for p in &w.pts {
             if p.x % GRID != 0 || p.y % GRID != 0 {
-                out.push(CheckResult::fail("schematic_offgrid", w.net.clone(), format!("wire point {p:?} is not on the {GRID}um grid")));
+                out.push(CheckResult::fail("schematic_offgrid", w.net.clone(), format!("wire point {p:?} is not on the {GRID} nm grid")));
                 ok = false;
             }
         }
@@ -878,8 +878,8 @@ fn check_sheet_aspect(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_>
             "sheet",
             format!(
                 "drawn extent is {:.1}mm wide x {:.1}mm tall (height/width = {ratio:.2}); allowed {MIN_SHEET_ASPECT}..{MAX_SHEET_ASPECT}",
-                w / 1000.0,
-                h / 1000.0
+                w / 1e6,
+                h / 1e6
             ),
         ));
     } else {
@@ -887,13 +887,13 @@ fn check_sheet_aspect(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_>
     }
 }
 
-/// Sheet cell size for the density grid (um). Chosen to be roughly the
+/// Sheet cell size for the density grid (nm). Chosen to be roughly the
 /// size of one small part's box plus its label slots (~20mm), so a single
 /// occupied cell corresponds to "about one symbol's worth" of drawn
 /// content — coarse enough that a few wire jogs don't paper over a truly
 /// empty region, fine enough that a real functional block spans several
 /// cells rather than one.
-const DENSITY_CELL_NM: i64 = 20_000;
+const DENSITY_CELL_NM: i64 = 20_000_000;
 
 /// Fraction of grid cells (over the drawing's own bounding box) that may be
 /// completely empty (no symbol box, wire segment or label) before the sheet
@@ -1031,7 +1031,7 @@ fn check_sheet_density(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_
             status: CheckStatus::Fail,
             location: Some("sheet".into()),
             hint: Some(format!(
-                "{empty_cells}/{total_cells} of {DENSITY_CELL_NM}um grid cells are empty ({:.0}% > {:.0}% max); widest empty band is {:.0}% of width / {:.0}% of height (max {:.0}%)",
+                "{empty_cells}/{total_cells} of {DENSITY_CELL_NM} nm grid cells are empty ({:.0}% > {:.0}% max); widest empty band is {:.0}% of width / {:.0}% of height (max {:.0}%)",
                 empty_fraction * 100.0,
                 MAX_EMPTY_CELL_FRACTION * 100.0,
                 max_col_band * 100.0,
@@ -1107,18 +1107,18 @@ fn check_content_in_bounds(sch: &SchematicSection, model: &ConstraintModel, geos
 
     // Symbol boxes + every pin's stub tip.
     for (id, g) in geos {
-        let b = geometry::symbol_box_mm(g.top_left.x as f64 / 1000.0, g.top_left.y as f64 / 1000.0, g.width, g.height);
+        let b = geometry::symbol_box_mm(g.top_left.x as f64 / 1e6, g.top_left.y as f64 / 1e6, g.width, g.height);
         check_point(&format!("{id}:box"), b.x0, b.y0, x0, y0, x1, y1, eps, &mut ok, out);
         check_point(&format!("{id}:box"), b.x1, b.y1, x0, y0, x1, y1, eps, &mut ok, out);
         for port_idx in 0..g.node.ports.len() {
             let tip = geometry::stub_tip(&g.node, g.top_left, port_idx);
-            check_point(&format!("{id}:stub{port_idx}"), tip.x as f64 / 1000.0, tip.y as f64 / 1000.0, x0, y0, x1, y1, eps, &mut ok, out);
+            check_point(&format!("{id}:stub{port_idx}"), tip.x as f64 / 1e6, tip.y as f64 / 1e6, x0, y0, x1, y1, eps, &mut ok, out);
         }
     }
     // Wire segment endpoints.
     for (wi, w) in sch.wires.iter().enumerate() {
         for p in &w.pts {
-            check_point(&format!("wire{wi}"), p.x as f64 / 1000.0, p.y as f64 / 1000.0, x0, y0, x1, y1, eps, &mut ok, out);
+            check_point(&format!("wire{wi}"), p.x as f64 / 1e6, p.y as f64 / 1e6, x0, y0, x1, y1, eps, &mut ok, out);
         }
     }
     // Every refdes/value/pin-name/net-label ink box, plus each net label's
@@ -1260,7 +1260,7 @@ fn check_wire_detour(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_>>
 /// "net" in this sense, but a hand-authored intent could still tie two
 /// adjacent power pins directly), so this only flags a wire that actually
 /// behaves like the sheet-spanning rail this gate exists to catch.
-const MAX_POWER_WIRE_LEN_NM: i64 = 30_000; // 30mm
+const MAX_POWER_WIRE_LEN_NM: i64 = 30_000_000; // 30mm
 const MAX_POWER_WIRE_BENDS: usize = 2;
 
 fn check_power_net_as_wire(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
@@ -1277,7 +1277,7 @@ fn check_power_net_as_wire(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
                 status: CheckStatus::Fail,
                 location: Some(format!("{}:{:?}", w.net, w.pins)),
                 hint: Some(format!(
-                    "power/ground net '{}' drawn as a {length}um/{bends}-bend wire (max {MAX_POWER_WIRE_LEN_NM}um / {MAX_POWER_WIRE_BENDS} bends) instead of a flag/glyph at each pin",
+                    "power/ground net '{}' drawn as a {length} nm/{bends}-bend wire (max {MAX_POWER_WIRE_LEN_NM} nm / {MAX_POWER_WIRE_BENDS} bends) instead of a flag/glyph at each pin",
                     w.net
                 )), detail: None
             });
@@ -1336,7 +1336,7 @@ fn check_column_overflow(sch: &SchematicSection, model: &ConstraintModel, out: &
 /// to bite exactly the drawings that already carried one page-crossing
 /// wire, and the layout change (not a tuned threshold) is what brings every
 /// fixture under it. Not since relaxed.
-const MAX_WIRE_LEN_NM: i64 = 80_000;
+const MAX_WIRE_LEN_NM: i64 = 80_000_000;
 
 fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
     let mut ok = true;
@@ -1352,8 +1352,8 @@ fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
                 location: Some(format!("{}:{:?}", w.net, w.pins)),
                 hint: Some(format!(
                     "wire polyline is {:.1}mm long (max {:.1}mm) — this net belongs on a net label, not a wire",
-                    len as f64 / 1000.0,
-                    MAX_WIRE_LEN_NM as f64 / 1000.0
+                    len as f64 / 1e6,
+                    MAX_WIRE_LEN_NM as f64 / 1e6
                 )), detail: None
             });
             ok = false;
@@ -1373,7 +1373,7 @@ fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
 /// before the block-and-label layout landed, the worst was 60.5 mm/part
 /// (`star_net`), against 738 mm/part for `ladder/l4_control_hub` — the
 /// limit sits just under the busiest clean fixture. Not since relaxed.
-const MAX_WIRE_INK_UM_PER_PART: f64 = 60_000.0;
+const MAX_WIRE_INK_NM_PER_PART: f64 = 60_000_000.0;
 
 fn check_wire_ink(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
     let total: i64 = sch
@@ -1383,16 +1383,16 @@ fn check_wire_ink(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
         .sum();
     let parts = sch.symbols.len().max(1);
     let per_part = total as f64 / parts as f64;
-    if per_part > MAX_WIRE_INK_UM_PER_PART {
+    if per_part > MAX_WIRE_INK_NM_PER_PART {
         out.push(CheckResult {
             check: "schematic_wire_ink".into(),
             status: CheckStatus::Fail,
             location: Some("sheet".into()),
             hint: Some(format!(
                 "{:.0}mm of wire over {parts} parts = {:.1}mm/part (max {:.0}mm/part)",
-                total as f64 / 1000.0,
-                per_part / 1000.0,
-                MAX_WIRE_INK_UM_PER_PART / 1000.0
+                total as f64 / 1e6,
+                per_part / 1e6,
+                MAX_WIRE_INK_NM_PER_PART / 1e6
             )), detail: None
         });
     } else {
@@ -1447,8 +1447,8 @@ fn check_cluster_split(
                 hint: Some(format!(
                     "cluster of {seen} parts ({}) is drawn {:.1}mm across, more than {CLUSTER_SPREAD_RATIO}x its own {:.1}mm packed extent",
                     members.join(","),
-                    spread / 1000.0,
-                    packed_side / 1000.0
+                    spread / 1e6,
+                    packed_side / 1e6
                 )), detail: None
             });
             ok = false;
@@ -1518,7 +1518,7 @@ mod tests {
     #[test]
     fn offgrid_fails_on_off_grid_symbol() {
         let model = one_part_model();
-        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false, symbols: vec![r1_symbol(IrPoint { x: 100, y: 0 })], wires: vec![], labels: vec![] };
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false, symbols: vec![r1_symbol(IrPoint { x: 100_000, y: 0 })], wires: vec![], labels: vec![] };
         let results = check_style(&design(sch), &model);
         assert!(results.iter().any(|r| r.check == "schematic_offgrid" && r.status == CheckStatus::Fail));
     }
@@ -1527,7 +1527,7 @@ mod tests {
 
     /// A root that places one sheet ("Power", file `power.kicad_sch`) holding `child`.
     fn hierarchy(child: SchematicSection) -> Design {
-        let root = SchematicSection { sheets: vec![eda_model::ir::SheetInstance { id: "s1".into(), name: "Power".into(), file: "power.kicad_sch".into(), at: IrPoint { x: 0, y: 0 }, size: (20_000, 10_000), pins: vec![], page: String::new() }], ..Default::default() };
+        let root = SchematicSection { sheets: vec![eda_model::ir::SheetInstance { id: "s1".into(), name: "Power".into(), file: "power.kicad_sch".into(), at: IrPoint { x: 0, y: 0 }, size: (20_000_000, 10_000_000), pins: vec![], page: String::new() }], ..Default::default() };
         let mut d = design(root);
         d.sheet_contents = Some([("power.kicad_sch".to_string(), child)].into_iter().collect());
         d
@@ -1536,7 +1536,7 @@ mod tests {
     #[test]
     fn a_defect_on_a_child_sheet_is_found_and_named_by_its_sheet() {
         let model = one_part_model();
-        let child = SchematicSection { symbols: vec![r1_symbol(IrPoint { x: 100, y: 0 })], ..Default::default() };
+        let child = SchematicSection { symbols: vec![r1_symbol(IrPoint { x: 100_000, y: 0 })], ..Default::default() };
         let results = check_style(&hierarchy(child), &model);
         let bad: Vec<&CheckResult> = results.iter().filter(|r| r.check == "schematic_offgrid" && r.status == CheckStatus::Fail).collect();
         assert_eq!(bad.len(), 1, "{results:?}");
@@ -1557,7 +1557,7 @@ mod tests {
     #[test]
     fn a_flat_design_is_checked_exactly_as_before() {
         let model = one_part_model();
-        let sch = SchematicSection { symbols: vec![r1_symbol(IrPoint { x: 100, y: 0 })], ..Default::default() };
+        let sch = SchematicSection { symbols: vec![r1_symbol(IrPoint { x: 100_000, y: 0 })], ..Default::default() };
         let flat = check_style(&design(sch), &model);
         assert_eq!(flat.iter().filter(|r| r.check == "schematic_offgrid" && r.status == CheckStatus::Fail).count(), 1);
         assert!(flat.iter().all(|r| r.location.as_deref().is_none_or(|l| !l.contains(": "))), "no sheet prefix on a flat design");
@@ -1571,7 +1571,7 @@ mod tests {
         let model = one_part_model();
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![],
-            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }, IrPoint { x: 1270, y: 1270 }], bus: false }],
+            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1_270_000, y: 0 }, IrPoint { x: 1_270_000, y: 1_270_000 }], bus: false }],
             labels: vec![],
         };
         let results = check_style(&design(sch), &model);
@@ -1583,7 +1583,7 @@ mod tests {
         let model = one_part_model();
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![],
-            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 1270 }], bus: false }],
+            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1_270_000, y: 1_270_000 }], bus: false }],
             labels: vec![],
         };
         let results = check_style(&design(sch), &model);
@@ -1606,7 +1606,7 @@ mod tests {
         let r2 = Part { reference: "R2".into(), ..model.parts[0].clone() };
         model.parts.push(r2);
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
-            symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 }), SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R2".into(), at: IrPoint { x: 1270, y: 0 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }],
+            symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 }), SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R2".into(), at: IrPoint { x: 1_270_000, y: 0 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }],
             wires: vec![],
             labels: vec![],
         };
@@ -1621,7 +1621,7 @@ mod tests {
         let model = one_part_model();
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
-            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: -5000, y: -5000 }, IrPoint { x: -5000, y: -6000 }], bus: false }],
+            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: -5_000_000, y: -5_000_000 }, IrPoint { x: -5_000_000, y: -6_000_000 }], bus: false }],
             labels: vec![],
         };
         let results = check_style(&design(sch), &model);
@@ -1636,7 +1636,7 @@ mod tests {
         let mid_y = (top + bottom) / 2;
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
-            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: left - 100, y: mid_y }, IrPoint { x: right + 100, y: mid_y }], bus: false }],
+            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: left - 100_000, y: mid_y }, IrPoint { x: right + 100_000, y: mid_y }], bus: false }],
             labels: vec![],
         };
         let results = check_style(&design(sch), &model);
@@ -1673,25 +1673,25 @@ mod tests {
         let sch_for = |u1_x: i64| SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![
                 SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J1".into(), at: IrPoint { x: 0, y: 0 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J2".into(), at: IrPoint { x: 12700, y: 0 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J2".into(), at: IrPoint { x: 12_700_000, y: 0 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
                 SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "U1".into(), at: IrPoint { x: u1_x, y: 0 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
             ],
             wires: vec![Wire { id: String::new(),
                 net: "SIG".into(),
                 pins: vec!["J1.1".into(), "J2.1".into(), "U1.1".into()],
-                pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 25400, y: 0 }], bus: false,
+                pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 25_400_000, y: 0 }], bus: false,
             }],
             labels: vec![],
         };
         // U1 to the right of both connectors: passes.
-        let results = check_style(&design(sch_for(25400)), &model);
+        let results = check_style(&design(sch_for(25_400_000)), &model);
         assert!(
             results.iter().any(|r| r.check == "schematic_flow_direction" && r.status == CheckStatus::Pass),
             "{results:#?}"
         );
         // U1 to the left of both: both connectors are genuinely on the wrong
         // side of what they drive, and must still be flagged.
-        let results = check_style(&design(sch_for(-12700)), &model);
+        let results = check_style(&design(sch_for(-12_700_000)), &model);
         let fails: Vec<&CheckResult> =
             results.iter().filter(|r| r.check == "schematic_flow_direction" && r.status == CheckStatus::Fail).collect();
         assert_eq!(fails.len(), 2, "{results:#?}");
@@ -1724,7 +1724,7 @@ mod tests {
             wires: vec![Wire { id: String::new(),
                 net: "N".into(),
                 pins: vec![],
-                pts: vec![IrPoint { x: left, y: top }, IrPoint { x: left, y: top + 40 * w }], bus: false,
+                pts: vec![IrPoint { x: left, y: top }, IrPoint { x: left, y: top + 40_000 * w }], bus: false,
             }],
             labels: vec![],
         };
@@ -1782,13 +1782,13 @@ mod tests {
             symbols: vec![],
             wires: vec![
                 // A: horizontal 0..1270 at y=0
-                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }], bus: false },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1_270_000, y: 0 }], bus: false },
                 // B: horizontal 1270..2540 at y=0 -- only touches A at a point.
-                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 1270, y: 0 }, IrPoint { x: 2540, y: 0 }], bus: false },
+                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 1_270_000, y: 0 }, IrPoint { x: 2_540_000, y: 0 }], bus: false },
                 // C: horizontal at y=1270 (offset, parallel but not collinear).
-                Wire { id: String::new(), net: "C".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 1270 }, IrPoint { x: 1270, y: 1270 }], bus: false },
+                Wire { id: String::new(), net: "C".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 1_270_000 }, IrPoint { x: 1_270_000, y: 1_270_000 }], bus: false },
                 // D: vertical crossing A, not collinear.
-                Wire { id: String::new(), net: "D".into(), pins: vec![], pts: vec![IrPoint { x: 600, y: -600 }, IrPoint { x: 600, y: 600 }], bus: false },
+                Wire { id: String::new(), net: "D".into(), pins: vec![], pts: vec![IrPoint { x: 600_000, y: -600_000 }, IrPoint { x: 600_000, y: 600_000 }], bus: false },
             ],
             labels: vec![],
         };
@@ -1802,9 +1802,9 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![],
             wires: vec![
-                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 2540, y: 0 }], bus: false },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 2_540_000, y: 0 }], bus: false },
                 // Overlaps A over x in [1270, 2540].
-                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 1270, y: 0 }, IrPoint { x: 3810, y: 0 }], bus: false },
+                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 1_270_000, y: 0 }, IrPoint { x: 3_810_000, y: 0 }], bus: false },
             ],
             labels: vec![],
         };
@@ -1818,8 +1818,8 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![],
             wires: vec![
-                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 2540, y: 0 }], bus: false },
-                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 1270, y: 0 }, IrPoint { x: 3810, y: 0 }], bus: false },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 2_540_000, y: 0 }], bus: false },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 1_270_000, y: 0 }, IrPoint { x: 3_810_000, y: 0 }], bus: false },
             ],
             labels: vec![],
         };
@@ -1835,8 +1835,8 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![],
             wires: vec![
-                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }], bus: false },
-                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 5080 }, IrPoint { x: 1270, y: 5080 }], bus: false },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1_270_000, y: 0 }], bus: false },
+                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 5_080_000 }, IrPoint { x: 1_270_000, y: 5_080_000 }], bus: false },
             ],
             labels: vec![],
         };
@@ -1852,8 +1852,8 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![],
             wires: vec![
-                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: -1270, y: 0 }, IrPoint { x: 1270, y: 0 }], bus: false },
-                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: -1270 }, IrPoint { x: 0, y: 1270 }], bus: false },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: -1_270_000, y: 0 }, IrPoint { x: 1_270_000, y: 0 }], bus: false },
+                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: -1_270_000 }, IrPoint { x: 0, y: 1_270_000 }], bus: false },
             ],
             labels: vec![],
         };
@@ -1881,7 +1881,7 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![],
             wires: vec![],
-            labels: vec![NetLabel { id: String::new(), kind: eda_model::ir::LabelKind::Local, net: "GND".into(), at: IrPoint { x: 3, y: 7 } }],
+            labels: vec![NetLabel { id: String::new(), kind: eda_model::ir::LabelKind::Local, net: "GND".into(), at: IrPoint { x: 3000, y: 7000 } }],
         };
         let results = check_style(&design(sch), &model);
         assert!(results.iter().all(|r| r.check != "schematic_offgrid" || r.status == CheckStatus::Pass));
