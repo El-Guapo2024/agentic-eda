@@ -888,6 +888,16 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
         erc["meta"] = serde_json::json!({ "version": ERC_EXCLUSION_RECORDS_SCHEMA });
     }
     project["erc"] = erc;
+    // The simulator's settings (`NGSPICE_SETTINGS`, a `NESTED_SETTINGS` at "ngspice" of `SCHEMATIC_SETTINGS`, schema version 0) as KiCad writes them, once the
+    // simulator set them.
+    if let Some(ng) = design.schematic.as_ref().and_then(|s| s.extras.ngspice.as_ref()) {
+        project["schematic"]["ngspice"] = serde_json::json!({
+            "fix_include_paths": ng.fix_include_paths,
+            "meta": { "version": 0 },
+            "model_mode": ng.model_mode,
+            "workbook_filename": ng.workbook_filename,
+        });
+    }
     let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
     if !waived.is_empty() {
         project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);

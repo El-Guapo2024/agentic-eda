@@ -103,6 +103,12 @@ pub struct ConstraintModel {
     /// here falls back to a synthesized generic box at export time.
     #[serde(default)]
     pub symbols: Vec<LibSymbol>,
+    /// The simulation fields (`Sim.Device`, `Sim.Type`, `Sim.Pins`, `Sim.Params`, `Sim.Library`, `Sim.Name`, ...) a resolved library symbol carries, by `lib_id`, as
+    /// its `.kicad_sym` has them (`Simulation_SPICE:VSIN` has `Sim.Device V`, `Sim.Type SIN`, ...). KiCad copies a library symbol's fields onto a symbol it places;
+    /// the schematic writer gives a symbol the ones it has none of, so kicad-cli's SPICE netlist (`SIM_LIB_MGR::CreateModel` reads the instance's fields) models
+    /// it. Filled by the symbol-library loader. Never part of an intent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub symbol_sim_fields: BTreeMap<String, Vec<(String, String)>>,
     /// Board rules consumed by the placer, router and routing gates.
     #[serde(default)]
     pub board: BoardRules,
