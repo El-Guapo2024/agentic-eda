@@ -82,11 +82,14 @@ pub struct QueryOpts<'a> {
     pub kind_mask: u8,
     pub filter: Option<&'a dyn Fn(ItemId) -> bool>,
     pub use_epsilon: bool,
+    /// [`Node::nearest_obstacle`] only: measure where the line enters each obstacle's hull on the hull's bounding box instead (`NearestObstacle`'s
+    /// `simplifyHull`, which KiCad turns on in the 90-degree corner modes: `cornerMode == MITERED_90 || cornerMode == ROUNDED_90`).
+    pub box_hull: bool,
 }
 
 impl Default for QueryOpts<'_> {
     fn default() -> Self {
-        QueryOpts { kind_mask: kind_mask::ANY, filter: None, use_epsilon: true }
+        QueryOpts { kind_mask: kind_mask::ANY, filter: None, use_epsilon: true, box_hull: false }
     }
 }
 
@@ -983,10 +986,12 @@ impl Node {
         for (id, o) in &found {
             let item = &self.items[id];
             // `GetClearance( item, aLine ) + aLine->Width() / 2`, hull thickness 0.
-            let hull = item.hull(eps(Self::clearance_to(rules, &line.net, item)) + line.width / 2, 0, line.layer);
+            // `makeHull`: the bounding box of the hull in a 90-degree corner mode (`simplifyHull`)
+            let make_hull = |h: Vec<Point>| if opts.box_hull { crate::hull::bbox_hull(&h) } else { h };
+            let hull = make_hull(item.hull(eps(Self::clearance_to(rules, &line.net, item)) + line.width / 2, 0, line.layer));
             let mut dist: Option<(i64, Point)> = first_entry(&hull);
             if let Some(v) = via {
-                let via_hull = item.hull(eps(Self::clearance_to(rules, &v.net, item)) + v.diameter / 2, 0, line.layer);
+                let via_hull = make_hull(item.hull(eps(Self::clearance_to(rules, &v.net, item)) + v.diameter / 2, 0, line.layer));
                 if let Some(d) = first_entry(&via_hull) {
                     if dist.is_none_or(|(bd, _)| d.0 < bd) {
                         dist = Some(d);

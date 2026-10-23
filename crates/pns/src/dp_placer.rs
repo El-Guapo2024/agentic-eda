@@ -490,7 +490,7 @@ impl DiffPairPlacer {
         let norm_sq = |v: (i64, i64)| v.0 as i128 * v.0 as i128 + v.1 as i128 * v.1 as i128;
         while iter < MAX_ITER {
             let circle = Shape::Circle { c: virt.pos, r: virt.diameter / 2 };
-            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true };
+            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false };
             let mut obstacles = self.world.colliding_with(&circle, &virt.net, virt.layers, rules, &[], opts);
             obstacles.sort_by_key(|o| o.id);
             let Some(obs) = obstacles.first() else { break };
@@ -667,6 +667,7 @@ impl DiffPairPlacer {
             return None;
         }
         let mut walker = Walker::new(node, rules);
+        walker.corner_mode = settings.corner_mode;
         walker.item_mask = mask;
         walker.iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
         walker.set_allowed_policies(&[WalkPolicy::Shortest]);

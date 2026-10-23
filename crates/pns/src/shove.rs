@@ -371,7 +371,7 @@ pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, dire
     let mut iter = 0;
     while iter < max_iterations {
         let circle = Shape::Circle { c: pos, r: via.diameter / 2 };
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false, box_hull: false };
         let obstacles = node.colliding_with(&circle, &via.net, via.layers, rules, exclude, opts);
         let Some(first) = obstacles.first() else { break };
         let force = via_pushout_from(rules, via, pos, node.get(first.id)?);
@@ -1085,6 +1085,7 @@ impl<'a> Shove<'a> {
         let walked: Option<(SLine, i32)> = {
             let cluster = self.node.assemble_cluster(obstacle, cur.line.layer, 10.0, None, &|id| skip.contains(&id));
             let mut walker = Walker::new(&self.node, self.rules);
+            walker.corner_mode = self.settings.corner_mode;
             walker.arcs = cur.line.arcs.clone();
             walker.restrict_to_cluster(&cluster);
             walker.skip_items(skip.iter().copied());
@@ -1397,7 +1398,8 @@ impl<'a> Shove<'a> {
 
     fn nearest_for(&self, cur: &SLine, mask: u8) -> Option<NearestHit> {
         let exclude = cur.links();
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true };
+        // `NODE::NearestObstacle` reads the router's corner mode itself: box hulls in a 90-degree mode
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: self.settings.corner_mode.is_90() };
         self.node.nearest_obstacle(&cur.line, cur.via.as_ref().map(|v| &v.data), self.rules, &exclude, opts)
     }
 

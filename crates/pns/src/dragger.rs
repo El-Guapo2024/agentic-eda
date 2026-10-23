@@ -689,6 +689,7 @@ fn split_chain_at(pts: &mut Vec<Point>, p: Point) {
 #[allow(clippy::too_many_arguments)] // the query context, the line's net, layer and width, its points and its arcs
 fn try_walkaround(node: &Node, rules: &BoardRules, settings: &RoutingSettings, net: &Net, layer: i32, width: Um, pts: &[Point], arcs: &[crate::arcs::ArcPts]) -> Option<Vec<Point>> {
     let mut walker = Walker::new(node, rules);
+    walker.corner_mode = settings.corner_mode;
     walker.arcs = arcs.to_vec();
     walker.iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
     walker.length_limit_on = true;
