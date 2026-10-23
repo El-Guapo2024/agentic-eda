@@ -29,12 +29,19 @@ import {
   touch,
 } from "../state/simulator";
 import { currentTab } from "../kicad-port/sim/simFrame";
-import { addTuner, probeTrace, toggleOp } from "../state/simulator";
+import { addTuner, probeTrace, setSimFocused, toggleOp } from "../state/simulator";
 import { picker } from "./pcbPicker";
 import { hitPin, pinItems } from "../kicad-port/schPins";
 import { hitSymbol } from "../components/schematic/schHit";
 import { measureStrokeText } from "../components/text/strokeFont";
 import type { Schematic } from "../api/types";
+import { saveTextAs } from "../api/client";
+import { plotCanvases } from "../components/simulator/SimPlot";
+import { plotCsv, xAxisVector } from "../kicad-port/sim/simSignals";
+import { displayName, traceId } from "../kicad-port/sim/simPlotTab";
+import { simTypeOf } from "../kicad-port/sim/simFrame";
+import { plotImageSexpr } from "../kicad-port/sim/simExport";
+import { startPaste } from "./schClipboardActions";
 import { fitWithUndo, zoomIn, zoomOut, zoomRedo, zoomUndo } from "../kicad-port/sim/mathPlot";
 import { gridShown, setGrid } from "../kicad-port/sim/simPlotTab";
 
@@ -96,6 +103,31 @@ function spiceNetOf(sch: Schematic, wire: Schematic["wires"][number]): string | 
   for (const p of pinItems(sch)) if (p.net === wire.net && nets[`${p.reference}.${p.number}`]) return nets[`${p.reference}.${p.number}`]!;
   return null;
 }
+
+/** The current plot's picture (`mpWindow::SaveScreenshot`: the plot as the window shows it, at its size). */
+function plotPng(): Promise<Blob | null> {
+  const tab = currentTab(getSimUi().frame);
+  const canvas = tab ? plotCanvases.get(tab.id) : undefined;
+  if (!canvas) return Promise.resolve(null);
+  return new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/png"));
+}
+
+function download(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+const baseName = () => {
+  const s = getSimUi();
+  const tab = currentTab(s.frame);
+  return `${s.project || "noname"}${tab ? `-${tab.title.replace(/[^A-Za-z0-9_-]+/g, "_")}` : ""}`;
+};
 
 export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
   const { dispatch, api } = ctx;
@@ -163,6 +195,42 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
         if (ref) void addTuner(ref);
         return true;
       },
+    });
+  });
+  // SIMULATOR_CONTROL::ExportPlotAsPNG ("Save Plot as Image"): the plot's picture, downloaded.
+  m.set("eeschema.Simulator.exportPNG", () => {
+    void plotPng().then((b) => b && download(b, `${baseName()}.png`));
+  });
+  // SIMULATOR_CONTROL::ExportPlotAsCSV ("Save Plot Data"): the x axis and every trace, ';' after each value, rows ending CRLF.
+  m.set("eeschema.Simulator.exportCSV", () => {
+    const tab = currentTab(getSimUi().frame);
+    if (!tab?.plot) return;
+    const x = xAxisVector(simTypeOf(tab), tab.plots[0]);
+    // `NGSPICE::GetXAxis`: libngspice's name for it (a raw file's `v(v-sweep)` is `v-sweep` there)
+    const xName = x ? x.name.replace(/^v\((.*-sweep)\)$/i, "$1") : simTypeOf(tab) === "TRAN" ? "time" : "frequency";
+    const traces = [...tab.plot.traces.values()].map((t) => ({ id: traceId(t.vector, t.type), display: displayName(t), x: t.x, y: t.y }));
+    const csv = plotCsv(xName, traces);
+    if (csv !== null) saveTextAs(csv, `${baseName()}.csv`);
+  });
+  // SIMULATOR_CONTROL::ExportPlotToClipboard: the picture on the clipboard.
+  m.set("eeschema.Simulator.exportToClipboard", () => {
+    void plotPng().then(async (b) => {
+      if (!b) return;
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": b })]);
+      } catch (e) {
+        dispatch({ type: "TOAST", message: `Could not copy the plot to the clipboard: ${e instanceof Error ? e.message : String(e)}`, kind: "error" });
+      }
+    });
+  });
+  // SIMULATOR_CONTROL::ExportPlotToSchematic: the picture as an `(image (at 0 0) (data ...))` clipboard text, pasted on the sheet (ACTIONS::paste), the
+  // schematic raised.
+  m.set("eeschema.Simulator.exportPlotToSchematic", () => {
+    void plotPng().then(async (b) => {
+      if (!b) return;
+      const text = plotImageSexpr(new Uint8Array(await b.arrayBuffer()));
+      setSimFocused(false);
+      await startPaste({ state: api.getState(), dispatch }, { mode: "unique", duplicate: false, text });
     });
   });
   // SCH_EDITOR_CONTROL::ToggleOPVoltages / ToggleOPCurrents

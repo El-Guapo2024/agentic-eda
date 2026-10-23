@@ -310,3 +310,16 @@ test("the operating point goes on the longest wire of a net and on a pin", async
   assert.equal(i.text, "100uA");
   assert.equal(i.vertical, false, "a vertical pin's current reads across");
 });
+
+test("the plot goes to the schematic as KiCad's image clipboard text", async () => {
+  const { base64, plotImageSexpr } = await import("./simExport");
+  assert.equal(base64(new Uint8Array([77, 97, 110])), "TWFu");
+  assert.equal(base64(new Uint8Array([77, 97])), "TWE=");
+  assert.equal(base64(new Uint8Array([77])), "TQ==");
+  const s = plotImageSexpr(new Uint8Array(100).fill(255));
+  const lines = s.split("\n");
+  assert.equal(lines[0], "(image (at 0 0)");
+  assert.equal(lines[1], "  (data");
+  assert.equal(lines[2]!.length, 4 + 2 + 76, "76 characters a line");
+  assert.ok(s.endsWith("  )\n)\n"));
+});
