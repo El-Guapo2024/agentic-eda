@@ -264,6 +264,7 @@
         const l2 = done.symbols.find((q) => q.at[0] === X0 + 22 * G && q.at[1] === Y0), r2 = done.symbols.find((q) => q.at[0] === X0 + 30 * G && q.at[1] === Y0);
         t(new Set([l2.id, r2.id]).size === 2 && [l2.id, r2.id].every((id) => !s0.symbols.some((s) => s.id === id)), `two free references, left to right: ${l2.id}, ${r2.id}`);
       }
+      await until(() => /R\d+/.test(document.querySelector('[data-testid="annotate-messages"]')?.textContent ?? ""), 8000);
       t(/R\d+/.test(document.querySelector('[data-testid="annotate-messages"]')?.textContent ?? ""), `the messages say what each was given (${document.querySelector('[data-testid="annotate-messages"]')?.textContent.slice(0, 120)})`);
       await closeDialogs();
       await undo();

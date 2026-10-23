@@ -41,7 +41,10 @@
     for (const [name, text] of files) dt.items.add(new File([bytesOf(text)], name));
     input.files = dt.files;
     input.dispatchEvent(new Event("change", { bubbles: true }));
-    await sleep(900);
+    await sleep(300);
+    // each file is its own round trip (and a question when its name is taken): wait for the grid to list the ones that went in, not a fixed time
+    await until(() => files.every(([name]) => rows().includes(name)) || !!document.querySelector(".dialog .dialog .dialog-footer, [data-testid^='embedded-files-conflict']"), 8000);
+    await sleep(300);
   };
   const extracted = async (q, name) => {
     const r = await fetch(`/api/embedded/file?${q}&name=${encodeURIComponent(name)}`, { cache: "no-store" });
@@ -148,7 +151,7 @@
     panel().querySelector('tr[data-name="a.txt"]').click();
     await sleep(200);
     tid("embedded-files-remove", panel()).click();
-    await sleep(900);
+    await until(async () => !(await names("owner=board")).includes("a.txt"), 8000);
     t(!(await names("owner=board")).includes("a.txt") && (await names("owner=board")).includes("b.txt"), "the selected row is removed, the other stays");
     panel().querySelector('tr[data-name="b.txt"]').click();
     await sleep(200);

@@ -104,13 +104,13 @@
     prompt.dispatchEvent(new Event("input", { bubbles: true }));
     await sleep(100);
     [...document.querySelectorAll(".dialog button")].find((x) => x.innerText === "OK").click();
-    await sleep(1500);
+    await until(() => rows()[1]?.classList.contains("excluded") && /known and accepted/.test(rows()[1].innerText), 15000);
     check("the comment is kept with the exclusion and shown under it", rows()[1].classList.contains("excluded") && /known and accepted/.test(rows()[1].innerText), rows()[1].innerText.replace(/\n/g, " / "));
   }
 
   await rightClick(rows()[2]);
   await pick("Exclude all '");
-  await sleep(1500);
+  await until(() => rows().filter((r) => r.classList.contains("excluded")).length >= 3, 15000);
   check("Exclude all of a check waives every violation of it", rows().filter((r) => r.classList.contains("excluded")).length >= 3, badges());
   const persisted = await (await fetch("/api/drc")).json();
   check("the waivers are the design's (GET /api/drc says excluded)", persisted.violations.filter((v) => v.excluded).length >= 3, `${persisted.violations.filter((v) => v.excluded).length} of ${persisted.violations.length}`);
@@ -139,7 +139,7 @@
     await rightClick(ignored[0]);
     check("a right click on one offers Error / Warning / Ignore", ["Error", "Warning", "Ignore"].every((l) => menuLabels().some((m) => m.startsWith(l))));
     await pick("Warning");
-    await sleep(1200);
+    await until(() => document.querySelectorAll(".dialog .rc-ignored-row").length === ignored.length - 1, 15000);
     check("choosing Warning takes the check off the list", document.querySelectorAll(".dialog .rc-ignored-row").length === ignored.length - 1);
     await fetch("/api/undo", { method: "POST" });
   }

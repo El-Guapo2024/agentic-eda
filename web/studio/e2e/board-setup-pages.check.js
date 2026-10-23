@@ -475,14 +475,14 @@
       await __eda.run("common.InteractiveSelection.clear");
       await __eda.run("common.InteractiveSelection.selectItems", [trackId]);
       await sleep(250);
-      await __eda.run("pcbnew.LengthTuner.TuneSingleTrack");
-      await sleep(500);
+      // The tuner tools (7, 8) arm the tool since P5c; its settings are the Tuning Pattern dialog that Ctrl+L (`LengthTuner.Settings`) opens.
+      const openTuner = async (tool) => { await __eda.run(tool); await sleep(300); await __eda.run("pcbnew.LengthTuner.Settings"); await sleep(500); };
+      await openTuner("pcbnew.LengthTuner.TuneSingleTrack");
       const singleFields = tunerFields();
-      const closeTuner = async () => { [...document.querySelectorAll(".dialog-footer button")].find((b) => b.textContent.trim() === "Cancel")?.click(); await sleep(300); };
+      const closeTuner = async () => { [...document.querySelectorAll(".dialog-footer button")].find((b) => b.textContent.trim() === "Cancel")?.click(); await sleep(300); await __eda.run("common.Interactive.cancel"); await sleep(200); await __eda.run("common.Interactive.cancel"); await sleep(200); };
       check("the length tuner opens at the maximum amplitude and the spacing of the single track pattern", singleFields[1] === 1.5 && singleFields[2] === 0.6, JSON.stringify(singleFields));
       await closeTuner();
-      await __eda.run("pcbnew.LengthTuner.TuneDiffPair");
-      await sleep(500);
+      await openTuner("pcbnew.LengthTuner.TuneDiffPair");
       const pairFields = tunerFields();
       check("and for a differential pair at that of the pair pattern", pairFields[1] === 1 && pairFields[2] === 1.2, JSON.stringify(pairFields));
       await closeTuner();

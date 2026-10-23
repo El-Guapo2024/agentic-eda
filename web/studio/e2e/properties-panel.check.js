@@ -37,7 +37,7 @@
   const undo = async () => { await __eda.run("common.Interactive.undo"); await sleep(450); };
   const waitAct = async (before) => {
     const t0 = Date.now();
-    while (Date.now() - t0 < 4000) {
+    while (Date.now() - t0 < 10000) { // a busy machine answers slowly: a late answer would be one undo step too many at the end
       const a = await lastAct();
       if (a && (!before || a.t !== before.t || a.cmd !== before.cmd)) { await sleep(350); return a; }
       await sleep(40);
