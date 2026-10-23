@@ -6,7 +6,6 @@
 // OK sends one `edit_sheet_pin` -- one undo step, nothing when nothing changed. Not here because the drawing model has no place for them: the pin's font face and colour.
 import { useEffect, useState } from "react";
 import type { LabelShape } from "../api/types";
-import { FIELD_SIZE_MAX_UM, FIELD_SIZE_MIN_UM } from "../kicad-port/schFieldEdit";
 import { mmToUm, umToMm } from "../kicad-port/schProperties";
 import { sheetPinEditCmd, SHEET_PIN_DEFAULT_SIZE_UM, SHEET_PIN_SHAPES } from "../kicad-port/schSheetPins";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -41,13 +40,14 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
     };
   }, [state.currentSheetPath, sheetId]);
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
-  // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
+  // `TransferDataFromWindow` validates no size: `SetTextSize` clamps it to 0.001..250 mm (`sheetPinEditCmd`)
   const sizeUm = mmToUm(size);
-  const sizeOk = sizeUm !== null && sizeUm >= FIELD_SIZE_MIN_UM && sizeUm <= FIELD_SIZE_MAX_UM;
+  const sizeOk = sizeUm !== null && sizeUm > 0;
   const canOk = name.trim().length > 0 && sizeOk;
-  const pick = (text: string) => {
+  const pick = (text: string, picked: boolean) => {
     setName(text);
-    // `onComboBox`: a name that is one of the file's labels takes that label's shape
+    // `onComboBox`: a label picked from the list (not a name typed) gives the pin that label's shape (`FindString`, without regard to case)
+    if (!picked) return;
     const known = labels.find((l) => l.name.toLowerCase() === text.toLowerCase());
     if (known?.shape) setShape(known.shape);
   };
@@ -61,7 +61,7 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
       <div className="kv-grid" style={{ gridTemplateColumns: "110px 1fr" }}>
         <span>Name</span>
         <span>
-          <input data-testid="sheet-pin-name" autoFocus list="sheet-pin-labels" value={name} onChange={(e) => pick(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void submit()} style={{ width: "100%" }} />
+          <input data-testid="sheet-pin-name" autoFocus list="sheet-pin-labels" value={name} onChange={(e) => pick(e.target.value, (e.nativeEvent as InputEvent).inputType === "insertReplacementText" || (e.nativeEvent as InputEvent).inputType === undefined)} onKeyDown={(e) => e.key === "Enter" && void submit()} style={{ width: "100%" }} />
           <datalist id="sheet-pin-labels">
             {labels.map((l) => (
               <option key={l.name} value={l.name} />

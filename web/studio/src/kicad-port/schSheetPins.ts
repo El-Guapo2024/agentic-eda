@@ -212,19 +212,25 @@ export const SHEET_PIN_SHAPES: ReadonlyArray<{ value: LabelShape; label: string 
 /** The size a sheet pin's text is set in until Sheet Pin Properties sets another: 50 mil. */
 export const SHEET_PIN_DEFAULT_SIZE_UM = 1270;
 
+/** `EDA_TEXT::SetTextSize`'s clamp (`TEXT_MIN_SIZE_MM` 0.001, `TEXT_MAX_SIZE_MM` 250), in micrometres: Sheet Pin Properties validates no size, it clamps it. */
+export const TEXT_MIN_SIZE_UM = 1;
+export const TEXT_MAX_SIZE_UM = 250_000;
+
 /**
- * What OK sends in `DIALOG_SHEET_PIN_PROPERTIES::TransferDataFromWindow`: the pin's name, shape and the text's size, bold and italic as they were typed and picked. Only what
+ * What OK sends in `DIALOG_SHEET_PIN_PROPERTIES::TransferDataFromWindow`: the pin's name as it was typed (`SetText( EscapeString( m_comboName->GetValue() ) )`, not
+ * trimmed), its shape and the text's size (clamped as `SetTextSize` clamps it), bold and italic. Only what
  * changed goes, as one `edit_sheet_pin` (a verb that would change nothing is refused and the undo stack never records a step that did nothing); null when nothing did.
  */
 export function sheetPinEditCmd(
   pin: { id: string; name: string; shape: LabelShape; size_um?: number; bold?: boolean; italic?: boolean },
   next: { name: string; shape: LabelShape; sizeUm?: number; bold?: boolean; italic?: boolean },
 ): Cmd | null {
-  const name = next.name.trim();
+  const name = next.name;
+  const sizeUm = next.sizeUm === undefined ? undefined : Math.min(TEXT_MAX_SIZE_UM, Math.max(TEXT_MIN_SIZE_UM, Math.round(next.sizeUm)));
   const edit: { name?: string; shape?: LabelShape; size_um?: number; bold?: boolean; italic?: boolean } = {};
   if (name !== pin.name) edit.name = name;
   if (next.shape !== pin.shape) edit.shape = next.shape;
-  if (next.sizeUm !== undefined && next.sizeUm !== (pin.size_um && pin.size_um > 0 ? pin.size_um : SHEET_PIN_DEFAULT_SIZE_UM)) edit.size_um = next.sizeUm;
+  if (sizeUm !== undefined && sizeUm !== (pin.size_um && pin.size_um > 0 ? pin.size_um : SHEET_PIN_DEFAULT_SIZE_UM)) edit.size_um = sizeUm;
   if (next.bold !== undefined && next.bold !== !!pin.bold) edit.bold = next.bold;
   if (next.italic !== undefined && next.italic !== !!pin.italic) edit.italic = next.italic;
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_sheet_pin", id: pin.id, ...edit } : null;
