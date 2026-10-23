@@ -6,7 +6,7 @@
 // Ported from:
 //   appearance_controls.cpp    s_objectSettings (the Objects rows), onObjectVisibilityChanged (Footprint Text drags References and Values along),
 //                              onNetColorMode, UpdateDisplayOptions
-//   layer_settings_utils.cpp   VISIBILITY_LAYER / UserVisbilityLayers (the 22 objects with visibility, and the names a project file stores them by)
+//   layer_settings_utils.cpp   VISIBILITY_LAYER / UserVisbilityLayers (the 24 objects with visibility (22, and the Grids and Via Stitching of KiCad 10), and the names a project file stores them by)
 //   lset.cpp                   GAL_SET::DefaultVisible (what is on in a new project)
 //   project_local_settings.cpp the defaults of the opacities (zones 0.6, images 0.6, the others 1), HIGH_CONTRAST_MODE and NET_COLOR_MODE
 //   pcb_painter.cpp            GetColor's net colour branch: a per-net colour, else the net class colour, else the layer's own, only for copper and
@@ -103,6 +103,8 @@ export const OBJECT_IDS = [
   "footprint_text",
   "footprint_anchors",
   "ly_points",
+  "subgrids",
+  "via_stitching",
   "ratsnest",
   "drc_warnings",
   "drc_errors",
@@ -120,7 +122,7 @@ export function isObjectId(s: unknown): s is ObjectId {
 }
 
 /**
- * `GAL_SET::DefaultVisible` restricted to the 22: everything is on except the DRC exclusions ("DRC exclusions hidden by default") and the board area
+ * `GAL_SET::DefaultVisible` restricted to the 24: everything is on except the DRC exclusions ("DRC exclusions hidden by default") and the board area
  * shadow ("currently hidden by default") -- and, unlike KiCad, the drawing sheet: the placer starts a board at the page's corner, where the sheet's frame (ten
  * and twelve millimetres in from the paper's edge) would cut straight through it, and the studio has never drawn one. One click on Drawing Sheet shows it.
  */
@@ -138,6 +140,8 @@ export const DEFAULT_OBJECT_VISIBILITY: Readonly<Record<ObjectId, boolean>> = {
   footprint_text: true,
   footprint_anchors: true,
   ly_points: true,
+  subgrids: true,
+  via_stitching: true,
   ratsnest: true,
   drc_warnings: true,
   drc_errors: true,
@@ -195,6 +199,9 @@ export const OBJECT_ROWS: readonly ObjectRow[] = [
   { id: "drc_exclusions", label: "DRC Exclusions", tooltip: "DRC violations which have been individually excluded", checkbox: true },
   { id: "footprint_anchors", label: "Anchors", tooltip: "Show footprint and text origins as a cross", checkbox: true },
   { id: "ly_points", label: "Points", tooltip: "Show explicit snap points as crosses", checkbox: true },
+  // KiCad 10 (25ec2335): `LAYER_SUBGRIDS` and `LAYER_VIA_STITCHING`, after Points.
+  { id: "subgrids", label: "Grids", tooltip: "Show custom routing/placement grids", checkbox: true },
+  { id: "via_stitching", label: "Via Stitching", tooltip: "Show via stitching generator outlines", checkbox: true },
   { id: "locked_item_shadows", label: "Locked Item Shadow", tooltip: "Show a shadow on locked items", checkbox: true },
   { id: "conflict_shadows", label: "Colliding Courtyards", tooltip: "Show colliding footprint courtyards", checkbox: true },
   { id: "board_outline_area", label: "Board Area Shadow", tooltip: "Show board area shadow", checkbox: true },

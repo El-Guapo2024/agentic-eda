@@ -108,6 +108,23 @@ impl KicadFills {
         out
     }
 
+    /// The current fills of the zones of `design` in nanometres, as KiCad holds them (`ZONE::GetFill( layer )`), by `(zone id, layer)`: what a via stitching's placement
+    /// reads (`eda_drc::via_stitch`).
+    pub fn fills_nm(&self, design: &Design) -> eda_drc::via_stitch::ZoneFillsNm {
+        let mut out = eda_drc::via_stitch::ZoneFillsNm::new();
+        for z in design.routing.as_ref().map_or(&[][..], |r| r.zones.as_slice()) {
+            let Some(entry) = self.current(z) else { continue };
+            for (layer, rings) in &entry.layers {
+                let mut fill = ShapePolySet::default();
+                for ring in rings {
+                    fill.add_outline(ring.pts.iter().map(|p| Point64::new(p[0], p[1])).collect());
+                }
+                out.insert((z.id.clone(), layer.clone()), fill);
+            }
+        }
+        out
+    }
+
     /// How many zone layers have a fill, and how many rings those fills are.
     pub fn counts(&self) -> (usize, usize) {
         let layers = self.zones.values().map(|e| e.layers.values().filter(|r| !r.is_empty()).count()).sum();

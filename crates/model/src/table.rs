@@ -253,6 +253,25 @@ impl TableCell {
         ((stroke_um as f64 / 2.0).round() + (text.height_um as f64 * 0.75).round()) as Um
     }
 
+    /// `GetLegacyTextMargin` in nanometres, as KiCad has it: `KiROUND( stroke / 2.0 ) + KiROUND( GetTextSize().y * 0.75 )` -- 1.0025 mm for a new cell's 1.27 mm text on
+    /// a 0.1 mm stroke, which the IR's micrometres round to 1.003.
+    pub fn legacy_margin_nm(text: &TableText, stroke_um: Um) -> i64 {
+        ((stroke_um * 1000) as f64 / 2.0).round() as i64 + ((text.height_um * 1000) as f64 * 0.75).round() as i64
+    }
+
+    /// Margin `i` (left, top, right, bottom) in nanometres: a new cell's legacy margin (`pcb_new`'s, the one the IR rounds) as KiCad holds it, any other the micrometres it is.
+    /// What `Autosize` lays a table out with and the writer writes, so a chart a rebuild makes is KiCad's to the nanometre the IR can say.
+    pub fn margin_nm(&self, i: usize) -> i64 {
+        let m = self.margins[i];
+        if m == Self::legacy_margin_um(&self.style, 100) {
+            let nm = Self::legacy_margin_nm(&self.style, 100);
+            if (nm as f64 / 1000.0).round() as Um == m {
+                return nm;
+            }
+        }
+        m * 1000
+    }
+
     /// A new board cell (`new PCB_TABLECELL( table )`): an empty text box of KiCad's defaults, mirrored when the table is on a back layer
     /// (`SetMirrored( board->IsBackLayer( aParent->GetLayer() ) )`).
     pub fn pcb_new(back: bool) -> Self {

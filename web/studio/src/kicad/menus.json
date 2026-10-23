@@ -10,7 +10,8 @@
       "common/tool/actions.cpp",
       "pcbnew/router/router_tool.cpp",
       "common/hotkey_store.cpp"
-    ]
+    ],
+    "kicad10Additions": "Place > Add Drill Chart, Add Drill Map (after Add Stackup Table) and Place Sub-grid: from pcbnew/menubar_pcb_editor.cpp of KiCad 25ec2335"
   },
   "menus": [
     {
@@ -588,6 +589,14 @@
           "action": "pcbnew.InteractiveDrawing.placeStackup"
         },
         {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.placeDrillChart"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.placeDrillMap"
+        },
+        {
           "type": "separator"
         },
         {
@@ -605,6 +614,13 @@
         {
           "type": "item",
           "action": "common.Control.gridResetOrigin"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GridItem.place"
         },
         {
           "type": "separator"

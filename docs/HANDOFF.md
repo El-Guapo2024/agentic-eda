@@ -55,6 +55,8 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-kicad10-items` | KiCad 10's line endings, grid items, via stitching, drill charts, drill maps and drill symbol profile read, written, drawn and edited (HANDOFF "Next tasks" 5, third bullet), ported from KiCad 25ec2335 (`~/src/kicad-src-25ec2335`, the commit of the box's kicad-cli) | done: 4 commits, slow proofs on 7 QA boards and a fixture, 3 chart builds held to kicad-cli's, e2e `kicad10-items.check.js` 6/6 | grid items as routing/placement roles; the Drill Chart Properties and Drill Groups dialogs; backdrills and post-machining in the drill model; microvia stack generators and custom user properties (PARITY-pcb.md section 50) |
+| `task-kicad10-review` | Adversarial parity review of `task-kicad10-items` against KiCad 25ec2335's code (cut from its 397d53f): line endings, grid items, via stitching, drill charts and maps | done: 5 commits of fixes with failing tests first; slow `kicad10_items` 6/6 (2 boards of the downgrade corpus added), `drill_charts_kicad_cli` 4/4, chart geometry to the micrometre | merge after `task-kicad10-items`; left: the `IfConnected` shortcut, a footprint's fields on copper, imperial drills (PARITY-pcb.md section 50 "Review") |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
