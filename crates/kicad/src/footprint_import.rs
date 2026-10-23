@@ -86,10 +86,17 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     fp.model = fp.models3d.first().map(|m| m.path.clone());
     fp.courtyard = crate::footprint_lib::courtyard_from(root);
 
+    // in step with `fp.graphics`: each graphic's stroke type when it is not `solid`; with `fp.texts`: each text's looks beyond `Text` (see `LibraryFootprintKeep`)
+    let mut strokes: Vec<Option<String>> = Vec::new();
+    let mut text_looks: Vec<(eda_model::board_text::TextExtra, bool)> = Vec::new();
+    // and each pad's, graphic's and text's uuid
+    let (mut pad_uuids, mut graphic_uuids, mut text_uuids): (Vec<Option<String>>, Vec<Option<String>>, Vec<Option<String>>) = (Vec::new(), Vec::new(), Vec::new());
+    let uuid_of = |item: &[Sexpr]| sexpr::find(item, "uuid").or_else(|| sexpr::find(item, "tstamp")).and_then(|u| sexpr::txt(u, 1)).filter(|u| !u.is_empty()).map(str::to_string);
     for child in root.iter().skip(2).filter_map(Sexpr::as_list) {
+        let (drawn, written, padded) = (fp.graphics.len(), fp.texts.len(), fp.pads.len());
         match sexpr::tag(child) {
             Some("pad") => {
-                if let Some(pad) = parse_pad(child) {
+                if let Some(pad) = parse_pad(child, version) {
                     fp.pads.push(pad);
                 }
             }
@@ -125,7 +132,13 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
                 }
             }
             Some("fp_text") => match sexpr::txt(child, 1) {
-                Some("user") => fp.texts.extend(parse_text(child, sexpr::txt(child, 2).unwrap_or(""))),
+                Some("user") => {
+                    if let Some(t) = parse_text(child, sexpr::txt(child, 2).unwrap_or("")) {
+                        fp.texts.push(t);
+                        let look = crate::board_text_io::read_style(child).extra;
+                        text_looks.push((look, crate::fp_fields::parse_layout(child, Side::Top, 0).keep_upright));
+                    }
+                }
                 // the pre-KiCad-8 form: `(fp_text reference "REF**" (at ..) (layer ..) (effects ..))`
                 Some("reference") => {
                     let l = field_layout(child, sexpr::txt(child, 2).unwrap_or(""), LIBRARY_REFERENCE_TEXT);
@@ -141,6 +154,9 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
             },
             Some("property") => {
                 let (key, value) = (sexpr::txt(child, 1).unwrap_or(""), sexpr::txt(child, 2).unwrap_or(""));
+                if let Some(u) = uuid_of(child) {
+                    fp.kicad.uuids.insert(format!("field:{key}"), u);
+                }
                 // a field of KiCad 8 has its layout; an older property only the hide flag
                 let layout = (!legacy).then(|| crate::fp_fields::parse_layout(child, Side::Top, 0));
                 let visible = layout.as_ref().map_or(!hidden(child), |l| l.visible);
@@ -157,28 +173,88 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
                             fp.value = Some(with_text(l, value, &fp.name));
                         }
                     }
-                    "Description" => {
-                        if fp.description.is_empty() {
-                            fp.description = value.to_string();
+                    // The Datasheet and Description fields (`FIELD_T::DATASHEET`, `DESCRIPTION`): KiCad 8's are their own fields beside the library description
+                    // `(descr ..)`; an older file's Description property was the description.
+                    "Description" => match layout {
+                        Some(mut l) => {
+                            l.text = Some(value.to_string());
+                            fp.description_field = Some(l);
+                        }
+                        None => {
+                            if fp.description.is_empty() {
+                                fp.description = value.to_string();
+                            }
+                        }
+                    },
+                    "Datasheet" => {
+                        if let Some(mut l) = layout {
+                            l.text = Some(value.to_string());
+                            fp.datasheet = Some(l);
                         }
                     }
-                    "Datasheet" | "" => {}
+                    "" => {}
                     _ => fp.fields.push(FootprintField { name: key.to_string(), value: value.to_string(), visible, layout }),
                 }
             }
-            Some("zone") | Some("group") | Some("image") | Some("dimension") | Some("fp_text_box") | Some("fp_text_private") => warnings.push(format!("{} items are not supported by the library footprint and were left out", sexpr::tag(child).unwrap_or("?"))),
+            Some("fp_text_private") => warnings.push(format!("{} items are not supported by the library footprint and were left out", sexpr::tag(child).unwrap_or("?"))),
+            Some(tag) if !OWN_TOKENS.contains(&tag) => {
+                // In a file before KiCad 9 a margin or clearance of 0 meant "inherit" (`parseFOOTPRINT_unchecked`): it says nothing, and is not kept.
+                let inherit = version <= 20240201 && KEPT_NUMBERS.contains(&tag) && sexpr::num(child, 1) == Some(0.0);
+                if !inherit {
+                    fp.kicad.tokens.push(sexpr::to_text(&Sexpr::List(child.to_vec())));
+                }
+            }
             _ => {}
+        }
+        if fp.graphics.len() > drawn {
+            strokes.push(sexpr::find(child, "stroke").and_then(|st| sexpr::find(st, "type")).and_then(|t| sexpr::txt(t, 1)).filter(|t| *t != "solid").map(str::to_string));
+            graphic_uuids.push(uuid_of(child));
+        }
+        if fp.texts.len() > written {
+            text_uuids.push(uuid_of(child));
+        }
+        if fp.pads.len() > padded {
+            pad_uuids.push(uuid_of(child));
         }
     }
     if fp.pads.is_empty() && fp.graphics.is_empty() && fp.texts.is_empty() {
         warnings.push("the footprint holds no pad, graphic or text".to_string());
     }
     fp.assign_missing_ids();
+    let ids = fp.pads.iter().map(|p| p.id.clone()).zip(pad_uuids).chain(fp.graphics.iter().map(|g| g.id().to_string()).zip(graphic_uuids)).chain(fp.texts.iter().map(|t| t.id.clone()).zip(text_uuids));
+    let uuids: Vec<(String, String)> = ids.filter_map(|(id, u)| Some((id, u?))).collect();
+    fp.kicad.uuids.extend(uuids);
+    for (g, stroke) in fp.graphics.iter().zip(strokes) {
+        if let Some(t) = stroke {
+            fp.kicad.stroke_types.insert(g.id().to_string(), t);
+        }
+    }
+    for (t, (mut look, keep_upright)) in fp.texts.iter().zip(text_looks) {
+        if !keep_upright {
+            fp.kicad.unlocked_texts.insert(t.id.clone());
+        }
+        if !look.is_default() {
+            look.id = t.id.clone();
+            fp.kicad.text_extras.push(look);
+        }
+    }
     let embedded = crate::embedded::read_owner(root, &mut warnings);
     warnings.sort();
     warnings.dedup();
     Ok(ParsedFootprint { footprint: fp, embedded, warnings })
 }
+
+/// The forms of a footprint this reader takes into the [`LibraryFootprint`] (or knows to leave out: the board-only ones); any other is kept as the file wrote it
+/// (`LibraryFootprintKeep::tokens`).
+const OWN_TOKENS: &[&str] = &[
+    "version", "generator", "generator_version", "layer", "descr", "tags", "property", "attr", "zone_connect", "fp_line", "fp_arc", "fp_rect", "fp_circle", "fp_poly", "fp_curve",
+    "fp_text", "pad", "model", "embedded_fonts", "embedded_files", "uuid", "tstamp", "tedit", "at", "path", "sheetname", "sheetfile", "units", "component_classes",
+    // read and dropped by KiCad itself ("never exposed in the GUI")
+    "thermal_width", "thermal_gap",
+];
+
+/// The kept footprint numbers that a file before KiCad 9 wrote as 0 for "inherit".
+const KEPT_NUMBERS: &[&str] = &["clearance", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "solder_paste_ratio"];
 
 /// A `(property ..)` or `(fp_text reference|value ..)`'s layout, with the text it shows when that is not `own` (the footprint's default text for the field).
 fn field_layout(item: &[Sexpr], text: &str, own: &str) -> FieldLayout {
@@ -244,7 +320,7 @@ fn parse_text(item: &[Sexpr], content: &str) -> Option<Text> {
     })
 }
 
-fn parse_pad(pad: &[Sexpr]) -> Option<LibraryPad> {
+fn parse_pad(pad: &[Sexpr], version: i64) -> Option<LibraryPad> {
     let number = sexpr::txt(pad, 1).unwrap_or("").to_string();
     let kind = match sexpr::txt(pad, 2).unwrap_or("") {
         "np_thru_hole" => PadKind::NonPlatedHole,
@@ -296,6 +372,19 @@ fn parse_pad(pad: &[Sexpr]) -> Option<LibraryPad> {
         PadShape::Custom => LibraryPadShape::Custom,
         PadShape::Rect => LibraryPadShape::Rect,
     };
+    // What the editor does not edit (`LibraryPadKeep`): an edge connector, the fabrication property, the margins (a 0 of a file before KiCad 9 is "inherit"), the rest as written.
+    let mut keep = eda_model::lib_keep::LibraryPadKeep { connector: sexpr::txt(pad, 2) == Some("connect"), ..Default::default() };
+    let margin = |tag: &str| sexpr::find(pad, tag).and_then(|c| sexpr::num(c, 1)).filter(|v| !(version <= 20240201 && *v == 0.0));
+    keep.solder_mask_margin = margin("solder_mask_margin").map(mm_to_um);
+    keep.solder_paste_margin = margin("solder_paste_margin").map(mm_to_um);
+    keep.solder_paste_margin_ratio = margin("solder_paste_margin_ratio").or_else(|| margin("solder_paste_ratio"));
+    for item in pad.iter().skip(1).filter_map(Sexpr::as_list) {
+        match sexpr::tag(item) {
+            Some("property") => keep.property = sexpr::txt(item, 1).map(str::to_string),
+            Some(tag) if !OWN_PAD_TOKENS.contains(&tag) => keep.tokens.push(sexpr::to_text(&Sexpr::List(item.to_vec()))),
+            _ => {}
+        }
+    }
     Some(LibraryPad {
         id: String::new(),
         number,
@@ -323,8 +412,16 @@ fn parse_pad(pad: &[Sexpr]) -> Option<LibraryPad> {
         zone_connection: sexpr::find(pad, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64)),
         thermal_spoke_angle_mdeg: sexpr::find(pad, "thermal_bridge_angle").and_then(|a| sexpr::num(a, 1)).map(|d| ((d * 1000.0).round() as i64).rem_euclid(360_000) as eda_model::ir::Millideg),
         stack,
+        kicad: keep,
     })
 }
+
+/// The forms of a pad that [`parse_pad`] reads into the [`LibraryPad`] (or that a library pad cannot have: `net`); the others are kept as written.
+const OWN_PAD_TOKENS: &[&str] = &[
+    "at", "size", "offset", "drill", "layers", "roundrect_rratio", "chamfer_ratio", "chamfer", "rect_delta", "clearance", "zone_connect", "thermal_bridge_width", "thermal_width",
+    "thermal_bridge_angle", "thermal_gap", "options", "primitives", "uuid", "tstamp", "padstack", "remove_unused_layers", "keep_end_layers", "net", "solder_mask_margin",
+    "solder_paste_margin", "solder_paste_margin_ratio", "solder_paste_ratio",
+];
 
 #[cfg(test)]
 mod tests {
@@ -356,6 +453,7 @@ mod tests {
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
             stack: Default::default(),
+            kicad: Default::default(),
         }
     }
 
@@ -500,8 +598,11 @@ mod tests {
         assert_eq!(by("4").shape, LibraryPadShape::Custom, "a custom pad keeps its anchor and its basic shapes");
         let custom = by("4").custom.as_ref().expect("the custom pad's primitives");
         assert_eq!((custom.anchor, custom.primitives.len()), (eda_model::footprint::PadAnchor::Rect, 1));
-        assert_eq!(parsed.warnings.len(), 1, "{:?}", parsed.warnings);
-        assert!(parsed.warnings.iter().any(|w| w.contains("zone")));
+        // the zone is kept as the file has it (`LibraryFootprintKeep::tokens`), for the writer
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert_eq!(fp.kicad.tokens.len(), 1);
+        assert!(fp.kicad.tokens[0].starts_with("(zone"), "{:?}", fp.kicad.tokens);
+        assert!(export_kicad_mod(&fp).contains("(zone"), "and written back");
     }
 
     #[test]

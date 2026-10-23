@@ -167,6 +167,11 @@ fn a_symbol_of_the_project_library_is_a_link_target_even_when_it_was_put_there_a
         published: false,
         extends: None,
         fields: vec![],
+        units_locked: false,
+        power_local: false,
+        exclude_from_sim: false,
+        exclude_from_pos_files: false,
+        kicad: Default::default(),
     };
     b.apply(&Cmd::SetSymbolLibIds { changes: vec![("Device:R".into(), "mylib:R".into())], update_fields: false }).unwrap_err();
     b.apply(&Cmd::PutLibrarySymbol { symbol: sym, overwrite: false }).unwrap();

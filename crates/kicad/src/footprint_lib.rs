@@ -281,7 +281,7 @@ pub fn resolve_library_footprints_with(model: &mut ConstraintModel, mut find: im
 fn write_library_fields(out: &mut String, fp: &eda_model::ir::LibraryFootprint) {
     use eda_model::fp_edit::{default_library_reference_layout, default_library_value_layout, new_library_field_layout, LIBRARY_REFERENCE_TEXT};
     let one = |out: &mut String, name: &str, text: &str, l: &eda_model::fp_edit::FieldLayout| {
-        let uuid = crate::duid(&format!("fpfield:{}:{name}", fp.name));
+        let uuid = fp.kicad.uuids.get(&format!("field:{name}")).cloned().unwrap_or_else(|| crate::duid(&format!("fpfield:{}:{name}", fp.name)));
         let mut tmp = String::new();
         crate::fp_fields::write_property(&mut tmp, name, text, l, eda_model::ir::Side::Top, 0, &uuid);
         for line in tmp.lines() {
@@ -296,6 +296,12 @@ fn write_library_fields(out: &mut String, fp: &eda_model::ir::LibraryFootprint) 
     if let Some(mut l) = fp.value.clone().or_else(|| (!fp.value_visible).then(default_library_value_layout)) {
         l.visible = fp.value_visible;
         one(out, "Value", l.shown(&fp.name), &l);
+    }
+    // The Datasheet and the Description fields, when the footprint has them (else KiCad gives it its own, `default_library_datasheet_layout`).
+    for (name, field) in [("Datasheet", &fp.datasheet), ("Description", &fp.description_field)] {
+        if let Some(l) = field {
+            one(out, name, l.text.as_deref().unwrap_or(""), l);
+        }
     }
     for f in &fp.fields {
         let mut l = f.layout.clone().unwrap_or_else(new_library_field_layout);
@@ -374,33 +380,43 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
     if fp.attributes.dnp {
         attrs.push("dnp");
     }
+    // `FP_ALLOW_SOLDERMASK_BRIDGES`, written `allow_soldermask_bridges` (`format( FOOTPRINT )`; the reader takes `allow_solder_mask_bridges` too)
+    if fp.attributes.allow_soldermask_bridges {
+        attrs.push("allow_soldermask_bridges");
+    }
     if !attrs.is_empty() {
         writeln!(out, "\t(attr {})", attrs.join(" ")).unwrap();
+    }
+    // The footprint's own kept forms that are no items (margins, clearance, net-tie groups, private layers, jumpers), after the attributes as KiCad writes them.
+    for t in fp.kicad.tokens.iter().filter(|t| !is_kept_item(t)) {
+        writeln!(out, "\t{t}").unwrap();
     }
 
     let fp_fill = |filled: bool| if filled { "yes" } else { "no" };
     for g in &fp.graphics {
-        let uuid = crate::duid(&format!("fpgraphic:{}", g.id()));
+        let uuid = fp.kicad.uuids.get(g.id()).cloned().unwrap_or_else(|| crate::duid(&format!("fpgraphic:{}", g.id())));
         let layer = crate::sexpr_str(g.layer());
+        // the line style the file had (`LibraryFootprintKeep::stroke_types`), else KiCad's `solid`
+        let solid = fp.kicad.stroke_types.get(g.id()).map(String::as_str).unwrap_or("solid");
         match g {
             Shape::Segment { stroke_width, start, end, .. } => writeln!(
                 out,
-                "\t(fp_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(fp_line (start {} {}) (end {} {}) (stroke (width {}) (type {solid})) (layer {layer}) (uuid \"{uuid}\"))",
                 crate::mm(start.x), crate::mm(start.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0))
             ),
             Shape::Arc { stroke_width, start, mid, end, .. } => writeln!(
                 out,
-                "\t(fp_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(fp_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type {solid})) (layer {layer}) (uuid \"{uuid}\"))",
                 crate::mm(start.x), crate::mm(start.y), crate::mm(mid.x), crate::mm(mid.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0))
             ),
             Shape::Rect { stroke_width, filled, start, end, .. } => writeln!(
                 out,
-                "\t(fp_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(fp_rect (start {} {}) (end {} {}) (stroke (width {}) (type {solid})) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
                 crate::mm(start.x), crate::mm(start.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0)), fp_fill(*filled)
             ),
             Shape::Circle { stroke_width, filled, center, end, .. } => writeln!(
                 out,
-                "\t(fp_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(fp_circle (center {} {}) (end {} {}) (stroke (width {}) (type {solid})) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
                 crate::mm(center.x), crate::mm(center.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0)), fp_fill(*filled)
             ),
             Shape::Polygon { stroke_width, filled, pts, .. } => {
@@ -408,11 +424,11 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
                 for p in pts {
                     write!(out, " (xy {} {})", crate::mm(p.x), crate::mm(p.y)).unwrap();
                 }
-                writeln!(out, ") (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))", crate::mm((*stroke_width).max(0)), fp_fill(*filled))
+                writeln!(out, ") (stroke (width {}) (type {solid})) (fill {}) (layer {layer}) (uuid \"{uuid}\"))", crate::mm((*stroke_width).max(0)), fp_fill(*filled))
             }
             Shape::Bezier { stroke_width, start, c1, c2, end, .. } => writeln!(
                 out,
-                "\t(fp_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(fp_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type {solid})) (layer {layer}) (uuid \"{uuid}\"))",
                 crate::mm(start.x), crate::mm(start.y), crate::mm(c1.x), crate::mm(c1.y), crate::mm(c2.x), crate::mm(c2.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0))
             ),
         }
@@ -420,7 +436,8 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
     }
 
     for t in &fp.texts {
-        write_fp_text(&mut out, t);
+        let uuid = fp.kicad.uuids.get(&t.id).cloned().unwrap_or_else(|| crate::duid(&format!("fptext:{}", t.id)));
+        write_fp_text(&mut out, t, &uuid, fp.kicad.text_extra(&t.id), !fp.kicad.unlocked_texts.contains(&t.id));
     }
 
     for pad in &fp.pads {
@@ -429,11 +446,13 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
         let shape = crate::pad_shape::shape_token(engine.shape);
         let shape_text = crate::pad_shape::write_pad_shape(engine.shape, engine.roundrect_ratio, &engine.ext, eda_model::ir::Side::Top);
         let kind = match pad.kind {
+            // an edge connector pad is an SMD pad with its own attribute (`PAD_ATTRIB::CONN`)
+            eda_model::PadKind::Smd if pad.kicad.connector => "connect",
             eda_model::PadKind::Smd => "smd",
             eda_model::PadKind::ThroughHole => "thru_hole",
             eda_model::PadKind::NonPlatedHole => "np_thru_hole",
         };
-        let uuid = crate::duid(&format!("fppad:{}:{}:{}:{}", pad.id, pad.number, pad.at.x, pad.at.y));
+        let uuid = fp.kicad.uuids.get(&pad.id).cloned().unwrap_or_else(|| crate::duid(&format!("fppad:{}:{}:{}:{}", pad.id, pad.number, pad.at.x, pad.at.y)));
         let angle_deg = crate::pad_file_angle(eda_model::ir::Side::Top, 0, pad.rot);
         write!(out, "\t(pad {} {kind} {shape} (at {} {} {angle_deg})", crate::sexpr_str(&pad.number), crate::mm(pad.at.x), crate::mm(pad.at.y)).unwrap();
         write!(out, " (size {} {})", crate::mm(pad.size.0), crate::mm(pad.size.1)).unwrap();
@@ -478,6 +497,19 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
         if pad.kind == eda_model::PadKind::ThroughHole {
             out.push_str(&crate::padstack_io::unconnected_text(engine.ext.stack.unconnected));
         }
+        // `(property pad_prop_..)` (the fabrication property), then the margins, as `format( const PAD* )` writes them
+        if let Some(p) = &pad.kicad.property {
+            write!(out, " (property {p})").unwrap();
+        }
+        if let Some(m) = pad.kicad.solder_mask_margin {
+            write!(out, " (solder_mask_margin {})", crate::mm(m)).unwrap();
+        }
+        if let Some(m) = pad.kicad.solder_paste_margin {
+            write!(out, " (solder_paste_margin {})", crate::mm(m)).unwrap();
+        }
+        if let Some(r) = pad.kicad.solder_paste_margin_ratio {
+            write!(out, " (solder_paste_margin_ratio {})", crate::fmt_double_2_str(r)).unwrap();
+        }
         if let Some(c) = pad.clearance_override {
             write!(out, " (clearance {})", crate::mm(c)).unwrap();
         }
@@ -499,10 +531,19 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
             write!(out, " (thermal_gap {})", crate::mm(g)).unwrap();
         }
         out.push_str(&shape_text.custom);
+        // the pad's other kept forms (pin-to-die length, teardrops, tenting, ...)
+        for t in &pad.kicad.tokens {
+            write!(out, " {t}").unwrap();
+        }
         write!(out, " (uuid \"{uuid}\")").unwrap();
         // The other layers' shapes, after the uuid (a library file has no board: every copper layer KiCad's file can name, `MAX_CU_LAYERS`).
         out.push_str(&crate::padstack_io::write_padstack(&engine, eda_model::ir::Side::Top, &crate::padstack_io::library_copper_layers()));
         writeln!(out, ")").unwrap();
+    }
+
+    // The kept items the editor does not draw (zones, points, dimensions, images, text boxes, tables, barcodes), after the pads as KiCad writes them.
+    for t in fp.kicad.tokens.iter().filter(|t| is_kept_item(t)) {
+        writeln!(out, "\t{t}").unwrap();
     }
 
     // The embedded files, before the models as KiCad writes them.
@@ -515,29 +556,26 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
     out
 }
 
+/// Whether a kept footprint form (`LibraryFootprintKeep::tokens`) is an item of the footprint (a zone, a point, ...) rather than one of its settings.
+fn is_kept_item(token: &str) -> bool {
+    let tag = token.trim_start_matches('(').split(|c: char| c.is_whitespace() || c == ')').next().unwrap_or("");
+    matches!(tag, "zone" | "point" | "dimension" | "image" | "fp_text_box" | "table" | "barcode" | "group" | "generated")
+}
+
 /// `fp_text user "..."`, the footprint-local counterpart of `pcb.rs`'s
 /// `write_text`'s `gr_text` -- same field shape (KiCad's `EDA_TEXT::Format`
 /// is shared by both), different owning tag and an added type token.
-fn write_fp_text(out: &mut String, text: &eda_model::ir::Text) {
-    use eda_model::ir::TextJustify;
+/// The text's `(effects ..)` is `EDA_TEXT::Format`'s with what the file said beyond [`eda_model::ir::Text`] (`extra`: bold, italic, a vertical justification, a glyph
+/// width, an automatic pen, a font), and `(unlocked yes)` a text that turns with the footprint (`keep_upright` false).
+fn write_fp_text(out: &mut String, text: &eda_model::ir::Text, uuid: &str, extra: Option<&eda_model::board_text::TextExtra>, keep_upright: bool) {
     use std::fmt::Write as _;
-    let uuid = crate::duid(&format!("fptext:{}", text.id));
     let angle_deg = crate::fmt_mm_f(text.angle as f64 / 1000.0);
-    let size_mm = crate::mm(text.size_um);
-    let thickness_mm = crate::mm(text.stroke_width);
-    let mut justify = String::new();
-    match text.justify {
-        TextJustify::Left => justify.push_str(" left"),
-        TextJustify::Right => justify.push_str(" right"),
-        TextJustify::Center => {}
-    }
-    if text.mirror {
-        justify.push_str(" mirror");
-    }
-    let justify_tok = if justify.is_empty() { String::new() } else { format!(" (justify{justify})") };
+    let effects = crate::board_text_io::effects(text, extra);
+    let knockout = if extra.is_some_and(|e| e.knockout) { " knockout" } else { "" };
+    let unlocked = if keep_upright { "" } else { " (unlocked yes)" };
     writeln!(
         out,
-        "\t(fp_text user {} (at {} {} {angle_deg}) (layer {}) (uuid \"{uuid}\")\n\t\t(effects (font (size {size_mm} {size_mm}) (thickness {thickness_mm})){justify_tok})\n\t)",
+        "\t(fp_text user {} (at {} {} {angle_deg}){unlocked} (layer {}{knockout}) (uuid \"{uuid}\")\n\t\t{effects}\n\t)",
         crate::sexpr_str(&text.content),
         crate::mm(text.at.x),
         crate::mm(text.at.y),
@@ -690,6 +728,7 @@ mod tests {
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
             stack: Default::default(),
+            kicad: Default::default(),
         }
     }
 
@@ -719,6 +758,9 @@ mod tests {
             published: false,
             zone_connection: None,
             pad_edit: None,
+            datasheet: None,
+            description_field: None,
+            kicad: Default::default(),
         };
 
         let text = export_kicad_mod(&fp);

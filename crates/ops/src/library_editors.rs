@@ -31,6 +31,40 @@ use eda_model::CheckResult;
 
 use super::Board;
 
+/// The attributes of Symbol Properties that [`Cmd::EditSymbolProperties`](crate::Cmd::EditSymbolProperties) takes beside its own (`DIALOG_LIB_SYMBOL_PROPERTIES::
+/// TransferDataFromWindow`), each kept as the symbol has it when `None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SymbolAttributes {
+    /// "All units are interchangeable" unchecked.
+    pub units_locked: Option<bool>,
+    /// "Define as local power symbol".
+    pub power_local: Option<bool>,
+    pub exclude_from_sim: Option<bool>,
+    pub exclude_from_pos_files: Option<bool>,
+}
+
+impl SymbolAttributes {
+    /// `LockUnits( GetUnitCount() > 1 && !m_OptionPartsInterchangeable->GetValue() )`, `SetLocalPower()` only for a power symbol (`SetGlobalPower()` otherwise,
+    /// `SetNormal()` for one that is none), `SetExcludedFromSim`, `SetExcludedFromPosFiles`. Called after the unit count and the power flag are set.
+    pub fn apply(&self, sym: &mut LibrarySymbol) {
+        if let Some(locked) = self.units_locked {
+            sym.units_locked = sym.unit_count > 1 && locked;
+        }
+        if let Some(local) = self.power_local {
+            sym.power_local = local;
+        }
+        if !sym.power {
+            sym.power_local = false;
+        }
+        if let Some(x) = self.exclude_from_sim {
+            sym.exclude_from_sim = x;
+        }
+        if let Some(x) = self.exclude_from_pos_files {
+            sym.exclude_from_pos_files = x;
+        }
+    }
+}
+
 /// `FOOTPRINT::StringLibNameInvalidChars( false )`: the characters a footprint name may not hold.
 const FOOTPRINT_NAME_INVALID: &str = "%$<>\t\n\r\"\\/:";
 
@@ -97,6 +131,8 @@ pub fn import_pad_settings(dst: &mut LibraryPad, master: &LibraryPad) {
     dst.thermal_spoke_angle_mdeg = master.thermal_spoke_angle_mdeg;
     // `SetPadstack( aMasterPad.Padstack() )`: the shapes of the other layers and the unconnected-layer mode come across with the rest.
     dst.stack = master.stack.clone();
+    // ... and what the editor keeps of the file: the attribute (an edge connector), `SetProperty`, the padstack's margins; not the pin-to-die length.
+    dst.kicad = dst.kicad.imported_from(&master.kicad);
 
     if master.shape == eda_model::ir::LibraryPadShape::Circle {
         dst.size = (dst.size.0, dst.size.0);
@@ -424,6 +460,7 @@ mod verb_tests {
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
             stack: Default::default(),
+            kicad: Default::default(),
         }
     }
 
