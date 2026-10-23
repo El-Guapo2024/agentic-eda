@@ -786,9 +786,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `common/widgets/{design_block_pane,panel_design_block_chooser}.cpp`, `common/dialogs/{dialog_design_block_properties,panel_design_block_lib_table}.cpp`, `eeschema/sch_design_block_utils.cpp`, `pcbnew/pcb_design_block_utils.cpp`.
 
 ### 33. Browser-check coverage
-**Standing.** Package P20. **2026-10-23 (`task-p20-browser-checks`): 41 checks, all run headless by `tools/run-all-checks.sh`.**
+**Standing.** Package P20. **2026-10-23 (`task-p20-browser-checks`): 42 checks, all run headless by `tools/run-all-checks.sh` (42 of 42 pass after the KiCad 10 items merge).**
 - The runner builds once, makes each board a check needs once (the header line `// run-all-checks: board=<kind> [minutes=<m>] [ui=<ui>]` names it: `mcu30`,
-  `mcu30-few`, `mcu30-placed`, `mcu30-routed`, `mcu30-zones`, `opamp-routed`, `usb-pair`, `tune-board`, `multichannel`, `simulator`), serves a fresh copy with no undo history per
+  `mcu30-few`, `mcu30-placed`, `mcu30-routed`, `mcu30-zones`, `opamp-routed`, `kicad10-stitch`, `usb-pair`, `tune-board`, `multichannel`, `simulator`), serves a fresh copy with no undo history per
   check on ports 8810-8814 (`-j N` at once), runs `web/studio/e2e/run-check.mjs` (which now also runs the older one-expression checks and the ones whose `wait()` returns
   a summary) and prints one line per check; it exits non-zero on any failure. `tools/run-all-checks.sh zones sch-edit` runs some.
 - New in P20: `board-edit.check.js` (select with the pointer, a window, move by drag, M, Escape, Move Exactly, R / Shift+R, F, Del, undo and redo chains, the Properties

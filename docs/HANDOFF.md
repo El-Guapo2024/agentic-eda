@@ -58,7 +58,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-p20-browser-checks` | P20: `tools/run-all-checks.sh` (every browser check headless, on the boards their headers name); five new checks (board-edit, sch-edit, lib-edit, board-setup-rules, plot-exports); eight fixes they found (item edits off the placement grid, the junction of a T, the library editors' E / R / Del actions, Pre-defined Sizes in one undo step, Escape on a popup menu, a CSV placement file's name, the parity DRC on a board with no stored schematic); stale checks brought up to date | done; gates: cargo check 0 warnings, check.sh fast Rust 3552/0, web 2414; run-all-checks 40/41 then the one left (embedded-files, a fixed sleep) 1/1 | what GAPS.md item 33 lists |
+| `task-p20-browser-checks` | P20: `tools/run-all-checks.sh` (every browser check headless, on the boards their headers name); five new checks (board-edit, sch-edit, lib-edit, board-setup-rules, plot-exports); eight fixes they found (item edits off the placement grid, the junction of a T, the library editors' E / R / Del actions, Pre-defined Sizes in one undo step, Escape on a popup menu, a CSV placement file's name, the parity DRC on a board with no stored schematic); stale checks brought up to date | done, main merged 2026-10-23; gates: cargo check 0 warnings, check.sh fast Rust 3623/0, web 2449; run-all-checks 42/42 | what GAPS.md item 33 lists |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
