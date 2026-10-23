@@ -3,9 +3,10 @@
 //
 //   - The grid: Filename and Embedded Reference (`kicad-embed://name`, which a 3D model, a datasheet field or a drawing sheet names the file by), with the type and size the server
 //     reads from the file. "Copy Embedded Reference" (`EMBEDDED_FILES_GRID_TRICKS`) copies the link. Board Setup lists the files only footprints hold too (`m_inheritedFiles`), marked.
-//   - Add Files (`onAddEmbeddedFiles`): the file chooser, then each file is `add`ed -- a name already embedded asks "Replace" or "Reuse Existing" (`AddEmbeddedFile`).
+//   - Add Files (`onAddEmbeddedFiles`): the file chooser, then each file is `add`ed -- a name already embedded with the same content is reused without a word, with other content
+//     asks "Replace", "Reuse Existing" or "Cancel" (`AddEmbeddedFile`).
 //   - Remove (`onDeleteEmbeddedFile`): the selected rows; an inherited one is refused, and Board Setup asks whether to take a file out of the footprints that list it too.
-//   - Export (`onExportFiles`): the selected rows, or all, downloaded -- a browser saves where its downloads go, so there is no folder to pick.
+//   - Export (`onExportFiles`): every file of the list, downloaded -- a browser saves where its downloads go, so there is no folder to pick and no overwrite question.
 //   - Embed fonts (`m_cbEmbedFonts`, `onFontEmbedClick`): the fonts the text uses are embedded on save; turning it off drops the ones that were.
 //
 // Every Add, Remove and Embed fonts is one `Cmd::Embedded` verb, one undo step (KiCad applies the panel on OK; see the module doc of kicad-port/embeddedFiles.ts).
@@ -13,7 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Cmd } from "../api/types";
 import type { EmbeddedListing, EmbeddedOwner } from "../api/embeddedTypes";
 import { embeddedFileUrl, fetchEmbedded, readFileBase64 } from "../api/embeddedClient";
-import { addCmd, addDecision, fontsCmd, NESTED_QUESTION, removeCmd, removePlan, rowsOf, sizeText } from "../kicad-port/embeddedFiles";
+import { addCmd, addDecision, checksumOf, fullNameOf as fullName, CONFLICT_TITLE, exportNames, fontsCmd, NESTED_QUESTION, NESTED_TITLE, removeCmd, removePlan, rowsOf, sizeText } from "../kicad-port/embeddedFiles";
 import { setActiveEmbeddedPanel, type ActiveEmbeddedPanel } from "../state/embeddedPanel";
 
 export interface EmbeddedFilesPanelProps {
@@ -28,7 +29,7 @@ export interface EmbeddedFilesPanelProps {
 }
 
 /** A question the panel asks in its own footer (no native dialog). */
-type Question = { text: string; yes: string; no: string; onYes: () => void; onNo: () => void } | null;
+type Question = { title: string; text: string; yes: string; no: string; onYes: () => void; onNo: () => void; cancel?: () => void } | null;
 
 export function EmbeddedFilesPanel({ owner, run, hidden = false, version = null, fonts = true }: EmbeddedFilesPanelProps) {
   const [listing, setListing] = useState<EmbeddedListing | null>(null);
@@ -73,24 +74,28 @@ export function EmbeddedFilesPanel({ owner, run, hidden = false, version = null,
   const addFiles = async (files: readonly File[]) => {
     setMessage(null);
     for (const file of files) {
-      const decision = addDecision(listing, file.name, file.size);
+      let checksum: string | undefined;
+      let data: string;
+      try {
+        // `ComputeFileHash` only for a name that is taken: the content is compared with the file that is there
+        if (listing?.files.some((f) => f.name === fullName(file.name))) checksum = checksumOf(new Uint8Array(await file.arrayBuffer()));
+        data = await readFileBase64(file);
+      } catch {
+        setMessage(`Failed to read file '${fullName(file.name)}'.`);
+        continue;
+      }
+      const decision = addDecision(listing, file.name, file.size, checksum);
       if (decision.kind === "refuse") {
         setMessage(decision.message);
         continue;
       }
-      let data: string;
-      try {
-        data = await readFileBase64(file);
-      } catch {
-        setMessage(`Failed to read file '${file.name}'.`);
-        continue;
-      }
+      if (decision.kind === "reuse") continue; // the same content: the file that is there is the one
       if (decision.kind === "conflict") {
         const replace = await new Promise<boolean>((resolve) =>
-          setQuestion({ text: decision.message, yes: "Replace", no: "Reuse Existing", onYes: () => resolve(true), onNo: () => resolve(false) })
+          setQuestion({ title: CONFLICT_TITLE, text: decision.message, yes: "Replace", no: "Reuse Existing", onYes: () => resolve(true), onNo: () => resolve(false), cancel: () => resolve(false) })
         );
         setQuestion(null);
-        if (!replace) continue; // "Reuse Existing": the file that is there stays
+        if (!replace) continue; // "Reuse Existing" and "Cancel": the file that is there stays
         await send(addCmd(owner, file.name, data, true));
       } else {
         await send(addCmd(owner, file.name, data));
@@ -101,16 +106,17 @@ export function EmbeddedFilesPanel({ owner, run, hidden = false, version = null,
   const remove = async (names: readonly string[]) => {
     setMessage(null);
     const plan = removePlan(owner, rows, names);
-    if ("error" in plan) {
+    if (!("names" in plan)) {
       setMessage(plan.error);
       return;
     }
     let nested = false;
     if (plan.askNested) {
-      nested = await new Promise<boolean>((resolve) => setQuestion({ text: NESTED_QUESTION, yes: "OK", no: "Cancel", onYes: () => resolve(true), onNo: () => resolve(false) }));
+      nested = await new Promise<boolean>((resolve) => setQuestion({ title: NESTED_TITLE, text: NESTED_QUESTION, yes: "Yes", no: "No", onYes: () => resolve(true), onNo: () => resolve(false) }));
       setQuestion(null);
     }
     if (await send(removeCmd(owner, plan.names, nested))) setSelected(new Set());
+    if (plan.error) setMessage(plan.error);
   };
 
   // Export: a download per file, from the route that decodes it.
@@ -240,7 +246,7 @@ export function EmbeddedFilesPanel({ owner, run, hidden = false, version = null,
         <button disabled={busy || selected.size === 0} title="Remove an embedded file" onClick={() => void remove([...selected])} data-testid="embedded-files-remove">
           Remove
         </button>
-        <button disabled={busy || rows.length === 0} title="Extract an embedded file" onClick={() => extract([...selected])} data-testid="embedded-files-export">
+        <button disabled={busy || rows.length === 0} title="Extract an embedded file" onClick={() => extract(exportNames(rows))} data-testid="embedded-files-export">
           Export...
         </button>
         {fonts && (
@@ -250,12 +256,13 @@ export function EmbeddedFilesPanel({ owner, run, hidden = false, version = null,
         )}
       </div>
       {question && (
-        <div className="bs-toolbar" role="alertdialog" aria-label="Embedded File Conflict" style={{ display: "flex", gap: 8, alignItems: "center" }} data-testid="embedded-files-question">
+        <div className="bs-toolbar" role="alertdialog" aria-label={question.title} style={{ display: "flex", gap: 8, alignItems: "center" }} data-testid="embedded-files-question">
           <span style={{ whiteSpace: "pre-line", marginRight: "auto" }}>{question.text}</span>
           <button className="primary" onClick={question.onYes}>
             {question.yes}
           </button>
           <button onClick={question.onNo}>{question.no}</button>
+          {question.cancel && <button onClick={question.cancel}>Cancel</button>}
         </div>
       )}
       {message && (
