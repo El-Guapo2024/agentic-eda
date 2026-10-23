@@ -273,6 +273,10 @@ pub struct CircuitItem {
     pub tuner: Option<(String, String)>,
     /// The item line as the netlist has it.
     pub line: String,
+    /// `GetDeviceInfo().fieldValue` and `GetTypeInfo().fieldValue` of its model, as Tune's "has simulation model of type '%s %s'" names them:
+    /// the symbol's `Sim.Device` and `Sim.Type`, else what the item line is (`SUBCKT` for an `X`, the SPICE letter otherwise) and no type.
+    pub sim_device: String,
+    pub sim_type: String,
 }
 
 /// The ports of the subcircuits the netlist's libraries define (`.subckt name port ... [params:]`), by name, lower case.
@@ -356,7 +360,10 @@ pub fn circuit(parts: &NetlistParts, xml: &XmlNetlist, ports: &BTreeMap<String, 
             'V' | 'I' if rest.first().is_some_and(|t| t.eq_ignore_ascii_case("dc")) && rest.len() >= 2 && rest.iter().skip(2).all(|t| !t.contains('(')) => Some(("dc".to_string(), rest[1].to_string())),
             _ => None,
         };
-        out.push(CircuitItem { reference, name: item.name.clone(), device: letter, nodes, pin_count, pin_index, currents, tuner, line: item.tokens.join(" ") });
+        let field = |name: &str| comp.and_then(|c| c.fields.get(name)).filter(|v| !v.is_empty()).cloned();
+        let sim_device = field("Sim.Device").unwrap_or_else(|| if letter == 'X' { "SUBCKT".to_string() } else { letter.to_string() });
+        let sim_type = field("Sim.Type").unwrap_or_default();
+        out.push(CircuitItem { reference, name: item.name.clone(), device: letter, nodes, pin_count, pin_index, currents, tuner, line: item.tokens.join(" "), sim_device, sim_type });
     }
     out
 }
@@ -456,7 +463,7 @@ mod tests {
                 comp("U1", &["1", "2", "3", "4", "5"], &[("Sim.Pins", "1=in+ 2=in- 3=vcc 4=vee 5=out"), ("Sim.Device", "SUBCKT")]),
                 comp("R2", &["2", "1"], &[]),
                 comp("V1", &["1", "2"], &[("Sim.Pins", "1=+ 2=-")]),
-                comp("V2", &["1", "2"], &[("Sim.Pins", "1=+ 2=-")]),
+                comp("V2", &["1", "2"], &[("Sim.Pins", "1=+ 2=-"), ("Sim.Device", "V"), ("Sim.Type", "SIN")]),
                 comp("Q1", &["1", "2", "3"], &[("Sim.Pins", "1=B 2=C 3=E")]),
             ],
             nets: vec![XmlNet { name: "/IN".into(), nodes: vec![] }],
@@ -474,6 +481,9 @@ mod tests {
         assert_eq!(r.pin_index["1"], 0);
         assert_eq!(items[2].tuner, Some(("dc".into(), "5".into())));
         assert_eq!(items[3].tuner, None, "a SIN source is not tuned");
+        assert_eq!((items[0].sim_device.as_str(), items[0].sim_type.as_str()), ("SUBCKT", ""));
+        assert_eq!((items[3].sim_device.as_str(), items[3].sim_type.as_str()), ("V", "SIN"));
+        assert_eq!((items[1].sim_device.as_str(), items[4].sim_device.as_str()), ("R", "Q"));
         let q = &items[4];
         assert_eq!(q.currents, vec!["I(Q1:c)", "I(Q1:b)", "I(Q1:e)"]);
         assert_eq!(q.pin_index["1"], 1, "pin 1 is the base");

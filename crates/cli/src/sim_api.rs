@@ -132,6 +132,8 @@ fn item_json(i: &CircuitItem) -> Value {
         "pin_index": i.pin_index,
         "currents": i.currents,
         "tuner": i.tuner.as_ref().map(|(p, v)| json!({ "param": p, "value": v })),
+        "sim_device": i.sim_device,
+        "sim_type": i.sim_type,
     })
 }
 
