@@ -203,10 +203,10 @@ impl<'a> Board<'a> {
         if !look.is_default() {
             sch.extras.label_looks.insert(id.clone(), look);
         }
-        // "if( !m_currentLabel->AutoRotateOnPlacement() && spin != selected ) SetSpinStyle( selected )", after the placement's AutoRotateItem
-        if let Some(spin) = props.spin {
-            sch.extras.label_spins.insert(id.clone(), spin);
-        }
+        // "if( !m_currentLabel->AutoRotateOnPlacement() && spin != selected ) SetSpinStyle( selected )", after the placement's AutoRotateItem. A label always
+        // has a spin of its own (`createNewLabel`: `SetSpinStyle( m_lastTextOrientation )`, which the tool starts as `SPIN_STYLE::RIGHT`), so none given is
+        // RIGHT and is kept: it is not read again off the wire it ends at whenever the wire moves.
+        sch.extras.label_spins.insert(id.clone(), props.spin.unwrap_or(LabelSpin::Right));
         if look.auto_rotate {
             let mut scene = Scene::new(sch, model);
             let index = scene.sch.labels.iter().position(|l| l.id == id).unwrap_or(0);

@@ -247,11 +247,28 @@ fn place_label_without_auto_keeps_the_spin_the_dialog_gave() {
     let id = sch.labels[0].id.clone();
     assert_eq!(sch.extras.label_spins.get(&id), Some(&LabelSpin::Up));
     assert!(!sch.extras.label_looks.contains_key(&id), "the flag is off: nothing to keep");
-    // with no spin and no flag the label keeps no entry: it reads off the wire as it always did
+    // with no spin given the label is RIGHT (`m_lastTextOrientation( SPIN_STYLE::RIGHT )`), not read off the wire it starts (which would be LEFT), and keeps it
     ok(&mut b, place("D0", p(0, 0), LabelKind::Local, None, None));
     let sch = sch_of(&b);
     let id = sch.labels[1].id.clone();
-    assert!(!sch.extras.label_spins.contains_key(&id) && !sch.extras.label_looks.contains_key(&id));
+    assert_eq!(sch.extras.label_spins.get(&id), Some(&LabelSpin::Right));
+    assert!(!sch.extras.label_looks.contains_key(&id));
+}
+
+/// A KiCad label never changes its spin unless it is a global or hierarchical label with Auto on: a wire that ends at it, moved to run the other way,
+/// leaves it as it was put down.
+#[test]
+fn a_placed_label_keeps_its_spin_when_the_wire_it_ends_is_turned_round() {
+    let m = ConstraintModel::default();
+    let mut s = section();
+    s.wires.push(wire("wire_a", &[p(0, 0), p(10_160, 0)]));
+    let mut b = board(s, &m);
+    ok(&mut b, place("D0", p(10_160, 0), LabelKind::Local, None, None));
+    let id = sch_of(&b).labels[0].id.clone();
+    let mut sch = sch_of(&b).clone();
+    sch.wires[0].pts = vec![p(20_320, 0), p(10_160, 0)];
+    let scene = crate::sch_scene::Scene::new(&sch, &m);
+    assert_eq!(crate::sch_move::effective_spin(&scene, 0), LabelSpin::Right, "{id}");
 }
 
 #[test]
