@@ -35,16 +35,18 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | P26 step 1 (10-22) | Embedded files: the IR and the four readers and writers. `zstd` is added, the one new dependency the user approved. |
 | P19b steps 1-2 (10-22) | Specctra: the DSN model with KiCad's writer, lexer and parser, plus `FromBOARD`. kicad-cli has no DSN, so this is our own exporter; the user approved it on 2026-10-21. |
 | P19b done (10-23) | Specctra: File > Export > Specctra DSN, File > Import > Specctra Session (`FromSESSION` as `Cmd::Specctra`, one undo step), `eda board export specctra` and `eda board import-ses`. The round trip leaves kicad-cli's DRC unchanged; `e2e/specctra.check.js` passes 5/5. PARITY-pcb.md section 46. No golden DSN exists in `qa/data`, and no outside router was run. |
+| P26 done (10-23) | Embedded files: the Embedded Files panel (Board Setup, Schematic Setup, both Footprint Properties), `kicad-embed://` 3D models, Collect and Embed 3D Models; byte-for-byte round trips; STEP/GLB with an embedded model; `e2e/embedded-files.check.js` 9/9. PARITY-pcb.md section 47. Left: font embedding (no outline fonts), the Symbol Editor's tab. |
+| P25 fix (10-23) | Remove Unused Pads uses `BOARD::LayerDepth` as KiCad computes it. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
+
+None after 2026-10-23's merges, apart from those started below.
 
 Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-embedded-files-wip` (on `task-embedded-files`) | Embedded files, P26 | **Done, ready to merge (2026-10-23).** Step 1 is on main; the branch has steps 2-3 verified and finished: the verbs, routes and library handling, the Embedded Files panel (Board Setup > Board Data, Schematic Setup > Schematic Data, Footprint Properties on the board and in the Footprint Editor), `kicad-embed://` models served from the board, Collect and Embed 3D Models (one undo step), the four actions wired (`PARITY-pcb.md` section 47). Gates on the box (2026-10-23): `cargo check --workspace --tests` no warnings; `tools/check.sh fast` Rust 3400 passed, 0 failed, 24 ignored, web typecheck ok, 2352 unit tests; slow `embedded_files_kicad` 9/9 (kicad-cli `pcb export step` and `glb` with an embedded STEP); the 12-board re-export 12/12 (0 differing findings); `e2e/embedded-files.check.js` 9/9 in headless Chromium | Nothing for P26; left by design: embedding the fonts the text uses (no outline fonts), the Symbol Editor's tab |
-| `task-pad-details-wip` (on `task-pad-details`) | A review fix for Remove Unused Pads (layer depth), its test and a PARITY line | Small, unverified | Run the `eda-ops` unused-pads tests, then merge |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -56,7 +58,7 @@ Gates for any of them:
 ## Next tasks, in order (the user's decisions of 2026-10-21)
 
 1. ~~**Finish Specctra**~~ merged 2026-10-23 (`9cd36d7`).
-2. **Finish embedded files** (`task-embedded-files-wip`, above). Then merge `task-pad-details-wip`.
+2. ~~**Finish embedded files**, then merge `task-pad-details-wip`~~ both merged 2026-10-23.
 3. **The simulator** (P21; 32 rows of `ui-parity-missing.json`): `kicad-cli sch export netlist --format spice`, then ngspice (`ngspice -b`, or libngspice), parsed into a Simulation panel. ngspice is a separate program, not a crate. KiCad bundles libngspice; on the box, `sudo apt-get install ngspice`. Port the panels from `eeschema/sim/`.
 4. **The graphical rule editor** (P9b, `pcbnew.DRETool.drcRuleEditor`), after the simulator. Custom Rules is edited as text today.
 5. **Details** listed in `GAPS.md`:
@@ -64,7 +66,7 @@ Gates for any of them:
    - the schematic: copying and pasting whole sheets, buses across sheets, a label's own fields;
    - KiCad 10 items the reader skips: line endings, grid items, via stitching, drill charts;
    - browser checks for the older areas (P20);
-   - re-running `tools/parity_report.py` (connectivity is at 84%).
+   - re-running `tools/parity_report.py` (connectivity is at 84%). On the box (2026-10-23) it needs `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data`, and its connectivity part evaluates 56 boards, against a floor of 58 set on the Mac, which fails the ratchet. Find out which two boards drop out before raising or lowering the floor.
 
 Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Python plugins, the autoplacer and the viewer windows (see `STALE-REASONS.md`); IDF, Hyperlynx and footprint-report export (no kicad-cli exporter; ask the user before porting them as was done for Specctra).
 
