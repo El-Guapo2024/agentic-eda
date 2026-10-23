@@ -96,8 +96,8 @@ fn type_counts(report: &serde_json::Value) -> BTreeMap<String, usize> {
 
 /// The board `rel` (under `qa/data/pcbnew`) staged with its project and rules, read, written back with its derived project, and both judged by kicad-cli. Returns the re-export's
 /// path and text, and panics with the two reports' differences when they differ.
-fn reexport_judged_the_same(cli: &Path, qa: &Path, rel: &str) -> (PathBuf, String) {
-    let src = qa.join("pcbnew").join(rel);
+fn reexport_judged_the_same(cli: &Path, src: &Path, rel: &str) -> (PathBuf, String) {
+    let src = src.to_path_buf();
     let name = src.file_stem().unwrap().to_str().unwrap().to_string();
     let orig_dir = work_dir(&format!("{name}/orig"));
     for ext in ["kicad_pcb", "kicad_pro", "kicad_dru"] {
@@ -156,6 +156,9 @@ const BOARDS: &[&str] = &[
     "api_kitchen_sink.kicad_pcb",
 ];
 
+/// Boards of our own, for the kinds no QA board has: grid items (cartesian and polar, turned, locked, with a custom property), as kicad-cli 10.99 (25ec2335) saved them.
+const FIXTURES: &[&str] = &["kicad10_grid_items.kicad_pcb"];
+
 #[test]
 fn kicad10_item_boards_reexport_as_kicad_cli_judges_the_originals() {
     if slow_tests_off() {
@@ -167,10 +170,12 @@ fn kicad10_item_boards_reexport_as_kicad_cli_judges_the_originals() {
     };
     let only = std::env::var("EDA_KICAD10_ONLY").unwrap_or_default();
     let mut failures = Vec::new();
-    for rel in BOARDS.iter().filter(|b| only.is_empty() || b.contains(only.as_str())) {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let boards = BOARDS.iter().map(|rel| (qa.join("pcbnew").join(rel), rel.to_string())).chain(FIXTURES.iter().map(|f| (fixtures.join(f), f.to_string())));
+    for (src, rel) in boards.filter(|(_, b)| only.is_empty() || b.contains(only.as_str())) {
         let run = || {
-            let (path, ours) = reexport_judged_the_same(&cli, &qa, rel);
-            items_are_written_as_kicad_writes_them(&cli, &qa, rel, &path, &ours);
+            let (path, ours) = reexport_judged_the_same(&cli, &src, &rel);
+            items_are_written_as_kicad_writes_them(&cli, &src, &rel, &path, &ours);
         };
         if let Err(e) = std::panic::catch_unwind(run) {
             failures.push(e.downcast_ref::<String>().cloned().unwrap_or_else(|| format!("{rel}: panicked")));
@@ -294,8 +299,8 @@ fn kicad10_items(text: &str) -> Vec<String> {
 
 /// Every KiCad 10 item of the original is in our re-export as the original has it, and kicad-cli's own re-save of our file (`pcb upgrade --force`, which writes every
 /// item with KiCad's `PCB_IO_KICAD_SEXPR::format`) leaves each one as we wrote it.
-fn items_are_written_as_kicad_writes_them(cli: &Path, qa: &Path, rel: &str, ours_path: &Path, ours: &str) {
-    let original = std::fs::read_to_string(qa.join("pcbnew").join(rel)).unwrap();
+fn items_are_written_as_kicad_writes_them(cli: &Path, src: &Path, rel: &str, ours_path: &Path, ours: &str) {
+    let original = std::fs::read_to_string(src).unwrap();
     let resaved_path = ours_path.with_file_name(format!("{}.resaved.kicad_pcb", ours_path.file_stem().unwrap().to_str().unwrap()));
     std::fs::write(&resaved_path, ours).unwrap();
     let up = Command::new(cli).args(["pcb", "upgrade", "--force"]).arg(&resaved_path).output().unwrap();

@@ -4,7 +4,8 @@
 // the whole box (`edit_text_box`) -- the free text's setters are the text's own verbs and a field's the footprint's.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BarcodeEcc, BarcodeKind, BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import type { BarcodeEcc, BarcodeKind, BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import { gridItemCmd, normalizedGridItem } from "./gridItem";
 import type { Cmd } from "../api/types";
 import { BARCODE_KINDS, barcodeToCmd, clampEcc, eccChoices, hasErrorCorrection } from "./barcodeShapes";
 import type { PcbCtx, PcbItem } from "./pcbProperties";
@@ -195,7 +196,53 @@ function registerBarcode(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]
 }
 
 /** Register `PCB_TEXTBOX` and its properties, and the other classes of the family. */
+/** The cmd that replaces grid item `g` with `g` changed by `patch`, through the item's setters (`edit_grid_item`). */
+function gridCmd(g: BoardGridItem, patch: Partial<BoardGridItem>): Cmd[] {
+  return [{ op: "pcb_item", verb: "edit_grid_item", id: g.id, grid_item: gridItemCmd(normalizedGridItem({ ...g, ...patch })) }];
+}
+
+/**
+ * Register KiCad 10's `PCB_GRID_ITEM` (`PCB_GRIDITEM_DESC`, pcbnew/pcb_grid_item.cpp of KiCad 25ec2335): a board item without a layer (the Layer row is not available), then Grid Type,
+ * Orientation, the cartesian Extent X / Y (the whole width, twice the half-extent the item keeps) and Spacing X / Y, the polar Radius Extent, Radius Spacing, Phi Extent and Phi Spacing,
+ * Priority, Tick Interval and what it affects.
+ */
+function registerGridItem(pm: PM, add: Add): void {
+  pm.registerType("PCB_GRID_ITEM");
+  pm.inheritsAfter("PCB_GRID_ITEM", "BOARD_ITEM");
+  pm.overrideAvailability("PCB_GRID_ITEM", "BOARD_ITEM", "Layer", () => false);
+  const own = (i: PcbItem): BoardGridItem => i.grid!;
+  const isCartesian = (i: PcbItem): boolean => own(i).kind === "cartesian";
+  const isPolar = (i: PcbItem): boolean => own(i).kind === "polar";
+  const same = (a: BoardGridItem, b: BoardGridItem): boolean => JSON.stringify(gridItemCmd(a)) === JSON.stringify(gridItemCmd(b));
+  const edit = (i: PcbItem, patch: Partial<BoardGridItem>): Cmd[] => (same(normalizedGridItem({ ...own(i), ...patch }), own(i)) ? [] : gridCmd(own(i), patch));
+  const GRID_TYPES: Choice[] = [
+    { label: "Cartesian", value: "cartesian" },
+    { label: "Polar", value: "polar" },
+  ];
+  add({ owner: "PCB_GRID_ITEM", name: "Grid Type", kind: "enum", choices: () => GRID_TYPES, get: (i) => own(i).kind, set: (i, v) => edit(i, { kind: String(v) as BoardGridItem["kind"] }) });
+  add({ owner: "PCB_GRID_ITEM", name: "Orientation", kind: "double", display: "degree", get: (i) => own(i).angle, set: (i, v) => edit(i, { angle: num(v) }) });
+  const size = (name: string, available: (i: PcbItem) => boolean, get: (g: BoardGridItem) => number, patch: (g: BoardGridItem, v: number) => Partial<BoardGridItem>): void =>
+    add({ owner: "PCB_GRID_ITEM", name, kind: "int", display: "size", available, get: (i) => get(own(i)), set: (i, v) => edit(i, patch(own(i), Math.round(num(v)))) });
+  // `GetExtentX` / `SetExtentX`: "2x to show total width to the user".
+  size("Extent X", isCartesian, (g) => g.extent[0] * 2, (g, v) => ({ extent: [Math.abs(Math.trunc(v / 2)), g.extent[1]] }));
+  size("Extent Y", isCartesian, (g) => g.extent[1] * 2, (g, v) => ({ extent: [g.extent[0], Math.abs(Math.trunc(v / 2))] }));
+  size("Spacing X", isCartesian, (g) => g.spacing[0], (g, v) => ({ spacing: [Math.max(v, 1), g.spacing[1]] }));
+  size("Spacing Y", isCartesian, (g) => g.spacing[1], (g, v) => ({ spacing: [g.spacing[0], Math.max(v, 1)] }));
+  size("Radius Extent", isPolar, (g) => g.extent[0], (g, v) => ({ extent: [Math.abs(v), g.extent[1]] }));
+  size("Radius Spacing", isPolar, (g) => g.spacing[0], (g, v) => ({ spacing: [Math.max(v, 1), g.spacing[1]] }));
+  add({ owner: "PCB_GRID_ITEM", name: "Phi Extent", kind: "double", display: "degree", available: isPolar, get: (i) => own(i).phi_extent, set: (i, v) => edit(i, { phi_extent: num(v) }) });
+  add({ owner: "PCB_GRID_ITEM", name: "Phi Spacing", kind: "double", display: "degree", available: isPolar, get: (i) => own(i).phi_spacing, set: (i, v) => edit(i, { phi_spacing: num(v) }) });
+  add({ owner: "PCB_GRID_ITEM", name: "Priority", kind: "int", get: (i) => own(i).priority, set: (i, v) => edit(i, { priority: Math.max(0, Math.trunc(num(v))) }) });
+  add({ owner: "PCB_GRID_ITEM", name: "Tick Interval", kind: "int", get: (i) => own(i).tick_interval, set: (i, v) => edit(i, { tick_interval: Math.max(0, Math.trunc(num(v))) }) });
+  const affects = (name: string, key: keyof BoardGridItem["affects"]): void =>
+    add({ owner: "PCB_GRID_ITEM", name, kind: "bool", get: (i) => own(i).affects[key], set: (i, v) => edit(i, { affects: { ...own(i).affects, [key]: Boolean(v) } }) });
+  affects("Affects Cursor Snap", "cursor");
+  affects("Affects Routing", "routing");
+  affects("Affects Placement", "placement");
+}
+
 export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
+  registerGridItem(pm, add);
   registerReferenceImage(pm, add, layerChoices);
   registerPoint(pm, add, layerChoices);
   registerBarcode(pm, add, layerChoices);

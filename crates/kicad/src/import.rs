@@ -310,7 +310,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
 const READ_ITEMS: &[&str] = &[
     "version", "generator", "generator_version", "general", "paper", "page", "title_block", "layers", "setup", "host", "net", "net_class", "footprint", "module", "segment", "arc", "via", "zone", "gr_line", "gr_arc",
     "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "gr_text_box", "image", "point", "dimension", "group", "generated", "barcode", "embedded_fonts",
-    "table", "embedded_files",
+    "table", "embedded_files", "grid_item",
 ];
 
 /// Whether a reader here takes the top-level `item` of kind `tag`: its kind is in [`READ_ITEMS`], and a reference image is one whose data is a file the reader understands

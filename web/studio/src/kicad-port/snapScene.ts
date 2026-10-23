@@ -7,6 +7,8 @@
 // polyline is an item of its own (`PCB_TRACK` is one segment), and a pad is a circle, an oval or a rectangle.
 //
 // Built from `BoardState` (api/types.ts, the type only: this module has no runtime dependency on the app) and cached per board object by `sceneOf`.
+import type { BoardGridItem } from "../api/pcbItemTypes";
+import { geometryContains, gridAnchors, gridBounds, gridGeometry } from "./gridItem";
 import type { BoardState, BoardText, Dimension, Pad, Part, Shape, Track, Via, Zone } from "../api/types";
 import { arcThrough, box, circle, seg, type ArcG, type Box, type Geom, type Pt } from "./snapGeom";
 import { outlineContains } from "./padOutline";
@@ -14,7 +16,7 @@ import { footprintBox } from "./footprintBox";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { hatchDistance } from "./shapeFill";
 
-export type SnapItemType = "footprint" | "pad" | "track" | "via" | "shape" | "zone" | "dimension" | "text" | "point";
+export type SnapItemType = "footprint" | "pad" | "track" | "via" | "shape" | "zone" | "dimension" | "text" | "point" | "grid";
 
 export interface SnapItemBase {
   /** Unique within the scene: the board id of the item, with `#k` after it for the k-th segment of a polyline track. */
@@ -94,10 +96,20 @@ export interface PointItem extends SnapItemBase {
   at: Pt;
 }
 
-export type SnapItem = FootprintItem | PadItem | TrackItem | ViaItem | ShapeItem | ZoneItem | DimensionItem | TextItem | PointItem;
+/** KiCad 10's grid item: its edit handles are anchors (`computeAnchors`, `PCB_GRID_ITEM_T`: the centre `ORIGIN | CORNER | SNAPPABLE`, the corners or the arc's ends and middle `CORNER | SNAPPABLE`); its
+ * own points are the snap of `Align`, not anchors ("would flood the snap pool"). On no layer: shown while Grids is. */
+export interface GridItemSnap extends SnapItemBase {
+  type: "grid";
+  centre: Pt;
+  corners: Pt[];
+}
+
+export type SnapItem = FootprintItem | PadItem | TrackItem | ViaItem | ShapeItem | ZoneItem | DimensionItem | TextItem | PointItem | GridItemSnap;
 
 export interface SnapScene {
   items: readonly SnapItem[];
+  /** KiCad 10's grid items: the grid helper's `Align` snaps to them (kicad-port/gridItem.ts `alignWithGridItems`). */
+  gridItems?: readonly BoardGridItem[];
 }
 
 /** The part of the board state the scene reads (a test builds one by hand; a `BoardState` is one). */
@@ -105,7 +117,7 @@ export interface SceneBoard {
   layers?: readonly string[];
   parts: ReadonlyArray<Pick<Part, "ref" | "placed"> & Partial<Pick<Part, "at" | "side" | "pads" | "courtyard" | "body">>>;
   routing?: { tracks: readonly Track[]; vias: readonly Via[]; zones: readonly Zone[] } | null;
-  drawings?: { shapes: readonly Shape[]; texts: readonly BoardText[]; dimensions: readonly Dimension[]; points?: readonly { id: string; layer: string; x: number; y: number; size: number }[] } | null;
+  drawings?: { shapes: readonly Shape[]; texts: readonly BoardText[]; dimensions: readonly Dimension[]; points?: readonly { id: string; layer: string; x: number; y: number; size: number }[]; grid_items?: readonly BoardGridItem[] } | null;
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------- hit tests
@@ -363,7 +375,13 @@ export function buildScene(board: SceneBoard): SnapScene {
     items.push({ id: p.id, owner: p.id, type: "point", layers: [p.layer], bbox: box(p.x - half, p.y - half, p.x + half, p.y + half), hit: (q) => Math.abs(q[0] - p.x) <= half && Math.abs(q[1] - p.y) <= half, at: [p.x, p.y] });
   }
 
-  return { items };
+  for (const g of board.drawings?.grid_items ?? []) {
+    const [x0, y0, x1, y1] = gridBounds(g);
+    const a = gridAnchors(g);
+    const geom = gridGeometry(g);
+    items.push({ id: g.id, owner: g.id, type: "grid", layers: [], bbox: box(x0, y0, x1, y1), hit: (q) => geometryContains(geom, q), centre: a.centre, corners: a.corners });
+  }
+  return { items, gridItems: board.drawings?.grid_items ?? [] };
 }
 
 const cache = new WeakMap<object, SnapScene>();

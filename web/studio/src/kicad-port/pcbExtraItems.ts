@@ -1,19 +1,20 @@
-// The board items GAPS.md item 24 (package P16) added -- text boxes, reference images, points and barcodes -- seen as one family by the code that
+// The board items GAPS.md item 24 (package P16) added -- text boxes, reference images, points and barcodes, and KiCad 10's grid items -- seen as one family by the code that
 // walks every kind of item (what an id names, where `GetPosition()` puts it, its bounding box, which layer it is on, the verb that deletes it). The hubs that dispatch on the kind
 // of an item (`itemKind`, `itemBounds`, the selection, the delete tool, the move tool's carry) ask this file for the kinds they do not know, so each holds a line for all of them.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import type { BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
 import type { BoardState, Cmd } from "../api/types";
 import { barcodeBounds, barcodeHitDistance, barcodeLabel } from "./barcodeShapes";
 import { imageBoxHitDistance } from "./refImage";
 import { textBoxBounds, textBoxHitDistance } from "./pcbTextBox";
+import { GRID_ITEM_LABEL, gridBounds, gridHitDistance } from "./gridItem";
 
 /** The kinds of item this file knows. */
-export type ExtraKind = "textbox" | "image" | "point" | "barcode";
+export type ExtraKind = "textbox" | "image" | "point" | "barcode" | "grid";
 
 /** Every kind of the family, for the tables that list the kinds an item can be (what a plain drag of a clicked item picks up, ...). */
-export const EXTRA_KINDS: readonly ExtraKind[] = ["textbox", "image", "point", "barcode"];
+export const EXTRA_KINDS: readonly ExtraKind[] = ["textbox", "image", "point", "barcode", "grid"];
 
 export type Box = [number, number, number, number];
 
@@ -31,6 +32,8 @@ export interface ExtraItem {
   image?: BoardRefImage;
   point?: BoardPoint;
   barcode?: BoardBarcode;
+  /** KiCad 10's grid item: on no layer (`layer` is empty; `GetLayerSet` is every layer). */
+  grid?: BoardGridItem;
 }
 
 /** `DEFAULT_PT_SIZE_MM` of `pcbnew/pcb_point.cpp`: the size of a point the Place Point tool makes, µm. */
@@ -69,6 +72,8 @@ export function refImageBounds(i: Pick<BoardRefImage, "x" | "y" | "w" | "h">): B
 
 const ofBarcode = (b: BoardBarcode): ExtraItem => ({ kind: "barcode", id: b.id, layer: b.layer, position: [b.x, b.y], bounds: barcodeBounds(b), barcode: b });
 
+const ofGrid = (g: BoardGridItem): ExtraItem => ({ kind: "grid", id: g.id, layer: "", position: [g.x, g.y], bounds: gridBounds(g), grid: g });
+
 const ofImage = (i: BoardRefImage): ExtraItem => ({ kind: "image", id: i.id, layer: i.layer, position: [i.x, i.y], bounds: refImageBounds(i), image: i });
 
 const ofTextBox = (b: BoardTextBox): ExtraItem => ({
@@ -82,7 +87,7 @@ const ofTextBox = (b: BoardTextBox): ExtraItem => ({
 
 /** Every item of the family the board has, in the order the state lists them. */
 export function extraItems(board: Pick<BoardState, "drawings"> | null | undefined): ExtraItem[] {
-  return [...(board?.drawings?.text_boxes ?? []).map(ofTextBox), ...(board?.drawings?.images ?? []).map(ofImage), ...(board?.drawings?.points ?? []).map(ofPoint), ...(board?.drawings?.barcodes ?? []).map(ofBarcode)];
+  return [...(board?.drawings?.text_boxes ?? []).map(ofTextBox), ...(board?.drawings?.images ?? []).map(ofImage), ...(board?.drawings?.points ?? []).map(ofPoint), ...(board?.drawings?.barcodes ?? []).map(ofBarcode), ...(board?.drawings?.grid_items ?? []).map(ofGrid)];
 }
 
 /** The item of the family `id` names, or undefined. */
@@ -94,12 +99,14 @@ export function extraItemById(board: Pick<BoardState, "drawings"> | null | undef
   const pt = board?.drawings?.points?.find((t) => t.id === id);
   if (pt) return ofPoint(pt);
   const bc = board?.drawings?.barcodes?.find((t) => t.id === id);
-  return bc ? ofBarcode(bc) : undefined;
+  if (bc) return ofBarcode(bc);
+  const gr = board?.drawings?.grid_items?.find((t) => t.id === id);
+  return gr ? ofGrid(gr) : undefined;
 }
 
 /** Every id of the family (for the sets that tell new items from old ones). */
 export function extraItemIds(board: Pick<BoardState, "drawings"> | null | undefined): string[] {
-  return [...(board?.drawings?.text_boxes ?? []).map((b) => b.id), ...(board?.drawings?.images ?? []).map((i) => i.id), ...(board?.drawings?.points ?? []).map((p) => p.id), ...(board?.drawings?.barcodes ?? []).map((b) => b.id)];
+  return [...(board?.drawings?.text_boxes ?? []).map((b) => b.id), ...(board?.drawings?.images ?? []).map((i) => i.id), ...(board?.drawings?.points ?? []).map((p) => p.id), ...(board?.drawings?.barcodes ?? []).map((b) => b.id), ...(board?.drawings?.grid_items ?? []).map((g) => g.id)];
 }
 
 /** How far the point `(x, y)` is from the item, for a click's "sloppiness": 0 when it hits (`HitTest`). */
@@ -110,6 +117,8 @@ export function extraHitDistance(item: ExtraItem, x: number, y: number): number 
   if (item.point) return pointHitDistance(item.point, x, y);
   // `PCB_BARCODE::HitTest`: inside the box of the symbol or of its text, turned with the barcode.
   if (item.barcode) return barcodeHitDistance(item.barcode, x, y);
+  // `PCB_GRID_ITEM::HitTest`: anywhere it covers, turned as it is.
+  if (item.grid) return gridHitDistance(item.grid, x, y);
   return Infinity;
 }
 
@@ -124,6 +133,8 @@ export function extraDeleteCmd(item: Pick<ExtraItem, "kind" | "id">): Cmd {
       return { op: "pcb_item", verb: "delete_text_box", id: item.id };
     case "barcode":
       return { op: "pcb_item", verb: "delete_barcode", id: item.id };
+    case "grid":
+      return { op: "pcb_item", verb: "delete_grid_item", id: item.id };
   }
 }
 
@@ -140,5 +151,7 @@ export function extraItemLabel(board: Pick<BoardState, "drawings"> | null | unde
   if (item?.point) return `Point [${item.layer}]`;
   // `PCB_BARCODE::GetItemDescription`
   if (item?.barcode) return barcodeLabel(item.barcode);
+  // `PCB_GRID_ITEM::GetItemDescription`
+  if (item?.grid) return GRID_ITEM_LABEL;
   return id;
 }

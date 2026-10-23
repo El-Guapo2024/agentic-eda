@@ -366,21 +366,24 @@ pub struct BoardItems {
     /// The hatch, the line endings and the net of the board's shapes, by the id of the shape ([`ShapeStyle`]). Not items of their own: see [`BoardItems::ids`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shape_styles: Vec<ShapeStyle>,
+    /// KiCad 10's grid items (`grid_item`, `PCB_GRID_ITEM`) -- see [`crate::grid_item`]. Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grid_items: Vec<crate::grid_item::GridItem>,
 }
 
 impl BoardItems {
     pub fn is_empty(&self) -> bool {
-        self.text_boxes.is_empty() && self.images.is_empty() && self.points.is_empty() && self.shape_styles.is_empty()
+        self.text_boxes.is_empty() && self.images.is_empty() && self.points.is_empty() && self.shape_styles.is_empty() && self.grid_items.is_empty()
     }
 
     /// Every id of the items, for the id sets that name them (a shape's style is the shape's, not an item).
     pub fn ids(&self) -> impl Iterator<Item = &str> {
-        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.points.iter().map(|p| p.id.as_str()))
+        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.points.iter().map(|p| p.id.as_str())).chain(self.grid_items.iter().map(|g| g.id.as_str()))
     }
 
     /// The ids of the items the lock (`(locked yes)`) applies to: every kind but the point, whose file form has no lock.
     pub fn lockable_ids(&self) -> impl Iterator<Item = &str> {
-        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str()))
+        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.grid_items.iter().map(|g| g.id.as_str()))
     }
 
     /// Give each item without an id the deterministic one the others get (`next_item_id`), in an order that does not depend on how they were listed.
@@ -388,6 +391,7 @@ impl BoardItems {
         assign_ids(&mut self.text_boxes, "tbx", existing, |t| &mut t.id, TextBox::id_seed, |t| (t.text.clone(), t.start, t.end));
         assign_ids(&mut self.images, "img", existing, |i| &mut i.id, RefImage::id_seed, |i| (i.layer.clone(), i.at, i.data.len() as i64));
         assign_ids(&mut self.points, "pnt", existing, |p| &mut p.id, PcbPoint::id_seed, |p| (p.layer.clone(), p.at, p.size_um));
+        assign_ids(&mut self.grid_items, "grd", existing, |g| &mut g.id, crate::grid_item::GridItem::id_seed, |g| (g.at, g.extent, g.spacing));
     }
 
     /// Sort the collections by id (the canonical form a design is hashed in).
@@ -396,6 +400,7 @@ impl BoardItems {
         self.images.sort_by(|a, b| a.id.cmp(&b.id));
         self.points.sort_by(|a, b| a.id.cmp(&b.id));
         self.shape_styles.sort_by(|a, b| a.id.cmp(&b.id));
+        self.grid_items.sort_by(|a, b| a.id.cmp(&b.id));
     }
 
     /// The hatch of the shape `shape_id`, if it has one.

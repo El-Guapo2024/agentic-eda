@@ -11,6 +11,7 @@ use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
 use eda_model::barcode::{Barcode, BarcodeKind, EccLevel};
 use eda_model::ir::{DrawingsSection, Millideg, Point, Shape, Um};
+use eda_model::grid_item::GridItem;
 use eda_model::line_ending::LineEnding;
 use eda_model::pcb_items::{PcbPoint, RefImage, ShapeFill, TextBox};
 use eda_model::CheckResult;
@@ -76,6 +77,13 @@ pub enum PcbItemCmd {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         end_ending: Option<LineEnding>,
     },
+    /// `pcbnew.GridItem.place` (`DRAWING_TOOL::PlaceSubGrid`, "Place Sub-grid"): KiCad 10's grid item, centred on the first click and as big and as turned as the second makes it.
+    /// `grid_item.id` is ignored. See [`crate::kicad10_items`].
+    AddGridItem { grid_item: GridItem },
+    /// `DIALOG_GRID_ITEM_PROPERTIES::TransferDataFromWindow` and the Properties panel ("Edit Grid Item Properties"): the grid with every field replaced, in place.
+    EditGridItem { id: String, grid_item: GridItem },
+    /// Remove a grid item.
+    DeleteGridItem { id: String },
 }
 
 impl PcbItemCmd {
@@ -87,6 +95,8 @@ impl PcbItemCmd {
             PcbItemCmd::AddPoint { point } => vec![point.layer.as_str()],
             PcbItemCmd::SetShapeStyle { ids, .. } => ids.iter().map(String::as_str).collect(),
             PcbItemCmd::AddBarcode { barcode } => vec![barcode.layer.as_str()],
+            PcbItemCmd::AddGridItem { .. } => vec!["grid_item"],
+            PcbItemCmd::EditGridItem { id, .. } | PcbItemCmd::DeleteGridItem { id } => vec![id.as_str()],
             PcbItemCmd::EditBarcode { id, .. } | PcbItemCmd::DeleteBarcode { id } => vec![id.as_str()],
             PcbItemCmd::EditTextBox { id, .. }
             | PcbItemCmd::DeleteTextBox { id }
@@ -115,6 +125,9 @@ impl PcbItemCmd {
             PcbItemCmd::AddBarcode { barcode: b } => format!("barcode add --layer {} --at {},{} --size {}x{} --kind {} --text {:?}", b.layer, mm(b.at.x), mm(b.at.y), mm(b.width_um), mm(b.height_um), b.kind.file_name(), b.text),
             PcbItemCmd::EditBarcode { id, barcode: b } => format!("barcode edit {id} --layer {} --at {},{} --size {}x{} --kind {} --text {:?}", b.layer, mm(b.at.x), mm(b.at.y), mm(b.width_um), mm(b.height_um), b.kind.file_name(), b.text),
             PcbItemCmd::DeleteBarcode { id } => format!("barcode delete {id}"),
+            PcbItemCmd::AddGridItem { grid_item: g } => format!("grid-item add --{} --at {},{} --extent {}x{} --spacing {}x{}", g.kind.token(), mm(g.at.x), mm(g.at.y), mm(g.extent.x), mm(g.extent.y), mm(g.spacing.x), mm(g.spacing.y)),
+            PcbItemCmd::EditGridItem { id, grid_item: g } => format!("grid-item edit {id} --{} --at {},{} --extent {}x{} --spacing {}x{} --angle {}", g.kind.token(), mm(g.at.x), mm(g.at.y), mm(g.extent.x), mm(g.extent.y), mm(g.spacing.x), mm(g.spacing.y), g.angle),
+            PcbItemCmd::DeleteGridItem { id } => format!("grid-item delete {id}"),
             PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending } => {
                 let mut out = format!("shape style {} --fill {}", ids.join(","), fill.map_or("unchanged".to_string(), |f| format!("{f:?}").to_lowercase()));
                 for (flag, e) in [("start", start_ending), ("end", end_ending)] {
@@ -135,6 +148,7 @@ impl PcbItemCmd {
             PcbItemCmd::AddPoint { .. } | PcbItemCmd::EditPoint { .. } | PcbItemCmd::DeletePoint { .. } => "point",
             PcbItemCmd::SetShapeStyle { .. } => "shape-style",
             PcbItemCmd::AddBarcode { .. } | PcbItemCmd::EditBarcode { .. } | PcbItemCmd::DeleteBarcode { .. } => "barcode",
+            PcbItemCmd::AddGridItem { .. } | PcbItemCmd::EditGridItem { .. } | PcbItemCmd::DeleteGridItem { .. } => "grid-item",
         }
     }
 }
@@ -157,6 +171,9 @@ impl<'a> Board<'a> {
             PcbItemCmd::AddBarcode { barcode } => self.add_barcode(barcode.clone()),
             PcbItemCmd::EditBarcode { id, barcode } => self.edit_barcode(id, barcode.clone()),
             PcbItemCmd::DeleteBarcode { id } => self.delete_barcode(id),
+            PcbItemCmd::AddGridItem { grid_item } => self.add_grid_item(grid_item.clone()),
+            PcbItemCmd::EditGridItem { id, grid_item } => self.edit_grid_item(id, grid_item.clone()),
+            PcbItemCmd::DeleteGridItem { id } => self.delete_grid_item(id),
         }
     }
 
@@ -594,6 +611,9 @@ pub(crate) fn transform_board_items(dr: &mut DrawingsSection, ids: &BTreeSet<Str
     }
     for b in dr.barcodes.iter_mut().filter(|b| ids.contains(&b.id)) {
         transform_barcode(b, x, copper);
+    }
+    for g in dr.board_items.grid_items.iter_mut().filter(|g| ids.contains(&g.id)) {
+        crate::kicad10_items::transform_grid_item(g, x);
     }
 }
 

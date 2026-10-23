@@ -95,6 +95,42 @@ export interface BoardRefImage {
 }
 
 /** `PCB_POINT`: a marker on the board (a cross with a ring), a snap anchor for the grid helper. `x`, `y` are its centre, `size` its extent in µm. */
+/**
+ * KiCad 10's grid item (`PCB_GRID_ITEM`, crates/model/src/grid_item.rs) as the state lists it: a sub-grid the cursor, the router and the placement tools snap to where it covers the
+ * board. `extent` is the half-extent (centre to edge) and `spacing` the pitch, µm; on a polar grid `[0]` of each is the radius and the radial pitch and `phi_extent` / `phi_spacing`
+ * the sweep and the angular pitch, degrees. `angle` is the orientation, degrees counter-clockwise on the screen.
+ */
+export interface BoardGridItem {
+  id: string;
+  kind: "cartesian" | "polar";
+  x: Um;
+  y: Um;
+  extent: [Um, Um];
+  spacing: [Um, Um];
+  angle: number;
+  phi_extent: number;
+  phi_spacing: number;
+  priority: number;
+  tick_interval: number;
+  affects: { cursor: boolean; routing: boolean; placement: boolean };
+  custom_properties?: [string, string][];
+}
+
+/** A grid item as `add_grid_item` / `edit_grid_item` take it (`eda_model::grid_item::GridItem`). */
+export interface CmdGridItem {
+  kind: "cartesian" | "polar";
+  at: PointXY;
+  extent: PointXY;
+  spacing: PointXY;
+  angle: number;
+  phi_extent_deg: number;
+  phi_spacing_deg: number;
+  priority: number;
+  tick_interval: number;
+  affects: { cursor: boolean; routing: boolean; placement: boolean };
+  custom_properties?: [string, string][];
+}
+
 export interface BoardPoint {
   id: string;
   layer: string;
@@ -192,7 +228,11 @@ export type PcbItemCmd =
    * dialog's choice), for all of `ids` as one undo step. The hatch lines are worked out when the board is described -- `pcbnew.Control.rehatchShapes` (`PCB_CONTROL::RehatchShapes`,
    * which KiCad posts after every commit, undo and file load) is that, so there is no verb for it. A fill left out changes nothing.
    */
-  | { verb: "set_shape_style"; ids: string[]; fill?: ShapeFill; start_ending?: CmdLineEnding; end_ending?: CmdLineEnding };
+  | { verb: "set_shape_style"; ids: string[]; fill?: ShapeFill; start_ending?: CmdLineEnding; end_ending?: CmdLineEnding }
+  /** Place Sub-grid's second click (`DRAWING_TOOL::PlaceSubGrid`) and Grid Item Properties' OK (`DIALOG_GRID_ITEM_PROPERTIES`). */
+  | { verb: "add_grid_item"; grid_item: CmdGridItem }
+  | { verb: "edit_grid_item"; id: string; grid_item: CmdGridItem }
+  | { verb: "delete_grid_item"; id: string };
 
 /**
  * One line ending as `set_shape_style` takes it (`eda_model::line_ending::LineEnding`): KiCad 10's `(start_shape ..)` / `(end_shape ..)` of a line, an arc or a curve -- the shape dialog's

@@ -690,3 +690,53 @@ fn the_endings_have_one_wire_form() {
     let back: Cmd = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
     assert_eq!(back, c);
 }
+
+// ------------------------------------------------------------------------------------------------------------------ grid items (KiCad 10)
+
+use eda_model::grid_item::{GridItem, GridKind};
+
+fn grids<'a>(b: &'a Board<'_>) -> &'a [GridItem] {
+    &drawings(b).board_items.grid_items
+}
+
+#[test]
+fn a_grid_item_is_placed_edited_turned_flipped_locked_and_deleted() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let g = GridItem { id: "caller".into(), extent: p(-3_000, 2_000), priority: 0, ..GridItem::new(p(10_000, 0)) };
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddGridItem { grid_item: g })).unwrap();
+    let id = grids(&b)[0].id.clone();
+    assert!(id.starts_with("grd_"), "{id}");
+    assert_eq!((grids(&b)[0].extent, grids(&b)[0].priority), (p(3_000, 2_000), 1), "the setters' ranges");
+
+    let edited = GridItem { kind: GridKind::Polar, phi_extent_deg: 90.0, angle: -30.0, ..grids(&b)[0].clone() };
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditGridItem { id: id.clone(), grid_item: edited })).unwrap();
+    assert_eq!((grids(&b)[0].kind, grids(&b)[0].angle, grids(&b)[0].id.as_str()), (GridKind::Polar, 330.0, id.as_str()));
+
+    // A clockwise quarter turn about the origin takes 90 from KiCad's counter-clockwise orientation.
+    b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    assert_eq!((grids(&b)[0].at, grids(&b)[0].angle), (p(0, 10_000), 240.0));
+    b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!(grids(&b)[0].angle, 300.0, "180 - 240");
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: 1_000, dy: 0 }).unwrap();
+    assert_eq!(grids(&b)[0].at, p(1_000, 10_000));
+    b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: true }).unwrap();
+    assert!(drawings(&b).locked_ids.contains(&id));
+
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteGridItem { id: "grd_nope".into() })).unwrap_err()[0].check, "ops_unknown_grid_item");
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteGridItem { id })).unwrap();
+    assert!(grids(&b).is_empty());
+}
+
+#[test]
+fn the_grid_item_commands_have_one_wire_form() {
+    let add: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "add_grid_item", "grid_item": {
+        "kind": "polar", "at": {"x": 1000, "y": 2000}, "extent": {"x": 5000, "y": 0}, "spacing": {"x": 500, "y": 500}, "angle": 45.5,
+        "phi_extent_deg": 180.0, "phi_spacing_deg": 15.0, "priority": 2, "tick_interval": 4, "affects": {"cursor": true, "routing": false, "placement": true}}})).unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::AddGridItem { grid_item }) = &add else { panic!("{add:?}") };
+    assert_eq!((grid_item.kind, grid_item.angle, grid_item.phi_extent_deg, grid_item.affects.routing), (GridKind::Polar, 45.5, 180.0, false));
+    let Cmd::PcbItem(c) = &add else { panic!() };
+    assert_eq!(c.describe(), "grid-item add --polar --at 1.000,2.000 --extent 5.000x0.000 --spacing 0.500x0.500");
+    let back: Cmd = serde_json::from_value(serde_json::to_value(&add).unwrap()).unwrap();
+    assert_eq!(back, add);
+}

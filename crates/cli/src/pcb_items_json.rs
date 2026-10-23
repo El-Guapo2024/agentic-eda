@@ -93,6 +93,7 @@ pub(crate) fn extend(drawings: &mut Value, design: &eda_model::ir::Design, model
     drawings["images"] = Value::Array(d.board_items.images.iter().map(image_json).collect());
     drawings["points"] = Value::Array(d.board_items.points.iter().map(point_json).collect());
     drawings["barcodes"] = Value::Array(d.barcodes.iter().map(|b| barcode_json(b, tv)).collect());
+    drawings["grid_items"] = Value::Array(d.board_items.grid_items.iter().map(grid_item_json).collect());
     hatch_json(drawings, design, model, d);
 }
 
@@ -138,6 +139,26 @@ fn hatch_json(drawings: &mut Value, design: &eda_model::ir::Design, model: &eda_
         json["hatch_width"] = json!(hatching.width);
         json["hatch_lines"] = Value::Array(hatching.lines.iter().map(|(a, b)| json!([a.x, a.y, b.x, b.y])).collect());
     }
+}
+
+/// One grid item (KiCad 10's `PCB_GRID_ITEM`) as the canvas, the dialog and the Properties panel read it: its centre, its half-extent and pitch (micrometres; for a polar grid `x` is
+/// the radius and the radial pitch), its orientation and polar angles in degrees, its priority, major-tick interval and what it affects.
+pub(crate) fn grid_item_json(g: &eda_model::grid_item::GridItem) -> Value {
+    json!({
+        "id": g.id,
+        "kind": match g.kind { eda_model::grid_item::GridKind::Cartesian => "cartesian", eda_model::grid_item::GridKind::Polar => "polar" },
+        "x": g.at.x,
+        "y": g.at.y,
+        "extent": [g.extent.x, g.extent.y],
+        "spacing": [g.spacing.x, g.spacing.y],
+        "angle": g.angle,
+        "phi_extent": g.phi_extent_deg,
+        "phi_spacing": g.phi_spacing_deg,
+        "priority": g.priority,
+        "tick_interval": g.tick_interval,
+        "affects": { "cursor": g.affects.cursor, "routing": g.affects.routing, "placement": g.affects.placement },
+        "custom_properties": g.custom_properties,
+    })
 }
 
 /// One line ending as the canvas, the shape dialog and the Properties panel read it: `{ "style", "length", "width", "stroke_width" }` (micrometres; 0 is automatic).

@@ -11,7 +11,7 @@
 
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
-import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
+import type { BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
 import type { MicrowaveCmd } from "./microwaveTypes";
 import type { EmbeddedCmd } from "./embeddedTypes";
 import type { TableCmdWire } from "./tableTypes";
@@ -608,6 +608,8 @@ export interface Drawings {
   images?: BoardRefImage[];
   /** The board's points (`PCB_POINT`) and barcodes (`PCB_BARCODE`) -- see api/pcbItemTypes.ts. */
   points?: BoardPoint[];
+  /** KiCad 10's grid items (`PCB_GRID_ITEM`) -- see api/pcbItemTypes.ts. */
+  grid_items?: BoardGridItem[];
   barcodes?: BoardBarcode[];
   /** The tables of the board (`PCB_TABLE`, crates/model/src/table.rs), with the geometry `crates/cli/src/table_json.rs` works out. Absent when the board has none. */
   tables?: BoardTable[];

@@ -42,6 +42,7 @@ import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
 import { TextDialog } from "./components/TextDialog";
 import { PcbItemDialogs } from "./components/PcbItemDialogs";
+import { Kicad10ItemDialogs } from "./components/Kicad10ItemDialogs";
 import { MicrowaveDialogs } from "./components/MicrowaveDialogs";
 import { MultichannelDialogs } from "./components/MultichannelDialogs";
 import { ItemPropertiesDialog } from "./components/ItemPropertiesDialog";
@@ -270,6 +271,7 @@ function StudioFrame() {
       <ZoneDialog />
       <TextDialog />
       <PcbItemDialogs />
+      <Kicad10ItemDialogs />
       <MicrowaveDialogs />
       <MultichannelDialogs />
       <ItemPropertiesDialog />

@@ -18,6 +18,7 @@ import { setToolPreview } from "../components/canvas/pcbItemsPaint";
 import { openBarcodeDialog, openTextBoxDialog } from "../state/pcbItemDialogs";
 import { newBarcode } from "../kicad-port/barcodeShapes";
 import { textStyleOf } from "../kicad-port/layerDefaults";
+import { gridItemCmd, newGridItem, sizeGridToCursor } from "../kicad-port/gridItem";
 
 export function registerPcbItemActions(m: Map<string, (param?: unknown) => void>, ctx: SweepCtx): void {
   const { pcbOnly } = createSweepHelpers(ctx);
@@ -29,6 +30,8 @@ export function registerPcbItemActions(m: Map<string, (param?: unknown) => void>
   });
   m.set("pcbnew.InteractiveDrawing.placePoint", pcbOnly(() => startPlacePointTool(ctx)));
   m.set("pcbnew.InteractiveDrawing.barcode", pcbOnly(() => startBarcodeTool(ctx)));
+  // KiCad 10 (25ec2335): `PCB_ACTIONS::placeSubGrid`, "Place Sub-grid".
+  m.set("pcbnew.GridItem.place", pcbOnly(() => startPlaceSubGridTool(ctx)));
   // KiCad posts `rehatchShapes` after every commit, undo and file load and keeps the lines in each shape; here the server works them out from the board as it is every time it describes it
   // (`eda_drc::hatch`), so the action is to describe it again -- the lines are never older than the board, and a shape put over a hatched one has already cut its lines.
   m.set("pcbnew.Control.rehatchShapes", pcbOnly(() => void ctx.api.refresh()));
@@ -57,6 +60,41 @@ function startBarcodeTool(ctx: SweepCtx): void {
   };
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
   next();
+}
+
+/**
+ * `DRAWING_TOOL::PlaceSubGrid` (KiCad 10, "Place Sub-grid"): Grids is switched on so the new grid will show; the first click (where the grid helper holds the cursor) is the centre, and
+ * the grid then follows the cursor -- as big each way as the cursor is far, turned to face it (`sizeToCursor`) -- until the second click puts it on the board as one undo step ("Place
+ * Sub-grid"). Escape drops a grid in the hand and waits for a new centre; Escape again ends the tool.
+ */
+function startPlaceSubGridTool(ctx: SweepCtx): void {
+  const { api, dispatch } = ctx;
+  dispatch({ type: "APPEARANCE", op: { op: "object", id: "subgrids", visible: true } });
+  dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+  const centre = (): void =>
+    picker.start({
+      kind: "point",
+      prompt: "Place Sub-grid: click the centre of the grid (Escape ends the tool)",
+      onPoint: (at) => {
+        const item = newGridItem(at.x, at.y);
+        setToolPreview({ kind: "grid", item: { ...item, extent: [0, 0] } });
+        return {
+          kind: "point",
+          prompt: "Place Sub-grid: click to set the size and the angle (Escape drops it)",
+          onPoint: (to) => {
+            setToolPreview(null);
+            const placed = sizeGridToCursor(item, [to.x, to.y]);
+            void applyCommands(api, dispatch, [{ op: "pcb_item", verb: "add_grid_item", grid_item: gridItemCmd(placed) }]).then(() => centre());
+            return false;
+          },
+          onCancel: (activated) => {
+            setToolPreview(null);
+            if (!activated) centre();
+          },
+        };
+      },
+    });
+  centre();
 }
 
 /**

@@ -21,6 +21,7 @@ pub mod fp_units;
 pub mod fp_exchange;
 pub mod fp_models;
 pub mod gensym;
+pub mod grid_item;
 pub mod groups;
 pub mod image_info;
 pub mod tuning;

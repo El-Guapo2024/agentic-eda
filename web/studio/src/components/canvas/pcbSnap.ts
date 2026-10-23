@@ -90,7 +90,7 @@ export class PcbSnap {
   /** What is drawn: a layer unless the Appearance panel turned it off, and in high-contrast mode only the active layer's items at full strength. */
   private visibility(): Visibility {
     const v = this.view!;
-    return { layerVisible: (layer) => v.layerVisible[layer] !== false, highContrastLayers: v.highContrast && v.activeLayer ? new Set([v.activeLayer]) : null, pointsVisible: objectOn(v.layerVisible, "ly_points") };
+    return { layerVisible: (layer) => v.layerVisible[layer] !== false, highContrastLayers: v.highContrast && v.activeLayer ? new Set([v.activeLayer]) : null, pointsVisible: objectOn(v.layerVisible, "ly_points"), gridItemsVisible: objectOn(v.layerVisible, "subgrids") };
   }
 
   private helperFor(tool: string): PcbGridHelper {
@@ -164,7 +164,7 @@ export class PcbSnap {
     const cats = ids.map((id): GridCategory => {
       const kind = itemKind(v.board!, id);
       // (`GetItemGrid`: a table has no grid of its own, the current one)
-      const mapped: PcbItemKind | null = kind === "part" ? "footprint" : kind === "table" || kind === "tablecell" ? null : kind;
+      const mapped: PcbItemKind | null = kind === "part" ? "footprint" : kind === "table" || kind === "tablecell" ? null : kind === "grid" ? "other" : kind;
       return pcbItemGrid(mapped);
     });
     return selectionGrid(cats, (c) => gridSizeFor(c, v.gridUm, v.grids, v.overrides));

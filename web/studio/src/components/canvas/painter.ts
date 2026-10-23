@@ -38,6 +38,8 @@ import { drawFootprintArt } from "./fpArtPaint";
 import { isAnyFill } from "../../kicad-port/shapeFill";
 import { orderedStackLayers } from "../../kicad-port/padStack";
 import { drawPcbItems, drawRefImages } from "./pcbItemsPaint";
+import { drawGridItems, gridItemCovers, shownGridItems } from "./gridItemPaint";
+import { gridGeometry, type GridGeometry } from "../../kicad-port/gridItem";
 import { drawTablePreview, drawTables } from "./tablePaint";
 import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
 import type { TuneHoverReply } from "../../api/tuneTypes";
@@ -1076,7 +1078,7 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
  * (computeVisibleGridSize) is the behaviorally important part and IS
  * ported exactly; see PARITY-pcb.md.
  */
-function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number, origin: readonly [number, number] = [0, 0]) {
+function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number, origin: readonly [number, number] = [0, 0], covered: readonly GridGeometry[] = []) {
   const visible = computeVisibleGridSize(gridUm, view.scale, DEFAULT_GRID_STYLE);
   const stepPx = visible * view.scale;
   if (!(stepPx > 0)) return; // gridUm <= 0 or a degenerate scale -- nothing sane to draw
@@ -1097,6 +1099,8 @@ function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: n
     const tickX = isMajorGridLine(i);
     for (let j = firstIndexY; j <= lastIndexY; j++) {
       const y = origin[1] + j * visible;
+      // A grid item's coverage hides the editor grid (`drawGridSource`'s wash): see gridItemPaint.ts.
+      if (covered.length > 0 && gridItemCovers(covered, x, y)) continue;
       ctx.beginPath();
       ctx.arc(x, y, tickX && isMajorGridLine(j) ? majorR : minorR, 0, Math.PI * 2);
       ctx.fill();
@@ -1410,7 +1414,13 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   });
   const copperPasses = passes.map((pass) => ({ alpha: pass.alpha, layers: copper(pass.b) }));
   const byLayer: Record<string, () => void> = {
-    grid: () => opts.gridVisible && drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0]),
+    // The editor grid and KiCad 10's grid items (`drawGridSources`), the one leaving out what the others cover.
+    grid: () => {
+      const grids = shownGridItems(board, opts.layerVisible);
+      if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0], grids.map(gridGeometry));
+      const box: [number, number, number, number] = [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale];
+      drawGridItems(ctx, view, board, opts.layerVisible, opts.selection, DEFAULT_GRID_STYLE, box);
+    },
     // The drawing sheet and the board area shadow lie under everything else, the outline on top of them.
     // When the Edge.Cuts shapes are the outline (arcs, circles, cutouts), they are drawn as the shapes they are, below; the polygon is only their summary.
     background: () => {
@@ -1461,6 +1471,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     ctx.save();
     ctx.transform(a, b, c, d, e, f);
     const moving = copper(carry.moving);
+    drawGridItems(ctx, view, carry.moving, own.layerVisible, own.selection, DEFAULT_GRID_STYLE, [-Infinity, -Infinity, Infinity, Infinity]);
     drawRefImages(ctx, view, carry.moving, own);
     for (const key of drawOrder()) moving[key]?.();
     for (const part of carry.moving.parts) drawFootprint(ctx, view, part, own);

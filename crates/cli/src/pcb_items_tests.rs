@@ -826,3 +826,42 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
     assert_eq!((read[0].1, read[0].2, read[0].3, read[0].4), (BarcodeKind::Qr, EccLevel::Q, at, 8_000));
     assert_eq!((read[1].0.as_str(), read[1].1), ("KEPT-TOO", BarcodeKind::Code128));
 }
+
+// ----------------------------------------------------------------------------------------------------------------------------- KiCad 10: line endings, grid items
+
+/// A line's endings are one undo step, described by the state (`start_ending`, `end_ending`) and written to the board after the stroke.
+#[test]
+fn a_lines_endings_are_one_undo_step_described_by_the_state_and_written_to_the_board() {
+    use eda_model::line_ending::{LineEnding, LineEndingStyle};
+    let dir = scratch("k10_endings");
+    setup(&dir);
+    let id = add_shape(&dir, bar("F.SilkS", 5_000, 10_000, 20_000));
+    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_um: 2_000, ..Default::default() };
+    step(&dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.clone()], fill: None, start_ending: Some(arrow), end_ending: Some(LineEnding::new(LineEndingStyle::ArrowOpen)) }), false, "test").unwrap();
+    let s = shape_json(&dir, &id);
+    assert_eq!(s["start_ending"], serde_json::json!({ "style": "arrow", "length": 2000, "width": 0, "stroke_width": 0 }));
+    assert_eq!(s["end_ending"]["style"], "arrow_open");
+    let pcb = std::fs::read_to_string(dir.join(".kicad").join(format!("{}.kicad_pcb", dir.file_name().unwrap().to_str().unwrap()))).unwrap_or_default();
+    if !pcb.is_empty() {
+        assert!(pcb.contains("(start_shape arrow (length 2)) (end_shape arrow_open)"), "{pcb}");
+    }
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert!(shape_json(&dir, &id).get("start_ending").is_none(), "the undo takes them away");
+}
+
+/// A grid item is one undo step of the board and the state lists it.
+#[test]
+fn a_grid_item_is_one_undo_step_and_the_state_lists_it() {
+    use eda_model::grid_item::GridItem;
+    let dir = scratch("k10_grid");
+    setup(&dir);
+    let g = GridItem { angle: 30.0, tick_interval: 5, ..GridItem::new(Point { x: 20_000, y: 15_000 }) };
+    step(&dir, Cmd::PcbItem(PcbItemCmd::AddGridItem { grid_item: g }), false, "test").unwrap();
+    let grids = state(&dir)["drawings"]["grid_items"].clone();
+    assert_eq!(grids.as_array().unwrap().len(), 1);
+    let j = &grids[0];
+    assert_eq!((j["kind"].as_str(), j["x"].as_i64(), j["extent"][0].as_i64(), j["angle"].as_f64(), j["tick_interval"].as_i64(), j["affects"]["cursor"].as_bool()), (Some("cartesian"), Some(20_000), Some(5_000), Some(30.0), Some(5), Some(true)));
+    assert!(j["id"].as_str().unwrap().starts_with("grd_"));
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!(state(&dir)["drawings"]["grid_items"].as_array().map_or(0, |a| a.len()), 0);
+}

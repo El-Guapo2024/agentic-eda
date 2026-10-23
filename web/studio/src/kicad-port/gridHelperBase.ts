@@ -37,6 +37,8 @@ export interface Visibility {
   highContrastLayers: ReadonlySet<string> | null;
   /** The Points object (`LAYER_POINTS`) is on: a point that is not shown is not snapped to either. Absent means on. */
   pointsVisible?: boolean;
+  /** KiCad 10's Grids object (`LAYER_SUBGRIDS`) is on: "Hidden grid items don't snap the cursor". Absent means on. */
+  gridItemsVisible?: boolean;
 }
 
 /** A set of layers an item must be on to be snapped to, or every layer. */
