@@ -32,6 +32,7 @@ import { registerPcbAssignNetclass } from "./assignNetclass";
 import { DEFAULT_FILTER_OPTIONS, filterSelection, netItems, netsOfItems, unrouteSelected, type FilterOptions } from "../kicad-port/pcbSelectionOps";
 import { itemKind } from "../kicad-port/pcbItems";
 import { mirrorReferencePoint, mirrorableIds, planMirror, type FlipDirection } from "../kicad-port/pcbMirror";
+import { modifyResultCmds } from "../kicad-port/shapeFill";
 import { healShapes, isLineModifiable, lineSelectionError, modifyLines, simplifyPolygonRing, type LineRoutine, type ModifyResult } from "../kicad-port/pcbModify";
 import { boardOutlineRings } from "../kicad-port/pcbOutline";
 import { breakTrack, filletTracks, type EditBoard, type EditTrack } from "../kicad-port/pcbTrackEdit";
@@ -241,8 +242,8 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
       toast(res.message ?? "Nothing to do.");
       return;
     }
-    const cmds: Cmd[] = [...res.remove.map((id): Cmd => ({ op: "delete_shape", id })), ...res.add.map((shape): Cmd => ({ op: "add_shape", shape }))];
-    void applyEdit(cmds, res.remove, res.message);
+    const { cmds, removed } = modifyResultCmds(board, res);
+    void applyEdit(cmds, removed, res.message);
   };
   const modifyLinesAction = (kind: LineRoutine["kind"]) =>
     pcbOnly(() => {
@@ -354,8 +355,8 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
           last.healToleranceUm = toleranceUm;
           if (toleranceUm <= 0) return;
           const res = healShapes(shapes, toleranceUm);
-          const cmds: Cmd[] = [...res.remove.map((id): Cmd => ({ op: "delete_shape", id })), ...res.add.map((shape): Cmd => ({ op: "add_shape", shape }))];
-          void applyEdit(cmds, res.remove, cmds.length === 0 ? "No shape ends were close enough to heal." : null);
+          const { cmds, removed } = modifyResultCmds(board, res);
+          void applyEdit(cmds, removed, cmds.length === 0 ? "No shape ends were close enough to heal." : null);
         },
       });
     })

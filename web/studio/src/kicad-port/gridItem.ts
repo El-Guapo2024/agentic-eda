@@ -348,6 +348,26 @@ export const GRID_DIM_ALPHA = 0.4;
 export const GRID_EDGE_DARKEN = 0.75;
 export const GRID_SELECTED_BRIGHTEN = 0.5;
 
+/**
+ * A layer's colour for a selected item (`RENDER_SETTINGS::update`'s `m_layerColorsSel`, `m_selectFactor` 0.5): kept for a colour close to black, else brightened by
+ * `0.25 + brightness^3` (at most 1), and when that hardly changes the brightness, darkened by 0.2 with the blue raised instead. `#rrggbb[aa]` in and out, the alpha kept.
+ */
+export function selectedLayerColor(hex: string): string {
+  const h = hex.replace("#", "");
+  const ch = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as [number, number, number];
+  const alpha = h.length >= 8 ? h.slice(6, 8) : "";
+  const brightness = (c: readonly number[]) => c[0]! * 0.299 + c[1]! * 0.587 + c[2]! * 0.117;
+  const out = (c: readonly number[]) => "#" + c.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0")).join("") + alpha;
+  if (brightness(ch) < 0.05) return out(ch);
+  const factor = Math.min(1, 0.5 * 0.5 + Math.pow(brightness(ch), 3));
+  let sel = ch.map((v) => v * (1 - factor) + factor);
+  if (Math.abs(brightness(sel) - brightness(ch)) < 0.05) {
+    sel = ch.map((v) => v * (1 - 0.5 * 0.4));
+    sel[2] = ch[2] * (1 - factor) + factor;
+  }
+  return out(sel);
+}
+
 /** The grid items in the order the painter draws them (`GAL::SetGridSources`' stable sort, winners first) -- drawn back to front, so the winner is on top. */
 export function gridsInPrecedence(grids: readonly BoardGridItem[]): BoardGridItem[] {
   return grids

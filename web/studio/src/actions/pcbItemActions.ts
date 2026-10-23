@@ -72,6 +72,8 @@ function startBarcodeTool(ctx: SweepCtx): void {
  */
 function startPlaceSubGridTool(ctx: SweepCtx): void {
   const { api, dispatch } = ctx;
+  // `RunAction( PCB_ACTIONS::selectionClear )`, then Grids switched on.
+  dispatch({ type: "CLEAR_SELECTION" });
   dispatch({ type: "APPEARANCE", op: { op: "object", id: "subgrids", visible: true } });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
   const centre = (): void =>

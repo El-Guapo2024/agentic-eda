@@ -353,8 +353,6 @@ export class PcbGridHelper extends GridHelper {
     return best ? best.pos : mouse;
   }
 
-  /** The ids `bestSnapAnchor` was told to skip (what is being moved): a grid item among them does not snap the cursor to itself (`FindActiveGridAt` leaves a selected grid out). */
-  private gridSkip: ReadonlySet<string> = new Set();
 
   /**
    * `PCB_GRID_HELPER::Align` (KiCad 10): with the grid on and Grids shown, a grid item that affects the cursor and covers the point owns the snap; otherwise the editor's grid point,
@@ -365,7 +363,8 @@ export class PcbGridHelper extends GridHelper {
     if (!this.canUseGrid() || grids.length === 0 || this.visibility.gridItemsVisible === false) return super.align(p, category);
     const gridAligned = super.align(p, category);
     const snapRange = kiRound(Math.min(SNAP_RANGE_PX / this.env.scale, this.getVisibleGrid()));
-    return alignWithGridItems(grids, p, gridAligned, snapRange, this.gridSkip);
+    // `FindActiveGridAt` / `Align` skip the grids that are selected (the one being moved is), whatever asked for the point.
+    return alignWithGridItems(grids, p, gridAligned, snapRange, this.visibility.selected ?? new Set());
   }
 
   // ---- BestSnapAnchor
@@ -382,7 +381,6 @@ export class PcbGridHelper extends GridHelper {
    * the items being moved.
    */
   bestSnapAnchor(origin: Pt, layers: LayerSel, category: GridCategory = "current", skip: ReadonlySet<string> = new Set()): Pt {
-    this.gridSkip = skip;
     const snapRange = this.snapRange();
     const horizon = box(origin[0] - snapRange / 2, origin[1] - snapRange / 2, origin[0] + snapRange / 2, origin[1] + snapRange / 2);
 

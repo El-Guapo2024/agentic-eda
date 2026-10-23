@@ -84,3 +84,35 @@ export function reshapeCmds(board: Pick<BoardState, "drawings"> | null | undefin
   if (current && (isHatched(current) || current.start_ending || current.end_ending || current.net)) return { cmds: [{ op: "replace_shape", id, shape: next }], removed: [] };
   return { cmds: [{ op: "delete_shape", id }, { op: "add_shape", shape: next }], removed: [id] };
 }
+
+/**
+ * The commands of a Fillet, Chamfer, Dogbone, Extend Lines or Heal Shapes result (`pcbModify.ts`'s `ModifyResult`). `EDIT_TOOL::ModifyLines` and `EDIT_TOOL::HealShapes` edit the lines
+ * they keep in place (`SetStart` / `SetEnd` on the same `PCB_SHAPE`), so a kept line's endings and net survive; a modified line that has any is therefore replaced in place
+ * (`reshapeCmds`), the others are deleted and added as before. The deletes come first, then the replacements, then the new shapes.
+ */
+export function modifyResultCmds(
+  board: Pick<BoardState, "drawings"> | null | undefined,
+  res: { remove: readonly string[]; add: readonly CmdShape[]; replaced: readonly { id: string; addIndex: number }[] }
+): { cmds: Cmd[]; removed: string[] } {
+  const byId = new Map(res.replaced.map((r) => [r.id, r.addIndex]));
+  const deletes: Cmd[] = [];
+  const replaces: Cmd[] = [];
+  const removed: string[] = [];
+  const used = new Set<number>();
+  for (const id of res.remove) {
+    const idx = byId.get(id);
+    const next = idx === undefined ? undefined : res.add[idx];
+    if (idx !== undefined && next) {
+      const re = reshapeCmds(board, id, next);
+      if (re.removed.length === 0) {
+        replaces.push(...re.cmds);
+        used.add(idx);
+        continue;
+      }
+    }
+    deletes.push({ op: "delete_shape", id });
+    removed.push(id);
+  }
+  const adds: Cmd[] = res.add.flatMap((shape, i): Cmd[] => (used.has(i) ? [] : [{ op: "add_shape", shape }]));
+  return { cmds: [...deletes, ...replaces, ...adds], removed };
+}

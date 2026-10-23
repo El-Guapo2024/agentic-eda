@@ -896,9 +896,12 @@ function drawShapeWithEndings(ctx: CanvasRenderingContext2D, s: Extract<Shape, {
       ctx.stroke();
     }
   }
+  // `LINE_ENDING::Draw`: the ending is always solid (only the body takes the line style) and the GAL strokes its polylines and polygon outlines with round joins and caps.
   ctx.save();
   ctx.fillStyle = ctx.strokeStyle;
-  ctx.lineJoin = "miter";
+  ctx.setLineDash([]);
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
   for (const ink of endingInks(s)) {
     ctx.beginPath();
     ink.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
@@ -910,7 +913,8 @@ function drawShapeWithEndings(ctx: CanvasRenderingContext2D, s: Extract<Shape, {
         ctx.stroke();
       }
     } else {
-      ctx.lineWidth = Math.max(ink.stroke, ctx.lineWidth);
+      // `SetLineWidth( m_stroke.GetWidth() > 0 ? m_stroke.GetWidth() : aLineWidth )`: an open arrow's own pen, thinner than the line or not.
+      if (ink.stroke > 0) ctx.lineWidth = ink.stroke;
       ctx.stroke();
     }
   }

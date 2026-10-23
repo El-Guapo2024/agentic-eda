@@ -35,6 +35,8 @@ export interface PcbSnapView {
   layerVisible: Record<string, boolean>;
   highContrast: boolean;
   activeLayer: string | null;
+  /** `state.selection`: a selected grid item does not own the snap. */
+  selection?: ReadonlySet<string>;
 }
 
 /** The modifiers of the event, with Ctrl meaning Cmd on a Mac: Ctrl turns the grid off (`DisableGridSnapping`), Shift the anchors (`MD_SHIFT`). */
@@ -90,7 +92,7 @@ export class PcbSnap {
   /** What is drawn: a layer unless the Appearance panel turned it off, and in high-contrast mode only the active layer's items at full strength. */
   private visibility(): Visibility {
     const v = this.view!;
-    return { layerVisible: (layer) => v.layerVisible[layer] !== false, highContrastLayers: v.highContrast && v.activeLayer ? new Set([v.activeLayer]) : null, pointsVisible: objectOn(v.layerVisible, "ly_points"), gridItemsVisible: objectOn(v.layerVisible, "subgrids") };
+    return { layerVisible: (layer) => v.layerVisible[layer] !== false, highContrastLayers: v.highContrast && v.activeLayer ? new Set([v.activeLayer]) : null, pointsVisible: objectOn(v.layerVisible, "ly_points"), gridItemsVisible: objectOn(v.layerVisible, "subgrids"), selected: v.selection };
   }
 
   private helperFor(tool: string): PcbGridHelper {

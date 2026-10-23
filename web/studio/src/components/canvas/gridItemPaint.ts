@@ -13,7 +13,7 @@
 import type { BoardGridItem } from "../../api/pcbItemTypes";
 import type { BoardState } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
-import { geometryContains, gridGeometry, gridLattice, gridOutline, gridsInPrecedence, isMajor, GRID_EDGE_DARKEN, GRID_SELECTED_BRIGHTEN, type GridGeometry } from "../../kicad-port/gridItem";
+import { geometryContains, gridGeometry, gridLattice, gridOutline, gridsInPrecedence, isMajor, selectedLayerColor, GRID_EDGE_DARKEN, GRID_SELECTED_BRIGHTEN, type GridGeometry } from "../../kicad-port/gridItem";
 import { DEFAULT_GRID_MIN_SPACING_PX, DEFAULT_GRID_TICK, type GridStyle } from "../../kicad-port/grid";
 import { brighten as brightenRgb, darken, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { hairlineUm } from "./view";
@@ -54,8 +54,33 @@ function coveragePath(ctx: CanvasRenderingContext2D, g: GridGeometry): void {
   }
 }
 
+/** Clips the canvas to the outside of every grid's coverage (each one an even-odd path of a huge rectangle around its coverage, the clips intersected). */
+function clipOutCoverages(ctx: CanvasRenderingContext2D, grids: readonly BoardGridItem[]): void {
+  if (grids.length === 0) return;
+  const base = ctx.getTransform();
+  const far = 1e12;
+  for (const item of grids) {
+    const h = gridGeometry(item);
+    ctx.setTransform(base);
+    ctx.translate(h.origin[0], h.origin[1]);
+    ctx.rotate(-h.orientation);
+    coveragePath(ctx, h);
+    ctx.rect(-far, -far, 2 * far, 2 * far);
+    ctx.clip("evenodd");
+  }
+  ctx.setTransform(base);
+}
+
 /** One grid source (`CAIRO_GAL_BASE::drawGridSource` for a bounded source). */
-function drawGridSource(ctx: CanvasRenderingContext2D, view: ViewTransform, item: BoardGridItem, highlighted: boolean, style: GridStyle, visibleBox: [number, number, number, number]): void {
+function drawGridSource(
+  ctx: CanvasRenderingContext2D,
+  view: ViewTransform,
+  item: BoardGridItem,
+  highlighted: boolean,
+  style: GridStyle,
+  visibleBox: [number, number, number, number],
+  washedBy: readonly BoardGridItem[] = []
+): void {
   const g = gridGeometry(item);
   const base = layerColor("LAYER_SUBGRIDS");
   const color = highlighted ? brighten(base, GRID_SELECTED_BRIGHTEN) : base;
@@ -64,6 +89,9 @@ function drawGridSource(ctx: CanvasRenderingContext2D, view: ViewTransform, item
   const marker = hairlineUm(view, 1);
   const double = 2 * marker;
   ctx.save();
+  // `drawGridSource` first fills a bounded grid's coverage with the clear colour, hiding the grids drawn before it; the canvas has the board's items under the grids, so the grids
+  // drawn after this one (`washedBy`, not highlighted: a highlighted one's wash is only `GRID_DIM_ALPHA`) clip it out of their coverage instead of painting over it.
+  clipOutCoverages(ctx, washedBy);
   ctx.translate(g.origin[0], g.origin[1]);
   // "GAL Rotate is math-convention; grid orientation is screen-convention": the canvas turns clockwise on the screen for a positive angle, KiCad's orientation the other way.
   ctx.rotate(-g.orientation);
@@ -194,7 +222,8 @@ function drawGridSource(ctx: CanvasRenderingContext2D, view: ViewTransform, item
 function drawSelectedGridItem(ctx: CanvasRenderingContext2D, view: ViewTransform, item: BoardGridItem): void {
   const pts = gridOutline(item);
   ctx.save();
-  ctx.strokeStyle = layerColor("selection");
+  // `m_pcbSettings.GetColor( aGridItem, LAYER_SUBGRIDS )` of a selected item: the Grids colour as `RENDER_SETTINGS::update` brightens it for a selection.
+  ctx.strokeStyle = selectedLayerColor(layerColor("LAYER_SUBGRIDS"));
   ctx.lineWidth = hairlineUm(view, 1);
   ctx.beginPath();
   pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
@@ -226,7 +255,10 @@ export function drawGridItems(ctx: CanvasRenderingContext2D, view: ViewTransform
   const grids = shownGridItems(board, layerVisible);
   if (grids.length === 0) return;
   const ordered = gridsInPrecedence(grids).reverse();
-  for (const g of ordered) if (!selection.has(g.id)) drawGridSource(ctx, view, g, false, style, visibleBox);
-  for (const g of ordered) if (selection.has(g.id)) drawGridSource(ctx, view, g, true, style, visibleBox);
+  const drawn = [...ordered.filter((g) => !selection.has(g.id)), ...ordered.filter((g) => selection.has(g.id))];
+  drawn.forEach((g, i) => {
+    const highlighted = selection.has(g.id);
+    drawGridSource(ctx, view, g, highlighted, style, visibleBox, drawn.slice(i + 1).filter((h) => !selection.has(h.id)));
+  });
   for (const g of grids) if (selection.has(g.id)) drawSelectedGridItem(ctx, view, g);
 }

@@ -18,6 +18,7 @@ import {
   newGridItem,
   sizeGridToCursor,
   snapToGridItem,
+  selectedLayerColor,
 } from "./gridItem";
 
 const grid = (over: Partial<BoardGridItem> = {}): BoardGridItem => ({ ...newGridItem(0, 0), id: "grd_a", ...over });
@@ -98,4 +99,11 @@ test("the command carries every field and the custom properties", () => {
   assert.deepEqual(c.at, { x: 0, y: 0 });
   assert.deepEqual(c.custom_properties, [["a", "b"]]);
   assert.equal(gridItemCmd(grid()).custom_properties, undefined);
+});
+
+test("a selected grid's outline is the Grids colour brightened as RENDER_SETTINGS::update brightens a selection", () => {
+  // #c2c200: brightness 0.6741, factor 0.25 + 0.6741^3 = 0.5563 -> 0.7608 * 0.4437 + 0.5563 = 0.8939 -> e4; blue 0.5563 -> 8e
+  assert.equal(selectedLayerColor("#c2c200ff"), "#e4e48eff");
+  assert.equal(selectedLayerColor("#000000"), "#000000", "close to black: kept");
+  assert.equal(selectedLayerColor("#ffffff"), "#ccccff", "near white: darkened, the blue kept glowing");
 });

@@ -258,7 +258,7 @@ function EndingRows({ label, value, onChange, units, testid }: { label: string; 
   );
   return (
     <>
-      <span>{label} shape</span>
+      <span>{label} Shape:</span>
       <span>
         <select value={value.style} onChange={(e) => onChange({ ...value, style: e.target.value as LineEndingStyle })} data-testid={`${testid}-ending-style`}>
           {LINE_ENDING_CHOICES.map((c) => (

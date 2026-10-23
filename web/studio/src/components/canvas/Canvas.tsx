@@ -265,7 +265,7 @@ export function Canvas() {
   const gridList = useGridSettings("pcb").grids;
   const gridOverrides = useGridOverrides("pcb");
   const [, bumpSnap] = useState(0);
-  snap.update({ board, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer });
+  snap.update({ board, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer, selection: state.selection });
   snap.onChange = () => bumpSnap((n) => n + 1);
   // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
   useEffect(() => {
