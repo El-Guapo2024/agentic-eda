@@ -462,6 +462,20 @@ export interface OverlaySpec {
   fields: OverlayField[];
   /** Integer-only (`IsIntegerOnly`). */
   integer?: boolean;
+  /** Static text over the picture: the via style's `(`, `-` and `)` around each min/max pair (`DRC_RE_VIA_STYLE_OVERLAY_PANEL`'s decorations). */
+  decor?: { text: string; x: number; y: number }[];
+}
+
+/** `DRC_RE_VIA_STYLE_OVERLAY_PANEL`'s "Diameter row decorations" and "Hole row decorations": `(` just before the min field, `-` midway between
+ *  the min's mm label and the max field, `)` just after the max's mm label. */
+function minMaxDecor(min: OverlayField, max: OverlayField): { text: string; x: number; y: number }[] {
+  const mmWidth = 16;
+  const afterMin = min.x1 + 4 + mmWidth;
+  return [
+    { text: "(", x: min.x0 - 6, y: min.y },
+    { text: "-", x: Math.round((afterMin + max.x0) / 2) - 2, y: min.y },
+    { text: ")", x: max.x1 + 4 + mmWidth + 2, y: min.y },
+  ];
 }
 
 const mmField = (key: OverlayField["key"], x0: number, x1: number, y: number, plusMinus = false): OverlayField => ({ key, kind: "number", x0, x1, y, label: "mm", labelAt: "right", ...(plusMinus ? { plusMinus } : {}) });
@@ -500,17 +514,16 @@ export function overlaySpec(panel: PanelType): OverlaySpec | null {
     return { bitmap, fields: [field], ...(panel === "maximum_via_count" || panel === "minimum_thermal_relief_spoke_count" ? { integer: true } : {}) };
   }
   switch (panel) {
-    case "via_style":
-      return {
-        bitmap: "constraint_via_style",
-        fields: [
-          mmField("min_via_diameter", 155, 195, 10),
-          mmField("max_via_diameter", 245, 285, 10),
-          mmField("min_via_hole", 195, 235, 190),
-          mmField("max_via_hole", 285, 325, 190),
-          { key: "via_type", kind: "choice", x0: 420, x1: 510, y: 110, label: "Via type:", labelAt: "left" },
-        ],
-      };
+    case "via_style": {
+      const fields: OverlayField[] = [
+        mmField("min_via_diameter", 155, 195, 10),
+        mmField("max_via_diameter", 245, 285, 10),
+        mmField("min_via_hole", 195, 235, 190),
+        mmField("max_via_hole", 285, 325, 190),
+        { key: "via_type", kind: "choice", x0: 420, x1: 510, y: 110, label: "Via type:", labelAt: "left" },
+      ];
+      return { bitmap: "constraint_via_style", fields, decor: [...minMaxDecor(fields[0]!, fields[1]!), ...minMaxDecor(fields[2]!, fields[3]!)] };
+    }
     case "minimum_text_height_and_thickness":
       return { bitmap: "constraint_minimum_text_height_and_thickness", fields: [mmField("min_text_height", 208, 248, 82), mmField("min_text_thickness", 109, 149, 197)] };
     case "routing_width":

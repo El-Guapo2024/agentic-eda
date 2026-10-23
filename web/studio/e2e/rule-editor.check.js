@@ -181,6 +181,7 @@
     t(tid("re-cancel").textContent === "Discard", "with changes the button says Discard");
     await click("re-cancel");
     t(!items().some((x) => x.startsWith("Custom rule 1")) && !!tid("rule-editor"), "the new rule goes, the dialog stays");
+    t(tid("re-cancel").textContent === "Close", `and the changes with it (RemoveRule's ClearModified): ${tid("re-cancel").textContent}`);
     await expandAll();
     await pick("hv");
     await type("re-field-value", "0.5");
