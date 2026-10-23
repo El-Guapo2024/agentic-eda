@@ -128,6 +128,8 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
 
 ## Gates of the last main
 
+- **`fd3f1b5`** (the box, 2026-10-23, every task of the list merged): `tools/check.sh fast` Rust 3627 passed, 0 failed, 25 ignored; web typecheck ok, 2449 unit tests. `tools/run-all-checks.sh -j 3`: 42 passed, 0 failed of 42 in 1382 s.
+
 - **`tools/check.sh fast` on `ef84155`** (the box, ws-agentic-eda, 2026-10-23): Rust 3387 passed, 0 failed, 24 ignored; web typecheck ok, 2347 unit tests. `cargo check --workspace --tests` has no warnings.
 
 - **`tools/check.sh fast` on `2b0cafb`** (everything above merged) passed: Rust 3387 passed, 0 failed, 24 ignored; web typecheck ok, 2347 unit tests passed. This commit only adds this file.
