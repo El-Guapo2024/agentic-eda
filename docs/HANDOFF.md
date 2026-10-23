@@ -49,6 +49,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-specctra-cli` | Specctra DSN export through `kicad-cli pcb export specctra` when kicad-cli has it (probed once per process), our exporter as the deprecated fallback; the reply's `engine` | done, gates run | the fallback's deletion, once every machine has the command |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -97,6 +98,7 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
   - The Mac ran 10.99.0-5334; the box has nightly 20261021 (25ec2335f2).
   - 5334 writes footprints with `(transform ...)`, stores DRC and ERC exclusions as structured records, gives ERC positions in mm, and crashes plotting a designator-form cross-reference (we write `${/path/uuid:FIELD}`).
   - Rerun the slow suites on a new nightly before trusting them.
+  - The Specctra DSN export takes `kicad-cli pcb export specctra` where kicad-cli has it (the box's nightly does; 5334 has not, so the Mac gets our exporter, `engine: "eda"`). Delete the fallback (`export_dsn`, marked DEPRECATED) once every machine runs a kicad-cli with the command; GAPS.md P19 lists which `crates/kicad/src/specctra/` modules go with it (`export.rs` and the writer tests) and which the SES import keeps (`lexer`, `parse`, `model`, `format`, `geom`, `board`, `session`).
 - **The serde gotcha:** starlark turns on serde_json's `arbitrary_precision`, which breaks the tagged-enum reader on numbers. Read such types field by field.
 - **New required fields break other branches' literals.** Two examples: `Group` has `design_block`, and `LibraryPad` has `stack` (padstacks). A merge can leave a literal without one; `cargo check` finds it, and `Default::default()` fixes it.
 - **`studio_import_foreign` failed once under load:** the server exited before printing its port. The test now prints the server's output and exit status, so the next failure explains itself.
