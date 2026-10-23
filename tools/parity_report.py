@@ -201,6 +201,21 @@ The zone fills are KiCad's: the harness exports unfilled zones and `--refill-zon
 """
 
 
+CONNECTIVITY_NOTES = """
+The boards are a fixed set: every `examples/*.yaml` and `examples/ladder/*.yaml` board (placed and routed best-effort, then exported), and every
+`qa/data/pcbnew/*.kicad_pcb` of the KiCad sources (8303b2ad) plus the first board of each `qa/data/pcbnew/*/` directory, imported. Never the user's
+`work/` boards. kicad-cli runs on a copy of each board in a directory of its own; a check the board's project sets to `ignore` is turned back on there
+(the board's `unignored`), and our count is capped at kicad-cli's error limit for the check (199, and 499 for `unconnected_items`), past which
+kicad-cli reports nothing more.
+
+Why the floor changed (2026-10-23). The old floor, 58 boards and 83.9%, was set on the Mac on a set that counted the user's `work/l1-order` and
+`work/mcu30`, which only some checkouts have (a box without them evaluated 56 and failed the ratchet), and a 40-board sample of the QA corpus. Those
+two boards are gone, the sample is the whole fixed set above, and two fields that measured nothing are measured now: a check the project ignores was
+compared with kicad-cli's zero, and a count past kicad-cli's error limit with the limit. The floor was reset to the new set's numbers, then raised
+with the fixes (`web/studio/PARITY-pcb.md` section 50 lists what is left, board by board).
+"""
+
+
 def ui_parity_section():
     """Section 4: the counts come from the generated action audit (docs/parity/UI-ACTIONS.md, written by web/studio/tools/ui-parity-audit.mjs)."""
     lines = ["## 4. UI parity -- KiCad actions vs the studio\n"]
@@ -259,10 +274,25 @@ def render_report(conn, rt, scores):
         lines.append(f"Boards evaluated: {len([b for b in conn['boards'] if not b.get('error')])} (of {len(conn['boards'])} attempted).\n")
         lines.append(f"Totals -- ours: {conn['totals_ours']}, oracle: {conn['totals_oracle']}.\n")
         lines.append(f"**Exact per-board-per-field match rate: {conn['exact_matches']}/{conn['total_checks']} ({fmt(conn['exact_match_rate'])}).**\n")
+        lines.append(CONNECTIVITY_NOTES)
         if conn.get("import_failures"):
             lines.append(f"\n### Boards that errored ({len(conn['import_failures'])})\n")
             for f in conn["import_failures"][:20]:
                 lines.append(f"- {f}")
+        lines.append(f"\n### The boards ({len(conn['boards'])})\n")
+        lines.append("Each cell is ours / kicad-cli's; a **bold** cell differs. `unignored` names a check the board's project ignores, which the harness turns back on for kicad-cli.\n")
+        lines.append("| board | source | unconnected | track_dangling | via_dangling | unignored |")
+        lines.append("|---|---|---:|---:|---:|---|")
+        for b in conn["boards"]:
+            if b.get("error"):
+                lines.append(f"| `{b['board']}` | {b['source']} | error | | | |")
+                continue
+
+            def cell(field):
+                o, k = b["ours"][field], b["oracle"][field]
+                return f"{o} / {k}" if o == k else f"**{o} / {k}**"
+
+            lines.append(f"| `{b['board']}` | {b['source']} | {cell('unconnected')} | {cell('track_dangling')} | {cell('via_dangling')} | {', '.join(b.get('unignored', []))} |")
     else:
         lines.append("_No data -- `docs/parity/raw/connectivity.json` not found. Run the connectivity parity test (needs kicad-cli)._")
     lines.append("")
