@@ -48,6 +48,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | KiCad 10 items (10-23) | Line endings, grid items, via stitching, drill charts and maps, ported from KiCad 25ec2335 (`~/src/kicad-src-25ec2335`, the box kicad-cli's commit; 8303b2ad predates them) and reviewed against it. Drill charts match kicad-cli's rebuild exactly. Left: imperial drills (needs drills in nm), a footprint's copper fields as stitch obstacles, undoing a chart placement keeps its profile marks. PARITY-pcb.md section 50. |
 | Library editors review (10-23) | P3 and P17 against KiCad's code; KiCad's installed libraries round-trip through our readers and writers (164 footprints, 243 symbols, none differing beyond sub-µm rounding). `LibraryPad` has a new `kicad` field: older branches' literals need `Default::default()`. Left: the IR's µm (70 of 164 footprints round by up to 0.5 µm), a hidden fp_text, colours, `.kicad_mod` still written as 20240108. |
 | Schematic core review (10-23) | P4, P10 and P10b against eeschema's code. Turned and mirrored symbols now go through KiCad's TRANSFORM in the engine, the tracer and the writer; before, their pins were not where they were drawn. 87 of KiCad's 130 QA schematics written back are judged alike by kicad-cli's ERC and netlist (a ratchet). Left: sheet naming (kept together), nested shared screens, `${#}`. PARITY-sch.md section 40. |
+| Connectivity measure (10-23) | A fixed set of 186 boards (`examples/` plus KiCad's QA boards, never `work/`); 97.8% of counts equal kicad-cli's; the ratchet passes on the box. Left: sub-µm segments (6 boards, needs nm in the IR), pads sharing a number but not a net, copper graphics with a net, teardrops, a custom-rule board. The studio's Fill All may lose teardrop zones' fills (read from the code, not run: GAPS.md item 36). PARITY-pcb.md section 51. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
@@ -58,7 +59,6 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-connectivity-parity` | The connectivity measure of `tools/parity_report.py` on a fixed set (no `work/` boards), kicad-cli on a copy with ignored checks turned on, counts capped at its error limits; arcs as one item, turned pads by their copper, unflashed pads and vias as their hole | Done: 546/558 (97.8%), floors reset to 186 boards and 97.8% | Sub-micrometre geometry (the IR is in micrometres), pads that share a number but not a net, copper graphics with a net, teardrops rebuilt by kicad-cli's Fill All (PARITY-pcb.md section 51) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
