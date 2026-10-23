@@ -39,6 +39,7 @@ import { isAnyFill } from "../../kicad-port/shapeFill";
 import { orderedStackLayers } from "../../kicad-port/padStack";
 import { drawPcbItems, drawRefImages } from "./pcbItemsPaint";
 import { drawGridItems, gridItemCovers, shownGridItems } from "./gridItemPaint";
+import { drawViaStitches } from "./viaStitchPaint";
 import { gridGeometry, type GridGeometry } from "../../kicad-port/gridItem";
 import { drawTablePreview, drawTables } from "./tablePaint";
 import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
@@ -1464,6 +1465,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   drawLockedShadows(ctx, board, opts);
   drawConflicts(ctx, fullBoard, opts.movePreview, opts);
   drawAnchors(ctx, view, board, opts);
+  // KiCad 10's via stitching outlines (`LAYER_VIA_STITCHING`, above the items with the anchors and points).
+  drawViaStitches(ctx, view, board, opts.layerVisible, opts.selection);
   // The carried items, in the same order, through the transform the drop would apply.
   if (carry && preview) {
     const own = { ...opts, movePreview: null };
@@ -1482,6 +1485,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     drawDimensions(ctx, view, carry.moving, own);
     drawPcbItems(ctx, view, carry.moving, own);
     drawAnchors(ctx, view, carry.moving, own);
+    drawViaStitches(ctx, view, carry.moving, own.layerVisible, own.selection);
     drawSelectedGroups(ctx, view, carry.moving, own);
     ctx.restore();
   }

@@ -275,6 +275,8 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if let Some(dr) = design.drawings.as_mut() {
         dr.text_extras = dr.texts.iter().zip(text_extras).filter(|(_, x)| !x.is_default()).map(|(t, mut x)| { x.id = t.id.clone(); x }).collect();
     }
+    // KiCad 10's via stitchings (`(generated (type via_stitch) ..)`), their members named by the ids the vias have just been given.
+    crate::via_stitch_io::attach(&mut design, root, &mut refs);
     // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
     // uuid, and `locked` rides on each item (`BOARD_ITEM::IsLocked()`).
     let (groups, locked_ids) = refs.resolve(&design, &import_items::import_groups(root));
@@ -313,10 +315,13 @@ const READ_ITEMS: &[&str] = &[
     "table", "embedded_files", "grid_item",
 ];
 
-/// Whether a reader here takes the top-level `item` of kind `tag`: its kind is in [`READ_ITEMS`], and a reference image is one whose data is a file the reader understands
-/// (an image that is not goes on as text, as KiCad would not have loaded the board at all).
+/// Whether a reader here takes the top-level `item` of kind `tag`: its kind is in [`READ_ITEMS`], a reference image is one whose data is a file the reader understands
+/// (an image that is not goes on as text, as KiCad would not have loaded the board at all), and a generator is a tuning pattern or a via stitching.
 fn is_read(item: &[Sexpr], tag: &str) -> bool {
-    READ_ITEMS.contains(&tag) && (tag != "image" || crate::pcb_image::read(item).is_some())
+    READ_ITEMS.contains(&tag)
+        && (tag != "image" || crate::pcb_image::read(item).is_some())
+        // A generator of a kind nothing here reads (KiCad 10's microvia stack, `via_stack`) goes on as text, as an unknown item does.
+        && (tag != "generated" || matches!(sexpr::find(item, "type").and_then(|t| sexpr::txt(t, 1)), Some("tuning_pattern") | Some("via_stitch")))
 }
 
 /// The top-level items of the board whose kind no reader here takes ([`READ_ITEMS`]), counted by kind.

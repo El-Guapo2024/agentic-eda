@@ -116,6 +116,7 @@ impl Refs {
             note(&self.board_items.images, dr.board_items.images.iter().map(|i| i.id.as_str()).collect());
             note(&self.board_items.points, dr.board_items.points.iter().map(|p| p.id.as_str()).collect());
             note(&self.board_items.grid_items, dr.board_items.grid_items.iter().map(|g| g.id.as_str()).collect());
+            note(&self.board_items.via_stitches, dr.board_items.via_stitches.iter().map(|v| v.id.as_str()).collect());
             note(&self.tables, dr.tables.iter().map(|t| t.id.as_str()).collect());
         }
 

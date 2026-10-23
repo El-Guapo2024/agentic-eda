@@ -10,7 +10,8 @@
       "common/tool/actions.cpp",
       "pcbnew/router/router_tool.cpp",
       "common/hotkey_store.cpp"
-    ]
+    ],
+    "kicad10Additions": "Place > Place Sub-grid: from pcbnew/menubar_pcb_editor.cpp of KiCad 25ec2335"
   },
   "menus": [
     {
@@ -605,6 +606,13 @@
         {
           "type": "item",
           "action": "common.Control.gridResetOrigin"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GridItem.place"
         },
         {
           "type": "separator"

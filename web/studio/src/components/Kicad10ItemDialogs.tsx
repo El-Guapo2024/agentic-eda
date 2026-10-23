@@ -10,12 +10,22 @@ import { applyCommands } from "../actions/pcbSweepKit";
 import type { BoardGridItem } from "../api/pcbItemTypes";
 import type { Cmd } from "../api/types";
 import { gridDialogCorners, gridFromCentreSize, gridFromCornerSize, gridFromCorners, gridItemCmd, normalizedGridItem } from "../kicad-port/gridItem";
-import { closeGridItemDialog, useKicad10Dialogs } from "../state/kicad10Dialogs";
+import { closeGridItemDialog, closeViaStitchDialog, useKicad10Dialogs } from "../state/kicad10Dialogs";
+import type { BoardViaStitch } from "../api/pcbItemTypes";
+import { fetchState } from "../api/client";
+import { pcbContext } from "../kicad-port/pcbProperties";
+import { defaultPitchUm, layoutOf, modeOf, MODE_CHOICES, movedStitch, PATTERN_CHOICES, stitchPosition, stitchPreview, viaStitchCmd, withLayoutAndMode, type StitchLayout, type StitchMode } from "../kicad-port/viaStitch";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo, type LengthUnit } from "../state/units";
+import { layerColor as layerColorOf } from "./canvas/layers";
 
 export function Kicad10ItemDialogs() {
-  return <GridItemDialog />;
+  return (
+    <>
+      <GridItemDialog />
+      <ViaStitchDialog />
+    </>
+  );
 }
 
 type Page = "corners" | "cornerSize" | "centreSize" | "polar";
@@ -269,6 +279,167 @@ function GridItemDialog() {
             Cancel
           </button>
           <button className="primary" onClick={() => void ok()} data-testid="grid-ok">
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/**
+ * Via Stitching Properties (`DIALOG_VIA_STITCH_PROPERTIES`, pcbnew/dialogs/dialog_via_stitch_properties.cpp of KiCad 25ec2335): Stitch Net, Position X / Y (the outline's first corner:
+ * a new one moves the outline there), Pattern, Pitch, Seed (the Poisson pattern's only), Via Properties (here the size, drill and layers of the template; KiCad's Configure opens the via
+ * dialog on it), Mode and Guard Net (a guard's only), with the sample of the pattern the dialog draws (`buildStitchPreview`). OK is "Edit Via Stitching" (`ShowPropertiesDialog`'s
+ * `EditStart`, `Update`, `EditFinish`), or, after Draw Via Stitch Area, "Create Via Stitch": one `set_via_stitch`, the vias placed by the server; Cancel drops a new one.
+ */
+function ViaStitchDialog() {
+  const state = useStudioState();
+  const api = useStudioApi();
+  const dispatch = useStudioDispatch();
+  const { viaStitch: req } = useKicad10Dialogs();
+  const units = state.units;
+  const [form, setForm] = useState<{ work: BoardViaStitch; x: string; y: string; pitch: string; seed: string; size: string; drill: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!req) {
+      setForm(null);
+      return;
+    }
+    const w = req.stitch;
+    const [x, y] = stitchPosition(w);
+    const size = w.via?.size_um ?? 0;
+    setForm({ work: w, x: fmt(x, units), y: fmt(y, units), pitch: fmt(w.pitch_um || defaultPitchUm(size || 600), units), seed: String(w.seed ?? 0), size: fmt(size, units), drill: fmt(w.via?.drill_um ?? 0, units) });
+    setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [req]);
+
+  if (!req || !form || !state.board) return null;
+  const board = state.board;
+  const nets = pcbContext(board, units).nets;
+  const copper = board.layers ?? [];
+  const close = () => closeViaStitchDialog();
+  const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
+  const setWork = (patch: Partial<BoardViaStitch>) => setForm({ ...form, work: { ...form.work, ...patch } });
+  const mode = modeOf(form.work);
+  const layout = layoutOf(form.work);
+  const stitching = mode === "stitch";
+  const poisson = stitching && layout === "poisson";
+  const u = (t: string) => Math.round(umFrom(Number(t), units));
+  const preview = stitchPreview(u(form.pitch) || 0, layout, Number(form.seed) >>> 0);
+
+  const ok = async () => {
+    const pitch = u(form.pitch);
+    const size = u(form.size);
+    const drill = u(form.drill);
+    if (!(pitch > 0)) return setError("The pitch must be greater than zero.");
+    if (!(size > 0) || !(drill > 0) || drill >= size) return setError("The via needs a drill smaller than its size.");
+    // `ToULong`: a seed that is not a number leaves the seed as it was.
+    const seed = /^\d+$/.test(form.seed.trim()) ? Number(form.seed.trim()) >>> 0 : (form.work.seed ?? 0);
+    // "Position: translate the outline to land on the requested first vertex."
+    const [x0, y0] = stitchPosition(form.work);
+    const [nx, ny] = [u(form.x), u(form.y)];
+    let work: BoardViaStitch = { ...form.work, pitch_um: pitch, seed, via: { from_layer: "F.Cu", to_layer: "B.Cu", ...form.work.via, size_um: size, drill_um: drill } };
+    if (Number.isFinite(nx) && Number.isFinite(ny) && (nx !== x0 || ny !== y0)) work = movedStitch(work, nx - x0, ny - y0);
+    const before = new Set((board.drawings?.via_stitches ?? []).map((v) => v.id));
+    if (!(await api.cmdBatch([viaStitchCmd(req.id, work)]))) return setError("The board refused the via stitching.");
+    // A new stitching is selected (`selectItem`), its vias are not.
+    if (!req.id) {
+      const fresh = await fetchState().catch(() => null);
+      const made = (fresh?.drawings?.via_stitches ?? []).find((v) => !before.has(v.id));
+      if (made) dispatch({ type: "SET_SELECTION", refs: [made.id] });
+    }
+    close();
+  };
+
+  const scale = preview.extent > 0 ? 180 / (preview.extent + 2 * (u(form.pitch) || 1)) : 1;
+  const margin = u(form.pitch) || 1;
+  const r = Math.max(1.5, ((u(form.size) || 600) / 2) * scale);
+  return (
+    <div className="dialog-backdrop" onClick={close}>
+      <div className="dialog" style={{ width: 560 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Via Stitching Properties" data-testid="via-stitch-properties">
+        <div className="dialog-header">
+          <span>Via Stitching Properties</span>
+        </div>
+        <div className="dialog-body" style={{ display: "flex", gap: 12 }}>
+          <div className="kv-grid" style={{ gridTemplateColumns: "120px 1fr", flex: 1 }}>
+            <span>Stitch Net:</span>
+            <select value={form.work.net ?? ""} onChange={(e) => setWork({ net: e.target.value })} data-testid="vst-net">
+              <option value="">&lt;no net&gt;</option>
+              {nets.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            <span>Position X: ({units})</span>
+            <input type="number" step="any" value={form.x} onChange={(e) => set({ x: e.target.value })} style={{ width: 100 }} data-testid="vst-x" />
+            <span>Position Y: ({units})</span>
+            <input type="number" step="any" value={form.y} onChange={(e) => set({ y: e.target.value })} style={{ width: 100 }} data-testid="vst-y" />
+            <span>Mode:</span>
+            <select value={mode} onChange={(e) => setWork(withLayoutAndMode(form.work, layout, e.target.value as StitchMode))} data-testid="vst-mode">
+              {MODE_CHOICES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <span>Pattern:</span>
+            <select value={layout} disabled={!stitching} onChange={(e) => setWork(withLayoutAndMode(form.work, e.target.value as StitchLayout, mode))} data-testid="vst-pattern">
+              {PATTERN_CHOICES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <span>Pitch: ({units})</span>
+            <input type="number" step="any" value={form.pitch} onChange={(e) => set({ pitch: e.target.value })} style={{ width: 100 }} data-testid="vst-pitch" />
+            <span>Seed:</span>
+            <input value={form.seed} disabled={!poisson} onChange={(e) => set({ seed: e.target.value })} style={{ width: 100 }} data-testid="vst-seed" />
+            <span>Via Properties:</span>
+            <span style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+              <input type="number" step="any" value={form.size} onChange={(e) => set({ size: e.target.value })} style={{ width: 70 }} title="Via size" data-testid="vst-size" />
+              <span>/</span>
+              <input type="number" step="any" value={form.drill} onChange={(e) => set({ drill: e.target.value })} style={{ width: 70 }} title="Via drill" data-testid="vst-drill" /> {units}
+              <select value={form.work.via?.from_layer ?? "F.Cu"} onChange={(e) => setWork({ via: { size_um: 0, drill_um: 0, to_layer: "B.Cu", ...form.work.via, from_layer: e.target.value } })} data-testid="vst-from">
+                {copper.map((l) => (
+                  <option key={l}>{l}</option>
+                ))}
+              </select>
+              <select value={form.work.via?.to_layer ?? "B.Cu"} onChange={(e) => setWork({ via: { size_um: 0, drill_um: 0, from_layer: "F.Cu", ...form.work.via, to_layer: e.target.value } })} data-testid="vst-to">
+                {copper.map((l) => (
+                  <option key={l}>{l}</option>
+                ))}
+              </select>
+            </span>
+            <span>Guard Net:</span>
+            <select value={form.work.guarded_net ?? ""} disabled={stitching} onChange={(e) => setWork({ guarded_net: e.target.value })} data-testid="vst-guard-net">
+              <option value="">&lt;no net&gt;</option>
+              {nets.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </div>
+          {/* `redrawPreview`: the template's vias at the sample's places, framed with a pitch round them; a guard's sample (tracks and their envelope) is not drawn here. */}
+          <svg width={180} height={180} style={{ background: "var(--chrome-bg-deep, #000)", flex: "none" }} data-testid="vst-preview">
+            {stitching &&
+              preview.samples.map(([x, y], i) => <circle key={i} cx={(x + margin) * scale} cy={(y + margin) * scale} r={r} fill={layerColorOf("LAYER_VIA_HOLES")} />)}
+          </svg>
+        </div>
+        {error && (
+          <p style={{ color: "var(--chrome-danger)", margin: "8px 12px 0" }} data-testid="vst-error">
+            {error}
+          </p>
+        )}
+        <div className="dialog-footer">
+          <button onClick={close} data-testid="vst-cancel">
+            Cancel
+          </button>
+          <button className="primary" onClick={() => void ok()} data-testid="vst-ok">
             OK
           </button>
         </div>

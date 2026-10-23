@@ -3,18 +3,19 @@
 // of an item (`itemKind`, `itemBounds`, the selection, the delete tool, the move tool's carry) ask this file for the kinds they do not know, so each holds a line for all of them.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import type { BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
 import type { BoardState, Cmd } from "../api/types";
 import { barcodeBounds, barcodeHitDistance, barcodeLabel } from "./barcodeShapes";
 import { imageBoxHitDistance } from "./refImage";
 import { textBoxBounds, textBoxHitDistance } from "./pcbTextBox";
 import { GRID_ITEM_LABEL, gridBounds, gridHitDistance } from "./gridItem";
+import { stitchBounds, stitchHitDistance, stitchPosition, VIA_STITCH_LABEL } from "./viaStitch";
 
 /** The kinds of item this file knows. */
-export type ExtraKind = "textbox" | "image" | "point" | "barcode" | "grid";
+export type ExtraKind = "textbox" | "image" | "point" | "barcode" | "grid" | "via_stitch";
 
 /** Every kind of the family, for the tables that list the kinds an item can be (what a plain drag of a clicked item picks up, ...). */
-export const EXTRA_KINDS: readonly ExtraKind[] = ["textbox", "image", "point", "barcode", "grid"];
+export const EXTRA_KINDS: readonly ExtraKind[] = ["textbox", "image", "point", "barcode", "grid", "via_stitch"];
 
 export type Box = [number, number, number, number];
 
@@ -34,6 +35,8 @@ export interface ExtraItem {
   barcode?: BoardBarcode;
   /** KiCad 10's grid item: on no layer (`layer` is empty; `GetLayerSet` is every layer). */
   grid?: BoardGridItem;
+  /** KiCad 10's via stitching: on no layer of its own (its vias are ordinary vias of the board). */
+  stitch?: BoardViaStitch;
 }
 
 /** `DEFAULT_PT_SIZE_MM` of `pcbnew/pcb_point.cpp`: the size of a point the Place Point tool makes, µm. */
@@ -74,6 +77,8 @@ const ofBarcode = (b: BoardBarcode): ExtraItem => ({ kind: "barcode", id: b.id, 
 
 const ofGrid = (g: BoardGridItem): ExtraItem => ({ kind: "grid", id: g.id, layer: "", position: [g.x, g.y], bounds: gridBounds(g), grid: g });
 
+const ofStitch = (v: BoardViaStitch): ExtraItem => ({ kind: "via_stitch", id: v.id, layer: "", position: stitchPosition(v), bounds: stitchBounds(v), stitch: v });
+
 const ofImage = (i: BoardRefImage): ExtraItem => ({ kind: "image", id: i.id, layer: i.layer, position: [i.x, i.y], bounds: refImageBounds(i), image: i });
 
 const ofTextBox = (b: BoardTextBox): ExtraItem => ({
@@ -87,7 +92,7 @@ const ofTextBox = (b: BoardTextBox): ExtraItem => ({
 
 /** Every item of the family the board has, in the order the state lists them. */
 export function extraItems(board: Pick<BoardState, "drawings"> | null | undefined): ExtraItem[] {
-  return [...(board?.drawings?.text_boxes ?? []).map(ofTextBox), ...(board?.drawings?.images ?? []).map(ofImage), ...(board?.drawings?.points ?? []).map(ofPoint), ...(board?.drawings?.barcodes ?? []).map(ofBarcode), ...(board?.drawings?.grid_items ?? []).map(ofGrid)];
+  return [...(board?.drawings?.text_boxes ?? []).map(ofTextBox), ...(board?.drawings?.images ?? []).map(ofImage), ...(board?.drawings?.points ?? []).map(ofPoint), ...(board?.drawings?.barcodes ?? []).map(ofBarcode), ...(board?.drawings?.grid_items ?? []).map(ofGrid), ...(board?.drawings?.via_stitches ?? []).map(ofStitch)];
 }
 
 /** The item of the family `id` names, or undefined. */
@@ -101,12 +106,14 @@ export function extraItemById(board: Pick<BoardState, "drawings"> | null | undef
   const bc = board?.drawings?.barcodes?.find((t) => t.id === id);
   if (bc) return ofBarcode(bc);
   const gr = board?.drawings?.grid_items?.find((t) => t.id === id);
-  return gr ? ofGrid(gr) : undefined;
+  if (gr) return ofGrid(gr);
+  const vs = board?.drawings?.via_stitches?.find((t) => t.id === id);
+  return vs ? ofStitch(vs) : undefined;
 }
 
 /** Every id of the family (for the sets that tell new items from old ones). */
 export function extraItemIds(board: Pick<BoardState, "drawings"> | null | undefined): string[] {
-  return [...(board?.drawings?.text_boxes ?? []).map((b) => b.id), ...(board?.drawings?.images ?? []).map((i) => i.id), ...(board?.drawings?.points ?? []).map((p) => p.id), ...(board?.drawings?.barcodes ?? []).map((b) => b.id), ...(board?.drawings?.grid_items ?? []).map((g) => g.id)];
+  return [...(board?.drawings?.text_boxes ?? []).map((b) => b.id), ...(board?.drawings?.images ?? []).map((i) => i.id), ...(board?.drawings?.points ?? []).map((p) => p.id), ...(board?.drawings?.barcodes ?? []).map((b) => b.id), ...(board?.drawings?.grid_items ?? []).map((g) => g.id), ...(board?.drawings?.via_stitches ?? []).map((v) => v.id)];
 }
 
 /** How far the point `(x, y)` is from the item, for a click's "sloppiness": 0 when it hits (`HitTest`). */
@@ -119,6 +126,8 @@ export function extraHitDistance(item: ExtraItem, x: number, y: number): number 
   if (item.barcode) return barcodeHitDistance(item.barcode, x, y);
   // `PCB_GRID_ITEM::HitTest`: anywhere it covers, turned as it is.
   if (item.grid) return gridHitDistance(item.grid, x, y);
+  // `PCB_VIA_STITCH::HitTest`: `m_outline.Collide( aPosition, aAccuracy )`.
+  if (item.stitch) return stitchHitDistance(item.stitch, x, y);
   return Infinity;
 }
 
@@ -135,6 +144,9 @@ export function extraDeleteCmd(item: Pick<ExtraItem, "kind" | "id">): Cmd {
       return { op: "pcb_item", verb: "delete_barcode", id: item.id };
     case "grid":
       return { op: "pcb_item", verb: "delete_grid_item", id: item.id };
+    // `PCB_VIA_STITCH::Remove`: the stitching and every via it made.
+    case "via_stitch":
+      return { op: "pcb_item", verb: "delete_via_stitch", id: item.id };
   }
 }
 
@@ -153,5 +165,6 @@ export function extraItemLabel(board: Pick<BoardState, "drawings"> | null | unde
   if (item?.barcode) return barcodeLabel(item.barcode);
   // `PCB_GRID_ITEM::GetItemDescription`
   if (item?.grid) return GRID_ITEM_LABEL;
+  if (item?.stitch) return VIA_STITCH_LABEL;
   return id;
 }

@@ -12,6 +12,7 @@ use super::Board;
 use eda_model::barcode::{Barcode, BarcodeKind, EccLevel};
 use eda_model::ir::{DrawingsSection, Millideg, Point, Shape, Um};
 use eda_model::grid_item::GridItem;
+use eda_model::via_stitch::ViaStitch;
 use eda_model::line_ending::LineEnding;
 use eda_model::pcb_items::{PcbPoint, RefImage, ShapeFill, TextBox};
 use eda_model::CheckResult;
@@ -84,6 +85,25 @@ pub enum PcbItemCmd {
     EditGridItem { id: String, grid_item: GridItem },
     /// Remove a grid item.
     DeleteGridItem { id: String },
+    /// KiCad 10's via stitching (`PCB_VIA_STITCH`): the generator with every setting replaced -- or a new one, from Draw Via Stitch Area, when `id` is none -- and its vias
+    /// made again (`EditStart`, `Update`, `EditFinish`: "Edit Via Stitching", "Exclude Via From Stitching", "Clear Via Stitching Exclusions"). `vias` is where they go
+    /// (`eda_drc::via_stitch::plan`), which the board directory works out from the zone fills when the command leaves it out. See [`crate::kicad10_items`].
+    SetViaStitch {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        stitch: ViaStitch,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vias: Option<Vec<PlannedVia>>,
+    },
+    /// `PCB_VIA_STITCH::Remove`: the generator and every via it made.
+    DeleteViaStitch { id: String },
+}
+
+/// Where a via stitching puts one via: its grid cell (or its position, where the layout has no grid: `cellForPosition`) and its position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedVia {
+    pub cell: (i64, i64),
+    pub at: Point,
 }
 
 impl PcbItemCmd {
@@ -97,6 +117,8 @@ impl PcbItemCmd {
             PcbItemCmd::AddBarcode { barcode } => vec![barcode.layer.as_str()],
             PcbItemCmd::AddGridItem { .. } => vec!["grid_item"],
             PcbItemCmd::EditGridItem { id, .. } | PcbItemCmd::DeleteGridItem { id } => vec![id.as_str()],
+            PcbItemCmd::SetViaStitch { id, stitch, .. } => vec![id.as_deref().unwrap_or(stitch.net.as_str())],
+            PcbItemCmd::DeleteViaStitch { id } => vec![id.as_str()],
             PcbItemCmd::EditBarcode { id, .. } | PcbItemCmd::DeleteBarcode { id } => vec![id.as_str()],
             PcbItemCmd::EditTextBox { id, .. }
             | PcbItemCmd::DeleteTextBox { id }
@@ -128,6 +150,19 @@ impl PcbItemCmd {
             PcbItemCmd::AddGridItem { grid_item: g } => format!("grid-item add --{} --at {},{} --extent {}x{} --spacing {}x{}", g.kind.token(), mm(g.at.x), mm(g.at.y), mm(g.extent.x), mm(g.extent.y), mm(g.spacing.x), mm(g.spacing.y)),
             PcbItemCmd::EditGridItem { id, grid_item: g } => format!("grid-item edit {id} --{} --at {},{} --extent {}x{} --spacing {}x{} --angle {}", g.kind.token(), mm(g.at.x), mm(g.at.y), mm(g.extent.x), mm(g.extent.y), mm(g.spacing.x), mm(g.spacing.y), g.angle),
             PcbItemCmd::DeleteGridItem { id } => format!("grid-item delete {id}"),
+            PcbItemCmd::SetViaStitch { id, stitch: v, vias } => format!(
+                "via-stitch {} --net {} --pitch {} --layout {:?} --mode {:?} --via {}x{} ({} vias)",
+                id.as_deref().unwrap_or("add"),
+                v.net,
+                mm(v.pitch_um),
+                v.layout,
+                v.mode,
+                mm(v.via.size_um),
+                mm(v.via.drill_um),
+                vias.as_ref().map_or("planned".to_string(), |p| p.len().to_string())
+            )
+            .to_lowercase(),
+            PcbItemCmd::DeleteViaStitch { id } => format!("via-stitch delete {id}"),
             PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending } => {
                 let mut out = format!("shape style {} --fill {}", ids.join(","), fill.map_or("unchanged".to_string(), |f| format!("{f:?}").to_lowercase()));
                 for (flag, e) in [("start", start_ending), ("end", end_ending)] {
@@ -149,6 +184,7 @@ impl PcbItemCmd {
             PcbItemCmd::SetShapeStyle { .. } => "shape-style",
             PcbItemCmd::AddBarcode { .. } | PcbItemCmd::EditBarcode { .. } | PcbItemCmd::DeleteBarcode { .. } => "barcode",
             PcbItemCmd::AddGridItem { .. } | PcbItemCmd::EditGridItem { .. } | PcbItemCmd::DeleteGridItem { .. } => "grid-item",
+            PcbItemCmd::SetViaStitch { .. } | PcbItemCmd::DeleteViaStitch { .. } => "via-stitch",
         }
     }
 }
@@ -174,6 +210,8 @@ impl<'a> Board<'a> {
             PcbItemCmd::AddGridItem { grid_item } => self.add_grid_item(grid_item.clone()),
             PcbItemCmd::EditGridItem { id, grid_item } => self.edit_grid_item(id, grid_item.clone()),
             PcbItemCmd::DeleteGridItem { id } => self.delete_grid_item(id),
+            PcbItemCmd::SetViaStitch { id, stitch, vias } => self.set_via_stitch(id.as_deref(), stitch.clone(), vias.as_deref()),
+            PcbItemCmd::DeleteViaStitch { id } => self.delete_via_stitch(id),
         }
     }
 
@@ -614,6 +652,9 @@ pub(crate) fn transform_board_items(dr: &mut DrawingsSection, ids: &BTreeSet<Str
     }
     for g in dr.board_items.grid_items.iter_mut().filter(|g| ids.contains(&g.id)) {
         crate::kicad10_items::transform_grid_item(g, x);
+    }
+    for v in dr.board_items.via_stitches.iter_mut().filter(|v| ids.contains(&v.id)) {
+        crate::kicad10_items::transform_via_stitch(v, x);
     }
 }
 

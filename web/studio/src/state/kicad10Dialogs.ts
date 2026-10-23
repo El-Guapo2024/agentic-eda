@@ -2,13 +2,16 @@
 // chart's. Plain module state with subscribers (like `state/pcbItemDialogs.ts`), so an action of the action runner can open a dialog without a place in the big reducer.
 // `components/Kicad10ItemDialogs.tsx` renders them.
 import { useSyncExternalStore } from "react";
+import type { BoardViaStitch } from "../api/pcbItemTypes";
 
 export interface Kicad10DialogsState {
   /** The grid item Grid Properties edits. */
   gridItem: { id: string } | null;
+  /** The via stitching Via Stitching Properties edits: one on the board (`id`), or the one Draw Via Stitch Area has just drawn (`id` null), with the settings it starts from. */
+  viaStitch: { id: string | null; stitch: BoardViaStitch } | null;
 }
 
-const CLOSED: Kicad10DialogsState = { gridItem: null };
+const CLOSED: Kicad10DialogsState = { gridItem: null, viaStitch: null };
 
 let current: Kicad10DialogsState = CLOSED;
 const listeners = new Set<() => void>();
@@ -37,4 +40,12 @@ export function openGridItemDialog(id: string): void {
 
 export function closeGridItemDialog(): void {
   set({ ...current, gridItem: null });
+}
+
+export function openViaStitchDialog(id: string | null, stitch: BoardViaStitch): void {
+  set({ ...current, viaStitch: { id, stitch } });
+}
+
+export function closeViaStitchDialog(): void {
+  set({ ...current, viaStitch: null });
 }

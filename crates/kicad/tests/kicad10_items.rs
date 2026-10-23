@@ -254,16 +254,24 @@ impl Sx {
     fn find(&self, tag: &str) -> Option<&Sx> {
         self.items().iter().find(|i| i.tag() == Some(tag))
     }
-    /// The canonical text: numbers as numbers (`3` and `3.000000` are one), the uuids of the item and its parts and the members a generator lists by uuid left out
-    /// (ours are made by the exporter, not kept from the file).
+    /// The canonical text: numbers as numbers to the micrometre the IR keeps (`3`, `3.000000` and `3.0004` are one), the uuids of the item and its parts and the members a
+    /// generator lists by uuid left out (ours are made by the exporter, not kept from the file). And the via protection tokens a via read from a file older than 20250228
+    /// is given (`(capping no) (covering (front no) (back no)) (plugging (front no) (back no)) (filling no)`: "Versions before 10.0 had no protection features ... must be
+    /// interpreted as OFF in legacy boards"), which kicad-cli's re-save of our KiCad 9-version file writes into every via, a via stitching's template among them.
     fn canon(&self) -> String {
         match self {
             Sx::Atom(a) => match a.parse::<f64>() {
-                Ok(v) if a.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') => format!("{}", (v * 1e6).round() / 1e6),
+                Ok(v) if a.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') => format!("{}", (v * 1e3).round() / 1e3),
                 _ => a.clone(),
             },
             Sx::List(l) => {
-                let parts: Vec<String> = l.iter().filter(|i| !matches!(i.tag(), Some("uuid") | Some("tstamp") | Some("members"))).map(Sx::canon).collect();
+                let legacy_off = |i: &Sx| match i.tag() {
+                    Some("capping") | Some("filling") => i.items().get(1) == Some(&Sx::Atom("no".into())),
+                    Some("covering") | Some("plugging") => i.items().iter().skip(1).all(|side| side.items().get(1) == Some(&Sx::Atom("no".into()))),
+                    _ => false,
+                };
+                let in_via = self.tag() == Some("via");
+                let parts: Vec<String> = l.iter().filter(|i| !matches!(i.tag(), Some("uuid") | Some("tstamp") | Some("members")) && !(in_via && legacy_off(i))).map(Sx::canon).collect();
                 format!("({})", parts.join(" "))
             }
         }
@@ -317,4 +325,110 @@ fn items_are_written_as_kicad_writes_them(cli: &Path, src: &Path, rel: &str, our
         diff(&c, &b).join("\n    ")
     );
     eprintln!("{rel}: {} KiCad 10 items written as the original has them, and as kicad-cli writes them", a.len());
+}
+
+// ------------------------------------------------------------------------------------------------------------------------- via stitching
+
+/// The via stitching of `stitch_fp_rulearea` (a GND stitching on a 1 mm grid over two inner planes, a footprint's rule area keeping vias out of part of it) regenerated
+/// here (`eda_drc::via_stitch::plan`, `PCB_VIA_STITCH::Update`) puts its vias where KiCad's own `Update` put the 73 the file lists, from the fills the file was saved with.
+#[test]
+fn a_via_stitching_regenerates_the_vias_kicad_made() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(qa) = qa_data() else {
+        eprintln!("skipped: needs KiCad 25ec2335's QA boards (KICAD10_QA_DATA)");
+        return;
+    };
+    let text = std::fs::read_to_string(qa.join("pcbnew/stitch_fp_rulearea.kicad_pcb")).unwrap();
+    let (design, model, notes) = import_kicad_pcb(&text).unwrap();
+    let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
+    let fills = eda_kicad::zone_fills::KicadFills::new("file".into(), String::new(), 0, entries).fills_nm(&design);
+    let stitch = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
+    let kicad: std::collections::BTreeSet<(i64, i64)> = design.routing.as_ref().unwrap().vias.iter().filter(|v| stitch.member_ids.contains(&v.id)).map(|v| (v.at.x, v.at.y)).collect();
+    assert_eq!(kicad.len(), 73);
+    let inputs = eda_drc::via_stitch::PlanInputs { design: &design, model: &model, fills: &fills, current_via_size_um: 600, current_via_drill_um: 300 };
+    let plan = eda_drc::via_stitch::plan(&inputs, &stitch);
+    let ours: std::collections::BTreeSet<(i64, i64)> = plan.vias.iter().map(|(_, p)| (p.x, p.y)).collect();
+    let missing: Vec<_> = kicad.difference(&ours).collect();
+    let extra: Vec<_> = ours.difference(&kicad).collect();
+    eprintln!("stitch_fp_rulearea: KiCad made {} vias, the regeneration {} ({:?} first)", kicad.len(), ours.len(), ours.iter().next());
+    assert!(missing.is_empty() && extra.is_empty(), "KiCad's {} vias against our {}: missing {missing:?}, extra {extra:?}", kicad.len(), ours.len());
+}
+
+/// The board `rel` with its zones filled by kicad-cli (`KI_TEST::FillZones`): `pcb drc --refill-zones --save-board` on a copy.
+fn refilled(cli: &Path, qa: &Path, rel: &str) -> String {
+    let src = qa.join("pcbnew").join(rel);
+    let dir = work_dir(&format!("{}/refill", src.file_stem().unwrap().to_str().unwrap()));
+    let copy = dir.join(src.file_name().unwrap());
+    std::fs::copy(&src, &copy).unwrap();
+    let report = dir.join("refill.json");
+    let out = Command::new(cli).args(["pcb", "drc", "--refill-zones", "--save-board", "--format", "json", "--output"]).arg(&report).arg(&copy).output().unwrap();
+    assert!(report.exists(), "kicad-cli did not refill {rel}: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::read_to_string(&copy).unwrap()
+}
+
+/// A board's via stitching planned from its fills: the design, the plan, the outline in micrometres.
+fn plan_of(text: &str) -> (eda_model::ir::Design, eda_drc::via_stitch::StitchPlan) {
+    let (design, model, notes) = import_kicad_pcb(text).unwrap();
+    let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
+    let fills = eda_kicad::zone_fills::KicadFills::new("file".into(), String::new(), 0, entries).fills_nm(&design);
+    let stitch = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
+    let inputs = eda_drc::via_stitch::PlanInputs { design: &design, model: &model, fills: &fills, current_via_size_um: 600, current_via_drill_um: 300 };
+    let plan = eda_drc::via_stitch::plan(&inputs, &stitch);
+    (design, plan)
+}
+
+fn inside(ring: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
+    let mut c = false;
+    let n = ring.len();
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        if (a.y > p.y) != (b.y > p.y) && (p.x as f64) < (b.x - a.x) as f64 * (p.y - a.y) as f64 / (b.y - a.y) as f64 + a.x as f64 {
+            c = !c;
+        }
+    }
+    c
+}
+
+/// KiCad's `PartialTopPourStillStitchesInnerPlanes` (qa/tests/pcbnew/test_via_stitch.cpp) on `issue25303`: GND on both inner planes, a small GND pour on F.Cu, and an outline
+/// running past it -- more than 100 vias, more than 20 under the pour and beyond it, reaching past x = 122 mm, each inside the outline.
+#[test]
+fn a_stitching_carries_on_across_the_inner_planes_past_a_partial_top_pour() {
+    if slow_tests_off() {
+        return;
+    }
+    let (Some(cli), Some(qa)) = (kicad_cli(), qa_data()) else { return };
+    let (_design, plan) = plan_of(&refilled(&cli, &qa, "issue25303.kicad_pcb"));
+    let positions: Vec<eda_model::ir::Point> = plan.vias.iter().map(|(_, p)| *p).collect();
+    let under = positions.iter().filter(|p| p.x < 107_000).count();
+    let beyond = positions.len() - under;
+    let max_x = positions.iter().map(|p| p.x).max().unwrap_or(0);
+    eprintln!("issue25303: {} vias, {under} under the F.Cu pour, {beyond} beyond, the farthest at x = {max_x} um", positions.len());
+    assert!(positions.len() > 100 && under > 20 && beyond > 20 && max_x > 122_000);
+    assert!(positions.iter().all(|p| inside(&plan.stitch.outline, *p)));
+}
+
+/// KiCad's `PadsBlockStitchingWithSolidZoneConnections` on `issue25265`: the GND pour floods its own pads, and no via lands on a pad flashed on an outer layer.
+#[test]
+fn a_stitching_keeps_off_the_pads_its_own_pour_floods() {
+    if slow_tests_off() {
+        return;
+    }
+    let (Some(cli), Some(qa)) = (kicad_cli(), qa_data()) else { return };
+    let text = refilled(&cli, &qa, "issue25265.kicad_pcb");
+    let (design, plan) = plan_of(&text);
+    let (_, model, _) = import_kicad_pcb(&text).unwrap();
+    let board = eda_drc::board::build(&design, &model);
+    eprintln!("issue25265: {} vias", plan.vias.len());
+    assert!(plan.vias.len() > 100, "{}", plan.vias.len());
+    for (_, p) in &plan.vias {
+        let via = eda_drc::kimath::Shape::Circle { c: *p, r: plan.stitch.via.size_um / 2 };
+        for pad in &board.pads {
+            for layer in ["F.Cu", "B.Cu"] {
+                let Some(copper) = pad.copper_on(layer) else { continue };
+                assert!(copper.gap_to(&via) > 0.0, "the via at {p:?} sits on pad {} on {layer}", pad.id);
+            }
+        }
+    }
 }

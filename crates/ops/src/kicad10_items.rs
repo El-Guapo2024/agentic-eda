@@ -61,3 +61,129 @@ impl<'a> Board<'a> {
         Ok(())
     }
 }
+
+// ------------------------------------------------------------------------------------------------------------------------- via stitching
+
+use super::pcb_items::PlannedVia;
+use eda_model::ir::{Point, Via};
+use eda_model::via_stitch::ViaStitch;
+use std::collections::BTreeMap;
+
+impl<'a> Board<'a> {
+    /// `ShowPropertiesDialog`'s `EditStart`, `Update`, `EditFinish` (and the generator a Draw Via Stitch Area makes): the stitching takes `stitch`'s settings, and its vias go
+    /// where `vias` says, churning as few as `Update` does -- a member via on a cell that is still wanted stays (moved there if it was nudged off it, made again if its size,
+    /// drill, layers or net no longer match the template), the others go, and a cell no member is on gets a new via, a copy of the template on the stitch net, `free`.
+    pub(crate) fn set_via_stitch(&mut self, id: Option<&str>, stitch: ViaStitch, vias: Option<&[PlannedVia]>) -> Result<(), Vec<CheckResult>> {
+        let what = id.unwrap_or("via_stitch");
+        let vias = vias.ok_or_else(|| fail("ops_via_stitch_unplanned", what, "the vias of the stitching were not placed (the board directory places them from the zone fills)"))?;
+        if !stitch.net.is_empty() {
+            self.known_net(&stitch.net)?;
+        }
+        if stitch.outline.len() < 3 {
+            return Err(fail("ops_bad_via_stitch", what, "a via stitching needs an outline of three corners or more"));
+        }
+        if stitch.via.size_um <= 0 || stitch.via.drill_um <= 0 || stitch.via.drill_um >= stitch.via.size_um {
+            return Err(fail("ops_bad_via_stitch", what, "the via of a stitching needs a drill smaller than its size"));
+        }
+        self.known_layer(&stitch.via.from_layer)?;
+        self.known_layer(&stitch.via.to_layer)?;
+        let members: Vec<String> = match id {
+            Some(id) => {
+                let dr = self.design.drawings.as_ref().ok_or_else(|| fail("ops_unknown_via_stitch", id, "the board has no drawings yet"))?;
+                dr.board_items.via_stitches.iter().find(|v| v.id == id).ok_or_else(|| fail("ops_unknown_via_stitch", id, "no via stitching with this id"))?.member_ids.clone()
+            }
+            None => Vec::new(),
+        };
+        let pitch = stitch.pitch_um * 1000;
+        let desired: BTreeMap<(i64, i64), Point> = vias.iter().map(|p| (p.cell, p.at)).collect();
+        // "Determine existing vias we can keep"
+        let existing: Vec<Via> = self.design.routing.iter().flat_map(|rt| rt.vias.iter().filter(|v| members.contains(&v.id)).cloned()).collect();
+        let mut kept: BTreeMap<(i64, i64), Via> = BTreeMap::new();
+        let mut removed: Vec<String> = Vec::new();
+        for v in existing {
+            let cell = eda_drc::via_stitch::cell_for_position(&stitch, pitch, (v.at.x * 1000, v.at.y * 1000));
+            if desired.contains_key(&cell) && !kept.contains_key(&cell) {
+                kept.insert(cell, v);
+            } else {
+                removed.push(v.id.clone());
+            }
+        }
+        // `matchesRef`: the template's size, drill, layers and net (the position aside).
+        let t = &stitch.via;
+        let matches = |v: &Via| v.diameter == t.size_um && v.drill == t.drill_um && v.from_layer == t.from_layer && v.to_layer == t.to_layer && v.net == stitch.net;
+        let mut keep_ids: Vec<String> = Vec::new();
+        let mut moves: Vec<(String, Point)> = Vec::new();
+        let mut adds: Vec<Point> = Vec::new();
+        for (cell, at) in &desired {
+            match kept.get(cell) {
+                Some(v) if matches(v) => {
+                    keep_ids.push(v.id.clone());
+                    if v.at != *at {
+                        // "Just nudge the via"
+                        moves.push((v.id.clone(), *at));
+                    }
+                }
+                Some(v) => {
+                    removed.push(v.id.clone());
+                    adds.push(*at);
+                }
+                None => adds.push(*at),
+            }
+        }
+        // The vias.
+        let rt = self.routing_mut();
+        rt.vias.retain(|v| !removed.contains(&v.id));
+        for (vid, at) in &moves {
+            if let Some(v) = rt.vias.iter_mut().find(|v| &v.id == vid) {
+                v.at = *at;
+            }
+        }
+        let before: std::collections::BTreeSet<String> = rt.vias.iter().map(|v| v.id.clone()).collect();
+        for at in &adds {
+            rt.vias.push(Via { id: String::new(), net: stitch.net.clone(), at: *at, drill: t.drill_um, diameter: t.size_um, from_layer: t.from_layer.clone(), to_layer: t.to_layer.clone() });
+        }
+        rt.assign_missing_ids();
+        let new_ids: Vec<String> = rt.vias.iter().filter(|v| !before.contains(&v.id)).map(|v| v.id.clone()).collect();
+        self.sort_routing();
+        // "Vias must be marked free to avoid connectivity stealing them away"
+        let dr = self.drawings_mut();
+        dr.via_extras.retain(|x| !removed.contains(&x.id));
+        for vid in &new_ids {
+            dr.via_extras.push(eda_model::via_extra::ViaExtra { id: vid.clone(), kind: Default::default(), tokens: vec!["(free yes)".into()] });
+        }
+        let mut member_ids: Vec<String> = keep_ids.into_iter().chain(new_ids).collect();
+        member_ids.sort();
+        match id {
+            Some(id) => {
+                let slot = dr.board_items.via_stitches.iter_mut().find(|v| v.id == id).expect("found above");
+                *slot = ViaStitch { id: id.to_string(), member_ids, ..stitch };
+            }
+            None => {
+                dr.board_items.via_stitches.push(ViaStitch { id: String::new(), member_ids, ..stitch });
+                dr.assign_missing_ids();
+            }
+        }
+        Ok(())
+    }
+
+    /// `PCB_VIA_STITCH::Remove`: every via the stitching made, then the stitching.
+    pub(crate) fn delete_via_stitch(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_via_stitch", id, "the board has no drawings yet"))?;
+        let pos = dr.board_items.via_stitches.iter().position(|v| v.id == id).ok_or_else(|| fail("ops_unknown_via_stitch", id, "no via stitching with this id"))?;
+        let gone = dr.board_items.via_stitches.remove(pos);
+        dr.via_extras.retain(|x| !gone.member_ids.contains(&x.id));
+        if let Some(rt) = self.design.routing.as_mut() {
+            rt.vias.retain(|v| !gone.member_ids.contains(&v.id));
+        }
+        Ok(())
+    }
+}
+
+/// `PCB_VIA_STITCH::Move` (the outline and the origin translated, the vias regenerated after: here they stay until the stitching is edited again) and what a turn and a flip do
+/// to the outline (`PCB_GENERATOR_POLY`'s `Rotate` and `Flip` of the polygon).
+pub(crate) fn transform_via_stitch(v: &mut ViaStitch, x: Xform) {
+    for p in v.outline.iter_mut() {
+        *p = x.point(*p);
+    }
+    v.origin = x.point(v.origin);
+}

@@ -147,5 +147,21 @@ export function buildPcbMenu(state: StudioState, board: BoardState, refs: readon
   const ctx = menuContext(state, board, refs, at);
   if (mode) return drawingMenu(mode, ctx);
   if (picker.session() != null || PICKER_TOOLS.has(tool)) return pickerMenu(ctx);
+  // "If every item in the selection shares the same generator parent and that generator provides a child context menu, show it instead": a via stitching's vias get Exclude From
+  // Stitching alone (`PCB_VIA_STITCH::GetChildContextMenu`).
+  const parent = sharedStitch(board, refs);
+  if (parent) return [{ type: "item", action: "pcbnew.Generator.excludeStitchVia" }];
   return pcbSelectionMenu(summarizePcbSelection(board, refs), ctx);
+}
+
+/** The via stitching every item of `refs` was made by, when they were all made by one (`GetParentGroup()` of each is the same generator). */
+export function sharedStitch(board: BoardState, refs: readonly string[]): string | null {
+  if (refs.length === 0) return null;
+  let parent: string | null = null;
+  for (const id of refs) {
+    const s = board.drawings?.via_stitches?.find((v) => v.member_ids?.includes(id));
+    if (!s || (parent !== null && parent !== s.id)) return null;
+    parent = s.id;
+  }
+  return parent;
 }

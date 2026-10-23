@@ -13,6 +13,7 @@
 // `BOARD_COMMIT::Push( "Edit Properties" )`.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
+import { stitchPosition } from "./viaStitch";
 import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PlacementArea, PlacementSourceType, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
@@ -24,7 +25,7 @@ import { shapeToCmd } from "./pcbPointEdit";
 import { circumcircle } from "./trackArc";
 import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
-import type { BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import type { BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
 import { registerExtraItemProperties } from "./pcbItemProperties";
 import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
 import { NO_ENDING, type LineEnding, type LineEndingStyle } from "./lineEnding";
@@ -55,6 +56,7 @@ export type PcbType =
   | "PCB_POINT"
   | "PCB_BARCODE"
   | "PCB_GRID_ITEM"
+  | "PCB_VIA_STITCH"
   | "PCB_TABLE"
   | "PCB_TABLECELL";
 
@@ -79,6 +81,8 @@ export interface PcbItem {
   readonly barcode?: BoardBarcode;
   /** KiCad 10's grid item. */
   readonly grid?: BoardGridItem;
+  /** KiCad 10's via stitching (a generator). */
+  readonly stitch?: BoardViaStitch;
   /** A table (`PCB_TABLE`), or the table a cell (`PCB_TABLECELL`) is in. */
   readonly table?: BoardTable;
   readonly cell?: BoardTableCell;
@@ -159,6 +163,8 @@ export function pcbItemOf(board: BoardState, id: string): PcbItem | null {
   if (barcode) return { type: "PCB_BARCODE", id, barcode };
   const grid = dr?.grid_items?.find((g) => g.id === id);
   if (grid) return { type: "PCB_GRID_ITEM", id, grid };
+  const stitch = dr?.via_stitches?.find((v) => v.id === id);
+  if (stitch) return { type: "PCB_VIA_STITCH", id, stitch };
   const tableItem = tableItemOf(board, id);
   if (tableItem) return tableItem;
   const pad = id.includes(".") ? padById(board, id) : null;
@@ -191,6 +197,7 @@ function indexOf(board: BoardState): Map<string, PcbItem> {
   for (const point of dr?.points ?? []) put({ type: "PCB_POINT", id: point.id, point });
   for (const barcode of dr?.barcodes ?? []) put({ type: "PCB_BARCODE", id: barcode.id, barcode });
   for (const grid of dr?.grid_items ?? []) put({ type: "PCB_GRID_ITEM", id: grid.id, grid });
+  for (const stitch of dr?.via_stitches ?? []) put({ type: "PCB_VIA_STITCH", id: stitch.id, stitch });
   for (const item of tableItemsOf(board)) put(item);
   return out;
 }
@@ -243,6 +250,8 @@ export function typeName(item: PcbItem): string {
       return "Barcode";
     case "PCB_GRID_ITEM":
       return "Grid";
+    case "PCB_VIA_STITCH":
+      return "Generator";
     case "PCB_TABLE":
       return "Table";
     case "PCB_TABLECELL":
@@ -253,7 +262,7 @@ export function typeName(item: PcbItem): string {
 }
 
 /** Every `KICAD_T` name an item here can have (the choices of the Type property). */
-export const TYPE_NAMES: readonly string[] = ["Barcode", "Dimension", "Footprint", "Graphic", "Grid", "Group", "Leader", "Pad", "Point", "Reference Image", "Table", "Table Cell", "Text", "Text Box", "Track", "Via", "Zone"];
+export const TYPE_NAMES: readonly string[] = ["Barcode", "Dimension", "Footprint", "Generator", "Graphic", "Grid", "Group", "Leader", "Pad", "Point", "Reference Image", "Table", "Table Cell", "Text", "Text Box", "Track", "Via", "Zone"];
 
 /** `GetFriendlyName()`: the caption of a single selected item (`EDA_ITEM::GetFriendlyName`, `PCB_TRACK::`, `ZONE::`). */
 export function pcbFriendlyName(item: PcbItem): string {
@@ -294,6 +303,8 @@ export function pcbFriendlyName(item: PcbItem): string {
       return "Barcode";
     case "PCB_GRID_ITEM":
       return "Grid";
+    case "PCB_VIA_STITCH":
+      return "Via Stitching";
     case "PCB_TABLE":
       return "Table";
     case "PCB_TABLECELL":
@@ -387,6 +398,7 @@ export function positionOf(i: PcbItem): [number, number] {
   if (i.point) return [i.point.x, i.point.y];
   if (i.barcode) return [i.barcode.x, i.barcode.y];
   if (i.grid) return [i.grid.x, i.grid.y];
+  if (i.stitch) return stitchPosition(i.stitch);
   const s = i.shape;
   if (s) {
     if (s.kind === "arc") return arcShapeCenter(s) ?? [s.start[0], s.start[1]];

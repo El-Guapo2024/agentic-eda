@@ -131,6 +131,30 @@ export interface CmdGridItem {
   custom_properties?: [string, string][];
 }
 
+/**
+ * KiCad 10's via stitching (`PCB_VIA_STITCH`, crates/model/src/via_stitch.rs) as the state lists it -- the model's own form, which `set_via_stitch` takes back. µm; an absent number
+ * is 0 (the pitch 0 is the default, twice the via and at least 2 mm), an absent layout or mode the first.
+ */
+export interface BoardViaStitch {
+  id: string;
+  layer?: string;
+  name?: string;
+  outline: PointXY[];
+  pitch_um?: number;
+  layout?: "plain" | "staggered" | "poisson";
+  mode?: "stitch" | "guard";
+  seed?: number;
+  origin_offset?: PointXY;
+  origin?: PointXY;
+  net?: string;
+  guarded_net?: string;
+  excluded_cells?: [number, number][];
+  excluded_positions?: PointXY[];
+  via?: { size_um: number; drill_um: number; from_layer: string; to_layer: string; text?: string };
+  member_ids?: string[];
+  custom_properties?: [string, string][];
+}
+
 export interface BoardPoint {
   id: string;
   layer: string;
@@ -232,7 +256,13 @@ export type PcbItemCmd =
   /** Place Sub-grid's second click (`DRAWING_TOOL::PlaceSubGrid`) and Grid Item Properties' OK (`DIALOG_GRID_ITEM_PROPERTIES`). */
   | { verb: "add_grid_item"; grid_item: CmdGridItem }
   | { verb: "edit_grid_item"; id: string; grid_item: CmdGridItem }
-  | { verb: "delete_grid_item"; id: string };
+  | { verb: "delete_grid_item"; id: string }
+  /**
+   * A via stitching's settings and its vias made again (Via Stitching Properties' OK, the Properties panel, Exclude From Stitching, Clear Via Stitching Exclusions), or a new one
+   * (Draw Via Stitch Area: no `id`); the server places the vias from the zone fills when `vias` is left out. One undo step.
+   */
+  | { verb: "set_via_stitch"; id?: string; stitch: Omit<BoardViaStitch, "id"> & { id?: string }; vias?: { cell: [number, number]; at: PointXY }[] }
+  | { verb: "delete_via_stitch"; id: string };
 
 /**
  * One line ending as `set_shape_style` takes it (`eda_model::line_ending::LineEnding`): KiCad 10's `(start_shape ..)` / `(end_shape ..)` of a line, an arc or a curve -- the shape dialog's

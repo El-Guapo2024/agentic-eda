@@ -19,6 +19,7 @@ import { openBarcodeDialog, openTextBoxDialog } from "../state/pcbItemDialogs";
 import { newBarcode } from "../kicad-port/barcodeShapes";
 import { textStyleOf } from "../kicad-port/layerDefaults";
 import { gridItemCmd, newGridItem, sizeGridToCursor } from "../kicad-port/gridItem";
+import { registerKicad10ItemActions } from "./kicad10ItemActions";
 
 export function registerPcbItemActions(m: Map<string, (param?: unknown) => void>, ctx: SweepCtx): void {
   const { pcbOnly } = createSweepHelpers(ctx);
@@ -32,6 +33,8 @@ export function registerPcbItemActions(m: Map<string, (param?: unknown) => void>
   m.set("pcbnew.InteractiveDrawing.barcode", pcbOnly(() => startBarcodeTool(ctx)));
   // KiCad 10 (25ec2335): `PCB_ACTIONS::placeSubGrid`, "Place Sub-grid".
   m.set("pcbnew.GridItem.place", pcbOnly(() => startPlaceSubGridTool(ctx)));
+  // KiCad 10's via stitching: actions/kicad10ItemActions.ts.
+  registerKicad10ItemActions(m, ctx);
   // KiCad posts `rehatchShapes` after every commit, undo and file load and keeps the lines in each shape; here the server works them out from the board as it is every time it describes it
   // (`eda_drc::hatch`), so the action is to describe it again -- the lines are never older than the board, and a shape put over a hatched one has already cut its lines.
   m.set("pcbnew.Control.rehatchShapes", pcbOnly(() => void ctx.api.refresh()));

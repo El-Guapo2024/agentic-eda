@@ -740,3 +740,106 @@ fn the_grid_item_commands_have_one_wire_form() {
     let back: Cmd = serde_json::from_value(serde_json::to_value(&add).unwrap()).unwrap();
     assert_eq!(back, add);
 }
+
+// ------------------------------------------------------------------------------------------------------------------ via stitching (KiCad 10)
+
+use eda_model::via_stitch::{StitchLayout, ViaStitch, ViaTemplate};
+use pcb_items::PlannedVia;
+
+fn stitch() -> ViaStitch {
+    let mut v = ViaStitch::new(vec![p(0, 0), p(10_000, 0), p(10_000, 10_000), p(0, 10_000)]);
+    v.net = "GND".into();
+    v.pitch_um = 2_000;
+    v.via = ViaTemplate { size_um: 600, drill_um: 300, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() };
+    v
+}
+
+fn planned(cells: &[(i64, i64)]) -> Vec<PlannedVia> {
+    cells.iter().map(|&(c, r)| PlannedVia { cell: (c, r), at: p(c * 2_000, r * 2_000) }).collect()
+}
+
+fn set_stitch(b: &mut Board<'_>, id: Option<&str>, v: ViaStitch, cells: &[(i64, i64)]) -> Result<(), Vec<CheckResult>> {
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetViaStitch { id: id.map(str::to_string), stitch: v, vias: Some(planned(cells)) }))
+}
+
+fn stitches<'a>(b: &'a Board<'_>) -> &'a [ViaStitch] {
+    &drawings(b).board_items.via_stitches
+}
+
+fn member_vias(b: &Board<'_>) -> Vec<(String, eda_model::ir::Point)> {
+    let ids = &stitches(b)[0].member_ids;
+    let mut out: Vec<_> = b.design().routing.as_ref().unwrap().vias.iter().filter(|v| ids.contains(&v.id)).map(|v| (v.id.clone(), v.at)).collect();
+    out.sort_by_key(|(_, at)| (at.x, at.y));
+    out
+}
+
+#[test]
+fn a_stitching_makes_its_vias_and_churns_as_few_as_update_does() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let before = b.design().routing.as_ref().unwrap().vias.len();
+    set_stitch(&mut b, None, stitch(), &[(1, 1), (2, 1), (3, 1)]).unwrap();
+    let id = stitches(&b)[0].id.clone();
+    assert!(id.starts_with("vst_"), "{id}");
+    assert_eq!(b.design().routing.as_ref().unwrap().vias.len(), before + 3);
+    let first = member_vias(&b);
+    assert_eq!(first.iter().map(|(_, at)| *at).collect::<Vec<_>>(), vec![p(2_000, 2_000), p(4_000, 2_000), p(6_000, 2_000)]);
+    // "Vias must be marked free".
+    assert!(drawings(&b).via_extras.iter().any(|x| x.id == first[0].0 && x.tokens == ["(free yes)"]));
+
+    // The same cells again: nothing changes, the ids stay (`UpdateDeltaStability`).
+    let cur = stitches(&b)[0].clone();
+    set_stitch(&mut b, Some(&id), cur, &[(1, 1), (2, 1), (3, 1)]).unwrap();
+    assert_eq!(member_vias(&b), first);
+    // One cell gone and one new: the two kept keep their ids.
+    let cur = stitches(&b)[0].clone();
+    set_stitch(&mut b, Some(&id), cur, &[(1, 1), (2, 1), (4, 1)]).unwrap();
+    let after = member_vias(&b);
+    assert_eq!((after[0].0.as_str(), after[1].0.as_str()), (first[0].0.as_str(), first[1].0.as_str()));
+    assert!(!after.iter().any(|(vid, _)| *vid == first[2].0), "the via of the cell that went is gone");
+    assert_eq!(after[2].1, p(8_000, 2_000));
+    // A new via size makes them again.
+    let mut bigger = stitches(&b)[0].clone();
+    bigger.via.size_um = 800;
+    set_stitch(&mut b, Some(&id), bigger, &[(1, 1), (2, 1), (4, 1)]).unwrap();
+    assert!(member_vias(&b).iter().all(|(vid, _)| !after.iter().any(|(o, _)| o == vid)));
+    assert!(b.design().routing.as_ref().unwrap().vias.iter().filter(|v| stitches(&b)[0].member_ids.contains(&v.id)).all(|v| v.diameter == 800));
+
+    // `Remove`: the stitching and its vias.
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteViaStitch { id })).unwrap();
+    assert!(stitches(&b).is_empty());
+    assert_eq!(b.design().routing.as_ref().unwrap().vias.len(), before);
+}
+
+#[test]
+fn a_nudged_via_is_put_back_on_its_cell_and_a_stitching_without_a_plan_is_refused() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    set_stitch(&mut b, None, stitch(), &[(1, 1)]).unwrap();
+    let id = stitches(&b)[0].id.clone();
+    let vid = member_vias(&b)[0].0.clone();
+    b.apply(&Cmd::MoveVia { id: vid.clone(), x: 2_300, y: 2_000 }).unwrap();
+    // The plan has the cell at its place: the via is "just nudged" back, not made again.
+    let cur = stitches(&b)[0].clone();
+    set_stitch(&mut b, Some(&id), cur, &[(1, 1)]).unwrap();
+    assert_eq!(member_vias(&b), vec![(vid, p(2_000, 2_000))]);
+    let err = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetViaStitch { id: Some(id.clone()), stitch: stitch(), vias: None })).unwrap_err();
+    assert_eq!(err[0].check, "ops_via_stitch_unplanned");
+    let mut odd = stitch();
+    odd.via.drill_um = 700;
+    assert_eq!(set_stitch(&mut b, Some(&id), odd, &[]).unwrap_err()[0].check, "ops_bad_via_stitch");
+    let mut poisson = stitch();
+    poisson.layout = StitchLayout::Poisson;
+    assert!(set_stitch(&mut b, Some(&id), poisson, &[]).is_ok());
+}
+
+#[test]
+fn the_via_stitching_commands_have_one_wire_form() {
+    let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_via_stitch", "stitch": {
+        "outline": [{"x": 0, "y": 0}, {"x": 1000, "y": 0}, {"x": 1000, "y": 1000}], "net": "GND", "pitch_um": 1000, "layout": "staggered",
+        "via": {"size_um": 600, "drill_um": 300, "from_layer": "F.Cu", "to_layer": "B.Cu"}}})).unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::SetViaStitch { id, stitch, vias }) = &c else { panic!("{c:?}") };
+    assert_eq!((id.as_deref(), stitch.layout, vias.is_none()), (None, StitchLayout::Staggered, true));
+    let back: Cmd = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+    assert_eq!(back, c);
+}

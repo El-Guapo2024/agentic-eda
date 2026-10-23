@@ -136,10 +136,11 @@ export function splitCarried(board: BoardState, refs: readonly string[]): Carrie
   const points = take(board.drawings?.points);
   const barcodes = take(board.drawings?.barcodes);
   const gridItems = take(board.drawings?.grid_items);
+  const viaStitches = take(board.drawings?.via_stitches);
   const groups = take(board.drawings?.groups);
   const tables = take(board.drawings?.tables);
   const routing = (side: "in" | "out") => (board.routing ? { ...board.routing, tracks: tracks[side], vias: vias[side], zones: zones[side] } : null);
-  const drawings = (side: "in" | "out") => (board.drawings ? { ...board.drawings, shapes: shapes[side], texts: texts[side], dimensions: dimensions[side], text_boxes: textBoxes[side], images: images[side], points: points[side], barcodes: barcodes[side], grid_items: gridItems[side], groups: groups[side], ...(board.drawings.tables ? { tables: tables[side] } : {}) } : null);
+  const drawings = (side: "in" | "out") => (board.drawings ? { ...board.drawings, shapes: shapes[side], texts: texts[side], dimensions: dimensions[side], text_boxes: textBoxes[side], images: images[side], points: points[side], barcodes: barcodes[side], grid_items: gridItems[side], via_stitches: viaStitches[side], groups: groups[side], ...(board.drawings.tables ? { tables: tables[side] } : {}) } : null);
   return {
     still: { ...board, parts: parts.out, routing: routing("out"), drawings: drawings("out") },
     moving: { ...board, parts: parts.in, routing: routing("in"), drawings: drawings("in") },

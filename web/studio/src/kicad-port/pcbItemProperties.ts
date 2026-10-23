@@ -4,7 +4,8 @@
 // the whole box (`edit_text_box`) -- the free text's setters are the text's own verbs and a field's the footprint's.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BarcodeEcc, BarcodeKind, BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import type { BarcodeEcc, BarcodeKind, BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
+import { LAYOUT_PROPERTY_CHOICES, layoutOf, MODE_CHOICES, modeOf, viaStitchCmd, withLayoutAndMode, type StitchLayout, type StitchMode } from "./viaStitch";
 import { gridItemCmd, normalizedGridItem } from "./gridItem";
 import type { Cmd } from "../api/types";
 import { BARCODE_KINDS, barcodeToCmd, clampEcc, eccChoices, hasErrorCorrection } from "./barcodeShapes";
@@ -241,8 +242,61 @@ function registerGridItem(pm: PM, add: Add): void {
   affects("Affects Placement", "placement");
 }
 
+/**
+ * Register KiCad 10's `PCB_VIA_STITCH` (`PCB_VIA_STITCH_DESC`): a board item with its Layer masked ("The stitch lives on its own GAL layer"), then Size, Drill, Pitch, Layout (a stitch's),
+ * Mode, Seed (a Poisson stitch's), Net and Guarded Net (a guard's). Each edit gives the stitching the setting and makes its vias again (`set_via_stitch`, the server placing them).
+ */
+function registerViaStitch(pm: PM, add: Add): void {
+  pm.registerType("PCB_VIA_STITCH");
+  pm.inheritsAfter("PCB_VIA_STITCH", "BOARD_ITEM");
+  pm.mask("PCB_VIA_STITCH", "BOARD_ITEM", "Layer");
+  const own = (i: PcbItem): BoardViaStitch => i.stitch!;
+  const edit = (i: PcbItem, next: BoardViaStitch): Cmd[] => (JSON.stringify(next) === JSON.stringify(own(i)) ? [] : [viaStitchCmd(own(i).id, next)]);
+  const via = (i: PcbItem) => own(i).via ?? { size_um: 0, drill_um: 0, from_layer: "F.Cu", to_layer: "B.Cu" };
+  add({ owner: "PCB_VIA_STITCH", name: "Size", kind: "int", display: "size", get: (i) => via(i).size_um, set: (i, v) => edit(i, { ...own(i), via: { ...via(i), size_um: Math.round(num(v)) } }) });
+  add({ owner: "PCB_VIA_STITCH", name: "Drill", kind: "int", display: "size", get: (i) => via(i).drill_um, set: (i, v) => edit(i, { ...own(i), via: { ...via(i), drill_um: Math.round(num(v)) } }) });
+  add({ owner: "PCB_VIA_STITCH", name: "Pitch", kind: "int", display: "size", get: (i) => own(i).pitch_um ?? 0, set: (i, v) => edit(i, { ...own(i), pitch_um: Math.round(num(v)) }) });
+  add({
+    owner: "PCB_VIA_STITCH",
+    name: "Layout",
+    kind: "enum",
+    choices: () => LAYOUT_PROPERTY_CHOICES.map((c) => ({ label: c.label, value: c.value })),
+    available: (i) => modeOf(own(i)) === "stitch",
+    get: (i) => layoutOf(own(i)),
+    set: (i, v) => edit(i, withLayoutAndMode(own(i), String(v) as StitchLayout, modeOf(own(i)))),
+  });
+  add({
+    owner: "PCB_VIA_STITCH",
+    name: "Mode",
+    kind: "enum",
+    choices: () => MODE_CHOICES.map((c) => ({ label: c.label, value: c.value })),
+    get: (i) => modeOf(own(i)),
+    set: (i, v) => edit(i, withLayoutAndMode(own(i), layoutOf(own(i)), String(v) as StitchMode)),
+  });
+  add({
+    owner: "PCB_VIA_STITCH",
+    name: "Seed",
+    kind: "int",
+    available: (i) => modeOf(own(i)) === "stitch" && layoutOf(own(i)) === "poisson",
+    get: (i) => own(i).seed ?? 0,
+    set: (i, v) => edit(i, { ...own(i), seed: Math.max(0, Math.trunc(num(v))) >>> 0 }),
+  });
+  const netChoices = (c: PcbCtx): Choice[] => [{ label: "<no net>", value: "" }, ...c.nets.map((n) => ({ label: n, value: n }))];
+  add({ owner: "PCB_VIA_STITCH", name: "Net", kind: "net", choices: (_i, c) => netChoices(c), get: (i) => own(i).net ?? "", set: (i, v) => edit(i, { ...own(i), net: String(v) }) });
+  add({
+    owner: "PCB_VIA_STITCH",
+    name: "Guarded Net",
+    kind: "net",
+    choices: (_i, c) => netChoices(c),
+    available: (i) => modeOf(own(i)) === "guard",
+    get: (i) => own(i).guarded_net ?? "",
+    set: (i, v) => edit(i, { ...own(i), guarded_net: String(v) }),
+  });
+}
+
 export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
   registerGridItem(pm, add);
+  registerViaStitch(pm, add);
   registerReferenceImage(pm, add, layerChoices);
   registerPoint(pm, add, layerChoices);
   registerBarcode(pm, add, layerChoices);
