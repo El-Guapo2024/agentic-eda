@@ -759,3 +759,14 @@ export function inspectConstraints(req: { item: string; at?: [Um, Um]; units: Le
 export function fetchFootprintCheck(name: string): Promise<FpCheckReply> {
   return postJson("/api/footprint/check", { name });
 }
+
+/** GET /api/rule_editor (crates/cli/src/rule_editor_api.rs): the board's rules as the DRC Rule Editor's tree holds them. */
+export async function fetchRuleEditor(): Promise<import("../kicad-port/ruleEditor").RuleEditorView> {
+  return getJson("/api/rule_editor");
+}
+
+/** POST /api/rule_editor/check: what Save would say of a rule panel (`{ entry, rule }`), or a Custom rule's Check Syntax (`{ syntax: { name, body } }`). Changes nothing. */
+export async function postRuleEditorCheck(body: unknown): Promise<{ ok: boolean; valid?: boolean; message: string; generated?: string }> {
+  const r = await fetch("/api/rule_editor/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return (await r.json()) as { ok: boolean; valid?: boolean; message: string; generated?: string };
+}

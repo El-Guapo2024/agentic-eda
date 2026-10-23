@@ -26,6 +26,7 @@ mod known_props;
 pub mod libeval;
 pub mod pcbexpr;
 pub mod rule_board;
+pub mod rule_editor;
 pub mod rule_item;
 pub mod rtree;
 mod shape_poly;
