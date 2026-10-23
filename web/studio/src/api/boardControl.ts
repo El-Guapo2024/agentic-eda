@@ -128,6 +128,30 @@ export function postFabGencad(options: GencadOptions): Promise<FabReply> {
   return postJson<FabReply>("/api/fab/gencad", options);
 }
 
+// ------------------------------------------------------------------------- IDF
+
+/** `DIALOG_EXPORT_IDF3`'s fields (`dialog_export_idf.h`): the output units choice, the board reference point, the two components to leave out. */
+export interface IdfOptions {
+  /** "Output units:" Millimeters or Mils (`GetThouOption`). */
+  units: "mm" | "mils";
+  /** "Set board reference point:"; off = the centre of the board outline's bounding box (`BOX2I::Centre` of `GetBoardEdgesBoundingBox`). */
+  set_reference_point: boolean;
+  /** "X position:" / "Y position:", mm. */
+  x_ref: number;
+  y_ref: number;
+  /** "Ignore 'Do not populate' components". */
+  no_dnp: boolean;
+  /** "Ignore 'Unspecified' components". */
+  no_unspecified: boolean;
+}
+
+/** `dialog_export_idf_base.cpp`'s own defaults: Millimeters, every box unchecked, the positions "0". */
+export const DEFAULT_IDF_OPTIONS: IdfOptions = { units: "mm", set_reference_point: false, x_ref: 0, y_ref: 0, no_dnp: false, no_unspecified: false };
+
+export function postFabIdf(options: IdfOptions): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/idf", options);
+}
+
 // -------------------------------------------------------------------- IPC-2581
 
 export interface Ipc2581Options {

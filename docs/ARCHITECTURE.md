@@ -163,6 +163,11 @@ never edited as masters.
     fallback marked DEPRECATED, to be deleted once every machine has the
     command; the reply's `engine` says which wrote the file. The session
     import (SES, `Cmd::Specctra`) stays ours: kicad-cli has no command for it.
+  - **IDFv3 and GenCAD** (File > Export > IDFv3... and GenCAD..., `/api/fab/idf`
+    and `/api/fab/gencad`, `eda board export --kicad idf|gencad`): kicad-cli's
+    `pcb export idf` and `gencad`, asked through the same probe. There is no
+    fallback: where the kicad-cli lacks the command the menu entry is
+    disabled with the reason (`GET /api/fab/exporters`).
 - **Our own ports** are kept for what kicad-cli cannot do or cannot do fast
   enough interactively:
   - the interactive router (`crates/pns`, a port of KiCad's PNS),

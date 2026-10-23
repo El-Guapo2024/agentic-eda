@@ -808,7 +808,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 ## Appendix B. Out of scope and deferred
 
 - **kicad-cli's job** (`docs/ARCHITECTURE.md`): DRC, ERC, plots, Gerbers, drill and position files, netlist, BOM, statistics, STEP, GLB, VRML,
-  IPC-2581, ODB++, D356 and GenCAD. Old #2, #3 and #19-#24. The UI around them is in scope (item 11). IDF, Hyperlynx and the footprint report stay unwired: kicad-cli has none (3 rows).
+  IPC-2581, ODB++, D356, GenCAD and IDF (IDF since 2026-10-23, `PARITY-pcb.md` section 49: `kicad-cli pcb export idf`, offered where the kicad-cli has it). Old #2, #3 and #19-#24. The UI around them is in scope (item 11). Hyperlynx and the footprint report stay unwired: kicad-cli has none, not even the nightly (2 rows).
 - **Python scripting and plugins**: `common.API.pluginsReload`, `pcbnew.ScriptingTool.*`, the footprint wizards (`pcbnew.FpWizard.*`, `ModuleEditor.createFootprint`) (6 rows).
 - **Project management and the application shell**: New, Open, Revert, Quit, the project manager, Rescue, Open Directory, Open with Text Editor, the calculators (9 rows). A web page has none of these. (Open Non-KiCad Board was one: it replaces the board that is open and needs no project of its own, so it is wired, with Import Non-KiCad Schematic File, since 2026-10-15: item 28.)
 - **Simulator**: 29 rows, item 34, package P21: done 2026-10-23 on `task-simulator`.

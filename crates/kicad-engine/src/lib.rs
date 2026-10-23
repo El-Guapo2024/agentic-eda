@@ -1798,6 +1798,22 @@ mod tests {
     }
 
     #[test]
+    fn the_export_probe_asks_each_kicad_cli_once_per_scope() {
+        let dir = std::env::temp_dir().join(format!("eda_kicad_engine_export_probe_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut env = Env::take();
+        // A kicad-cli without IDF (an older one) that counts how often it is asked.
+        let count = dir.join("asked");
+        env.set("FAKE_KICAD_ASKED", &count);
+        let cli = script(&dir, "no_idf.sh", "echo x >> \"$FAKE_KICAD_ASKED\"\necho 'Usage: pcb export [--help] {drill,gencad,gerbers,step}'");
+        assert!(!cli_has_export(&cli, "pcb", "idf"));
+        assert!(cli_has_export(&cli, "pcb", "gencad"));
+        assert_eq!(std::fs::read_to_string(&count).unwrap().lines().count(), 1, "one probe per binary and scope");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn top_level_forms_are_found_past_strings_and_comments_and_unbalanced_text_is_refused() {
         let text = "(version 1)\n# a comment with ( an open paren\n(rule \"a ) b\"\n  (constraint clearance (min 0.2mm)))\n(rule two (condition \"x\\\"y\"))";
         let forms = top_level_forms(text).expect("balanced");
