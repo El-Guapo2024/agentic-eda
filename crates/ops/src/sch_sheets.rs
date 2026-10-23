@@ -476,6 +476,24 @@ impl<'a> Board<'a> {
         sheets.sort_by(|a, b| str_num_cmp(&a.name, &b.name));
         let mut names: BTreeSet<String> = self.schematic_mut_or_create().sheets.iter().map(|s| s.name.clone()).collect();
         for sh in sheets {
+            // `TestForRecursion`: the sheet's file, or that of a sheet inside it, is the screen the paste lands on (or one above it): KiCad drops the sheet
+            // and says so. A verb cannot say and go on, so the paste is refused with KiCad's words.
+            let mut tree: BTreeSet<String> = BTreeSet::new();
+            let mut todo = vec![sh.file.clone()];
+            while let Some(f) = todo.pop() {
+                if tree.insert(f.clone()) {
+                    if let Some(sc) = fragment.sheet_screens.get(&f).or_else(|| self.design.sheet_contents.as_ref().and_then(|c| c.get(&f))) {
+                        todo.extend(sc.sheets.iter().map(|x| x.file.clone()));
+                    }
+                }
+            }
+            let above: BTreeSet<String> = match self.focus.as_deref() {
+                Some(here) => eda_model::sheet_list::walk(&self.design).iter().filter(|e| e.file == here).flat_map(|e| (1..=e.path.len()).filter_map(|k| eda_model::sheet_list::placement_at(&self.design, &e.path[..k]).map(|p| p.file.clone()))).collect(),
+                None => BTreeSet::new(),
+            };
+            if !tree.is_disjoint(&above) {
+                return Err(vec![CheckResult::fail("ops_sheet_recursion", &sh.name, format!("The pasted sheet '{}'\nwas dropped because the destination already has the sheet or one of its subsheets as a parent.", sh.file))]);
+            }
             let name = unique_sheet_name(&names, &sh.name);
             names.insert(name.clone());
             if !self.share_pasted_sheet(sh, (dx, dy), &name, mode)? {

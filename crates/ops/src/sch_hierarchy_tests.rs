@@ -126,6 +126,25 @@ fn a_pasted_sheet_is_a_copy_with_a_new_name_a_file_of_its_own_and_new_references
     assert_eq!(before.sheet_contents.as_ref().unwrap().len() + 2, b.design().sheet_contents.as_ref().unwrap().len());
 }
 
+/// `TestForRecursion`: a sheet pasted onto its own screen, or onto a screen inside it, would place itself; KiCad drops it with its words.
+#[test]
+fn a_sheet_pasted_inside_itself_is_refused_in_kicad_s_words() {
+    let m = ConstraintModel::default();
+    let d = power_design();
+    let fragment = power_fragment(&d);
+    let mut b = Board::new(d, &m, 100, 300);
+    let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: 0, dy: 0, mode: PasteMode::Unique };
+    let e = b.apply(&Cmd::OnSheet { sheet: "sp".into(), cmd: Box::new(paste.clone()) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_sheet_recursion");
+    assert_eq!(e[0].hint.as_deref(), Some("The pasted sheet 'power.kicad_sch'\nwas dropped because the destination already has the sheet or one of its subsheets as a parent."));
+    // and on the screen inside it too
+    let inner = b.design().sheet_contents.as_ref().unwrap()["power.kicad_sch"].sheets[0].id.clone();
+    let e = b.apply(&Cmd::OnSheet { sheet: format!("sp/{inner}"), cmd: Box::new(paste.clone()) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_sheet_recursion");
+    // the root takes it
+    b.apply(&paste).unwrap();
+}
+
 /// A pasted sheet's pins keep their text's size, bold and italic (`SCH_SHEET_PIN` is an `EDA_TEXT`, copied whole with its sheet).
 #[test]
 fn a_pasted_sheet_s_pins_keep_their_text_look() {
