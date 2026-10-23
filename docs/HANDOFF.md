@@ -46,6 +46,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | Schematic details (10-23) | A pasted sheet shares its screen, buses across sheets, a label's own fields; reviewed against eeschema's code; 18 of KiCad's QA hierarchies trace as kicad-cli reads them. Left: a shared screen inside a shared screen (needs references keyed by the whole path), two buses joined by a shared member name, `${#}` per placement, 20 of 371 nets of `netlists/video`. PARITY-sch.md section 39. |
 | Router via actions (10-23) | Blind/buried and micro vias, Select Layer and Place, Custom Track/Via Size, Switch Posture, in the router's context. The nightly's DRC adds `microvia_crosses_core`, which KiCad 8303b2ad lacks: a microvia from an outer layer fails on KiCad's default 4-layer stackup. |
 | KiCad 10 items (10-23) | Line endings, grid items, via stitching, drill charts and maps, ported from KiCad 25ec2335 (`~/src/kicad-src-25ec2335`, the box kicad-cli's commit; 8303b2ad predates them) and reviewed against it. Drill charts match kicad-cli's rebuild exactly. Left: imperial drills (needs drills in nm), a footprint's copper fields as stitch obstacles, undoing a chart placement keeps its profile marks. PARITY-pcb.md section 50. |
+| Library editors review (10-23) | P3 and P17 against KiCad's code; KiCad's installed libraries round-trip through our readers and writers (164 footprints, 243 symbols, none differing beyond sub-µm rounding). `LibraryPad` has a new `kicad` field: older branches' literals need `Default::default()`. Left: the IR's µm (70 of 164 footprints round by up to 0.5 µm), a hidden fp_text, colours, `.kicad_mod` still written as 20240108. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
@@ -56,7 +57,6 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-p17-review` | P17/P3 review: the library editors' readers and writers against KiCad's installed libraries (`crates/kicad/tests/library_roundtrip.rs`: 164 footprints, 243 symbols, all as KiCad writes them to the micrometre), `eda_model::lib_keep` (what the editors keep and do not edit), units locked, local power, the exclusions, Footprint Properties' four mandatory rows, KiCad's pad numbering, Symbol Properties in KiCad's words | done, gated | the micrometre grid; the board's Footprint Properties' two mandatory rows; `PARITY-fpedit.md` 16, `PARITY-symedit.md` "P17 review" |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
