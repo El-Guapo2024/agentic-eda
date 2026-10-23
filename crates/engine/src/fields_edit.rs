@@ -74,7 +74,8 @@ impl OwnerCtx {
             let resolved = model.real_symbol_of_instance(sch, &sym, part);
             let geom = SymbolGeom::of(&sym, part, resolved.as_ref());
             let specs = fields::symbol_specs_in(sch, &sym, Some(part), resolved.as_ref().map(|r| r.datasheet.as_str()).unwrap_or(""));
-            return Some(OwnerCtx { kind: OwnerKind::Symbol, key: key.to_string(), at: sym.at, rot: sym.rot, mirrored: sym.mirrored, width: geom.width, specs, sym: Some(sym), geom: Some(geom), power: None, sheet: None });
+            let (rot, mirrored) = crate::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
+            return Some(OwnerCtx { kind: OwnerKind::Symbol, key: key.to_string(), at: sym.at, rot, mirrored, width: geom.width, specs, sym: Some(sym), geom: Some(geom), power: None, sheet: None });
         }
         if let Some(p) = sch.power_symbols.iter().find(|p| p.id == key) {
             let flag = p.lib_id == "power:PWR_FLAG";

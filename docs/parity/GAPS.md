@@ -269,6 +269,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   a deleted placement takes its references with it, an imported tree that shows a screen twice numbers each placement, KiCad 6's root `symbol_instances` and sheet field names
   are read, a PWR_FLAG of any library names no net, a group bus matches by local name, a bus label's class goes to its members and a shared screen's label class to each placement;
   18 of KiCad's QA hierarchies trace as kicad-cli reads them (`slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them`).
+- Reviewed 2026-10-23 (`task-p10-review`; `PARITY-sch.md` section 40): Import Sheet, sheets in the clipboard, sheet pins and Annotate against KiCad's code. Fixed: a file
+  with a power symbol drawn otherwise than the design's hung Import Sheet and Paste; a sheet pasted inside itself is refused (`TestForRecursion`); a pasted sheet's pins keep
+  their look; Duplicate carries a sheet by its pin; Sheet Pin Properties and Cleanup Sheet Pins as KiCad's; the library-link check; Annotate's final check of a selection.
+  The practical check: KiCad's 130 QA schematic roots imported, written back and judged by kicad-cli, 87 alike (53 before). Left: a duplicate sheet name, "Untitled Sheet"
+  and the "Link?" prompt, first-free page numbers, the sheet's fill colour.
 - Left: a screen that has sheets of its own is still pasted as a copy, and a screen shown twice inside a screen shown twice has one reference per symbol for both (an override is filed
   under the placement just above the symbol, which nested placements share; KiCad's `qa/data/eeschema/issue10926_1`, `hierarchy_aliases`); Annotate numbers the screen's own
   references only, not the other placements' (it leaves no duplicate); two buses on one sheet that share only a member name are not joined (`bus_connection`, `issue17771`);
@@ -1154,6 +1159,11 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 32): a sheet pin's text look (size, bold, italic: Sheet Pin Properties, the painter, the pin's box, `(effects (font ..))` written and read; `SchExtras::sheet_pin_looks`).
 - Done on `task-sch-details` (2026-10-23, `PARITY-sch.md` section 39): a label's own fields (its net class), a global label's Sheet References and Schematic Setup's Inter-sheet
   References; a screen shown by two sheets (a net per placement, Paste sharing it); buses across sheets. `web/studio/e2e/sch-details-2.check.js`.
+- Reviewed 2026-10-23 (`task-p10-review`, `PARITY-sch.md` section 40): a turned or mirrored symbol on a sheet this project drew is traced, written and its fields placed
+  by KiCad's `TRANSFORM`, as it is drawn (the engine turned it the other way, mirrored it about its box and ignored a top-bottom mirror: kicad-cli and the studio's nets had
+  its pins elsewhere); two references of one symbol turned differently each get their cache copy; a label keeps a spin of its own (RIGHT by default); Mirror of a held
+  selection is about its centre; auto-rotate by bounding box; an empty field takes no row in Autoplace; the field dialogs' names and messages; a graphic line written as
+  two-point polylines.
 - Left: a sheet pin's font face and colour; a label's field moved by hand; see items 4 and 12.
 - Files: `web/studio/src/components/SchematicView.tsx`, `components/schematic/{schItems,schHit,schSelectionSummary}.ts`, `kicad-port/{schMove,selection,schConnection}.ts`, `components/SymbolFieldsTableDialog.tsx`,
   `crates/ops/src/{sch_move,sch_edit,sch_props,sch_fields,fields_table}.rs`, `crates/model/src/sch_extras.rs`.

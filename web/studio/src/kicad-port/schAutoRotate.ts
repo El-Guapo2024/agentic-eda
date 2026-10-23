@@ -20,7 +20,7 @@ type P = readonly [number, number];
 /** What a label's anchor can be over, in the shape `GetLabelOrientationForPoint` reads it. */
 export interface OrientationScene {
   /** Wires, buses and graphic lines, one entry per segment, in the direction they were drawn (`SCH_LINE_T`). */
-  lines: ReadonlyArray<{ a: P; b: P; bus: boolean }>;
+  lines: ReadonlyArray<{ a: P; b: P; bus: boolean; half?: number }>;
   /** Bus wire entries (`SCH_BUS_WIRE_ENTRY_T`): where they start and the step to their other end. */
   busEntries: ReadonlyArray<{ at: P; size: P }>;
   /** Each placed symbol (a power symbol is one) with its pins: where the pin's connection point is and the way its line runs from there into the body, on the sheet's axes (y down). */
@@ -45,6 +45,20 @@ function onSegment(a: P, b: P, p: P): boolean {
   if (samePoint(a, b)) return samePoint(p, a);
   const cross = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
   return cross === 0 && p[0] >= Math.min(a[0], b[0]) && p[0] <= Math.max(a[0], b[0]) && p[1] >= Math.min(a[1], b[1]) && p[1] <= Math.max(a[1], b[1]);
+}
+
+/**
+ * Half the pen of a line as `SCH_LINE::GetPenWidth` resolves it with nothing set: a wire's 6 mil (the Default net class), a bus's 12 mil, a graphic line's
+ * `m_DefaultLineWidth` (6 mil); in micrometres.
+ */
+export const HALF_PEN_UM = { wire: 76, bus: 152, line: 76 };
+
+/**
+ * `Items().Overlapping( aPosition )` for a line: the R-tree holds `SCH_LINE::GetBoundingBox`, the box of its two ends grown by half its pen (and 1 IU on the far
+ * side), so a point anywhere in that box counts, on the line or not (a point inside a diagonal line's box, or beside an orthogonal one by less than half its pen).
+ */
+function inLineBox(a: P, b: P, p: P, half: number): boolean {
+  return p[0] >= Math.min(a[0], b[0]) - half && p[0] <= Math.max(a[0], b[0]) + half && p[1] >= Math.min(a[1], b[1]) - half && p[1] <= Math.max(a[1], b[1]) + half;
 }
 
 /**
@@ -76,7 +90,7 @@ export function labelOrientationForPoint(scene: OrientationScene, at: P, current
 
   // SCH_LINE_T
   for (const l of scene.lines) {
-    if (!onSegment(l.a, l.b, at)) continue;
+    if (!inLineBox(l.a, l.b, at, l.half ?? (l.bus ? HALF_PEN_UM.bus : HALF_PEN_UM.wire))) continue;
     // "line angles goes between -90 and 90 degrees, but normalize": `Angle().Normalize90()` is in (-90, 90], so -45 < angle <= 45 is -dx < dy <= dx for the direction
     // turned to point right (or down, for a vertical line)
     let dx = l.b[0] - l.a[0];
@@ -105,9 +119,12 @@ export function labelOrientationForPoint(scene: OrientationScene, at: P, current
 
 /** The sheet's items as `labelOrientationForPoint` reads them. */
 export function orientationSceneOf(sch: Pick<Schematic, "wires" | "lines" | "bus_entries" | "symbols" | "power_symbols" | "lib_symbols">): OrientationScene {
-  const lines: Array<{ a: P; b: P; bus: boolean }> = [];
+  const lines: Array<{ a: P; b: P; bus: boolean; half?: number }> = [];
   for (const w of sch.wires) for (let i = 0; i + 1 < w.pts.length; i++) lines.push({ a: w.pts[i]!, b: w.pts[i + 1]!, bus: !!w.bus });
-  for (const l of sch.lines ?? []) for (let i = 0; i + 1 < l.pts.length; i++) lines.push({ a: l.pts[i]!, b: l.pts[i + 1]!, bus: false });
+  for (const l of sch.lines ?? []) {
+    const half = l.width_um > 0 ? Math.floor(l.width_um / 2) : HALF_PEN_UM.line;
+    for (let i = 0; i + 1 < l.pts.length; i++) lines.push({ a: l.pts[i]!, b: l.pts[i + 1]!, bus: false, half });
+  }
   const symbols: Array<Array<{ at: P; body: P }>> = [];
   const pinsOf = (instance: Parameters<typeof resolveLibSymbol>[0]): Array<{ at: P; body: P }> => {
     const real = resolveLibSymbol(instance, sch.lib_symbols);

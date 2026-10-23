@@ -3,7 +3,7 @@
 //! `placed.rs` answers "where does a wire meet this pin" in the engine's box-and-stub terms; the texts around a symbol (its pins'
 //! names and numbers, its fields) depend on the symbol's real drawn geometry instead, so they are measured here, with the rules of
 //! `eda_model::kicad_geom`. The geometry comes from `placed::corner_symbol`, the same symbol the `.kicad_sch` writer embeds, moved by
-//! the instance's turn and mirror the way `placed::bake_offset` moves a point, so a pin's tip here is the point a wire ends on.
+//! the instance's turn and mirror the way `placed::bake_offset` moves a point (KiCad's `TRANSFORM`), so a pin's tip here is the point a wire ends on.
 
 use eda_model::ir::{Point, SymbolInstance};
 use eda_model::kicad_geom::{arc_bbox, PinOrient, PinTexts, Rect, TextStyle};
@@ -12,36 +12,51 @@ use eda_model::Part;
 
 use crate::placed::{corner_symbol, part_box};
 
-/// Where a point of the symbol's unturned box frame (micrometres from the box's top-left corner, y down) lands on the sheet, as an
-/// offset from `SymbolInstance::at`: `placed::bake_offset`, in floating point. The mirror is about the box's own vertical axis, taken
-/// before the turn.
+/// A placed symbol's orientation folded into a turn and a left-right mirror: KiCad's `SYM_MIRROR_X` (this IR's `mirror_y`, a top-bottom flip) is a half
+/// turn and a left-right flip (`GetOrientation`'s twelve have "180 + mirror x" equal to "0 + mirror y"), so every orientation is one of the eight a
+/// turn and `mirrored` give.
+pub fn kicad_turn(rot_millideg: u32, mirrored: bool, mirror_y: bool) -> (u32, bool) {
+    if mirror_y {
+        ((rot_millideg % 360_000 + 180_000) % 360_000, !mirrored)
+    } else {
+        (rot_millideg % 360_000, mirrored)
+    }
+}
+
+/// Where a point of the symbol's unturned frame (micrometres from the corner the symbol is placed by, y down) lands on the sheet, as an offset from
+/// `SymbolInstance::at`: KiCad's `TRANSFORM` of the orientation (`SCH_SYMBOL::SetOrientation`), the turn first and then the mirror, each about `at` --
+/// what the editor (`sch_scene::Matrix`) and the studio's painter (`transform.ts`) draw, so a pin is where the user wires it. A turn of 90 degrees is
+/// counter-clockwise on the sheet (`(x, y)` goes to `(y, -x)`, y down); `mirrored` negates x. `width` is not used: KiCad mirrors about the symbol's
+/// own origin, not about its box. (`mirror_y` is folded in by [`kicad_turn`].)
 pub fn bake(rot_millideg: u32, mirrored: bool, width: f64, lx: f64, ly: f64) -> (f64, f64) {
-    let lx = if mirrored { width - lx } else { lx };
-    match rot_millideg % 360_000 {
+    let _ = width;
+    let (x, y) = match rot_millideg % 360_000 {
         0 => (lx, ly),
-        90_000 => (-ly, lx),
+        90_000 => (ly, -lx),
         180_000 => (-lx, -ly),
-        270_000 => (ly, -lx),
+        270_000 => (-ly, lx),
         deg => {
             let (s, c) = (deg as f64 / 1000.0).to_radians().sin_cos();
-            (lx * c - ly * s, lx * s + ly * c)
+            (lx * c + ly * s, -lx * s + ly * c)
         }
-    }
+    };
+    (if mirrored { -x } else { x }, y)
 }
 
 /// The inverse of [`bake`]: the unturned-frame point that lands `(px, py)` from `at`.
 pub fn unbake(rot_millideg: u32, mirrored: bool, width: f64, px: f64, py: f64) -> (f64, f64) {
-    let (x, y) = match rot_millideg % 360_000 {
+    let _ = width;
+    let px = if mirrored { -px } else { px };
+    match rot_millideg % 360_000 {
         0 => (px, py),
-        90_000 => (py, -px),
+        90_000 => (-py, px),
         180_000 => (-px, -py),
-        270_000 => (-py, px),
+        270_000 => (py, -px),
         deg => {
             let (s, c) = (deg as f64 / 1000.0).to_radians().sin_cos();
-            (px * c + py * s, -px * s + py * c)
+            (px * c - py * s, px * s + py * c)
         }
-    };
-    (if mirrored { width - x } else { x }, y)
+    }
 }
 
 /// The turn and mirror alone, for a direction rather than a point.
@@ -93,7 +108,8 @@ impl SymbolGeom {
     pub fn of(sym: &SymbolInstance, part: &Part, resolved: Option<&LibSymbol>) -> SymbolGeom {
         let cs = corner_symbol(&sym.lib_id, part, resolved, sym.unit);
         let width = part_box(part, resolved, sym.unit).width() as f64;
-        Self::of_corner_symbol(sym.at, sym.rot, sym.mirrored, width, &cs, sym.unit, Some(part))
+        let (rot, mirrored) = kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
+        Self::of_corner_symbol(sym.at, rot, mirrored, width, &cs, sym.unit, Some(part))
     }
 
     /// The geometry of a symbol whose library frame has its origin at the symbol's `at` (a power symbol, a sheet-less glyph): no

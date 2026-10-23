@@ -443,11 +443,13 @@ pub fn closest_anchor(section: &SchematicSection, connection_points: &[Point], c
     connectable.extend(section.no_connects.iter().map(|n| n.at));
     connectable.extend(section.bus_entries.iter().flat_map(|b| [b.at, Point { x: b.at.x + b.size.x, y: b.at.y + b.size.y }]));
     connectable.extend(section.labels.iter().map(|l| l.at));
-    connectable.extend(section.sheets.iter().map(|s| s.at));
+    // a sheet is connectable by its pins (`SCH_SHEET::GetConnectionPoints`); its own position counts only among the other points
+    connectable.extend(section.sheets.iter().flat_map(|s| s.pins.iter().map(|p| p.at)));
     if let Some(p) = best(connectable) {
         return Some(p);
     }
     let mut others: Vec<Point> = section.texts.iter().map(|t| t.at).collect();
+    others.extend(section.sheets.iter().map(|s| s.at));
     for l in &section.lines {
         others.extend(l.pts.iter().copied());
     }
@@ -590,5 +592,18 @@ mod tests {
         assert_eq!(top_left_anchor(&SchematicSection::default()), None);
         // The nearest connection point to a cursor: the label, not the far wire end.
         assert_eq!(closest_anchor(&s, &[], Point { x: 5_100, y: 2_100 }), Some(Point { x: 5_000, y: 2_000 }));
+    }
+
+    /// Duplicate carries a sheet by the pin nearest the cursor (`SCH_SHEET::GetConnectionPoints` is its pins), not by its corner; a sheet with no pins by
+    /// its position, among the points of what is not connectable.
+    #[test]
+    fn a_duplicated_sheet_is_carried_by_its_nearest_pin() {
+        use crate::ir::{SheetInstance, SheetPin};
+        let pin = SheetPin { id: String::new(), name: "IN".into(), shape: Default::default(), at: Point { x: 50_000, y: 10_000 } };
+        let sheet = SheetInstance { id: String::new(), name: "A".into(), file: "a.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (50_000, 30_000), pins: vec![pin], page: String::new() };
+        let s = SchematicSection { sheets: vec![sheet.clone()], ..Default::default() };
+        assert_eq!(closest_anchor(&s, &[], Point { x: 5_000, y: 5_000 }), Some(Point { x: 50_000, y: 10_000 }));
+        let bare = SchematicSection { sheets: vec![SheetInstance { pins: vec![], ..sheet }], ..Default::default() };
+        assert_eq!(closest_anchor(&bare, &[], Point { x: 5_000, y: 5_000 }), Some(Point { x: 0, y: 0 }));
     }
 }

@@ -43,21 +43,22 @@ pub fn part_box(part: &Part, resolved: Option<&LibSymbol>, unit: u32) -> PartBox
     PartBox { node: Node { id: 0, width, height, ports }, pin_port }
 }
 
-/// Where a box-local point lands after the instance's mirror and rotation, as an offset from `at` (um). Mirror first, then
-/// rotation about the corner -- `eda_kicad`'s `baked_local`.
+/// Where a box-local point lands after the instance's turn and mirror, as an offset from `at` (um): KiCad's `TRANSFORM` of the orientation, the
+/// turn (counter-clockwise on the sheet) and then the mirror about `at` -- [`crate::symgeom::bake`] in whole micrometres, and `eda_kicad`'s
+/// `baked_local`. `width` is not used (KiCad mirrors about the symbol's origin, not its box).
 pub fn bake_offset(rot_millideg: u32, mirrored: bool, width: i64, lx: i64, ly: i64) -> (i64, i64) {
-    let lx = if mirrored { width - lx } else { lx };
-    match rot_millideg % 360_000 {
+    let _ = width;
+    let (x, y) = match rot_millideg % 360_000 {
         0 => (lx, ly),
-        90_000 => (-ly, lx),
+        90_000 => (ly, -lx),
         180_000 => (-lx, -ly),
-        270_000 => (ly, -lx),
+        270_000 => (-ly, lx),
         deg => {
-            let theta = (deg as f64 / 1000.0).to_radians();
-            let (s, c) = theta.sin_cos();
-            (((lx as f64) * c - (ly as f64) * s).round() as i64, ((lx as f64) * s + (ly as f64) * c).round() as i64)
+            let (s, c) = (deg as f64 / 1000.0).to_radians().sin_cos();
+            (((lx as f64) * c + (ly as f64) * s).round() as i64, (-(lx as f64) * s + (ly as f64) * c).round() as i64)
         }
-    }
+    };
+    (if mirrored { -x } else { x }, y)
 }
 
 /// Every pin of a placed symbol, by pin number, at the point a wire connects to: the stub tip of a pin with a port, the flag
@@ -65,8 +66,9 @@ pub fn bake_offset(rot_millideg: u32, mirrored: bool, width: i64, lx: i64, ly: i
 pub fn pin_points(sym: &SymbolInstance, part: &Part, resolved: Option<&LibSymbol>) -> Vec<(String, Point)> {
     let b = part_box(part, resolved, sym.unit);
     let (w, h) = (b.width(), b.height());
+    let (rot, mirrored) = crate::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
     let at = |lx: i64, ly: i64| -> Point {
-        let (dx, dy) = bake_offset(sym.rot, sym.mirrored, w, lx, ly);
+        let (dx, dy) = bake_offset(rot, mirrored, w, lx, ly);
         Point { x: sym.at.x + dx, y: sym.at.y + dy }
     };
     let mut out = Vec::new();

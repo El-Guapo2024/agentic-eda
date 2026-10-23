@@ -142,6 +142,20 @@ fn a_diagonal_line_counts_as_horizontal_up_to_45_degrees_and_as_vertical_beyond(
     assert_eq!(spin_at(&s, p(45_720, 0), LabelSpin::Up), LabelSpin::Up, "ends at the top of an upward line");
 }
 
+/// `Items().Overlapping( aPosition )` asks the R-tree of bounding boxes: a point inside a diagonal line's box counts though it is not on the line, and so does a
+/// point beside a wire by less than half its pen; one further off does not.
+#[test]
+fn a_line_counts_wherever_its_bounding_box_holds_the_point() {
+    let mut s = section();
+    s.lines.push(SchLine { id: "line_d".into(), pts: vec![p(0, 0), p(10_000, 10_000)], width_um: 0 });
+    // 45 degrees: horizontal; not the end: LEFT
+    assert_eq!(spin_at(&s, p(5_000, 2_000), LabelSpin::Right), LabelSpin::Left);
+    let mut w = section();
+    w.wires.push(wire("wire_h", &[p(0, 0), p(10_160, 0)]));
+    assert_eq!(spin_at(&w, p(5_080, 70), LabelSpin::Up), LabelSpin::Left, "within half of the wire's 6 mil");
+    assert_eq!(spin_at(&w, p(5_080, 200), LabelSpin::Up), LabelSpin::Up, "beyond it");
+}
+
 /// The way a pin points away from the other pin of its resistor: the spin `GetPinSpinStyle` asks for, whatever the symbol's orientation.
 #[test]
 fn a_label_on_a_pin_reads_away_from_the_symbol_in_every_orientation() {
@@ -247,11 +261,28 @@ fn place_label_without_auto_keeps_the_spin_the_dialog_gave() {
     let id = sch.labels[0].id.clone();
     assert_eq!(sch.extras.label_spins.get(&id), Some(&LabelSpin::Up));
     assert!(!sch.extras.label_looks.contains_key(&id), "the flag is off: nothing to keep");
-    // with no spin and no flag the label keeps no entry: it reads off the wire as it always did
+    // with no spin given the label is RIGHT (`m_lastTextOrientation( SPIN_STYLE::RIGHT )`), not read off the wire it starts (which would be LEFT), and keeps it
     ok(&mut b, place("D0", p(0, 0), LabelKind::Local, None, None));
     let sch = sch_of(&b);
     let id = sch.labels[1].id.clone();
-    assert!(!sch.extras.label_spins.contains_key(&id) && !sch.extras.label_looks.contains_key(&id));
+    assert_eq!(sch.extras.label_spins.get(&id), Some(&LabelSpin::Right));
+    assert!(!sch.extras.label_looks.contains_key(&id));
+}
+
+/// A KiCad label never changes its spin unless it is a global or hierarchical label with Auto on: a wire that ends at it, moved to run the other way,
+/// leaves it as it was put down.
+#[test]
+fn a_placed_label_keeps_its_spin_when_the_wire_it_ends_is_turned_round() {
+    let m = ConstraintModel::default();
+    let mut s = section();
+    s.wires.push(wire("wire_a", &[p(0, 0), p(10_160, 0)]));
+    let mut b = board(s, &m);
+    ok(&mut b, place("D0", p(10_160, 0), LabelKind::Local, None, None));
+    let id = sch_of(&b).labels[0].id.clone();
+    let mut sch = sch_of(&b).clone();
+    sch.wires[0].pts = vec![p(20_320, 0), p(10_160, 0)];
+    let scene = crate::sch_scene::Scene::new(&sch, &m);
+    assert_eq!(crate::sch_move::effective_spin(&scene, 0), LabelSpin::Right, "{id}");
 }
 
 #[test]

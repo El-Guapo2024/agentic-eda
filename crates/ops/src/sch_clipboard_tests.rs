@@ -262,6 +262,24 @@ fn the_units_of_one_part_pasted_together_keep_one_number_and_a_unit_the_part_lac
     assert_eq!(placed, vec![("U1".to_string(), 1), ("U1".to_string(), 2)]);
 }
 
+/// A power symbol whose definition draws its pin elsewhere than the symbol the design knows by that name (every `power:<net>` is known: the built-in rail)
+/// comes in under a name of its own, `power:PWR_FLAG_2`; the names it tries are not all "known" in turn (the paste used to never end: KiCad's own
+/// `erc_multiple_pin_to_pin.kicad_sch` hung Import Sheet).
+#[test]
+fn a_power_symbol_drawn_otherwise_than_the_one_the_design_knows_comes_in_under_a_name_of_its_own() {
+    use eda_model::ir::LibrarySymbolPin;
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let pin = LibrarySymbolPin { id: String::new(), number: "1".into(), name: "pwr".into(), electrical_type: "power_out".into(), shape: "line".into(), at: eda_model::symbol::SPoint { x: 0.0, y: 7.62 }, angle_deg: 90.0, length_mm: 0.0, unit: 1, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None, alternates: Vec::new() };
+    let mut flag = LibrarySymbol { lib_id: "power:PWR_FLAG".into(), reference_prefix: "#FLG".into(), unit_count: 1, pins: vec![pin], ..LibrarySymbol::default() };
+    flag.assign_missing_ids();
+    let mut f = fragment(|s| s.power_symbols.push(PowerSymbol { id: "#FLG01".into(), lib_id: "power:PWR_FLAG".into(), at: p(0, 0), rot: 90_000, net: "PWR_FLAG".into(), pin: String::new() }));
+    f.lib_symbols.push(flag);
+    b.apply(&paste(&f, 0, 0, PasteMode::Keep)).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.power_symbols[0].lib_id, "power:PWR_FLAG_2");
+}
+
 #[test]
 fn two_generated_boxes_that_draw_the_same_share_one_library_symbol() {
     let m = ConstraintModel::default();

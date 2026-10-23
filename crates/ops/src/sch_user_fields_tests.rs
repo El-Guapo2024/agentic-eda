@@ -259,11 +259,11 @@ fn a_user_field_goes_round_with_its_symbol() {
     let turned = run(start, rotate(&["R1"], true)).unwrap();
     let after = field_named(&turned, "MPN");
     assert!(after.vertical && !before.vertical, "the text turned with the symbol");
-    // the offset from the symbol's origin was turned a quarter, as the symbol's own points are (`bake`: rot 90 takes (x, y) to (-y, x))
+    // the offset from the symbol's origin was turned a quarter, as the symbol's own points are (KiCad's `TRANSFORM` for 90: (x, y) goes to (y, -x))
     let (dx, dy) = (before.at.0 - sym.x as f64, before.at.1 - sym.y as f64);
     let at = turned.symbols[0].at;
     assert_eq!(turned.symbols[0].rot, 90_000);
-    assert!(near(after.at, (at.x as f64 - dy, at.y as f64 + dx)), "{:?} from {:?}", after.at, (dx, dy));
+    assert!(near(after.at, (at.x as f64 + dy, at.y as f64 - dx)), "{:?} from {:?}", after.at, (dx, dy));
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------- edit
@@ -329,6 +329,23 @@ fn autoplace_fields_places_a_shown_user_field_with_the_others() {
     assert_eq!(placed.extras.fields_autoplaced.get("R1"), Some(&AutoplaceAlgo::Manual));
 }
 
+/// `AUTOPLACER` places the fields `GetFields( aVisibleOnly = true )` gives it, and that skips a field with no text: a user field that is shown but empty
+/// takes no row of the box, so the Reference and the Value go where they go without it.
+#[test]
+fn autoplace_fields_leaves_a_shown_field_with_no_text_out_of_the_box() {
+    let m = model();
+    let mut start = sheet(0, false);
+    start.user_fields.get_mut("R1").unwrap().insert("MPN".into(), String::new());
+    start.field_layout.insert("R1".into(), OwnerCtx::new(&start, &m, "R1").unwrap().current(&start));
+    let without = run(start.clone(), Cmd::SchEdit(SchCmd::AutoplaceFields { ids: ids(&["R1"]) })).unwrap_or_else(|e| panic!("{e:?}"));
+    let shown = show(start, "MPN");
+    let with = run(shown, Cmd::SchEdit(SchCmd::AutoplaceFields { ids: ids(&["R1"]) })).unwrap_or_else(|e| panic!("{e:?}"));
+    for name in ["Reference", "Value"] {
+        let (a, b) = (field_named(&without, name), field_named(&with, name));
+        assert!(near(a.at, b.at), "{name}: {:?} against {:?}", a.at, b.at);
+    }
+}
+
 // ----------------------------------------------------------------------------------------------------------------- add, remove, rename
 
 #[test]
@@ -343,6 +360,9 @@ fn add_user_field_makes_a_hidden_field_and_refuses_a_name_that_is_taken() {
         let e = add(start.clone(), name, "x").unwrap_err();
         assert!(matches!(e[0].check.as_str(), "ops_field_exists" | "ops_bad_field"), "{why}: {e:?}");
     }
+    // KiCad's words: `Validate`'s "Fields must have a name." and `OnGridCellChanging`'s "Field name '%s' already in use."
+    assert_eq!(add(start.clone(), "  ", "x").unwrap_err()[0].hint.as_deref(), Some("Fields must have a name."));
+    assert_eq!(add(start.clone(), "mpn", "x").unwrap_err()[0].hint.as_deref(), Some("Field name 'mpn' already in use."));
     let e = run(start.clone(), Cmd::SchEdit(SchCmd::AddUserField { id: "R9".into(), name: "A".into(), text: String::new() })).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_item");
     let mut locked = start;

@@ -126,6 +126,42 @@ fn a_pasted_sheet_is_a_copy_with_a_new_name_a_file_of_its_own_and_new_references
     assert_eq!(before.sheet_contents.as_ref().unwrap().len() + 2, b.design().sheet_contents.as_ref().unwrap().len());
 }
 
+/// `TestForRecursion`: a sheet pasted onto its own screen, or onto a screen inside it, would place itself; KiCad drops it with its words.
+#[test]
+fn a_sheet_pasted_inside_itself_is_refused_in_kicad_s_words() {
+    let m = ConstraintModel::default();
+    let d = power_design();
+    let fragment = power_fragment(&d);
+    let mut b = Board::new(d, &m, 100, 300);
+    let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: 0, dy: 0, mode: PasteMode::Unique };
+    let e = b.apply(&Cmd::OnSheet { sheet: "sp".into(), cmd: Box::new(paste.clone()) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_sheet_recursion");
+    assert_eq!(e[0].hint.as_deref(), Some("The pasted sheet 'power.kicad_sch'\nwas dropped because the destination already has the sheet or one of its subsheets as a parent."));
+    // and on the screen inside it too
+    let inner = b.design().sheet_contents.as_ref().unwrap()["power.kicad_sch"].sheets[0].id.clone();
+    let e = b.apply(&Cmd::OnSheet { sheet: format!("sp/{inner}"), cmd: Box::new(paste.clone()) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_sheet_recursion");
+    // the root takes it
+    b.apply(&paste).unwrap();
+}
+
+/// A pasted sheet's pins keep their text's size, bold and italic (`SCH_SHEET_PIN` is an `EDA_TEXT`, copied whole with its sheet).
+#[test]
+fn a_pasted_sheet_s_pins_keep_their_text_look() {
+    let m = ConstraintModel::default();
+    let d = power_design();
+    let mut fragment = power_fragment(&d);
+    let pin_id = fragment.section.sheets[0].pins[0].id.clone();
+    assert!(!pin_id.is_empty());
+    let look = eda_model::sch_extras::LabelLook { size_um: 2_540, bold: true, ..Default::default() };
+    fragment.section.extras.sheet_pin_looks.insert(pin_id, look);
+    let mut b = Board::new(d, &m, 100, 300);
+    b.apply(&Cmd::PasteSch { fragment, dx: 60_000, dy: 0, mode: PasteMode::Unique }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let copy = sch.sheets.iter().find(|s| s.name == "Power1").unwrap();
+    assert_eq!(sch.extras.sheet_pin_looks.get(&copy.pins[0].id), Some(&look), "{:?}", sch.extras.sheet_pin_looks);
+}
+
 #[test]
 fn a_cut_and_paste_of_a_sheet_keeps_its_name_its_file_and_its_numbers() {
     let m = ConstraintModel::default();
@@ -295,10 +331,16 @@ fn the_checks_of_a_sheet_file_are_loadsheetfromfile_s() {
     assert_eq!(bb.apply(&import(Some(cyclic), true, false)).unwrap_err()[0].check, "ops_sheet_file");
     // symbols that name no library (a legacy link), and the reader's own remarks
     let mut legacy = a_file();
-    legacy.root.symbols[0].lib_id = "R".into();
+    legacy.root.symbols.iter_mut().for_each(|s| s.lib_id = s.lib_id.rsplit(':').next().unwrap_or("R").to_string());
+    legacy.root.power_symbols.iter_mut().for_each(|s| s.lib_id = s.lib_id.rsplit(':').next().unwrap_or("GND").to_string());
+    legacy.screens.values_mut().flat_map(|sc| sc.symbols.iter_mut()).for_each(|s| s.lib_id = s.lib_id.rsplit(':').next().unwrap_or("R").to_string());
     legacy.notes.push("2 symbol(s) had no library symbol in the file and were left out".into());
     let found = b.check_sheet_file(&legacy, "amp", false);
-    assert!(found.iter().any(|f| f.severity == "error" && f.text.contains("symbol library links")), "{found:?}");
+    assert!(found.iter().any(|f| f.severity == "error" && f.text == "The schematic 'amp' has not had its symbol library links remapped to the symbol library table.  The project this schematic belongs to must first be remapped before it can be imported into the current project."), "{found:?}");
+    // one symbol with a library link is enough (`HasNoFullyDefinedLibIds` returns false at the first)
+    let mut mixed = a_file();
+    mixed.root.symbols[0].lib_id = "R".into();
+    assert!(b.check_sheet_file(&mixed, "amp", false).iter().all(|f| !f.text.contains("symbol library links")));
     assert!(found.iter().any(|f| f.severity == "warning" && f.text.starts_with("2 symbol(s) had no library")));
     assert!(b.check_sheet_file(&a_file(), "amp", false).iter().all(|f| f.severity != "warning"));
 }
