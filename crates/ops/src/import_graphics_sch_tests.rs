@@ -18,11 +18,11 @@ fn dxf(entities: &str) -> String {
 }
 
 fn sch_req(format: GraphicsFormat, text: String) -> ImportSchGraphics {
-    ImportSchGraphics { format, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 0 }
+    ImportSchGraphics { format, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 0 }
 }
 
 fn sym_req(text: String) -> ImportSymbolGraphics {
-    ImportSymbolGraphics { lib_id: "Test:Sym".into(), unit: 1, body_style: 1, format: GraphicsFormat::Dxf, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 0 }
+    ImportSymbolGraphics { lib_id: "Test:Sym".into(), unit: 1, body_style: 1, format: GraphicsFormat::Dxf, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 0 }
 }
 
 fn sch<'a>(b: &'a Board<'_>) -> &'a eda_model::ir::SchematicSection {
@@ -57,8 +57,8 @@ fn a_dxf_outline_becomes_graphic_lines_and_arcs_of_the_sheet() {
     let arcs: Vec<&SchGraphic> = s.extras.graphics.iter().filter(|g| matches!(g.shape, SchGraphicKind::Arc { .. })).collect();
     assert_eq!((arcs.len(), s.extras.graphics.len()), (4, 4));
     // No line width in the file, none in the dialog: the sheet's default width (0), the way `MapLineWidth( 0 )` gives it.
-    assert!(s.lines.iter().all(|l| l.width_um == 0 && l.pts.len() == 2 && !l.id.is_empty()), "{:?}", s.lines);
-    assert!(arcs.iter().all(|g| g.width_um == 0 && g.fill == SchFill::None));
+    assert!(s.lines.iter().all(|l| l.width_nm == 0 && l.pts.len() == 2 && !l.id.is_empty()), "{:?}", s.lines);
+    assert!(arcs.iter().all(|g| g.width_nm == 0 && g.fill == SchFill::None));
     // Y is down on a sheet as on the board: the 40 x 30 outline hangs above the origin.
     let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x as f64, p.y as f64))));
     assert_eq!((x0, y0, x1, y1), (0.0, -30_000.0, 40_000.0, 0.0));
@@ -84,7 +84,7 @@ fn the_scale_the_offset_and_the_default_line_width_are_the_dialogs() {
     let mut r = sch_req(GraphicsFormat::Dxf, fixture("no_units.dxf"));
     r.dxf_units = "mm".into();
     r.scale = 2.0;
-    r.line_width_um = 150;
+    r.line_width_nm = 150;
     r.offset_x_nm = 10_000_000;
     r.offset_y_nm = -5_000_000;
     b.apply(&Cmd::ImportSchGraphics(r)).unwrap();
@@ -94,7 +94,7 @@ fn the_scale_the_offset_and_the_default_line_width_are_the_dialogs() {
     let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x as f64, p.y as f64))));
     assert_eq!((x0, x1), (10_000.0, 14_000.0));
     assert_eq!((y1 - y0).round(), 2_000.0);
-    assert!(s.lines.iter().all(|l| l.width_um == 300), "{:?}", s.lines);
+    assert!(s.lines.iter().all(|l| l.width_nm == 300), "{:?}", s.lines);
 }
 
 #[test]
@@ -102,12 +102,12 @@ fn circles_are_shapes_with_a_centre_and_a_radius() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     b.apply(&Cmd::ImportSchGraphics(sch_req(GraphicsFormat::Dxf, fixture("holes.dxf")))).unwrap();
-    let mut circles: Vec<(Point, Um)> = graphics_of(&b)
+    let mut circles: Vec<(Point, Nm)> = graphics_of(&b)
         .into_iter()
         .map(|g| match g.shape {
-            SchGraphicKind::Circle { center, radius_um } => {
-                assert_eq!((g.fill, g.width_um), (SchFill::None, 0));
-                (center, radius_um)
+            SchGraphicKind::Circle { center, radius_nm } => {
+                assert_eq!((g.fill, g.width_nm), (SchFill::None, 0));
+                (center, radius_nm)
             }
             other => panic!("{other:?}"),
         })
@@ -125,9 +125,9 @@ fn a_dashed_red_svg_line_keeps_its_style_and_colour_in_the_stroke_table() {
     let s = sch(&b);
     assert_eq!(s.lines.len(), 1, "{:?}", s.lines);
     let l = &s.lines[0];
-    assert_eq!((l.pts[0], l.pts[1], l.width_um), (Point { x: 1_000, y: 2_000 }, Point { x: 11_000, y: 2_000 }, 300));
+    assert_eq!((l.pts[0], l.pts[1], l.width_nm), (Point { x: 1_000, y: 2_000 }, Point { x: 11_000, y: 2_000 }, 300));
     let st = s.extras.strokes.get(&l.id).expect("the style and colour are in the stroke table");
-    assert_eq!((st.width_um, st.style, st.color), (0, SchLineStyle::Dash, Some(SchColor { r: 255, g: 0, b: 0, a: 255 })));
+    assert_eq!((st.width_nm, st.style, st.color), (0, SchLineStyle::Dash, Some(SchColor { r: 255, g: 0, b: 0, a: 255 })));
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn a_filled_svg_polygon_is_filled_with_its_colour_and_has_no_outline_to_speak_of
     assert_eq!(pts.len(), 4);
     assert_eq!((g[0].fill, g[0].fill_color), (SchFill::Color, Some(SchColor { r: 0, g: 255, b: 0, a: 255 })));
     // "Historically -1 meant no-stroke": a hairline stands for it.
-    assert_eq!(g[0].width_um, 1);
+    assert_eq!(g[0].width_nm, 1);
 }
 
 #[test]
@@ -157,12 +157,12 @@ fn a_text_keeps_the_files_size_and_angle_and_stands_at_the_left_end_of_its_basel
     let t = &sch(&b).texts;
     assert_eq!(t.len(), 3, "{t:?}");
     let (plain, centred, up) = (&t[0], &t[1], &t[2]);
-    assert_eq!((plain.content.as_str(), plain.at, plain.angle, plain.size_um), ("Hello", Point { x: 10_000, y: -5_000 }, 0, 2_500));
+    assert_eq!((plain.content.as_str(), plain.at, plain.angle, plain.size_nm), ("Hello", Point { x: 10_000, y: -5_000 }, 0, 2_500));
     // Centred: the anchor is half the text's width to the left of the point the file gives.
-    let width_um = kicad_font::text_advance_iu("Hello", kicad_font::mm_to_iu(2.5)) / 10;
-    assert!((centred.at.x - (10_000 - width_um / 2)).abs() <= 1 && centred.at.y == -20_000, "{centred:?} {width_um}");
+    let width_nm = kicad_font::text_advance_iu("Hello", kicad_font::mm_to_iu(2.5)) / 10;
+    assert!((centred.at.x - (10_000 - width_nm / 2)).abs() <= 1 && centred.at.y == -20_000, "{centred:?} {width_nm}");
     let angle: Millideg = 90_000;
-    assert_eq!((up.content.as_str(), up.at, up.angle, up.size_um), ("Up", Point { x: 30_000, y: -5_000 }, angle, 1_500));
+    assert_eq!((up.content.as_str(), up.at, up.angle, up.size_nm), ("Up", Point { x: 30_000, y: -5_000 }, angle, 1_500));
 }
 
 #[test]
@@ -189,7 +189,7 @@ fn the_commands_are_the_editors_own_and_read_from_json() {
     assert!(!c.edits_connectivity(), "drawn lines are not wires");
     assert_eq!(Cmd::ImportSymbolGraphics(sym_req("x".into())).domain(), Domain::SymbolEditor);
     let json = serde_json::json!({ "op": "import_sch_graphics", "format": "svg", "text": "<svg/>" });
-    assert_eq!(serde_json::from_value::<Cmd>(json).unwrap(), Cmd::ImportSchGraphics(ImportSchGraphics { format: GraphicsFormat::Svg, text: "<svg/>".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 0 }));
+    assert_eq!(serde_json::from_value::<Cmd>(json).unwrap(), Cmd::ImportSchGraphics(ImportSchGraphics { format: GraphicsFormat::Svg, text: "<svg/>".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 0 }));
     let json = serde_json::json!({ "op": "import_symbol_graphics", "lib_id": "Test:Sym", "unit": 2, "format": "dxf", "text": "x", "scale": 0.5, "offset_x_nm": -1500000 });
     let Cmd::ImportSymbolGraphics(r) = serde_json::from_value::<Cmd>(json).unwrap() else { panic!() };
     assert_eq!((r.unit, r.body_style, r.scale, r.offset_x_nm, r.offset_y_nm), (2, 1, 0.5, -1_500_000, 0));

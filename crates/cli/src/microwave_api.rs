@@ -9,7 +9,7 @@
 //!
 //! `POST /api/microwave/inductor`: whether the inductor between two points can be as long as the "Length of track:" box says. KiCad answers it before it asks the value
 //! (`createMicrowaveInductor`: the length dialog, the minimum check, `BuildCornersList_S_Shape`'s verdict, then "Component value:"), so the page asks it between the two prompts.
-//! Request: `{ "start": {"x","y"}, "end": {"x","y"}, "length_um", "track_width_um" }` (micrometres). Reply: `{ "ok": true }` or `{ "ok": false, "message": "Requested length too large" }`.
+//! Request: `{ "start": {"x","y"}, "end": {"x","y"}, "length_nm", "track_width_nm" }` (micrometres). Reply: `{ "ok": true }` or `{ "ok": false, "message": "Requested length too large" }`.
 
 use eda_model::ir::Point;
 use serde_json::{json, Value};
@@ -36,7 +36,7 @@ pub fn check_inductor(body: &[u8]) -> Value {
         Err(e) => return json!({ "ok": false, "message": format!("not an inductor request: {e}") }),
     };
     let (Some(start), Some(end)) = (req.get("start").and_then(point_of), req.get("end").and_then(point_of)) else { return json!({ "ok": false, "message": "an inductor needs two points" }) };
-    let (Some(length), Some(width)) = (req.get("length_um").and_then(Value::as_i64), req.get("track_width_um").and_then(Value::as_i64)) else { return json!({ "ok": false, "message": "an inductor needs a length and a track width" }) };
+    let (Some(length), Some(width)) = (req.get("length_nm").and_then(Value::as_i64), req.get("track_width_nm").and_then(Value::as_i64)) else { return json!({ "ok": false, "message": "an inductor needs a length and a track width" }) };
     match eda_ops::microwave::inductor_corners(start, end, length, width) {
         Ok(_) => json!({ "ok": true }),
         Err(message) => json!({ "ok": false, "message": message }),
@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn the_inductors_length_is_checked_before_its_value_is_asked() {
-        let ask = |length: i64| check_inductor(json!({ "start": {"x": 0, "y": 0}, "end": {"x": 0, "y": 10_000}, "length_um": length, "track_width_um": 250 }).to_string().as_bytes());
+        let ask = |length: i64| check_inductor(json!({ "start": {"x": 0, "y": 0}, "end": {"x": 0, "y": 10_000}, "length_nm": length, "track_width_nm": 250 }).to_string().as_bytes());
         assert_eq!(ask(20_000), json!({ "ok": true }));
         for (length, message) in [(9_000, "Requested length < minimum length"), (11_000, "Requested length too small"), (15_000, "Requested length can't be represented"), (100_000, "Requested length too large")] {
             assert_eq!(ask(length), json!({ "ok": false, "message": message }), "{length}");

@@ -352,7 +352,7 @@ pub fn preview(dir: &Path, target: &str) -> Reply {
         Err(e) => return not_found(crate::board::reasons(&e)),
     };
     let engine = library.to_engine_footprint();
-    let probe = Part { reference: "REF".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(engine.name.clone()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+    let probe = Part { reference: "REF".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(engine.name.clone()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
     let model = ConstraintModel { parts: vec![probe.clone()], footprints: vec![engine], ..Default::default() };
     match preview_part(&model, &probe) {
         Some(part) => reply("200 OK", json!({ "part": part })),
@@ -549,7 +549,7 @@ mod tests {
         let mut art = eda_model::fp_art::FpArt::default();
         art.shapes.push(eda_model::fp_art::FpShape::new(eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: -1_000, y: -900 }, end: Point { x: 1_000, y: -900 } }));
         let footprint = eda_model::Footprint { name: "T:Two".into(), pads: vec![pad("1", -1_000, 0), pad("2", 1_000, 0)], courtyard: Some((2_400, 1_000)), art, ..Default::default() };
-        let probe = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("v".into()), package: None, footprint: Some("T:Two".into()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+        let probe = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("v".into()), package: None, footprint: Some("T:Two".into()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
         let model = ConstraintModel { parts: vec![probe.clone()], footprints: vec![footprint], ..Default::default() };
         let p = preview_part(&model, &probe).unwrap();
         assert_eq!((p["side"].as_str(), p["at"].clone(), p["rot"].as_f64()), (Some("top"), json!([0, 0]), Some(0.0)));

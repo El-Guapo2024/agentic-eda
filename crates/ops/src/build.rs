@@ -270,8 +270,8 @@ pub struct Report {
 pub fn build(
     design: Design,
     model: &ConstraintModel,
-    snap: eda_model::ir::Um,
-    spacing: eda_model::ir::Um,
+    snap: eda_model::ir::Nm,
+    spacing: eda_model::ir::Nm,
     chooser: &mut dyn Chooser,
 ) -> Result<(Design, Report), Vec<CheckResult>> {
     let mut b = Board::new(design, model, snap, spacing);

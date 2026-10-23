@@ -600,7 +600,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             let uuid = duid_for(&seed, &l.id);
             writeln!(out, "\t(polyline").unwrap();
             writeln!(out, "\t\t(pts{pts})").unwrap();
-            writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(l.width_um, sch.extras.strokes.get(&l.id))).unwrap();
+            writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(l.width_nm, sch.extras.strokes.get(&l.id))).unwrap();
             writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
             if sch.extras.is_locked(&l.id) {
                 writeln!(out, "\t\t(locked yes)").unwrap();
@@ -664,7 +664,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let uuid = duid_for(&format!("text:{}:{}:{}", t.content, t.at.x, t.at.y), &t.id);
         writeln!(out, "\t(text {}", sexpr_str(&t.content)).unwrap();
         writeln!(out, "\t\t(at {x} {y} {angle_deg})").unwrap();
-        writeln!(out, "\t\t{}", sch_extras_io::text_effects_str(t.size_um, sch.extras.text_justify_of(&t.id))).unwrap();
+        writeln!(out, "\t\t{}", sch_extras_io::text_effects_str(t.size_nm, sch.extras.text_justify_of(&t.id))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&t.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
@@ -756,7 +756,7 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
         let justify = if angle == 0 || angle == 90 { "right" } else { "left" };
         // the size, bold and italic Sheet Pin Properties set (`SCH_SHEET_PIN` is an `EDA_TEXT`)
         let look = sch.extras.sheet_pin_looks.get(&p.id).copied().unwrap_or_default();
-        let font = FieldLook { size_um: look.text_size_um() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font();
+        let font = FieldLook { size_nm: look.text_size_nm() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font();
         writeln!(out, "\t\t\t(effects {font} (justify {justify})))").unwrap();
     }
     writeln!(out, "\t\t(instances").unwrap();
@@ -928,7 +928,7 @@ fn justify_tokens(h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::
 /// name is shown and whether Autoplace Fields may move it (`(show_name yes)`, `(do_not_autoplace yes)`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct FieldLook {
-    size_um: f64,
+    size_nm: f64,
     bold: bool,
     italic: bool,
     show_name: bool,
@@ -936,19 +936,19 @@ struct FieldLook {
 }
 
 impl FieldLook {
-    const DEFAULT: FieldLook = FieldLook { size_um: 1270.0, bold: false, italic: false, show_name: false, do_not_autoplace: false };
+    const DEFAULT: FieldLook = FieldLook { size_nm: 1270.0, bold: false, italic: false, show_name: false, do_not_autoplace: false };
 
     fn of(p: &FieldPlacement) -> FieldLook {
-        FieldLook { size_um: p.text_size_um() as f64, bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace }
+        FieldLook { size_nm: p.text_size_nm() as f64, bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace }
     }
 
     fn of_page(f: &eda_engine::fields::PageField) -> FieldLook {
-        FieldLook { size_um: f.size_um, bold: f.bold, italic: f.italic, show_name: f.name_shown, do_not_autoplace: f.no_autoplace }
+        FieldLook { size_nm: f.size_nm, bold: f.bold, italic: f.italic, show_name: f.name_shown, do_not_autoplace: f.no_autoplace }
     }
 
     /// `(font (size S S) (bold yes) (italic yes))`.
     fn font(&self) -> String {
-        let size = fmt_mm_f(self.size_um / 1000.0);
+        let size = fmt_mm_f(self.size_nm / 1000.0);
         format!("(font (size {size} {size}){}{})", if self.bold { " (bold yes)" } else { "" }, if self.italic { " (italic yes)" } else { "" })
     }
 }
@@ -985,7 +985,7 @@ pub(crate) fn label_effects(sch: &eda_model::ir::SchematicSection, l: &NetLabel,
     let (angle, justify) = label_spin(sch, l);
     let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
     let vertical_justify = if local { " bottom" } else { "" };
-    (angle, format!("(effects {} (justify {justify}{vertical_justify}))", FieldLook { size_um: look.text_size_um() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font()))
+    (angle, format!("(effects {} (justify {justify}{vertical_justify}))", FieldLook { size_nm: look.text_size_nm() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font()))
 }
 
 /// `(fields_autoplaced yes)`: the fields of the item are where Autoplace Fields put them (`SCH_ITEM::GetFieldsAutoplaced`).
@@ -1045,8 +1045,8 @@ fn write_property(out: &mut String, key: &str, value: &str, x: f64, y: f64, hide
 /// `Device:C`'s box corner sits 2.54mm from its library origin, and
 /// `CIN`/`COUT`'s power-flagged pin landed 2.54mm/3.81mm off its own
 /// GND power symbol until this shift was added.
-fn baked_real_point(sym: &SymbolInstance, width_um: f64, x0: f64, y1: f64, p: eda_model::symbol::SPoint) -> eda_model::symbol::SPoint {
-    let (x, y) = baked_local(sym, width_um, (p.x - x0) * 1000.0, (y1 - p.y) * 1000.0);
+fn baked_real_point(sym: &SymbolInstance, width_nm: f64, x0: f64, y1: f64, p: eda_model::symbol::SPoint) -> eda_model::symbol::SPoint {
+    let (x, y) = baked_local(sym, width_nm, (p.x - x0) * 1000.0, (y1 - p.y) * 1000.0);
     eda_model::symbol::SPoint::new(x, y)
 }
 
@@ -1070,9 +1070,9 @@ fn baked_real_angle(sym: &SymbolInstance, angle_deg: f64) -> f64 {
 /// draw it, in the on-disk library-frame convention [`write_symbol_graphic`]
 /// itself expects. `unit`/`stroke_mm`/`filled`/`size_mm`/`text` carry no
 /// position and pass through untouched.
-fn baked_graphic(g: &eda_model::SymbolGraphic, sym: &SymbolInstance, width_um: f64, x0: f64, y1: f64) -> eda_model::SymbolGraphic {
+fn baked_graphic(g: &eda_model::SymbolGraphic, sym: &SymbolInstance, width_nm: f64, x0: f64, y1: f64) -> eda_model::SymbolGraphic {
     use eda_model::SymbolGraphic::*;
-    let p = |pt| baked_real_point(sym, width_um, x0, y1, pt);
+    let p = |pt| baked_real_point(sym, width_nm, x0, y1, pt);
     match *g {
         Rectangle { unit, start, end, stroke_mm, filled } => Rectangle { unit, start: p(start), end: p(end), stroke_mm, filled },
         Polyline { unit, ref pts, stroke_mm, filled } => Polyline { unit, pts: pts.iter().map(|&pt| p(pt)).collect(), stroke_mm, filled },
@@ -1734,7 +1734,7 @@ mod tests {
         Pin { number: number.into(), name: Some(name.into()), kind }
     }
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), pins, body_um: None, symbol: None, datasheet: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), pins, body_nm: None, symbol: None, datasheet: None, edge: None }
     }
     fn net(name: &str, pins: &[&str]) -> Net {
         Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }
@@ -1780,7 +1780,7 @@ mod tests {
         assert!(plain.contains("(comment 1 \"engine_version:"), "no comments of its own: the provenance comments, as before");
 
         let sch = design.schematic.as_mut().unwrap();
-        sch.extras.page = Some(eda_model::page::PageSettings { paper: "USLetter".into(), portrait: true, user_size_um: None });
+        sch.extras.page = Some(eda_model::page::PageSettings { paper: "USLetter".into(), portrait: true, user_size_nm: None });
         sch.title_block = Some(eda_model::ir::TitleBlock { title: "Mine".into(), comments: vec!["only".into()], ..Default::default() });
         let out = export_kicad_sch(&design, &model, &meta).unwrap();
         assert!(out.contains("(paper \"USLetter\" portrait)"), "{out}");
@@ -1788,7 +1788,7 @@ mod tests {
 
         let (back, _, _) = import_kicad_sch(&out).unwrap();
         let sch = back.schematic.unwrap();
-        assert_eq!(sch.extras.page, Some(eda_model::page::PageSettings { paper: "USLetter".into(), portrait: true, user_size_um: None }));
+        assert_eq!(sch.extras.page, Some(eda_model::page::PageSettings { paper: "USLetter".into(), portrait: true, user_size_nm: None }));
         assert_eq!(sch.title_block.map(|t| t.title), Some("Mine".to_string()));
         let (default_back, _, _) = import_kicad_sch(&plain).unwrap();
         assert!(default_back.schematic.unwrap().extras.page.is_none(), "A4 landscape is the default and is not kept");
@@ -1870,8 +1870,8 @@ mod tests {
         let (plx, ply) = local_port_point(&port, width, height);
         let (slx, sly) = local_stub_tip(&port, plx, ply);
         let (bx_mm, by_mm) = baked_local(u1, width as f64, slx, sly);
-        let expected_x_um = u1.at.x + (bx_mm * 1000.0).round() as i64;
-        let expected_y_um = u1.at.y + (by_mm * 1000.0).round() as i64;
+        let expected_x_nm = u1.at.x + (bx_mm * 1000.0).round() as i64;
+        let expected_y_nm = u1.at.y + (by_mm * 1000.0).round() as i64;
 
         let meta = ExportMeta { date: "2026-01-01", title: "t" };
         let out = export_kicad_sch(&design, &model, &meta).unwrap();
@@ -1886,10 +1886,10 @@ mod tests {
         let at_str = &before[at_idx + 4..];
         let end = at_str.find(" 0)").unwrap();
         let coords: Vec<f64> = at_str[..end].split(' ').map(|t| t.parse().unwrap()).collect();
-        let got_x_um = (coords[0] * 1000.0).round() as i64 + u1.at.x;
-        let got_y_um = (coords[1] * 1000.0).round() as i64 + u1.at.y;
-        assert!((got_x_um - expected_x_um).abs() <= 1, "x mismatch: {got_x_um} vs {expected_x_um}");
-        assert!((got_y_um - expected_y_um).abs() <= 1, "y mismatch: {got_y_um} vs {expected_y_um}");
+        let got_x_nm = (coords[0] * 1000.0).round() as i64 + u1.at.x;
+        let got_y_nm = (coords[1] * 1000.0).round() as i64 + u1.at.y;
+        assert!((got_x_nm - expected_x_nm).abs() <= 1, "x mismatch: {got_x_nm} vs {expected_x_nm}");
+        assert!((got_y_nm - expected_y_nm).abs() <= 1, "y mismatch: {got_y_nm} vs {expected_y_nm}");
     }
 
     #[test]
@@ -1911,7 +1911,7 @@ mod tests {
     fn missing_schematic_errors() {
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: None,

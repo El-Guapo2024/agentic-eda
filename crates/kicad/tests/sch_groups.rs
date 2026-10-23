@@ -40,12 +40,12 @@ fn gate() -> LibSymbol {
 
 fn model() -> ConstraintModel {
     let pins = ["1", "2", "3"].map(|n| Pin { number: n.into(), name: None, kind: PinKind::Signal }).to_vec();
-    let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("GATE".into()), package: None, footprint: Some("Foo:Bar".into()), symbol: Some("test:GATE".into()), datasheet: None, pins, body_um: None, edge: None };
+    let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("GATE".into()), package: None, footprint: Some("Foo:Bar".into()), symbol: Some("test:GATE".into()), datasheet: None, pins, body_nm: None, edge: None };
     ConstraintModel { parts: vec![part], symbols: vec![gate()], ..Default::default() }
 }
 
 fn design_with(sch: SchematicSection) -> Design {
-    Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
+    Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
 }
 
 /// The gate with a wire from each pin out to a label (`NET_A`, `NET_B`, `NET_Y`), a text, and these groups: `inner = {w_NET_A, l_NET_A}` named "net A",
@@ -63,7 +63,7 @@ fn grouped(m: &ConstraintModel) -> SchematicSection {
         sch.wires.push(Wire { id: format!("w_{net}"), net: net.clone(), pins: vec![], pts, bus: false });
         sch.labels.push(NetLabel { id: format!("l_{net}"), net, at: end, kind: LabelKind::Local });
     }
-    sch.texts.push(SchematicText { id: "txt_note".into(), content: "a note".into(), at: Point { x: 30_000, y: 40_000 }, angle: 0, size_um: 1_270 });
+    sch.texts.push(SchematicText { id: "txt_note".into(), content: "a note".into(), at: Point { x: 30_000, y: 40_000 }, angle: 0, size_nm: 1_270 });
     let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|s| s.to_string()).collect(), design_block: String::new() };
     sch.extras.groups = vec![group("grp_inner", "net A", &["w_NET_A", "l_NET_A"]), group("grp_outer", "gate", &["grp_inner", "U1"]), group("grp_other", "the rest", &["l_NET_B", "l_NET_Y", "txt_note"])];
     sch

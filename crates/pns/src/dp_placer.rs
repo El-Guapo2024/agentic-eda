@@ -36,13 +36,13 @@ use crate::direction45::Direction45;
 use crate::item::{net_of, same_net, Item, ItemId, Kind, Net, Via};
 use crate::layer::LayerRange;
 use crate::line::Line;
-use crate::line_placer::{FixOutcome, SNAP_UM};
+use crate::line_placer::{FixOutcome, SNAP_NM};
 use crate::node::{kind_mask, Node, QueryOpts};
 use crate::settings::{Mode, RoutingSettings};
 use crate::shove::{DisplacedLine, DisplacedVia, ShoveHead};
 use crate::walkaround::{WalkPolicy, WalkStatus, Walker};
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 use std::collections::{BTreeMap, HashSet};
 
@@ -54,15 +54,15 @@ use std::collections::{BTreeMap, HashSet};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DpSizes {
     /// `DiffPairWidth`.
-    pub width: Um,
+    pub width: Nm,
     /// `DiffPairGap`: edge to edge.
-    pub gap: Um,
+    pub gap: Nm,
     /// `DiffPairViaGap`: edge to edge between the two vias.
-    pub via_gap: Um,
-    pub via_diameter: Um,
-    pub via_drill: Um,
+    pub via_gap: Nm,
+    pub via_diameter: Nm,
+    pub via_drill: Nm,
     /// `GetDiffPairHoleToHole`.
-    pub hole_to_hole: Um,
+    pub hole_to_hole: Nm,
 }
 
 impl DpSizes {
@@ -74,22 +74,22 @@ impl DpSizes {
     pub fn resolve(rules: &BoardRules, net_p: &str, net_n: &str) -> Self {
         let clearance = Node::clearance(rules, &net_of(net_p), &net_of(net_n));
         DpSizes {
-            width: rules.diff_pair_width_of(net_p).max(rules.track_width_min_um),
+            width: rules.diff_pair_width_of(net_p).max(rules.track_width_min_nm),
             gap: rules.diff_pair_gap_of(net_p).max(clearance),
             via_gap: rules.diff_pair_via_gap_of(net_p).max(clearance),
             via_diameter: rules.via_diameter_of(net_p),
             via_drill: rules.via_drill_of(net_p),
-            hole_to_hole: rules.hole_to_hole_min_um,
+            hole_to_hole: rules.hole_to_hole_min_nm,
         }
     }
 
     /// `DIFF_PAIR_PLACER::viaGap`.
-    pub fn via_gap_total(&self) -> Um {
+    pub fn via_gap_total(&self) -> Nm {
         self.via_gap.max(self.hole_to_hole + self.via_drill - self.via_diameter)
     }
 
     /// `DIFF_PAIR_PLACER::gap`: the pitch of the two lines, centre to centre.
-    pub fn pitch(&self) -> Um {
+    pub fn pitch(&self) -> Nm {
         self.gap + self.width
     }
 }
@@ -187,7 +187,7 @@ pub fn find_dp_primitive_pair(node: &Node, item_id: ItemId) -> Result<FoundPair,
 #[derive(Debug, Clone)]
 pub struct DpLeg {
     pub layer: i32,
-    pub width: Um,
+    pub width: Nm,
     pub p: Vec<Point>,
     pub n: Vec<Point>,
     pub vias: Option<(Via, Via)>,
@@ -210,8 +210,8 @@ pub struct DpCommit {
 pub struct PreviewVia {
     pub net: Net,
     pub pos: Point,
-    pub diameter: Um,
-    pub drill: Um,
+    pub diameter: Nm,
+    pub drill: Nm,
     pub layers: LayerRange,
 }
 
@@ -225,8 +225,8 @@ impl From<&Via> for PreviewVia {
 #[derive(Debug, Clone)]
 pub struct DiffPairPreview {
     pub layer: i32,
-    pub width: Um,
-    pub gap: Um,
+    pub width: Nm,
+    pub gap: Nm,
     /// The fixed legs of P (`a`) and N (`b`), one line per leg, each on its own layer.
     pub runs_a: Vec<Line>,
     pub runs_b: Vec<Line>,
@@ -322,7 +322,7 @@ impl DiffPairPlacer {
 
         // `isStartingPointRoutable` (`if( Settings().AllowDRCViolations() ) return true;` first)
         if !settings.allow_drc_violations() {
-            if sizes.gap < rules.min_clearance_um {
+            if sizes.gap < rules.min_clearance_nm {
                 return Err("Diff pair gap is less than board minimum clearance.".into());
             }
         }
@@ -341,13 +341,13 @@ impl DiffPairPlacer {
             }
             // the two lines, as dots, collide with nothing: "If the only reason we collide is track width; it's better to allow the user to
             // start anyway and just highlight the resulting collisions, so they can change width later."
-            let dummy_collides = |width: Um| {
+            let dummy_collides = |width: Nm| {
                 [(found.pair.anchor_n, &net_n), (found.pair.anchor_p, &net_p)].iter().any(|(at, net)| {
                     let pts = [*at, *at];
                     PairLine { pts: &pts, net: *net, layer, width, via: None }.hits_node(world, rules, kind_mask::ANY)
                 })
             };
-            if dummy_collides(sizes.width) && dummy_collides(rules.track_width_min_um) {
+            if dummy_collides(sizes.width) && dummy_collides(rules.track_width_min_nm) {
                 return Err("The routing start point violates DRC.".into());
             }
         }
@@ -393,7 +393,7 @@ impl DiffPairPlacer {
     }
 
     /// `UpdateSizes` from the Differential Pair Dimensions dialog: the width, the gap and the via gap of the next `Move`.
-    pub fn set_dimensions(&mut self, width: Option<Um>, gap: Option<Um>, via_gap: Option<Um>) {
+    pub fn set_dimensions(&mut self, width: Option<Nm>, gap: Option<Nm>, via_gap: Option<Nm>) {
         if let Some(w) = width.filter(|w| *w > 0) {
             self.sizes.width = w;
         }
@@ -414,7 +414,7 @@ impl DiffPairPlacer {
 
     /// `DIFF_PAIR_PLACER::ToggleVia`: the head ends in a pair of vias (or stops doing so). `to_layer` is the layer the route goes on to
     /// after them; without one, the other end of the board.
-    pub fn toggle_via(&mut self, enabled: bool, diameter: Option<Um>, drill: Option<Um>, to_layer: Option<i32>) {
+    pub fn toggle_via(&mut self, enabled: bool, diameter: Option<Nm>, drill: Option<Nm>, to_layer: Option<i32>) {
         self.placing_via = enabled;
         if enabled {
             if let Some(d) = diameter.filter(|d| *d > 0) {
@@ -451,7 +451,7 @@ impl DiffPairPlacer {
             // pads and vias take priority over tracks (`prioritized[]`); then the nearest
             let class = if matches!(item, Item::Segment(_)) { 1u8 } else { 0 };
             let dist = item.anchors().iter().map(|a| vnorm(vsub(*a, at))).min();
-            let Some(dist) = dist.filter(|d| *d <= SNAP_UM) else { continue };
+            let Some(dist) = dist.filter(|d| *d <= SNAP_NM) else { continue };
             let key = (class, dist, id);
             if best.as_ref().is_none_or(|(k, _)| key < *k) {
                 best = Some((key, id));
@@ -982,7 +982,7 @@ mod tests {
     use super::*;
     use crate::item::{Segment, Solid};
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 
@@ -992,15 +992,15 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn pad(node: &mut Node, net: &str, at: Point, r: Um) -> ItemId {
+    fn pad(node: &mut Node, net: &str, at: Point, r: Nm) -> ItemId {
         node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false }))
     }
 
-    fn smd_pad(node: &mut Node, net: &str, at: Point, r: Um) -> ItemId {
+    fn smd_pad(node: &mut Node, net: &str, at: Point, r: Nm) -> ItemId {
         node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false }))
     }
 
-    fn track(node: &mut Node, net: &str, a: Point, b: Point, width: Um) -> ItemId {
+    fn track(node: &mut Node, net: &str, a: Point, b: Point, width: Nm) -> ItemId {
         node.add(Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width, source_track: Some((format!("trk_{net}"), 0)), locked: false }))
     }
 
@@ -1093,7 +1093,7 @@ mod tests {
     }
 
     /// The least edge-to-edge distance between the lines of the head (a gap, not a pitch).
-    fn min_gap(a: &[Point], wa: Um, b: &[Point], wb: Um) -> f64 {
+    fn min_gap(a: &[Point], wa: Nm, b: &[Point], wb: Nm) -> f64 {
         let mut best = f64::MAX;
         for sa in a.windows(2) {
             for sb in b.windows(2) {
@@ -1104,7 +1104,7 @@ mod tests {
     }
 
     /// The least gap between a line of `width` along `pts` and an item.
-    fn gap_to_item(pts: &[Point], width: Um, item: &Item) -> f64 {
+    fn gap_to_item(pts: &[Point], width: Nm, item: &Item) -> f64 {
         pts.windows(2).map(|w| Shape::Stadium { a: w[0], b: w[1], r: width / 2 }.gap_to(&item.shape(item.layers().start()))).fold(f64::MAX, f64::min)
     }
 

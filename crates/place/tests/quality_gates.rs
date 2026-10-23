@@ -69,7 +69,7 @@ fn fp(id: &str, x: i64, y: i64, rot_deg: u32) -> FootprintInstance {
 fn design(outline: Vec<Point>, fps: Vec<FootprintInstance>) -> Design {
     Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection { outline, footprints: fps, modules: Vec::new() }),

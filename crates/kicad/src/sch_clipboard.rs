@@ -16,7 +16,7 @@
 use crate::sexpr;
 use crate::{duid_plain, fmt_mm_f, mm, note_item_uuid, sexpr_str};
 use eda_model::ir::{Design, LabelKind, LibrarySymbol, Point, SchematicSection, SymbolInstance};
-use eda_model::sch_clipboard::{place_offset_mm, place_offset_um, SchFragment};
+use eda_model::sch_clipboard::{place_offset_mm, place_offset_nm, SchFragment};
 use eda_model::symbol::LibSymbol;
 use eda_model::{is_synthetic_lib_id, CheckResult, ConstraintModel};
 use std::collections::BTreeMap;
@@ -303,7 +303,7 @@ fn copied_symbol<'a>(input: &CopyInput<'_>, sym: &'a SymbolInstance) -> Option<C
             } else {
                 let drawn = if style > 1 { engine.in_style(style).into_owned() } else { engine.clone() };
                 let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, sym.unit);
-                let (dx, dy) = place_offset_um(sym.rot as f64 / 1000.0, sym.mirrored, sym.mirror_y, (-x0, -y1));
+                let (dx, dy) = place_offset_nm(sym.rot as f64 / 1000.0, sym.mirrored, sym.mirror_y, (-x0, -y1));
                 Point { x: sym.at.x + dx, y: sym.at.y + dy }
             };
             Some(CopiedSymbol { sym, lib_id, origin, engine, style })
@@ -608,7 +608,7 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         let pts: String = l.pts.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect();
         let uuid = duid_plain(&format!("clipboard:line:{pts}"));
         note_item_uuid(&l.id, &uuid);
-        let _ = writeln!(out, "\t(polyline\n\t\t(pts{pts})\n\t\t(stroke (width {}) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", mm(l.width_um));
+        let _ = writeln!(out, "\t(polyline\n\t\t(pts{pts})\n\t\t(stroke (width {}) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", mm(l.width_nm));
     }
 
     // Shapes, text boxes, rule areas, directive labels: written by the same code that writes a file's.
@@ -649,7 +649,7 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         note_item_uuid(&t.id, &uuid);
         // upright angle and the justification, as the file writes them (`KeepUpright`, `EDA_TEXT::Format`)
         let angle = if eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0) { 90.0 } else { 0.0 };
-        let effects = crate::sch_extras_io::text_effects_str(t.size_um, sch.extras.text_justify_of(&t.id));
+        let effects = crate::sch_extras_io::text_effects_str(t.size_nm, sch.extras.text_justify_of(&t.id));
         let _ = writeln!(out, "\t(text {}\n\t\t(exclude_from_sim no)\n\t\t(at {x} {y} {})\n\t\t{effects}\n\t\t(uuid \"{uuid}\")\n\t)", sexpr_str(&t.content), fmt_mm_f(angle));
     }
 

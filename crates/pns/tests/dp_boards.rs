@@ -7,7 +7,7 @@
 //! Skipped (prints a line, passes) when the QA corpus is not on this machine: `KICAD_QA_DATA`, default `~/ws/kicad-src-8303b2ad/qa/data`.
 
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Design, Point, Track, Um};
+use eda_model::ir::{Design, Point, Track, Nm};
 use eda_model::{ConstraintModel, NetClass};
 use eda_pns::from_ir::build_node;
 use eda_pns::item::{Item, ItemId};
@@ -33,7 +33,7 @@ fn dp_test() -> Option<(Design, ConstraintModel)> {
     Some((design, model))
 }
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -99,7 +99,7 @@ fn commit_into_node(node: &Node, layers: &eda_pns::layer::LayerMap, commit: &Rou
 }
 
 /// The least gap between two polylines of the given widths.
-fn gap_between(a: &[Point], wa: Um, b: &[Point], wb: Um) -> f64 {
+fn gap_between(a: &[Point], wa: Nm, b: &[Point], wb: Nm) -> f64 {
     let mut best = f64::MAX;
     for sa in a.windows(2) {
         for sb in b.windows(2) {

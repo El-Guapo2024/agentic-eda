@@ -15,7 +15,7 @@ use std::process::Command;
 
 fn model() -> ConstraintModel {
     let pin = |number: &str| Pin { number: number.into(), name: None, kind: PinKind::Passive };
-    let r1 = Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("10k".into()), package: None, footprint: Some("Foo:Bar".into()), pins: vec![pin("1"), pin("2")], body_um: None, symbol: Some("Device:R".into()), datasheet: None, edge: None };
+    let r1 = Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("10k".into()), package: None, footprint: Some("Foo:Bar".into()), pins: vec![pin("1"), pin("2")], body_nm: None, symbol: Some("Device:R".into()), datasheet: None, edge: None };
     ConstraintModel { parts: vec![r1], nets: vec![Net { name: "SIG".into(), pins: vec!["R1.1".into(), "R1.2".into()] }], ..Default::default() }
 }
 

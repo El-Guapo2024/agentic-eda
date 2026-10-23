@@ -10,9 +10,9 @@ use crate::sexpr::{self, Sexpr};
 use crate::{fmt_mm_f, mm, mm_to_um, sexpr_str};
 
 /// `PCB_BARCODE`'s own defaults: 40 mm square, a QR code of error correction level L on `Dwgs.User`, the text printed.
-const DEFAULT_SIZE_UM: i64 = 40_000;
+const DEFAULT_SIZE_NM: i64 = 40_000;
 /// The height of a `PCB_TEXT` that nothing sized (1.5 mm).
-const DEFAULT_TEXT_HEIGHT_UM: i64 = 1_500;
+const DEFAULT_TEXT_HEIGHT_NM: i64 = 1_500;
 
 fn yes(item: &[Sexpr], name: &str) -> Option<bool> {
     sexpr::find(item, name).map(|l| sexpr::txt(l, 1).map_or(true, |v| v != "no"))
@@ -28,23 +28,23 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Barcode> {
         at: Point { x: mm_to_um(x), y: mm_to_um(y) },
         angle,
         layer: sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Dwgs.User").to_string(),
-        width_um: DEFAULT_SIZE_UM,
-        height_um: DEFAULT_SIZE_UM,
+        width_nm: DEFAULT_SIZE_NM,
+        height_nm: DEFAULT_SIZE_NM,
         text: sexpr::find(item, "text").and_then(|t| sexpr::txt(t, 1)).unwrap_or("").to_string(),
-        text_height_um: DEFAULT_TEXT_HEIGHT_UM,
+        text_height_nm: DEFAULT_TEXT_HEIGHT_NM,
         kind: BarcodeKind::default(),
         ecc: EccLevel::default(),
         show_text: true,
         knockout: false,
-        margin_x_um: 0,
-        margin_y_um: 0,
+        margin_x_nm: 0,
+        margin_y_nm: 0,
     };
     if let Some(s) = sexpr::find(item, "size") {
-        b.width_um = sexpr::num(s, 1).map_or(b.width_um, mm_to_um);
-        b.height_um = sexpr::num(s, 2).map_or(b.height_um, mm_to_um);
+        b.width_nm = sexpr::num(s, 1).map_or(b.width_nm, mm_to_um);
+        b.height_nm = sexpr::num(s, 2).map_or(b.height_nm, mm_to_um);
     }
     if let Some(h) = sexpr::find(item, "text_height").and_then(|h| sexpr::num(h, 1)) {
-        b.text_height_um = mm_to_um(h);
+        b.text_height_nm = mm_to_um(h);
     }
     if let Some(t) = sexpr::find(item, "type") {
         b.kind = BarcodeKind::from_file_name(sexpr::txt(t, 1)?)?;
@@ -56,8 +56,8 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Barcode> {
     b.show_text = !yes(item, "hide").unwrap_or(false);
     b.knockout = yes(item, "knockout").unwrap_or(false);
     if let Some(m) = sexpr::find(item, "margins") {
-        b.margin_x_um = sexpr::num(m, 1).map_or(0, mm_to_um);
-        b.margin_y_um = sexpr::num(m, 2).map_or(0, mm_to_um);
+        b.margin_x_nm = sexpr::num(m, 1).map_or(0, mm_to_um);
+        b.margin_y_nm = sexpr::num(m, 2).map_or(0, mm_to_um);
     }
     Some(b)
 }
@@ -83,17 +83,17 @@ pub(crate) fn write(out: &mut String, b: &Barcode, locked: bool) -> String {
     }
     write!(out, " (at {} {} {})", mm(b.at.x), mm(b.at.y), fmt_mm_f(b.angle as f64 / 1000.0)).unwrap();
     write!(out, " (layer {})", sexpr_str(&b.layer)).unwrap();
-    write!(out, " (size {} {})", mm(b.width_um), mm(b.height_um)).unwrap();
+    write!(out, " (size {} {})", mm(b.width_nm), mm(b.height_nm)).unwrap();
     write!(out, " (text {})", sexpr_str(&b.text)).unwrap();
-    write!(out, " (text_height {})", mm(b.text_height_um)).unwrap();
+    write!(out, " (text_height {})", mm(b.text_height_nm)).unwrap();
     write!(out, " (type {})", b.kind.file_name()).unwrap();
     if b.kind.has_error_correction() {
         write!(out, " (ecc_level {})", b.ecc.file_name()).unwrap();
     }
     write!(out, " (hide {})", if b.show_text { "no" } else { "yes" }).unwrap();
     write!(out, " (knockout {})", if b.knockout { "yes" } else { "no" }).unwrap();
-    if b.margin_x_um != 0 || b.margin_y_um != 0 {
-        write!(out, " (margins {} {})", mm(b.margin_x_um), mm(b.margin_y_um)).unwrap();
+    if b.margin_x_nm != 0 || b.margin_y_nm != 0 {
+        write!(out, " (margins {} {})", mm(b.margin_x_nm), mm(b.margin_y_nm)).unwrap();
     }
     writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     uuid

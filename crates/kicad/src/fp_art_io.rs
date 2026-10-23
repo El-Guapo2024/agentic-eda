@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use eda_model::fp_art::{is_art_layer, is_side_specific, layer_on_side, FpArt, FpShape, FpText, Hatch, LineStyle};
-use eda_model::ir::{FootprintInstance, Millideg, Point, Shape, Side, Um};
+use eda_model::ir::{FootprintInstance, Millideg, Point, Shape, Side, Nm};
 use eda_model::outline::Arc as GeoArc;
 use eda_model::{ConstraintModel, Footprint};
 
@@ -33,7 +33,7 @@ use crate::sexpr::{self, Sexpr};
 use crate::{duid_for, fmt_mm_f, mm, sexpr_str};
 
 /// `DEFAULT_LINE_WIDTH` (`board_design_settings.h`), 0.1 mm: what a stroke of no width that is not filled is given (`parsePCB_SHAPE`).
-const DEFAULT_LINE_WIDTH_UM: Um = 100;
+const DEFAULT_LINE_WIDTH_NM: Nm = 100;
 
 const SHAPE_TAGS: [&str; 6] = ["fp_line", "fp_arc", "fp_circle", "fp_rect", "fp_poly", "fp_curve"];
 
@@ -89,7 +89,7 @@ fn pts_of(item: &[Sexpr]) -> Vec<Point> {
             Some("arc") => {
                 let get = |name: &str| sexpr::find(e, name).and_then(xy_point);
                 if let (Some(s), Some(m), Some(en)) = (get("start"), get("mid"), get("end")) {
-                    let line = GeoArc::through(s, m, en).polyline(eda_model::outline::MAX_ERROR_UM as f64);
+                    let line = GeoArc::through(s, m, en).polyline(eda_model::outline::MAX_ERROR_NM as f64);
                     for p in line {
                         if out.last() != Some(&p) {
                             out.push(p);
@@ -143,7 +143,7 @@ fn read_shape(item: &[Sexpr], tag: &str, side: Side) -> Option<FpShape> {
     }
     // Only a filled shape may have no width.
     if width <= 0 && !(filled || hatch.is_some()) {
-        width = DEFAULT_LINE_WIDTH_UM;
+        width = DEFAULT_LINE_WIDTH_NM;
     }
     let width = width.max(0);
 
@@ -238,7 +238,7 @@ fn fitted_art(lib: &Footprint, builtin: &Footprint) -> eda_model::fp_art::FpArt 
     match crate::fit_pads(&pads(lib), &pads(builtin)) {
         None => lib.art.clone(),
         Some(fit) => {
-            let by = FootprintInstance { id: String::new(), at: Point { x: fit.dx_um.round() as Um, y: fit.dy_um.round() as Um }, rot: (fit.rot_deg * 1000.0).round().rem_euclid(360_000.0) as Millideg, side: Side::Top, label: Default::default() };
+            let by = FootprintInstance { id: String::new(), at: Point { x: fit.dx_nm.round() as Nm, y: fit.dy_nm.round() as Nm }, rot: (fit.rot_deg * 1000.0).round().rem_euclid(360_000.0) as Millideg, side: Side::Top, label: Default::default() };
             lib.art.moved(&by)
         }
     }
@@ -424,7 +424,7 @@ mod tests {
         sexpr::parse(text).unwrap().as_list().unwrap().to_vec()
     }
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 

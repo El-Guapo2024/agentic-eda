@@ -40,12 +40,12 @@ fn gate() -> LibSymbol {
 
 fn model() -> ConstraintModel {
     let pins = ["1", "2", "3"].map(|n| Pin { number: n.into(), name: None, kind: PinKind::Signal }).to_vec();
-    let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("GATE".into()), package: None, footprint: Some("Foo:Bar".into()), symbol: Some("test:GATE".into()), datasheet: None, pins, body_um: None, edge: None };
+    let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("GATE".into()), package: None, footprint: Some("Foo:Bar".into()), symbol: Some("test:GATE".into()), datasheet: None, pins, body_nm: None, edge: None };
     ConstraintModel { parts: vec![part], symbols: vec![gate()], ..Default::default() }
 }
 
 fn design_with(sch: SchematicSection) -> Design {
-    Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
+    Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
 }
 
 /// The gate with a wire from each pin (where the library puts it) out to a label: `NET_A`, `NET_B`, `NET_Y`; with `swapped`, pins 1 and 2 have traded places.
@@ -103,7 +103,7 @@ fn text_sheet(m: &ConstraintModel) -> SchematicSection {
     use eda_model::ir::{SchematicText, TextJustify as H, TextVAlign as V};
     use eda_model::sch_extras::SchTextJustify as J;
     let mut sch = gate_sheet(m, false);
-    let text = |id: &str, content: &str, x: i64, angle: u32| SchematicText { id: id.into(), content: content.into(), at: Point { x, y: 40_000 }, angle, size_um: 1_270 };
+    let text = |id: &str, content: &str, x: i64, angle: u32| SchematicText { id: id.into(), content: content.into(), at: Point { x, y: 40_000 }, angle, size_nm: 1_270 };
     sch.texts = vec![text("txt_legacy", "legacy", 10_000, 0), text("txt_centre", "centred", 40_000, 0), text("txt_up", "runs up", 70_000, 90_000), text("txt_mirror", "mirrored", 100_000, 0)];
     sch.extras.set_text_justify("txt_centre", J::FILE_DEFAULT);
     sch.extras.set_text_justify("txt_up", J { h: H::Right, v: V::Top });

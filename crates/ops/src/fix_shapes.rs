@@ -10,7 +10,7 @@
 //! two points. Only lines, arcs and curves have end points to join; a circle, a rectangle or a polygon is not part of a chain (KiCad adds
 //! their start and end points to the tree as well, so a circle's centre near a line's end stops a walk there).
 
-use eda_model::ir::{Point, Shape, Um};
+use eda_model::ir::{Point, Shape, Nm};
 
 type P = (i64, i64);
 
@@ -152,7 +152,7 @@ struct Piece {
 
 /// `ConnectBoardShapes( aShapeList, aChainingEpsilon )` over the shapes of `shapes` that are lines, arcs or curves. Moves their end
 /// points in place; nothing is added or removed. `epsilon` is in micrometres (the design's unit).
-pub(crate) fn connect_board_shapes(shapes: &mut [Shape], epsilon: Um) {
+pub(crate) fn connect_board_shapes(shapes: &mut [Shape], epsilon: Nm) {
     // The pieces and every end point of them as they were before anything moved (the k-d tree is built once).
     let pieces: Vec<Piece> = shapes.iter().enumerate().filter(|(_, s)| matches!(s, Shape::Segment { .. } | Shape::Arc { .. } | Shape::Bezier { .. })).map(|(at, _)| Piece { at }).collect();
     if pieces.is_empty() {

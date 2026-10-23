@@ -1,0 +1,1560 @@
+parts:
+- reference: J2
+  mpn: null
+  value: JAE_LY20-18P-DLT1_2x09_P2.00mm_Horizontal
+  package: null
+  footprint: Connector_JAE:JAE_LY20-18P-DLT1_2x09_P2.00mm_Horizontal
+  pins:
+  - number: a1
+    name: null
+    kind: signal
+  - number: a2
+    name: null
+    kind: signal
+  - number: a3
+    name: null
+    kind: signal
+  - number: a4
+    name: null
+    kind: signal
+  - number: a5
+    name: null
+    kind: signal
+  - number: a6
+    name: null
+    kind: signal
+  - number: a7
+    name: null
+    kind: signal
+  - number: a8
+    name: null
+    kind: signal
+  - number: a9
+    name: null
+    kind: signal
+  - number: b1
+    name: null
+    kind: signal
+  - number: b2
+    name: null
+    kind: signal
+  - number: b3
+    name: null
+    kind: signal
+  - number: b4
+    name: null
+    kind: signal
+  - number: b5
+    name: null
+    kind: signal
+  - number: b6
+    name: null
+    kind: signal
+  - number: b7
+    name: null
+    kind: signal
+  - number: b8
+    name: null
+    kind: signal
+  - number: b9
+    name: null
+    kind: signal
+- reference: J1
+  mpn: null
+  value: Samtec_LSHM-105-xx.x-x-DV-S_2x05-1SH_P0.50mm_Vertical
+  package: null
+  footprint: Connector_Samtec:Samtec_LSHM-105-xx.x-x-DV-S_2x05-1SH_P0.50mm_Vertical
+  pins:
+  - number: '1'
+    name: null
+    kind: signal
+  - number: '2'
+    name: null
+    kind: signal
+  - number: '3'
+    name: null
+    kind: signal
+  - number: '4'
+    name: null
+    kind: signal
+  - number: '5'
+    name: null
+    kind: signal
+  - number: '6'
+    name: null
+    kind: signal
+  - number: '7'
+    name: null
+    kind: signal
+  - number: '8'
+    name: null
+    kind: signal
+  - number: '9'
+    name: null
+    kind: signal
+  - number: '10'
+    name: null
+    kind: signal
+  - number: SH
+    name: null
+    kind: signal
+  - number: SH
+    name: null
+    kind: signal
+nets: []
+clusters: []
+placement_rules: []
+stackup: null
+impedance_targets: []
+footprints:
+- name: Connector_JAE:JAE_LY20-18P-DLT1_2x09_P2.00mm_Horizontal
+  pads:
+  - number: a1
+    at:
+    - 0
+    - 0
+    size:
+    - 1200
+    - 1200
+    shape: round_rect
+    kind: through_hole
+    drill: 800
+    rot: 0
+    roundrect_ratio: 0.208333
+  - number: a2
+    at:
+    - 0
+    - 2000
+    size:
+    - 1300
+    - 1100
+    shape: trapezoid
+    kind: through_hole
+    drill: 800
+    rot: 0
+    ext:
+      trapezoid_delta:
+      - 200
+      - 0
+  - number: a3
+    at:
+    - 0
+    - 4000
+    size:
+    - 1000
+    - 1200
+    shape: round_rect
+    kind: through_hole
+    drill: null
+    drill_slot:
+    - 400
+    - 600
+    rot: 0
+    roundrect_ratio: 0.16
+  - number: a4
+    at:
+    - 0
+    - 6000
+    size:
+    - 1200
+    - 1200
+    shape: chamfered_rect
+    kind: through_hole
+    drill: 800
+    rot: 0
+    roundrect_ratio: 0.0
+    ext:
+      chamfer_ratio: 0.3
+      chamfer_corners:
+        top_left: false
+        top_right: false
+        bottom_left: true
+        bottom_right: true
+  - number: a5
+    at:
+    - 0
+    - 8000
+    size:
+    - 2000
+    - 1200
+    shape: oval
+    kind: through_hole
+    drill: 800
+    rot: 0
+    ext:
+      offset:
+      - -300
+      - 0
+  - number: a6
+    at:
+    - 0
+    - 10000
+    size:
+    - 1200
+    - 1200
+    shape: circle
+    kind: through_hole
+    drill: 800
+    rot: 0
+  - number: a7
+    at:
+    - 0
+    - 12000
+    size:
+    - 1200
+    - 1200
+    shape: circle
+    kind: through_hole
+    drill: 800
+    rot: 0
+  - number: a8
+    at:
+    - 0
+    - 14000
+    size:
+    - 1200
+    - 1200
+    shape: circle
+    kind: through_hole
+    drill: 800
+    rot: 0
+  - number: a9
+    at:
+    - 0
+    - 16000
+    size:
+    - 1200
+    - 1200
+    shape: circle
+    kind: through_hole
+    drill: 800
+    rot: 0
+  - number: b1
+    at:
+    - 2000
+    - 0
+    size:
+    - 2000
+    - 1200
+    shape: oval
+    kind: through_hole
+    drill: 800
+    rot: 0
+  - number: b2
+    at:
+    - 2000
+    - 2000
+    size:
+    - 1200
+    - 1200
+    shape: trapezoid
+    kind: through_hole
+    drill: 800
+    rot: 0
+    ext:
+      trapezoid_delta:
+      - 0
+      - 500
+  - number: b3
+    at:
+    - 2000
+    - 4000
+    size:
+    - 1200
+    - 1200
+    shape: chamfered_rect
+    kind: through_hole
+    drill: 800
+    rot: 0
+    roundrect_ratio: 0.0
+    ext:
+      chamfer_ratio: 0.2
+      chamfer_corners:
+        top_left: true
+        top_right: false
+        bottom_left: false
+        bottom_right: false
+  - number: b4
+    at:
+    - 2000
+    - 6000
+    size:
+    - 1200
+    - 1200
+    shape: chamfered_rect
+    kind: through_hole
+    drill: 800
+    rot: 0
+    roundrect_ratio: 0.22
+    ext:
+      chamfer_ratio: 0.21
+      chamfer_corners:
+        top_left: true
+        top_right: false
+        bottom_left: true
+        bottom_right: false
+  - number: b5
+    at:
+    - 2000
+    - 8000
+    size:
+    - 1200
+    - 1200
+    shape: chamfered_rect
+    kind: through_hole
+    drill: 800
+    rot: 0
+    roundrect_ratio: 0.0
+    ext:
+      offset:
+      - 100
+      - -150
+      chamfer_ratio: 0.2
+      chamfer_corners:
+        top_left: true
+        top_right: false
+        bottom_left: false
+        bottom_right: false
+  - number: b6
+    at:
+    - 2000
+    - 10000
+    size:
+    - 1200
+    - 1200
+    shape: circle
+    kind: through_hole
+    drill: 800
+    rot: 0
+  - number: b7
+    at:
+    - 2000
+    - 12000
+    size:
+    - 1200
+    - 1200
+    shape: circle
+    kind: through_hole
+    drill: 800
+    rot: 0
+  - number: b8
+    at:
+    - 2000
+    - 14000
+    size:
+    - 1200
+    - 1200
+    shape: circle
+    kind: through_hole
+    drill: 800
+    rot: 0
+  - number: b9
+    at:
+    - 2000
+    - 16000
+    size:
+    - 1200
+    - 1200
+    shape: circle
+    kind: through_hole
+    drill: 800
+    rot: 0
+  courtyard:
+  - 7500
+  - 18300
+  courtyard_outlines:
+  - - - -1100
+      - -2300
+    - - -1100
+      - 18300
+    - - 7500
+      - 18300
+    - - 7500
+      - -2300
+  model: ${KICAD8_3DMODEL_DIR}/Connector_JAE.3dshapes/JAE_LY20-18P-DLT1_2x09_P2.00mm_Horizontal.wrl
+  models3d:
+  - path: ${KICAD8_3DMODEL_DIR}/Connector_JAE.3dshapes/JAE_LY20-18P-DLT1_2x09_P2.00mm_Horizontal.wrl
+  art:
+    shapes:
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -1010
+          y: -2210
+        end:
+          x: -1010
+          y: 200
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: -1910
+        end:
+          x: -710
+          y: -860
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: -1910
+        end:
+          x: 7110
+          y: -1910
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: 860
+        end:
+          x: -710
+          y: 1515
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: 2485
+        end:
+          x: -710
+          y: 3515
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: 4485
+        end:
+          x: -710
+          y: 5515
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: 6485
+        end:
+          x: -710
+          y: 7515
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: 8485
+        end:
+          x: -710
+          y: 9515
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: 10485
+        end:
+          x: -710
+          y: 11515
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: 12485
+        end:
+          x: -710
+          y: 13515
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: 14485
+        end:
+          x: -710
+          y: 15515
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: 16485
+        end:
+          x: -710
+          y: 17910
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -710
+          y: 17910
+        end:
+          x: 7110
+          y: 17910
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 1400
+          y: -2210
+        end:
+          x: -1010
+          y: -2210
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4200
+          y: 2300
+        end:
+          x: 4200
+          y: 8000
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4200
+          y: 3750
+        end:
+          x: 6733
+          y: 3750
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4200
+          y: 5750
+        end:
+          x: 6733
+          y: 5750
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4200
+          y: 7750
+        end:
+          x: 6733
+          y: 7750
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4200
+          y: 9750
+        end:
+          x: 6733
+          y: 9750
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4200
+          y: 11750
+        end:
+          x: 6733
+          y: 11750
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4200
+          y: 13700
+        end:
+          x: 4200
+          y: 8000
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6200
+          y: 2300
+        end:
+          x: 6200
+          y: 3750
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6200
+          y: 13700
+        end:
+          x: 6200
+          y: 12250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6733
+          y: 3750
+        end:
+          x: 6900
+          y: 4000
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6733
+          y: 4250
+        end:
+          x: 4200
+          y: 4250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6733
+          y: 5750
+        end:
+          x: 6900
+          y: 6000
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6733
+          y: 6250
+        end:
+          x: 4200
+          y: 6250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6733
+          y: 7750
+        end:
+          x: 6900
+          y: 8000
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6733
+          y: 8250
+        end:
+          x: 4200
+          y: 8250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6733
+          y: 9750
+        end:
+          x: 6900
+          y: 10000
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6733
+          y: 10250
+        end:
+          x: 4200
+          y: 10250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6733
+          y: 11750
+        end:
+          x: 6900
+          y: 12000
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6733
+          y: 12250
+        end:
+          x: 4200
+          y: 12250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6900
+          y: 4000
+        end:
+          x: 6733
+          y: 4250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6900
+          y: 6000
+        end:
+          x: 6733
+          y: 6250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6900
+          y: 8000
+        end:
+          x: 6733
+          y: 8250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6900
+          y: 10000
+        end:
+          x: 6733
+          y: 10250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 6900
+          y: 12000
+        end:
+          x: 6733
+          y: 12250
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 7110
+          y: -1910
+        end:
+          x: 7110
+          y: 2300
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 7110
+          y: 2300
+        end:
+          x: 4200
+          y: 2300
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 7110
+          y: 13700
+        end:
+          x: 4200
+          y: 13700
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 7110
+          y: 17910
+        end:
+          x: 7110
+          y: 13700
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -600
+          y: -1800
+        end:
+          x: -600
+          y: 17800
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -600
+          y: 500
+        end:
+          x: 107
+          y: 0
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -600
+          y: 17800
+        end:
+          x: 7000
+          y: 17800
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 107
+          y: 0
+        end:
+          x: -600
+          y: -500
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 7000
+          y: -1800
+        end:
+          x: -600
+          y: -1800
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 7000
+          y: 17800
+        end:
+          x: 7000
+          y: -1800
+    texts:
+    - text: ${REFERENCE}
+      layout:
+        at:
+          x: 3200
+          y: 17100
+        size:
+        - 1000
+        - 1000
+        thickness: 150
+        layer: F.Fab
+- name: Connector_Samtec:Samtec_LSHM-105-xx.x-x-DV-S_2x05-1SH_P0.50mm_Vertical
+  pads:
+  - number: ''
+    at:
+    - -2250
+    - -850
+    size:
+    - 1450
+    - 1450
+    shape: circle
+    kind: non_plated_hole
+    drill: 1450
+    rot: 0
+  - number: ''
+    at:
+    - 2250
+    - -850
+    size:
+    - 1450
+    - 1450
+    shape: circle
+    kind: non_plated_hole
+    drill: 1450
+    rot: 0
+  - number: '1'
+    at:
+    - -1000
+    - -1850
+    size:
+    - 300
+    - 1500
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  - number: '2'
+    at:
+    - -1000
+    - 1850
+    size:
+    - 300
+    - 1500
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  - number: '3'
+    at:
+    - -500
+    - -1850
+    size:
+    - 300
+    - 1500
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  - number: '4'
+    at:
+    - -500
+    - 1850
+    size:
+    - 300
+    - 1500
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  - number: '5'
+    at:
+    - 0
+    - -1850
+    size:
+    - 300
+    - 1500
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  - number: '6'
+    at:
+    - 0
+    - 1850
+    size:
+    - 300
+    - 1500
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  - number: '7'
+    at:
+    - 500
+    - -1850
+    size:
+    - 300
+    - 1500
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  - number: '8'
+    at:
+    - 500
+    - 1850
+    size:
+    - 300
+    - 1500
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  - number: '9'
+    at:
+    - 1000
+    - -1850
+    size:
+    - 300
+    - 1500
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  - number: '10'
+    at:
+    - 1000
+    - 1850
+    size:
+    - 300
+    - 1500
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  - number: SH
+    at:
+    - -3725
+    - 1150
+    size:
+    - 1500
+    - 1500
+    shape: circle
+    kind: through_hole
+    drill: 1000
+    rot: 0
+  - number: SH
+    at:
+    - 3725
+    - 1150
+    size:
+    - 1500
+    - 1500
+    shape: circle
+    kind: through_hole
+    drill: 1000
+    rot: 0
+  courtyard:
+  - 4970
+  - 3100
+  courtyard_outlines:
+  - - - 4970
+      - -3100
+    - - -4970
+      - -3100
+    - - -4970
+      - 3100
+    - - 4970
+      - 3100
+  model: ${KICAD8_3DMODEL_DIR}/Connector_Samtec.3dshapes/Samtec_LSHM-105-xx.x-x-DV-S_2x05-1SH_P0.50mm_Vertical.wrl
+  models3d:
+  - path: ${KICAD8_3DMODEL_DIR}/Connector_Samtec.3dshapes/Samtec_LSHM-105-xx.x-x-DV-S_2x05-1SH_P0.50mm_Vertical.wrl
+  art:
+    shapes:
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -800
+          y: -3143
+        end:
+          x: -1000
+          y: -2860
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -1200
+          y: -3143
+        end:
+          x: -800
+          y: -3143
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -1000
+          y: -2860
+        end:
+          x: -1200
+          y: -3143
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4185
+          y: -2600
+        end:
+          x: 4485
+          y: -2300
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 1410
+          y: -2600
+        end:
+          x: 4185
+          y: -2600
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -1410
+          y: -2600
+        end:
+          x: -4185
+          y: -2600
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -4185
+          y: -2600
+        end:
+          x: -4485
+          y: -2300
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4485
+          y: -2300
+        end:
+          x: 4485
+          y: 377
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -4485
+          y: -2300
+        end:
+          x: -4485
+          y: 377
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4485
+          y: 1923
+        end:
+          x: 4485
+          y: 2300
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -4485
+          y: 1923
+        end:
+          x: -4485
+          y: 2300
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4485
+          y: 2300
+        end:
+          x: 4185
+          y: 2600
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -4485
+          y: 2300
+        end:
+          x: -4185
+          y: 2600
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 4185
+          y: 2600
+        end:
+          x: 1410
+          y: 2600
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -4185
+          y: 2600
+        end:
+          x: -1410
+          y: 2600
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 4075
+          y: -2490
+        end:
+          x: 4375
+          y: -2190
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 0
+          y: -2490
+        end:
+          x: 4075
+          y: -2490
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 0
+          y: -2490
+        end:
+          x: -4075
+          y: -2490
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -1500
+          y: -2490
+        end:
+          x: -1000
+          y: -1783
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -4075
+          y: -2490
+        end:
+          x: -4375
+          y: -2190
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 4375
+          y: -2190
+        end:
+          x: 4375
+          y: 2190
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -4375
+          y: -2190
+        end:
+          x: -4375
+          y: 2190
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -1000
+          y: -1783
+        end:
+          x: -500
+          y: -2490
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 4375
+          y: 2190
+        end:
+          x: 4075
+          y: 2490
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -4375
+          y: 2190
+        end:
+          x: -4075
+          y: 2490
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 4075
+          y: 2490
+        end:
+          x: 0
+          y: 2490
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -4075
+          y: 2490
+        end:
+          x: 0
+          y: 2490
+    texts:
+    - text: ${REFERENCE}
+      layout:
+        at:
+          x: 0
+          y: 0
+        size:
+        - 1000
+        - 1000
+        thickness: 150
+        layer: F.Fab
+symbols: []
+board:
+  grid: 254
+  track_width: 200
+  clearance: 200
+  via_drill: 300
+  via_diameter: 600
+  layers:
+  - F.Cu
+  - B.Cu
+  outline: null
+  refdes_font_um: null
+  tuning:
+    edge_clearance_um: 500
+    between_pads_max_gap_um: 2000
+    preflight_reach_cells: 2000
+    optimizer_passes: 10
+  hole_to_hole_min_um: 250
+  hole_clearance_um: 250
+  copper_edge_clearance_um: 500
+  silk_clearance_um: 0
+  annular_width_min_um: 100
+  min_silk_text_height_um: 800
+  min_silk_text_thickness_um: 80
+  track_width_min_um: 0
+  min_clearance_um: 0
+  via_diameter_min_um: 500
+  via_drill_min_um: 300
+  rule_severities:
+    annular_width: error
+    clearance: error
+    connection_width: warning
+    copper_edge_clearance: error
+    copper_sliver: warning
+    courtyards_overlap: error
+    diff_pair_gap_out_of_range: error
+    diff_pair_uncoupled_length_too_long: error
+    drill_out_of_range: error
+    duplicate_footprints: warning
+    extra_footprint: warning
+    footprint: error
+    footprint_symbol_mismatch: warning
+    footprint_type_mismatch: ignore
+    hole_clearance: error
+    hole_near_hole: error
+    hole_to_hole: error
+    holes_co_located: warning
+    invalid_outline: error
+    isolated_copper: warning
+    item_on_disabled_layer: error
+    items_not_allowed: error
+    length_out_of_range: error
+    lib_footprint_issues: warning
+    lib_footprint_mismatch: warning
+    malformed_courtyard: error
+    microvia_drill_out_of_range: error
+    missing_courtyard: ignore
+    missing_footprint: warning
+    net_conflict: warning
+    npth_inside_courtyard: ignore
+    padstack: warning
+    pth_inside_courtyard: ignore
+    shorting_items: error
+    silk_edge_clearance: warning
+    silk_over_copper: warning
+    silk_overlap: warning
+    skew_out_of_range: error
+    solder_mask_bridge: error
+    starved_thermal: error
+    text_height: warning
+    text_thickness: warning
+    through_hole_pad_without_hole: error
+    too_many_vias: error
+    track_dangling: warning
+    track_width: error
+    tracks_crossing: error
+    unconnected_items: error
+    unresolved_variable: error
+    via_dangling: warning
+    zones_intersect: error
+  microvia_diameter_min_um: 200
+  microvia_drill_min_um: 100
+  min_resolved_spokes: 2
+  max_error_um: 5
+  use_height_for_length_calcs: true
+  zones_allow_external_fillets: false
+  constraints_explicit: true
+  board_thickness_um: 1600
+  text_graphics:
+    silk:
+      line_width_um: 100
+      text_width_um: 1000
+      text_height_um: 1000
+      text_thickness_um: 100
+      italic: false
+      upright: false
+    copper:
+      line_width_um: 200
+      text_width_um: 1500
+      text_height_um: 1500
+      text_thickness_um: 300
+      italic: false
+      upright: false
+    edge_cuts_line_width_um: 50
+    courtyard_line_width_um: 50
+    fab:
+      line_width_um: 100
+      text_width_um: 1000
+      text_height_um: 1000
+      text_thickness_um: 150
+      italic: false
+      upright: false
+    others:
+      line_width_um: 100
+      text_width_um: 1000
+      text_height_um: 1000
+      text_thickness_um: 150
+      italic: false
+      upright: false
+  layer_setup:
+    enabled:
+    - F.Adhes
+    - B.Adhes
+    - F.Paste
+    - B.Paste
+    - F.SilkS
+    - B.SilkS
+    - F.Mask
+    - B.Mask
+    - Dwgs.User
+    - Cmts.User
+    - Eco1.User
+    - Eco2.User
+    - Edge.Cuts
+    - Margin
+    - F.CrtYd
+    - B.CrtYd
+    - F.Fab
+    - B.Fab
+    - User.1
+    - User.2
+    - User.3
+    - User.4
+    - User.5
+    - User.6
+    - User.7
+    - User.8
+    - User.9
+allow:
+  max_layers: null
+  min_track: null
+  min_clearance: null
+  placers: []
+solver:
+  placer: build
+  place_spacing_um: 600
+  place_moves_per_part: 4000
+  place_snap_um: 100
+  cypress_proximity_weight: 50.0
+  fit_board_utilization: 0.25
+  place_attempts: 3
+  floorplan: false

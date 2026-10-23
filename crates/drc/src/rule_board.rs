@@ -15,7 +15,7 @@ use crate::dru::ParseError;
 use crate::kimath::Shape;
 use crate::pcbexpr::Env;
 use crate::rule_item::{AreaFacts, Class, FootprintFacts, Prop, RuleItem};
-use eda_model::ir::{Design, Point, Side, Um};
+use eda_model::ir::{Design, Point, Side, Nm};
 use eda_model::layers::{pcb_layer_id, TECH_LAYERS};
 use eda_model::{BoardRules, ConstraintModel, PadKind, PadShape};
 use std::collections::{BTreeSet, HashMap};
@@ -586,11 +586,11 @@ impl<'a> RuleBoard<'a> {
         it.layers = vec![t.layer.clone()];
         it.layer = Some(t.layer.clone());
         it.position = t.at;
-        it.text_height = nm(t.size_um);
+        it.text_height = nm(t.size_nm);
         it.text_thickness = nm(t.stroke_width);
         it.set("Text", Prop::Str(t.content.clone()));
         it.set("Layer", Prop::Layer(t.layer.clone()));
-        it.set("Text Height", Prop::Int(nm(t.size_um)));
+        it.set("Text Height", Prop::Int(nm(t.size_nm)));
         it.set("Text Thickness", Prop::Int(nm(t.stroke_width)));
         it.set("Position X", Prop::Int(nm(t.at.x)));
         it.set("Position Y", Prop::Int(nm(t.at.y)));
@@ -697,7 +697,7 @@ impl<'a> RuleBoard<'a> {
 
     /// A via that is not on the board, as the rules see it -- `PCB_VIA_STITCH::buildPlacementCells`' probe, "it must carry the stitch net because clearance rules can key off
     /// the net class": the via item of a board with it on.
-    pub fn probe_via(&self, net: &str, at: Point, diameter: Um, drill: Um, from_layer: &str, to_layer: &str) -> Rc<RuleItem> {
+    pub fn probe_via(&self, net: &str, at: Point, diameter: Nm, drill: Nm, from_layer: &str, to_layer: &str) -> Rc<RuleItem> {
         let v = crate::board::DrcVia { id: "via_probe".into(), net: (!net.is_empty()).then(|| net.to_string()), at, drill, diameter, from_layer: from_layer.to_string(), to_layer: to_layer.to_string() };
         let copper = self.copper_layers();
         let (i0, i1) = (copper.iter().position(|l| *l == v.from_layer), copper.iter().position(|l| *l == v.to_layer));
@@ -805,7 +805,7 @@ impl<'a> RuleBoard<'a> {
     }
 }
 
-/// Micrometres to the units the items use, for callers that hold a [`Um`].
-pub fn to_nm(um: Um) -> i64 {
+/// Micrometres to the units the items use, for callers that hold a [`Nm`].
+pub fn to_nm(um: Nm) -> i64 {
     nm(um)
 }

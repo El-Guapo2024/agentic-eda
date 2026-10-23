@@ -202,7 +202,7 @@ mod tests {
     fn padstack_model(side: eda_model::ir::Side) -> (eda_model::ir::Design, eda_model::ConstraintModel) {
         use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode};
         use eda_model::{BoardRules, Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
-        let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("TH1".into()), footprint: Some("TH1".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None };
+        let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("TH1".into()), footprint: Some("TH1".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None };
         let mut pad = Pad { number: "1".into(), at: (0, 0), size: (1600, 1600), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(800), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
         pad.ext.stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(PadLayerShape::plain(PadShape::Rect, (3000, 3000))), back: Some(PadLayerShape::plain(PadShape::Oval, (2400, 1000))), ..Default::default() };
         let model = eda_model::ConstraintModel {

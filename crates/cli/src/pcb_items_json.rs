@@ -39,16 +39,16 @@ pub(crate) fn text_box_json(t: &TextBox, tv: &PcbShown) -> Value {
         "end": pt(t.end),
         "pts": t.pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(),
         "angle": t.angle,
-        "margins": [t.margin_left_um, t.margin_top_um, t.margin_right_um, t.margin_bottom_um],
+        "margins": [t.margin_left_nm, t.margin_top_nm, t.margin_right_nm, t.margin_bottom_nm],
         "border": t.border,
-        "stroke_width": t.stroke_width_um,
+        "stroke_width": t.stroke_width_nm,
         "line_style": t.line_style.token(),
         "stroke_color": t.stroke_color,
         "knockout": t.knockout,
-        "size": t.size_um,
-        "width": t.text_width_um(),
-        "thickness": t.effective_pen_um(),
-        "thickness_auto": t.thickness_um == 0,
+        "size": t.size_nm,
+        "width": t.text_width_nm(),
+        "thickness": t.effective_pen_nm(),
+        "thickness_auto": t.thickness_nm == 0,
         "halign": halign(t.halign),
         "valign": valign(t.valign),
         "mirror": t.mirror,
@@ -67,7 +67,7 @@ pub(crate) fn text_box_json(t: &TextBox, tv: &PcbShown) -> Value {
 /// pixels are not in the state: `hash` is the part of `GET /api/pcb_image` that changes when they do.
 pub(crate) fn image_json(i: &RefImage) -> Value {
     let header = i.header();
-    let (w, h) = i.size_um();
+    let (w, h) = i.size_nm();
     json!({
         "id": i.id,
         "layer": i.layer,
@@ -84,7 +84,7 @@ pub(crate) fn image_json(i: &RefImage) -> Value {
 
 /// One point as the canvas and the Properties panel read it: its centre and the size of its mark.
 pub(crate) fn point_json(p: &PcbPoint) -> Value {
-    json!({ "id": p.id, "layer": p.layer, "x": p.at.x, "y": p.at.y, "size": p.size_um })
+    json!({ "id": p.id, "layer": p.layer, "x": p.at.x, "y": p.at.y, "size": p.size_nm })
 }
 
 /// Add the new item kinds to the `drawings` object of the state, and the hatch, line endings and net of the shapes `drawings["shapes"]` already lists.
@@ -117,16 +117,16 @@ pub(crate) fn barcode_json(b: &eda_model::barcode::Barcode, tv: &PcbShown) -> Va
         "x": b.at.x,
         "y": b.at.y,
         "angle": b.angle,
-        "w": b.width_um,
-        "h": b.height_um,
+        "w": b.width_nm,
+        "h": b.height_nm,
         "text": b.text,
-        "text_height": b.text_height_um,
+        "text_height": b.text_height_nm,
         "kind": b.kind.file_name(),
         "ecc": b.ecc.file_name(),
         "show_text": b.show_text,
         "knockout": b.knockout,
-        "margin_x": b.margin_x_um,
-        "margin_y": b.margin_y_um,
+        "margin_x": b.margin_x_nm,
+        "margin_y": b.margin_y_nm,
     });
     if shown != b.text {
         v["shown"] = json!(shown);
@@ -174,7 +174,7 @@ pub(crate) fn grid_item_json(g: &eda_model::grid_item::GridItem) -> Value {
 
 /// One line ending as the canvas, the shape dialog and the Properties panel read it: `{ "style", "length", "width", "stroke_width" }` (micrometres; 0 is automatic).
 pub(crate) fn line_ending_json(e: &eda_model::line_ending::LineEnding) -> Value {
-    json!({ "style": e.style.token(), "length": e.length_um, "width": e.width_um, "stroke_width": e.stroke_width_um })
+    json!({ "style": e.style.token(), "length": e.length_nm, "width": e.width_nm, "stroke_width": e.stroke_width_nm })
 }
 
 /// The line endings of an open shape (`start_ending`, `end_ending`, present when not none) and the net of a shape on copper (`net`). A closed shape's endings are not

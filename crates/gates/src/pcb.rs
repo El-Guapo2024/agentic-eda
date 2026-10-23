@@ -10,7 +10,7 @@
 
 use eda_drc::kimath::Shape;
 use eda_model::footprint::{placed_courtyard, placed_pads};
-use eda_model::ir::{Design, FootprintInstance, Point, Side, Track, Um, Via};
+use eda_model::ir::{Design, FootprintInstance, Point, Side, Track, Nm, Via};
 use eda_model::{CheckResult, ConstraintModel, PlacementRule};
 use std::collections::{BTreeMap, HashMap};
 
@@ -131,10 +131,10 @@ fn seg_seg_dist(a: Point, b: Point, c: Point, d: Point) -> f64 {
 
 /// Axis-aligned rectangle (min_x, min_y, max_x, max_y).
 #[derive(Debug, Clone, Copy)]
-pub struct Rect(pub Um, pub Um, pub Um, pub Um);
+pub struct Rect(pub Nm, pub Nm, pub Nm, pub Nm);
 
 impl Rect {
-    fn centered(c: Point, size: (Um, Um)) -> Self {
+    fn centered(c: Point, size: (Nm, Nm)) -> Self {
         Rect(c.x - size.0 / 2, c.y - size.1 / 2, c.x + size.0 / 2, c.y + size.1 / 2)
     }
     fn corners(&self) -> [Point; 4] {
@@ -181,7 +181,7 @@ fn from_lint(f: &eda_lint::Finding, check_name: &str) -> CheckResult {
     let mut cr = CheckResult { check: check_name.to_string(), status: eda_model::CheckStatus::Fail, location: Some(location), hint: Some(f.description.clone()), detail: None };
     if let Some(fix) = &f.fix {
         cr = cr.with_detail(serde_json::json!({
-            "mover": fix.mover, "toward": fix.toward, "distance_to_close_um": fix.distance_to_close_um,
+            "mover": fix.mover, "toward": fix.toward, "distance_to_close_nm": fix.distance_to_close_nm,
             "suggest": fix.suggested_command,
         }));
     }
@@ -359,8 +359,8 @@ pub fn placement_region(design: &Design, model: &ConstraintModel) -> Vec<CheckRe
                         format!("courtyard escapes its module region by {outx:.2} mm in x, {outy:.2} mm in y"),
                     )
                     .with_detail(serde_json::json!({
-                        "module": m.name, "part": id, "rect_um": [m.rect.0, m.rect.1, m.rect.2, m.rect.3],
-                        "courtyard_um": [c.0, c.1, c.2, c.3],
+                        "module": m.name, "part": id, "rect_nm": [m.rect.0, m.rect.1, m.rect.2, m.rect.3],
+                        "courtyard_nm": [c.0, c.1, c.2, c.3],
                         "out_x_mm": (outx * 100.0).round() / 100.0, "out_y_mm": (outy * 100.0).round() / 100.0,
                         "suggest": "far miss: the block is too small for its parts or too tightly boxed by its neighbours. Re-run the floorplan under another seed, or raise floorplan fill headroom",
                     })),
@@ -466,8 +466,8 @@ fn locality_with(design: &Design, model: &ConstraintModel, lint: &[eda_lint::Fin
 }
 
 pub use eda_lint::placement::{
-    BOARD_USE_MAX_IMBALANCE, BOARD_USE_MIN_DENSITY_FRACTION, BOARD_USE_MIN_SPAN, DECOUPLING_MAX_GAP_UM, EDGE_CONNECTOR_MAX_GAP_UM,
-    NET_COMPACTNESS_FLOOR_UM, NET_COMPACTNESS_MAX_MEMBERS, NET_COMPACTNESS_MAX_RATIO, STUB_CROSSING_MAX_RATIO,
+    BOARD_USE_MAX_IMBALANCE, BOARD_USE_MIN_DENSITY_FRACTION, BOARD_USE_MIN_SPAN, DECOUPLING_MAX_GAP_NM, EDGE_CONNECTOR_MAX_GAP_NM,
+    NET_COMPACTNESS_FLOOR_NM, NET_COMPACTNESS_MAX_MEMBERS, NET_COMPACTNESS_MAX_RATIO, STUB_CROSSING_MAX_RATIO,
 };
 
 /// See [`eda_model::is_free_two_pin`].
@@ -481,7 +481,7 @@ pub fn is_edge_connector(part: &eda_model::Part) -> bool {
 }
 
 /// See [`eda_model::footprint::edge_connector_gap`].
-pub fn edge_connector_gap(r: Rect, bb: (Um, Um, Um, Um)) -> Um {
+pub fn edge_connector_gap(r: Rect, bb: (Nm, Nm, Nm, Nm)) -> Nm {
     eda_model::footprint::edge_connector_gap((r.0, r.1, r.2, r.3), bb)
 }
 
@@ -584,10 +584,10 @@ fn seg_pad_dist(a: Point, b: Point, pad: &PadItem) -> f64 {
     } else {
         let r = g.corner_radius();
         let inset = Rect(
-            (center.x as f64 - g.size.0 as f64 / 2.0 + r).round() as Um,
-            (center.y as f64 - g.size.1 as f64 / 2.0 + r).round() as Um,
-            (center.x as f64 + g.size.0 as f64 / 2.0 - r).round() as Um,
-            (center.y as f64 + g.size.1 as f64 / 2.0 - r).round() as Um,
+            (center.x as f64 - g.size.0 as f64 / 2.0 + r).round() as Nm,
+            (center.y as f64 - g.size.1 as f64 / 2.0 + r).round() as Nm,
+            (center.x as f64 + g.size.0 as f64 / 2.0 - r).round() as Nm,
+            (center.y as f64 + g.size.1 as f64 / 2.0 - r).round() as Nm,
         );
         (seg_rect_dist(a, b, &inset) - r).max(0.0)
     }
@@ -773,7 +773,7 @@ fn check_workmanship(
     outer_bot: &str,
     out: &mut Vec<CheckResult>,
 ) {
-    const BETWEEN_PADS_MAX_GAP: Um = 2000;
+    const BETWEEN_PADS_MAX_GAP: Nm = 2000;
     if design.placement.is_none() {
         return;
     }
@@ -837,7 +837,7 @@ fn check_workmanship(
         for i in 0..fpads.len() {
             for j in i + 1..fpads.len() {
                 let (a, b) = (fpads[i], fpads[j]);
-                if (a.rect.gap(&b.rect) as Um) > BETWEEN_PADS_MAX_GAP {
+                if (a.rect.gap(&b.rect) as Nm) > BETWEEN_PADS_MAX_GAP {
                     continue;
                 }
                 // Adjacent pairs only: pins 1 and 3 of a row have pin 2
@@ -926,7 +926,7 @@ fn seg_seg_cross(a: Point, b: Point, c: Point, d: Point) -> Point {
         return a;
     }
     let t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den;
-    Point { x: (ax + t * (bx - ax)).round() as Um, y: (ay + t * (by - ay)).round() as Um }
+    Point { x: (ax + t * (bx - ax)).round() as Nm, y: (ay + t * (by - ay)).round() as Nm }
 }
 
 /// Routing *quality* gate (loop-3): exact-geometry judge over track/via
@@ -1046,7 +1046,7 @@ fn on_boundary(p: Point, poly: &[Point]) -> bool {
     })
 }
 
-fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], model: &ConstraintModel, track_w: Um, out: &mut Vec<CheckResult>) {
+fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], model: &ConstraintModel, track_w: Nm, out: &mut Vec<CheckResult>) {
     let mut ok = true;
     for net in &model.nets {
         let net_pads: Vec<&PadItem> = pads.iter().filter(|p| p.net == net.name).collect();
@@ -1089,7 +1089,7 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
         }
         // Vertex-vertex on the same layer at the same point; vertex-via at
         // the via point (any layer the via spans).
-        let mut by_point: HashMap<(Um, Um), Vec<(usize, String)>> = HashMap::new();
+        let mut by_point: HashMap<(Nm, Nm), Vec<(usize, String)>> = HashMap::new();
         for (ti, t) in tracks.iter().enumerate() {
             for (k, p) in t.pts.iter().enumerate() {
                 by_point.entry((p.x, p.y)).or_default().push((tv_base[ti] + k, t.layer.clone()));
@@ -1217,7 +1217,7 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
 /// KiCad's `BOARD_DESIGN_SETTINGS::GetDRCEpsilon()` (`DRCEpsilon`, 0.0005 mm): `DRC_TEST_PROVIDER_COPPER_CLEARANCE::sub_e` takes it
 /// off every clearance before a gap is compared with it, so a gap within half a micron of the rule is a pass in kicad-cli. The
 /// gate holds the same line: it never fails what kicad-cli's `clearance` check passes on the same geometry.
-const DRC_EPSILON_UM: f64 = 0.5;
+const DRC_EPSILON_NM: f64 = 0.5;
 
 /// The layers an item has copper on.
 #[derive(Clone, Copy)]
@@ -1249,7 +1249,7 @@ struct Copper<'a> {
     layers: CopperLayers<'a>,
     shape: Shape,
     /// `shape`'s bounding box, for rejecting far-apart pairs before the exact test.
-    bbox: (Um, Um, Um, Um),
+    bbox: (Nm, Nm, Nm, Nm),
 }
 
 impl<'a> Copper<'a> {
@@ -1260,7 +1260,7 @@ impl<'a> Copper<'a> {
 
     /// Different nets, copper on a common layer, and close enough that the gap could be under `reach` -- the pairs
     /// worth the exact test.
-    fn may_conflict(&self, other: &Copper, reach: Um) -> bool {
+    fn may_conflict(&self, other: &Copper, reach: Nm) -> bool {
         self.net != other.net
             && self.layers.overlaps(&other.layers)
             && self.bbox.0 - reach <= other.bbox.2
@@ -1284,15 +1284,15 @@ impl<'a> Copper<'a> {
 /// copper by the full clearance failed at the pad's corner.
 ///
 /// A gap is a violation when it is under `clearance` less
-/// [`DRC_EPSILON_UM`], as kicad-cli's `clearance` check counts it.
-fn check_clearance(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], clearance: Um, out: &mut Vec<CheckResult>) {
+/// [`DRC_EPSILON_NM`], as kicad-cli's `clearance` check counts it.
+fn check_clearance(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], clearance: Nm, out: &mut Vec<CheckResult>) {
     let mut ok = true;
-    let need = clearance as f64 - DRC_EPSILON_UM;
+    let need = clearance as f64 - DRC_EPSILON_NM;
     let mut fail = |a: &Copper, b: &Copper, gap: f64| {
         ok = false;
         out.push(
             CheckResult::fail("routing_clearance", format!("{}/{}", a.label, b.label), format!("copper gap {gap:.0} µm < {clearance} µm"))
-                .with_detail(serde_json::json!({ "items": [a.item, b.item], "gap_um": gap, "clearance_um": clearance })),
+                .with_detail(serde_json::json!({ "items": [a.item, b.item], "gap_nm": gap, "clearance_nm": clearance })),
         );
     };
 
@@ -1392,7 +1392,7 @@ mod tests {
             package: Some(package.into()),
             footprint: None,
             pins: (1..=2).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(),
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -1413,7 +1413,7 @@ mod tests {
         let fpi = |id: &str, x| FootprintInstance { id: id.into(), at: Point { x, y: 5000 }, rot: 0, side: Side::Top, label: Default::default() };
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection { outline, footprints: vec![fpi("R1", 5000), fpi("C1", 10000)], modules: Vec::new() }),
@@ -1423,7 +1423,7 @@ mod tests {
         (design, model)
     }
 
-    fn track(net: &str, pts: &[(Um, Um)]) -> Track {
+    fn track(net: &str, pts: &[(Nm, Nm)]) -> Track {
         Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect(), arc_mid_offset: None }
     }
 
@@ -1523,7 +1523,7 @@ mod tests {
     use eda_model::footprint::{Footprint, Pad, PadKind, PadShape};
     use eda_model::ir::Millideg;
 
-    fn test_pad(number: &str, at: (Um, Um), size: (Um, Um), shape: PadShape) -> Pad {
+    fn test_pad(number: &str, at: (Nm, Nm), size: (Nm, Nm), shape: PadShape) -> Pad {
         Pad { opposite_side: false, ext: Default::default(), number: number.into(), at, size, shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
     }
 
@@ -1539,7 +1539,7 @@ mod tests {
             package: Some("PADTEST".into()),
             footprint: Some("PADTEST".into()),
             pins: pads.iter().map(|p| Pin { number: p.number.clone(), name: None, kind: PinKind::Passive }).collect(),
-            body_um: None,
+            body_nm: None,
             symbol: None,
             datasheet: None,
             edge: None,
@@ -1549,7 +1549,7 @@ mod tests {
         let outline = vec![Point { x: 0, y: 0 }, Point { x: 20000, y: 0 }, Point { x: 20000, y: 20000 }, Point { x: 0, y: 20000 }];
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection { outline, footprints: vec![FootprintInstance { id: "J1".into(), at: Point { x: 10000, y: 10000 }, rot: fp_rot, side, label: Default::default() }], modules: Vec::new() }),
@@ -1564,11 +1564,11 @@ mod tests {
     }
 
     /// A net-A track `t1` on `layer`, 200 wide.
-    fn a_track(layer: &str, pts: &[(Um, Um)]) -> Track {
+    fn a_track(layer: &str, pts: &[(Nm, Nm)]) -> Track {
         Track { id: "t1".into(), layer: layer.into(), ..track("A", pts) }
     }
 
-    fn a_via(at: (Um, Um)) -> Via {
+    fn a_via(at: (Nm, Nm)) -> Via {
         Via { id: "v1".into(), net: "A".into(), at: Point { x: at.0, y: at.1 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
@@ -1577,7 +1577,7 @@ mod tests {
     }
 
     /// The 45-degree line `x + y = c` on the net-A track, long enough to run past a pad at (10000, 10000).
-    fn diagonal(c: Um) -> Track {
+    fn diagonal(c: Nm) -> Track {
         a_track("F.Cu", &[(c - 12000, 12000), (12000, c - 12000)])
     }
 
@@ -1600,7 +1600,7 @@ mod tests {
         let round = || vec![test_pad("1", (0, 0), (1000, 1000), PadShape::Circle)];
         // Horizontal tracks below the pad's bottom edge (the pad's lowest copper is y = 10500): y = 10800 is 500 + 100 +
         // 200 from the centre, exactly the clearance; one micron closer is not.
-        let at = |y: Um| pad_fixture(round(), 0, Side::Top, routing_of(vec![a_track("F.Cu", &[(8000, y), (12000, y)])], vec![]));
+        let at = |y: Nm| pad_fixture(round(), 0, Side::Top, routing_of(vec![a_track("F.Cu", &[(8000, y), (12000, y)])], vec![]));
         let (d, m) = at(10800);
         assert_eq!(clearance_fails(&d, &m), 0, "exactly the clearance away is clear");
         let (d, m) = at(10799);
@@ -1652,15 +1652,15 @@ mod tests {
     fn a_rotated_pad_is_measured_where_it_really_is() {
         // A 1.6 x 0.4 mm bar turned 45 degrees, by its own rotation and, the same, by its footprint's. A track alongside the
         // bar's long edge, 560 um from its axis (260 um of air), crosses the bar's bounding square.
-        let along = |k: Um| a_track("F.Cu", &[(7000 + k, 7000), (13000 + k, 13000)]); // x - y = k, parallel to the bar
-        let k_for = |axis_um: f64| (axis_um * std::f64::consts::SQRT_2).round() as Um;
-        let by_pad_rot = |k: Um| {
+        let along = |k: Nm| a_track("F.Cu", &[(7000 + k, 7000), (13000 + k, 13000)]); // x - y = k, parallel to the bar
+        let k_for = |axis_nm: f64| (axis_nm * std::f64::consts::SQRT_2).round() as Nm;
+        let by_pad_rot = |k: Nm| {
             let mut pad = test_pad("1", (0, 0), (1600, 400), PadShape::Rect);
             pad.rot = 45_000;
             pad_fixture(vec![pad], 0, Side::Top, routing_of(vec![along(k)], vec![]))
         };
-        let by_footprint_rot = |k: Um| pad_fixture(vec![test_pad("1", (0, 0), (1600, 400), PadShape::Rect)], 45_000, Side::Top, routing_of(vec![along(k)], vec![]));
-        for make in [&by_pad_rot as &dyn Fn(Um) -> (Design, ConstraintModel), &by_footprint_rot] {
+        let by_footprint_rot = |k: Nm| pad_fixture(vec![test_pad("1", (0, 0), (1600, 400), PadShape::Rect)], 45_000, Side::Top, routing_of(vec![along(k)], vec![]));
+        for make in [&by_pad_rot as &dyn Fn(Nm) -> (Design, ConstraintModel), &by_footprint_rot] {
             let (d, m) = make(k_for(560.0));
             assert_eq!(clearance_fails(&d, &m), 0, "260 um of air beside the bar: {:?}", fails(&d, &m, "routing_clearance"));
             let (d, m) = make(k_for(450.0));
@@ -1679,13 +1679,13 @@ mod tests {
         pad.ext = PadShapeExt { trapezoid_delta: Some((0, 800)), ..Default::default() };
         let pads = || vec![pad.clone()];
         // A vertical track whose left edge is 200 um from the bottom right corner (1400, 500): exactly the clearance, then a micron less.
-        let vertical = |x: Um| routing_of(vec![a_track("F.Cu", &[(10000 + x, 8000), (10000 + x, 12000)])], vec![]);
+        let vertical = |x: Nm| routing_of(vec![a_track("F.Cu", &[(10000 + x, 8000), (10000 + x, 12000)])], vec![]);
         let (d, m) = pad_fixture(pads(), 0, Side::Top, vertical(1700));
         assert_eq!(clearance_fails(&d, &m), 0, "{:?}", fails(&d, &m, "routing_clearance"));
         let (d, m) = pad_fixture(pads(), 0, Side::Top, vertical(1699));
         assert_eq!(clearance_fails(&d, &m), 1, "a micron under the clearance from the wide side's corner");
         // The narrow side: a horizontal track above the top edge (y = -500): 200 um of air, then a micron less.
-        let horizontal = |y: Um| routing_of(vec![a_track("F.Cu", &[(7000, 10000 + y), (13000, 10000 + y)])], vec![]);
+        let horizontal = |y: Nm| routing_of(vec![a_track("F.Cu", &[(7000, 10000 + y), (13000, 10000 + y)])], vec![]);
         let (d, m) = pad_fixture(pads(), 0, Side::Top, horizontal(-800));
         assert_eq!(clearance_fails(&d, &m), 0);
         let (d, m) = pad_fixture(pads(), 0, Side::Top, horizontal(-799));
@@ -1696,7 +1696,7 @@ mod tests {
             let (ux, uy) = (-800.0 / 1280.625, -1000.0 / 1280.625);
             let off = air + 100.0;
             let (cx, cy) = (1000.0 + nx * off, 0.0 + ny * off);
-            let pt = |t: f64| ((10000.0 + cx + ux * t).round() as Um, (10000.0 + cy + uy * t).round() as Um);
+            let pt = |t: f64| ((10000.0 + cx + ux * t).round() as Nm, (10000.0 + cy + uy * t).round() as Nm);
             routing_of(vec![a_track("F.Cu", &[pt(-2500.0), pt(2500.0)])], vec![])
         };
         let (d, m) = pad_fixture(pads(), 0, Side::Top, alongside(260.0));
@@ -1720,9 +1720,9 @@ mod tests {
         pad.ext = PadShapeExt { chamfer_ratio: Some(0.4), chamfer_corners: ChamferCorners { top_left: true, ..Default::default() }, ..Default::default() };
         // The track on x + y = c is |c - 20000 + 600| / sqrt 2 from the face: 250 um of air is 350 um from its axis.
         let air = |a: f64| 20000.0 - 600.0 - (a + 100.0) * std::f64::consts::SQRT_2;
-        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, routing_of(vec![diagonal(air(250.0).round() as Um)], vec![]));
+        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, routing_of(vec![diagonal(air(250.0).round() as Nm)], vec![]));
         assert_eq!(clearance_fails(&d, &m), 0, "250 um from the cut face (the square corner at (-500, -500) is 67 um nearer): {:?}", fails(&d, &m, "routing_clearance"));
-        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, routing_of(vec![diagonal(air(150.0).round() as Um)], vec![]));
+        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, routing_of(vec![diagonal(air(150.0).round() as Nm)], vec![]));
         assert_eq!(clearance_fails(&d, &m), 1, "150 um from the face");
         // The corner that is not cut is square: the same track beside the bottom right corner is as close as a rectangle's.
         let (d, m) = pad_fixture(vec![pad], 0, Side::Top, routing_of(vec![diagonal(21202)], vec![]));
@@ -1737,14 +1737,14 @@ mod tests {
         let line = Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 2000, y: 0 } };
         let mut pad = test_pad("1", (0, 0), (600, 600), PadShape::Custom);
         pad.ext = PadShapeExt { custom: Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![PadPrimitive { shape: line, proxy: false }] }), ..Default::default() };
-        let vertical = |x: Um| routing_of(vec![a_track("F.Cu", &[(10000 + x, 8000), (10000 + x, 12000)])], vec![]);
+        let vertical = |x: Nm| routing_of(vec![a_track("F.Cu", &[(10000 + x, 8000), (10000 + x, 12000)])], vec![]);
         // 100 + 200 + 2100: the track's edge is exactly the clearance from the line's end.
         let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, vertical(2400));
         assert_eq!(clearance_fails(&d, &m), 0, "{:?}", fails(&d, &m, "routing_clearance"));
         let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, vertical(2399));
         assert_eq!(clearance_fails(&d, &m), 1, "a micron under the clearance from the end of the basic shape, 2 mm from the anchor");
         // Beside the line, 200 um of air from its side (y = -100 - 200 - 100).
-        let horizontal = |y: Um| routing_of(vec![a_track("F.Cu", &[(11000, 10000 + y), (13000, 10000 + y)])], vec![]);
+        let horizontal = |y: Nm| routing_of(vec![a_track("F.Cu", &[(11000, 10000 + y), (13000, 10000 + y)])], vec![]);
         let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, horizontal(-400));
         assert_eq!(clearance_fails(&d, &m), 0);
         let (d, m) = pad_fixture(vec![pad], 0, Side::Top, horizontal(-399));
@@ -1772,7 +1772,7 @@ mod tests {
     #[test]
     fn two_round_pads_of_different_nets_are_measured_by_their_outlines() {
         // Pads 1 and 2 are 1 mm circles 1556 um apart on the diagonal: 556 um of air. Their bounding squares are 141 um apart.
-        let two = |dx: Um, dy: Um| vec![test_pad("1", (0, 0), (1000, 1000), PadShape::Circle), test_pad("2", (dx, dy), (1000, 1000), PadShape::Circle)];
+        let two = |dx: Nm, dy: Nm| vec![test_pad("1", (0, 0), (1000, 1000), PadShape::Circle), test_pad("2", (dx, dy), (1000, 1000), PadShape::Circle)];
         let (d, m) = pad_fixture(two(1100, 1100), 0, Side::Top, routing_of(vec![], vec![]));
         assert_eq!(clearance_fails(&d, &m), 0, "{:?}", fails(&d, &m, "routing_clearance"));
         // 150 um of air between them is not enough.

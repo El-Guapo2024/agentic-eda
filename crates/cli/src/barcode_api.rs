@@ -67,13 +67,13 @@ pub fn key(b: &Barcode, text: &str) -> String {
         b.kind.file_name(),
         ecc,
         b.layer,
-        b.width_um,
-        b.height_um,
-        b.text_height_um,
+        b.width_nm,
+        b.height_nm,
+        b.text_height_nm,
         b.show_text,
         b.knockout,
-        b.margin_x_um,
-        b.margin_y_um,
+        b.margin_x_nm,
+        b.margin_y_nm,
         b.angle,
         text.len(),
         text
@@ -140,7 +140,7 @@ fn lone_barcode(b: &Barcode, text: &str) -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "barcode".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -264,16 +264,16 @@ mod tests {
             at: Point { x: 5_000, y: 5_000 },
             angle: 0,
             layer: "F.SilkS".into(),
-            width_um: 10_000,
-            height_um: 10_000,
+            width_nm: 10_000,
+            height_nm: 10_000,
             text: text.into(),
-            text_height_um: 1_500,
+            text_height_nm: 1_500,
             kind: BarcodeKind::Qr,
             ecc: eda_model::barcode::EccLevel::L,
             show_text: true,
             knockout: false,
-            margin_x_um: 0,
-            margin_y_um: 0,
+            margin_x_nm: 0,
+            margin_y_nm: 0,
         }
     }
 
@@ -285,16 +285,16 @@ mod tests {
         moved.id = "bar_b".into();
         assert_eq!(key(&a, "HELLO"), key(&moved, "HELLO"));
         for change in [
-            Box::new(|b: &mut Barcode| b.width_um = 12_000) as Box<dyn Fn(&mut Barcode)>,
-            Box::new(|b| b.height_um = 12_000),
+            Box::new(|b: &mut Barcode| b.width_nm = 12_000) as Box<dyn Fn(&mut Barcode)>,
+            Box::new(|b| b.height_nm = 12_000),
             Box::new(|b| b.angle = 90_000),
             Box::new(|b| b.layer = "B.SilkS".into()),
             Box::new(|b| b.show_text = false),
             Box::new(|b| b.knockout = true),
-            Box::new(|b| b.margin_x_um = 500),
+            Box::new(|b| b.margin_x_nm = 500),
             Box::new(|b| b.kind = BarcodeKind::DataMatrix),
             Box::new(|b| b.ecc = eda_model::barcode::EccLevel::H),
-            Box::new(|b| b.text_height_um = 2_000),
+            Box::new(|b| b.text_height_nm = 2_000),
         ] {
             let mut c = a.clone();
             change(&mut c);

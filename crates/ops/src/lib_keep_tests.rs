@@ -37,7 +37,7 @@ fn props(lib_id: &str, power: bool, unit_count: u32, units_locked: Option<bool>,
     }
 }
 
-fn smd_pad(number: &str, x: Um) -> LibraryPad {
+fn smd_pad(number: &str, x: Nm) -> LibraryPad {
     let mut p: LibraryPad = serde_json::from_value(serde_json::json!({ "number": number, "at": { "x": x, "y": 0 }, "size": [1000, 600], "shape": "rect", "kind": "smd" })).expect("a pad");
     p.layers = vec!["F.Cu".into(), "F.Mask".into()];
     p

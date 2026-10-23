@@ -242,7 +242,7 @@ pub fn derive_single_sheet(model: &ConstraintModel, opts: &EngineOptions, module
         ..Default::default()
     };
     let mut design = Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: opts.engine_version.clone(), intent_hash: opts.intent_hash.clone(), seed: opts.seed, stage_hashes: Vec::new() },
         schematic: Some(sec),
         nets: None,
@@ -344,7 +344,7 @@ pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modu
     papers.insert(String::new(), root.paper);
 
     let mut design = Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: opts.engine_version.clone(), intent_hash: opts.intent_hash.clone(), seed: opts.seed, stage_hashes: Vec::new() },
         schematic: Some(root_section),
         nets: None,

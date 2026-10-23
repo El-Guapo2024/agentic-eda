@@ -56,7 +56,7 @@ fn pin(number: &str, kind: PinKind) -> Pin {
 }
 
 fn part(reference: &str, package: &str, pins: Vec<Pin>) -> Part {
-    Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: Some(package.into()), footprint: Some(package.into()), pins, body_um: None, symbol: None, datasheet: None, edge: None }
+    Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: Some(package.into()), footprint: Some(package.into()), pins, body_nm: None, symbol: None, datasheet: None, edge: None }
 }
 
 fn model_net(name: &str, pins: &[&str]) -> ModelNet {
@@ -85,7 +85,7 @@ pub(super) fn sample_board() -> (Design, ConstraintModel) {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,

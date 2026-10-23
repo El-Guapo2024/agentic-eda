@@ -302,13 +302,13 @@ struct Tally {
     items: usize,
     exact: usize,
     /// items whose only differences are lengths finer than the micrometre
-    sub_um: usize,
+    sub_nm: usize,
     by_category: BTreeMap<String, (usize, Vec<String>)>,
 }
 
 impl Tally {
     fn new() -> Self {
-        Tally { items: 0, exact: 0, sub_um: 0, by_category: BTreeMap::new() }
+        Tally { items: 0, exact: 0, sub_nm: 0, by_category: BTreeMap::new() }
     }
 
     fn add(&mut self, item: &str, original: &[Sx], ours: &[Sx], report: bool) {
@@ -318,7 +318,7 @@ impl Tally {
             if diff(original, ours, false).is_empty() {
                 self.exact += 1;
             } else {
-                self.sub_um += 1;
+                self.sub_nm += 1;
             }
             return;
         }
@@ -341,7 +341,7 @@ impl Tally {
     }
 
     fn print(&self, what: &str) {
-        eprintln!("{what}: {} items, {} identical, {} identical to the micrometre, {} differ", self.items, self.exact, self.sub_um, self.items - self.exact - self.sub_um);
+        eprintln!("{what}: {} items, {} identical, {} identical to the micrometre, {} differ", self.items, self.exact, self.sub_nm, self.items - self.exact - self.sub_nm);
         for (c, (n, ex)) in &self.by_category {
             eprintln!("  {n:>3} items  {c}");
             for e in ex {

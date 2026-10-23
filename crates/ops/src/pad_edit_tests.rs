@@ -15,7 +15,7 @@ fn pad(v: serde_json::Value) -> LibraryPad {
     serde_json::from_value(v).unwrap()
 }
 
-fn line(layer: &str, a: (Um, Um), b: (Um, Um), width: Um) -> Shape {
+fn line(layer: &str, a: (Nm, Nm), b: (Nm, Nm), width: Nm) -> Shape {
     Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: width, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
 }
 

@@ -94,7 +94,7 @@ fn zen_globals(gb: &mut GlobalsBuilder) {
             package,
             footprint: None,
             pins,
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         });
         Ok(NoneType)
@@ -181,7 +181,7 @@ pub fn import_zen(path: &Path) -> Result<ConstraintModel, Vec<CheckResult>> {
         }
     };
 
-    let model = ConstraintModel {
+    let model = ConstraintModel { schema: eda_model::INTENT_SCHEMA_VERSION,
         parts,
         nets,
         clusters,

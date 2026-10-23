@@ -25,7 +25,7 @@ pub(crate) fn preview(dir: &Path, body: &[u8]) -> Value {
         Ok(loaded) => loaded,
         Err(e) => return fail(crate::board::reasons(&e)),
     };
-    let mut board = eda_ops::Board::new(design, &model, meta.snap_um, meta.spacing_um);
+    let mut board = eda_ops::Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
     match board.apply(&cmd) {
         Ok(()) => json!({ "ok": true, "pads": [] }),
         Err(failures) => match failures.iter().find(|c| c.check == "ops_swap_unselected_pads") {

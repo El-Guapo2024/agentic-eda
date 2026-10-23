@@ -61,7 +61,7 @@ fn chart_of(d: &Design) -> (Table, DrillChart) {
 /// the micrometre the IR holds them in (KiCad lays them out in nanometres from margins of 1.0025 mm; so does `autosize`, `TableCell::margin_nm`).
 fn assert_same_chart(tag: &str, ours: &Design, kicad: &Design) {
     let ((t, c), (kt, kc)) = (chart_of(ours), chart_of(kicad));
-    let cells = |t: &Table| t.cells.iter().map(|x| (x.text.clone(), x.style.h_align, x.style.height_um, x.margins)).collect::<Vec<_>>();
+    let cells = |t: &Table| t.cells.iter().map(|x| (x.text.clone(), x.style.h_align, x.style.height_nm, x.margins)).collect::<Vec<_>>();
     assert_eq!(cells(&t), cells(&kt), "{tag}: the cells");
     assert_eq!((t.col_count(), t.row_count(), t.at), (kt.col_count(), kt.row_count(), kt.at), "{tag}: the grid");
     assert_eq!(t.col_widths, kt.col_widths, "{tag}: column widths against kicad-cli's");

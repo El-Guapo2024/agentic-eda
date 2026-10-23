@@ -12,7 +12,7 @@
 
 use crate::direction45::{AngleType, CornerMode, Direction45};
 use eda_drc::kimath::Seg;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 
 /// Micrometres to the nanometres KiCad computes in.
 const NM: i64 = 1000;
@@ -64,7 +64,7 @@ impl MouseTrailTracer {
     }
 
     /// `SetTolerance`: the track width.
-    pub fn set_tolerance(&mut self, tolerance: Um) {
+    pub fn set_tolerance(&mut self, tolerance: Nm) {
         self.tolerance = tolerance * NM;
     }
 
@@ -90,7 +90,7 @@ impl MouseTrailTracer {
     }
 
     /// `GetTrailLeadVector`: from the first point of the trail to its last, micrometres.
-    pub fn trail_lead_vector(&self) -> (Um, Um) {
+    pub fn trail_lead_vector(&self) -> (Nm, Nm) {
         if self.trail.len() < 2 {
             (0, 0)
         } else {
@@ -396,7 +396,7 @@ fn simplify(chain: &mut Vec<Point>, closed: bool) {
 mod tests {
     use super::*;
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 
@@ -404,7 +404,7 @@ mod tests {
         Point { x: x * NM, y: y * NM }
     }
 
-    fn tracer(tolerance: Um, init: Direction45) -> MouseTrailTracer {
+    fn tracer(tolerance: Nm, init: Direction45) -> MouseTrailTracer {
         // `LINE_PLACER::Start`
         let mut t = MouseTrailTracer::new();
         t.clear();

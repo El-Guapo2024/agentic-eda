@@ -3,7 +3,7 @@ use super::*;
 use eda_model::ir::Provenance;
 use eda_model::sch_clipboard::{PasteMode, SchFragment};
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -13,7 +13,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -27,7 +27,7 @@ fn symbol(id: &str, lib_id: &str, value: &str, at: Point) -> SymbolInstance {
     SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit: 1, value: value.into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
 }
 
-fn wire(pts: &[(Um, Um)]) -> Wire {
+fn wire(pts: &[(Nm, Nm)]) -> Wire {
     Wire { id: String::new(), net: String::new(), pins: vec![], pts: pts.iter().map(|(x, y)| p(*x, *y)).collect(), bus: false }
 }
 
@@ -39,7 +39,7 @@ fn fragment(f: impl FnOnce(&mut SchematicSection)) -> SchFragment {
     SchFragment { section, lib_symbols, notes: vec![], sheet_screens: Default::default() }
 }
 
-fn paste(f: &SchFragment, dx: Um, dy: Um, mode: PasteMode) -> Cmd {
+fn paste(f: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode) -> Cmd {
     Cmd::PasteSch { fragment: f.clone(), dx, dy, mode }
 }
 
@@ -55,10 +55,10 @@ fn a_paste_adds_every_kind_of_item_translated_with_new_ids_and_no_locks_as_one_c
         s.symbols.push(symbol("R1", "Device:R", "10k", p(100_000, 50_000)));
         s.wires.push(wire(&[(100_000, 53_810), (110_000, 53_810), (110_000, 60_000)]));
         s.labels.push(NetLabel { id: "lbl_old".into(), net: "SDA".into(), at: p(110_000, 60_000), kind: LabelKind::Local });
-        s.texts.push(SchematicText { id: String::new(), content: "note".into(), at: p(90_000, 40_000), angle: 90_000, size_um: 1_270 });
+        s.texts.push(SchematicText { id: String::new(), content: "note".into(), at: p(90_000, 40_000), angle: 90_000, size_nm: 1_270 });
         s.no_connects.push(NoConnect { id: String::new(), at: p(120_000, 50_000), pin: "R9.1".into() });
         s.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(130_000, 50_000) });
-        s.lines.push(SchLine { id: String::new(), pts: vec![p(0, 0), p(5_000, 5_000)], width_um: 250 });
+        s.lines.push(SchLine { id: String::new(), pts: vec![p(0, 0), p(5_000, 5_000)], width_nm: 250 });
         s.extras.locked.push("R1".into());
     });
     f.section.symbols[0].footprint = "Resistor_SMD:R_0603".into();
@@ -240,7 +240,7 @@ fn dual() -> LibrarySymbol {
 #[test]
 fn the_units_of_one_part_pasted_together_keep_one_number_and_a_unit_the_part_lacks_joins_it() {
     let m = ConstraintModel::default();
-    let unit = |u: u32, x: Um| SymbolInstance { unit: u, ..symbol("U1", "Test:Dual", "74HC00", p(x, 0)) };
+    let unit = |u: u32, x: Nm| SymbolInstance { unit: u, ..symbol("U1", "Test:Dual", "74HC00", p(x, 0)) };
     let mut f = fragment(|s| s.symbols.extend([unit(1, 0), unit(2, 20_000)]));
     f.lib_symbols.push(dual());
     // Both units of U1 are placed already: a copy of both is a part of its own.

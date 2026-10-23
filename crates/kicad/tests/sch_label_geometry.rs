@@ -23,7 +23,7 @@ fn model() -> ConstraintModel {
         package: None,
         footprint: Some("Foo:Bar".into()),
         pins,
-        body_um: None,
+        body_nm: None,
         symbol: symbol.map(String::from),
         datasheet: None,
         edge: None,
@@ -43,9 +43,9 @@ fn cases() -> Vec<(LabelKind, LabelSpin, LabelLook)> {
         for (s, spin) in spins.iter().enumerate() {
             let look = match (k + s) % 4 {
                 0 => LabelLook::default(),
-                1 => LabelLook { size_um: 2_000, bold: false, italic: false, auto_rotate: false },
-                2 => LabelLook { size_um: 0, bold: true, italic: true, auto_rotate: false },
-                _ => LabelLook { size_um: 1_000, bold: true, italic: false, auto_rotate: false },
+                1 => LabelLook { size_nm: 2_000, bold: false, italic: false, auto_rotate: false },
+                2 => LabelLook { size_nm: 0, bold: true, italic: true, auto_rotate: false },
+                _ => LabelLook { size_nm: 1_000, bold: true, italic: false, auto_rotate: false },
             };
             out.push((kind.clone(), *spin, look));
         }
@@ -168,7 +168,7 @@ fn with_styled_field() -> (eda_model::ir::Design, ConstraintModel) {
     let sch = design.schematic.as_mut().unwrap();
     let layout = sch.field_layout.get_mut("R1").expect("the derivation stores where the fields of R1 are");
     let value = layout.iter_mut().find(|p| p.name == "Value").unwrap();
-    value.size_um = 2_000;
+    value.size_nm = 2_000;
     value.bold = true;
     value.italic = true;
     value.name_shown = true;

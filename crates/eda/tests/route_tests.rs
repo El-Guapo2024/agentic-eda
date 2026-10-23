@@ -18,7 +18,7 @@ fn part(reference: &str, npins: usize) -> Part {
         pins: (1..=npins)
             .map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal })
             .collect(),
-        body_um: None, symbol: None, datasheet: None,
+        body_nm: None, symbol: None, datasheet: None,
         edge: None,
     }
 }
@@ -80,7 +80,7 @@ fn part_th(reference: &str, npins: usize) -> Part {
         pins: (1..=npins)
             .map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal })
             .collect(),
-        body_um: None, symbol: None, datasheet: None,
+        body_nm: None, symbol: None, datasheet: None,
         edge: None,
     }
 }
@@ -96,7 +96,7 @@ fn fp_side(id: &str, x: i64, y: i64, side: Side) -> FootprintInstance {
 fn design(outline: Vec<Point>, footprints: Vec<FootprintInstance>) -> Design {
     Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: provenance(),
         schematic: None, nets: None,
         placement: Some(PlacementSection { outline, footprints, modules: Vec::new() }),

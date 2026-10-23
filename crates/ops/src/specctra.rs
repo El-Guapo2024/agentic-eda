@@ -92,7 +92,7 @@ mod tests {
 
     fn model() -> ConstraintModel {
         let pin = |n: &str| Pin { number: n.into(), name: None, kind: PinKind::Passive };
-        let r1 = Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("10k".into()), package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![pin("1"), pin("2")], body_um: None, symbol: None, datasheet: None, edge: None };
+        let r1 = Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("10k".into()), package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![pin("1"), pin("2")], body_nm: None, symbol: None, datasheet: None, edge: None };
         ConstraintModel { parts: vec![r1], nets: vec![Net { name: "VCC".into(), pins: vec!["R1.1".into()] }, Net { name: "GND".into(), pins: vec!["R1.2".into()] }], ..Default::default() }
     }
 

@@ -411,7 +411,7 @@ mod tests {
 
     fn part(reference: &str, package: &str, nets: usize) -> Part {
         let pins = (1..=nets).map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect();
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: Some(package.into()), footprint: Some(package.into()), pins, body_um: None, symbol: None, datasheet: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: Some(package.into()), footprint: Some(package.into()), pins, body_nm: None, symbol: None, datasheet: None, edge: None }
     }
 
     /// A board with a footprint on a net, and one of every other kind of item, a group over three of them.
@@ -437,20 +437,20 @@ mod tests {
             text_position: DimensionTextPosition::Outside,
             keep_text_aligned: true,
             text_angle: 0,
-            text_size_um: 1_000,
+            text_size_nm: 1_000,
             stroke_width: 150,
             arrow_length: 1_000,
             extension_offset: 300,
             extension_height: 500,
             arrow_direction: ArrowDirection::Inward,
-            text_thickness_um: None,
+            text_thickness_nm: None,
         };
         let design = Design {
             footprint_library: None,
             sheet_contents: None,
             bus_aliases: vec![],
             symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -475,7 +475,7 @@ mod tests {
             }),
             drawings: Some(DrawingsSection {
                 shapes: vec![Shape::Segment { id: "shp_a".into(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: p(100_000, 130_000), end: p(110_000, 130_000) }],
-                texts: vec![Text { id: "txt_a".into(), content: "hello".into(), at: p(100_000, 140_000), angle: 90_000, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: TextJustify::Left, mirror: false }],
+                texts: vec![Text { id: "txt_a".into(), content: "hello".into(), at: p(100_000, 140_000), angle: 90_000, layer: "F.SilkS".into(), size_nm: 1_000, stroke_width: 150, justify: TextJustify::Left, mirror: false }],
                 dimensions: vec![dimension],
                 groups: vec![Group { id: "grp_a".into(), name: "block".into(), member_ids: vec!["shp_a".into(), "txt_a".into(), "zone_a".into()], design_block: String::new() }],
                 locked_ids: vec!["trk_a".into()],

@@ -19,7 +19,7 @@
 
 use eda_model::footprint::{PadShape, PlacedPad};
 use eda_model::pad_geom::PadPiece;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 
 use crate::items::ItemShape;
 
@@ -254,8 +254,8 @@ pub fn pieces_distance(a: &[PadPiece], b: &[PadPiece]) -> f64 {
 }
 
 /// Axis-aligned bounding box, `(x0, y0, x1, y1)`, of a point set.
-pub fn bbox_of(points: &[Point]) -> (Um, Um, Um, Um) {
-    let mut b = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
+pub fn bbox_of(points: &[Point]) -> (Nm, Nm, Nm, Nm) {
+    let mut b = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
     for p in points {
         b.0 = b.0.min(p.x);
         b.1 = b.1.min(p.y);
@@ -297,7 +297,7 @@ pub fn touches(a: &ItemShape, a_anchors: &[Point], b: &ItemShape, b_anchors: &[P
         }
         (ItemShape::Pad(pad), ItemShape::Segment { a, b, half_width }) | (ItemShape::Segment { a, b, half_width }, ItemShape::Pad(pad)) => {
             let c = closest_point_on_segment((pad.center.x as f64, pad.center.y as f64), (a.x as f64, a.y as f64), (b.x as f64, b.y as f64));
-            let cp = Point { x: c.0.round() as Um, y: c.1.round() as Um };
+            let cp = Point { x: c.0.round() as Nm, y: c.1.round() as Nm };
             pad.signed_distance(cp) <= *half_width || pad.signed_distance(*a) <= *half_width || pad.signed_distance(*b) <= *half_width
         }
 
@@ -353,7 +353,7 @@ fn zone_item_touch(poly: &[Point], item: &ItemShape, anchors: &[Point]) -> bool 
                 || (0..n).any(|i| {
                     let (p0, p1) = (poly[i], poly[(i + 1) % n]);
                     let c = closest_point_on_segment((pad.center.x as f64, pad.center.y as f64), (p0.x as f64, p0.y as f64), (p1.x as f64, p1.y as f64));
-                    pad.signed_distance(Point { x: c.0.round() as Um, y: c.1.round() as Um }) <= 0.0
+                    pad.signed_distance(Point { x: c.0.round() as Nm, y: c.1.round() as Nm }) <= 0.0
                 })
         }
     }
@@ -387,7 +387,7 @@ mod tests {
         let corner = |u: f64, v: f64| (u * s - v * s, u * s + v * s);
         let poly = PadPiece::Polygon(vec![corner(-500.0, -200.0), corner(500.0, -200.0), corner(500.0, 200.0), corner(-500.0, 200.0)]);
         let pad = PlacedPad { number: "1".into(), center: Point { x: 0, y: 0 }, size: (990, 990), through_hole: false, shape: eda_model::footprint::PadShape::Rect, roundrect_ratio: None, pieces: vec![poly] };
-        let seg = |x0: Um, y0: Um, x1: Um, y1: Um| ItemShape::Segment { a: Point { x: x0, y: y0 }, b: Point { x: x1, y: y1 }, half_width: 25.0 };
+        let seg = |x0: Nm, y0: Nm, x1: Nm, y1: Nm| ItemShape::Segment { a: Point { x: x0, y: y0 }, b: Point { x: x1, y: y1 }, half_width: 25.0 };
         // Across the box's corner at (450, -450), 0.45 mm off the long axis: no copper there.
         assert!(!touches(&ItemShape::Pad(pad.clone()), &[], &seg(300, -480, 480, -300), &[]));
         // Across the far end of the long axis.
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn circle_pads_measure_center_distance_minus_radii() {
-        let pad = |x: Um, y: Um, d: Um| PlacedPad { number: "1".into(), center: Point { x, y }, size: (d, d), through_hole: false, shape: eda_model::footprint::PadShape::Circle, roundrect_ratio: None, pieces: Vec::new() };
+        let pad = |x: Nm, y: Nm, d: Nm| PlacedPad { number: "1".into(), center: Point { x, y }, size: (d, d), through_hole: false, shape: eda_model::footprint::PadShape::Circle, roundrect_ratio: None, pieces: Vec::new() };
         let a = pad(0, 0, 1000);
         let b = pad(3000, 0, 1000);
         // centers 3000 apart, radii 500 each -> gap 2000.

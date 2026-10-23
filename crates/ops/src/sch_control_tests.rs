@@ -2,7 +2,7 @@
 use super::*;
 use eda_model::ir::Provenance;
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -12,7 +12,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -22,7 +22,7 @@ fn empty_design() -> Design {
     }
 }
 
-fn place(b: &mut Board<'_>, id: &str, lib_id: &str, unit: u32, x: Um) {
+fn place(b: &mut Board<'_>, id: &str, lib_id: &str, unit: u32, x: Nm) {
     b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: lib_id.into(), at: p(x, 10_000), rot_millideg: 0, value: String::new(), footprint: String::new(), unit }).unwrap();
 }
 
@@ -94,7 +94,7 @@ fn a_label_or_text_changes_its_text_and_keeps_its_id_and_place() {
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, 100, 300);
     b.apply(&Cmd::AddLabel { net: "DATA0".into(), at: p(5_000, 5_000), kind: eda_model::ir::LabelKind::Local }).unwrap();
-    b.apply(&Cmd::AddSchText { content: "Rev A".into(), at: p(9_000, 9_000), angle_millideg: 0, size_um: 1270 }).unwrap();
+    b.apply(&Cmd::AddSchText { content: "Rev A".into(), at: p(9_000, 9_000), angle_millideg: 0, size_nm: 1270 }).unwrap();
     // the studio loads the design fresh for every verb, which hands out the ids; do the same here
     let mut design = b.design().clone();
     design.assign_missing_ids();
@@ -185,7 +185,7 @@ fn incrementing_annotations_moves_the_references_together_and_carries_the_pins()
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, 100, 300);
     for (i, r) in ["R1", "R2", "R3", "C1"].iter().enumerate() {
-        place(&mut b, r, "Device:R", 1, i as Um * 10_000);
+        place(&mut b, r, "Device:R", 1, i as Nm * 10_000);
     }
     b.apply(&Cmd::IncrementAnnotations { start: "R2".into(), increment: 1 }).unwrap();
     let mut ids: Vec<String> = symbols(&b).into_iter().map(|s| s.id).collect();
@@ -202,7 +202,7 @@ fn incrementing_annotations_refuses_a_collision_a_negative_number_and_leaves_a_b
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, 100, 300);
     for (i, r) in ["R1", "R2", "R3"].iter().enumerate() {
-        place(&mut b, r, "Device:R", 1, i as Um * 10_000);
+        place(&mut b, r, "Device:R", 1, i as Nm * 10_000);
     }
     let ids = |b: &Board<'_>| {
         let mut ids: Vec<String> = symbols(b).into_iter().map(|s| s.id).collect();

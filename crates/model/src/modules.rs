@@ -656,7 +656,7 @@ mod tests {
         Pin { number: number.into(), name: Some(name.into()), kind }
     }
     fn part(reference: &str, value: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(value.into()), package: None, footprint: None, symbol: None, datasheet: None, pins, body_um: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(value.into()), package: None, footprint: None, symbol: None, datasheet: None, pins, body_nm: None, edge: None }
     }
     fn two(reference: &str, value: &str) -> Part {
         part(reference, value, vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Passive)])

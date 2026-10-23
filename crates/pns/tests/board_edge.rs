@@ -4,7 +4,7 @@
 //! inside the clearance and kicad-cli reported `copper_edge_clearance` on a shoved track (seen on `mcu30`).
 
 use eda_drc::kimath::Shape as Shape2;
-use eda_model::ir::{Design, DrawingsSection, PlacementSection, Point, Provenance, RoutingSection, Shape, Track, Um};
+use eda_model::ir::{Design, DrawingsSection, PlacementSection, Point, Provenance, RoutingSection, Shape, Track, Nm};
 use eda_model::{ConstraintModel, NetClass};
 use eda_pns::from_ir::build_node;
 use eda_pns::item::{net_of, Item};
@@ -14,7 +14,7 @@ use eda_pns::router::Router;
 use eda_pns::settings::{Mode, RoutingSettings};
 use eda_pns::shove::shove_line;
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -30,7 +30,7 @@ fn board(outline: bool, tracks: Vec<Track>) -> (Design, ConstraintModel) {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -58,7 +58,7 @@ fn edges(node: &Node) -> Vec<(Point, Point)> {
 }
 
 /// The least gap between a track of `width` along `pts` and the outline.
-fn gap_to_outline(pts: &[Point], width: Um) -> f64 {
+fn gap_to_outline(pts: &[Point], width: Nm) -> f64 {
     let outline = [p(0, 0), p(20_000, 0), p(20_000, 20_000), p(0, 20_000)];
     let mut best = f64::MAX;
     for w in pts.windows(2) {
@@ -89,7 +89,7 @@ fn the_outline_is_one_edge_solid_per_side_on_every_copper_layer() {
 #[test]
 fn copper_keeps_the_boards_edge_clearance_from_the_outline_not_its_net_classs() {
     // A 200 um track whose copper is `gap` from the bottom edge (y = 0): its centreline is at y = gap + 100.
-    let near = |gap: Um, model: &ConstraintModel| {
+    let near = |gap: Nm, model: &ConstraintModel| {
         let (design, _) = board(true, vec![]);
         let (node, layers) = build_node(&design, model);
         let shape = Shape2::Stadium { a: p(5_000, gap + 100), b: p(15_000, gap + 100), r: 100 };
@@ -106,7 +106,7 @@ fn copper_keeps_the_boards_edge_clearance_from_the_outline_not_its_net_classs() 
     assert_eq!(near(600, &default), (false, false));
     // The board's own setting (`min_copper_edge_clearance`) is what counts.
     let mut tight = ConstraintModel::default();
-    tight.board.copper_edge_clearance_um = Some(250);
+    tight.board.copper_edge_clearance_nm = Some(250);
     assert_eq!(near(300, &tight), (false, false), "300 um is outside a 250 um setting");
     assert_eq!(near(200, &tight), (true, true));
     // A net class that asks for more copper-to-copper clearance does not move the edge.
@@ -118,7 +118,7 @@ fn copper_keeps_the_boards_edge_clearance_from_the_outline_not_its_net_classs() 
 /// GND runs along y = 1000 (copper 900..1100, 900 um from the bottom edge). SIG comes down x = 10000 from y = 8000 and
 /// pushes it toward the edge: the track moves to 400 um (200 clearance + both half widths) above SIG's tip. The edge's
 /// 500 um stops it at SIG's tip y = 1000: its copper is then at 500.
-fn pushed_toward_the_edge(outline: bool, tip: Um) -> Option<Vec<Point>> {
+fn pushed_toward_the_edge(outline: bool, tip: Nm) -> Option<Vec<Point>> {
     let gnd = track("gnd", "GND", "F.Cu", &[p(2_000, 1_000), p(18_000, 1_000)]);
     let (design, model) = board(outline, vec![gnd]);
     let (node, layers) = build_node(&design, &model);
@@ -196,7 +196,7 @@ fn a_head_that_would_end_inside_the_clearance_is_marked_and_a_pad_free_one_is_no
 fn board_with_an_arc_and_a_hole() -> (Design, ConstraintModel) {
     let edge = |s: Shape| s;
     let line = |a: Point, b: Point| edge(Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, start: a, end: b });
-    let (mid_x, mid_y) = (15_000 + (5_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as Um, 15_000 + (5_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as Um);
+    let (mid_x, mid_y) = (15_000 + (5_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as Nm, 15_000 + (5_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as Nm);
     let shapes = vec![
         line(p(0, 0), p(20_000, 0)),
         line(p(20_000, 0), p(20_000, 15_000)),
@@ -227,17 +227,17 @@ fn an_arc_edge_and_a_cutout_are_obstacles_like_the_outer_edge() {
 
     // Copper keeps the board's 0.5 mm from the hole's rim, as it does from the outer edge: a 200 um track 400 um from the ring is in the
     // way, one 520 um from it is not.
-    let near_hole = |gap: Um| {
+    let near_hole = |gap: Nm| {
         let shape = Shape2::Stadium { a: p(11_000 + gap + 100, 9_000), b: p(11_000 + gap + 100, 11_000), r: 100 };
         ["F.Cu", "B.Cu"].map(|l| !node.all_colliding(&shape, &net_of("SIG"), LayerRange::single(layers.index_of(l).unwrap()), &model.board, &[]).is_empty())
     };
     assert_eq!(near_hole(400), [true, true]);
     assert_eq!(near_hole(520), [false, false]);
     // ... and from the corner's arc.
-    let near_corner = |gap: Um| {
+    let near_corner = |gap: Nm| {
         // On the diagonal, `gap` inside the arc's 5 mm radius round (15, 15).
         let r = 5_000.0 - gap as f64 - 100.0;
-        let c = p(15_000 + (r * std::f64::consts::FRAC_1_SQRT_2) as Um, 15_000 + (r * std::f64::consts::FRAC_1_SQRT_2) as Um);
+        let c = p(15_000 + (r * std::f64::consts::FRAC_1_SQRT_2) as Nm, 15_000 + (r * std::f64::consts::FRAC_1_SQRT_2) as Nm);
         let shape = Shape2::Stadium { a: c, b: c, r: 100 };
         !node.all_colliding(&shape, &net_of("SIG"), LayerRange::single(layers.index_of("F.Cu").unwrap()), &model.board, &[]).is_empty()
     };

@@ -7,18 +7,19 @@
 //! board left at whatever outline the intent declared ships two to three
 //! times larger than it has to be.
 
+use crate::units::NM_PER_MM;
 use crate::footprint::placed_keepout;
-use crate::ir::{Design, Point, Um};
+use crate::ir::{Design, Point, Nm};
 use crate::ConstraintModel;
 use std::collections::BTreeSet;
 
-/// Margin, µm, kept between the outermost part and a trimmed edge.
-pub const TRIM_MARGIN_UM: Um = 1500;
+/// Margin, nm, kept between the outermost part and a trimmed edge.
+pub const TRIM_MARGIN_NM: Nm = 1_500_000;
 
-/// Courtyard-to-edge gap, µm, at which a fixed (edge) connector is pinned.
-/// Under the placement gate's `EDGE_CONNECTOR_MAX_GAP_UM` (1500) with room
+/// Courtyard-to-edge gap, nm, at which a fixed (edge) connector is pinned.
+/// Under the placement gate's `EDGE_CONNECTOR_MAX_GAP_NM` (1500) with room
 /// for the board's copper edge clearance (500) and a track beside the pads.
-pub const EDGE_PIN_GAP_UM: Um = 700;
+pub const EDGE_PIN_GAP_NM: Nm = 700_000;
 
 /// Sum of every part's keep-out area (courtyard + label), µm².
 pub fn keepout_area(design: &Design, model: &ConstraintModel) -> f64 {
@@ -27,7 +28,7 @@ pub fn keepout_area(design: &Design, model: &ConstraintModel) -> f64 {
 }
 
 /// Cut blank bands off the sides of a rectangular outline that hold no
-/// pinned connector, keeping [`TRIM_MARGIN_UM`] beyond the outermost
+/// pinned connector, keeping [`TRIM_MARGIN_NM`] beyond the outermost
 /// keep-out. Parts keep their board coordinates (shifted when a min side
 /// moves). `None` when nothing is worth trimming (< 2 mm).
 /// Shave blank bands off any board edge that holds no pinned connector,
@@ -63,23 +64,23 @@ pub fn trim_empty_edges(design: &Design, model: &ConstraintModel, pinned: &BTree
     );
     // An edge with a pinned connector on it is not trimmed.
     let near = |k: (i64, i64, i64, i64), edge: u8| match edge {
-        0 => k.0 - x0 < 2 * EDGE_PIN_GAP_UM,
-        1 => x1 - k.2 < 2 * EDGE_PIN_GAP_UM,
-        2 => k.1 - y0 < 2 * EDGE_PIN_GAP_UM,
-        _ => y1 - k.3 < 2 * EDGE_PIN_GAP_UM,
+        0 => k.0 - x0 < 2 * EDGE_PIN_GAP_NM,
+        1 => x1 - k.2 < 2 * EDGE_PIN_GAP_NM,
+        2 => k.1 - y0 < 2 * EDGE_PIN_GAP_NM,
+        _ => y1 - k.3 < 2 * EDGE_PIN_GAP_NM,
     };
     let held = |edge: u8| kos.iter().any(|(p, k)| *p && near(*k, edge));
     let mut n = (x0, y0, x1, y1);
-    if !held(0) && used.0 - x0 > TRIM_MARGIN_UM + 2000 { n.0 = used.0 - TRIM_MARGIN_UM; }
-    if !held(1) && x1 - used.2 > TRIM_MARGIN_UM + 2000 { n.2 = used.2 + TRIM_MARGIN_UM; }
-    if !held(2) && used.1 - y0 > TRIM_MARGIN_UM + 2000 { n.1 = used.1 - TRIM_MARGIN_UM; }
-    if !held(3) && y1 - used.3 > TRIM_MARGIN_UM + 2000 { n.3 = used.3 + TRIM_MARGIN_UM; }
+    if !held(0) && used.0 - x0 > TRIM_MARGIN_NM + 2_000_000 { n.0 = used.0 - TRIM_MARGIN_NM; }
+    if !held(1) && x1 - used.2 > TRIM_MARGIN_NM + 2_000_000 { n.2 = used.2 + TRIM_MARGIN_NM; }
+    if !held(2) && used.1 - y0 > TRIM_MARGIN_NM + 2_000_000 { n.1 = used.1 - TRIM_MARGIN_NM; }
+    if !held(3) && y1 - used.3 > TRIM_MARGIN_NM + 2_000_000 { n.3 = used.3 + TRIM_MARGIN_NM; }
     if n == (x0, y0, x1, y1) {
         return None;
     }
     // Whole millimetres, origin back at the old min corner.
-    let w = ((n.2 - n.0) as f64 / 1000.0).ceil() as i64 * 1000;
-    let h = ((n.3 - n.1) as f64 / 1000.0).ceil() as i64 * 1000;
+    let w = ((n.2 - n.0) as f64 / NM_PER_MM as f64).ceil() as i64 * NM_PER_MM;
+    let h = ((n.3 - n.1) as f64 / NM_PER_MM as f64).ceil() as i64 * NM_PER_MM;
     let (dx, dy) = (n.0 - x0, n.1 - y0);
     let mut out = design.clone();
     let p = out.placement.as_mut()?;
@@ -87,7 +88,7 @@ pub fn trim_empty_edges(design: &Design, model: &ConstraintModel, pinned: &BTree
     for f in &mut p.footprints {
         f.at = Point { x: f.at.x - dx, y: f.at.y - dy };
     }
-    eprintln!("cypress: trimmed blank edges, board {}x{} -> {}x{} mm", (x1 - x0) / 1000, (y1 - y0) / 1000, w / 1000, h / 1000);
+    eprintln!("cypress: trimmed blank edges, board {}x{} -> {}x{} mm", (x1 - x0) / NM_PER_MM, (y1 - y0) / NM_PER_MM, w / NM_PER_MM, h / NM_PER_MM);
     Some(out)
 }
 
@@ -127,8 +128,8 @@ pub fn fit_outline(design: &Design, model: &ConstraintModel, util: f64, scale_fl
         return out;
     }
     // Round the new size up to whole millimetres.
-    let w = ((((x1 - x0) as f64) * scale / 1000.0).ceil() * 1000.0) as i64;
-    let h = ((((y1 - y0) as f64) * scale / 1000.0).ceil() * 1000.0) as i64;
+    let w = ((((x1 - x0) as f64) * scale / 1e6).ceil() * 1e6) as i64;
+    let h = ((((y1 - y0) as f64) * scale / 1e6).ceil() * 1e6) as i64;
     pl.outline = vec![Point { x: x0, y: y0 }, Point { x: x0 + w, y: y0 }, Point { x: x0 + w, y: y0 + h }, Point { x: x0, y: y0 + h }];
     // Parts placed on the old outline start at the new centre; Cypress
     // spreads them.
@@ -192,8 +193,8 @@ pub fn sized_for_parts(model: &ConstraintModel, like: &[Point], density: f64) ->
         return None;
     }
     let scale = (want / (w * h)).sqrt();
-    let nw = ((w * scale / 1000.0).ceil() * 1000.0) as i64;
-    let nh = ((h * scale / 1000.0).ceil() * 1000.0) as i64;
+    let nw = ((w * scale / 1e6).ceil() * 1e6) as i64;
+    let nh = ((h * scale / 1e6).ceil() * 1e6) as i64;
     if nw <= 0 || nh <= 0 {
         return None;
     }
@@ -214,7 +215,7 @@ pub fn sized_for_parts(model: &ConstraintModel, like: &[Point], density: f64) ->
 /// [`fit_outline`] cannot do this: it shrinks an outline that exists, and
 /// handed a placement with none it returns the placement unchanged.
 pub fn square_for_parts(model: &ConstraintModel, density: f64) -> Option<Vec<Point>> {
-    let unit = [Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 1000 }, Point { x: 0, y: 1000 }];
+    let unit = [Point { x: 0, y: 0 }, Point { x: NM_PER_MM, y: 0 }, Point { x: NM_PER_MM, y: NM_PER_MM }, Point { x: 0, y: NM_PER_MM }];
     let sized = sized_for_parts(model, &unit, density)?;
     let widest = model
         .parts
@@ -226,7 +227,7 @@ pub fn square_for_parts(model: &ConstraintModel, density: f64) -> Option<Vec<Poi
         })
         .max()
         .unwrap_or(0);
-    let side = sized[1].x.max((widest + 1000 + 999) / 1000 * 1000);
+    let side = sized[1].x.max((widest + NM_PER_MM + NM_PER_MM - 1) / NM_PER_MM * NM_PER_MM);
     Some(vec![Point { x: 0, y: 0 }, Point { x: side, y: 0 }, Point { x: side, y: side }, Point { x: 0, y: side }])
 }
 
@@ -247,7 +248,7 @@ mod tests {
                 package: Some((*pkg).into()),
                 footprint: Some((*pkg).into()),
                 pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
-                body_um: None, symbol: None, datasheet: None,
+                body_nm: None, symbol: None, datasheet: None,
                 edge: None,
             })
             .collect();
@@ -259,7 +260,7 @@ mod tests {
         let m = model(&["0603", "0603", "SOT-23", "SOIC-8"]);
         // The shrink-only fitter has nothing to shrink.
         let empty = Design {
-            schema: 1,
+            schema: crate::ir::SCHEMA_VERSION,
             provenance: crate::ir::Provenance { engine_version: "0".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -273,11 +274,11 @@ mod tests {
         let o = square_for_parts(&m, 0.25).expect("a square");
         let side = o[1].x;
         assert_eq!(o, vec![Point { x: 0, y: 0 }, Point { x: side, y: 0 }, Point { x: side, y: side }, Point { x: 0, y: side }]);
-        assert_eq!(side % 1000, 0, "whole millimetres");
+        assert_eq!(side % 1_000_000, 0, "whole millimetres");
         // The smallest whole-millimetre square the parts fill no more than a quarter of.
         let area = intrinsic_part_area(&m);
-        assert!(area / (side as f64).powi(2) <= 0.25, "{side} um is too small");
-        assert!(area / ((side - 1000) as f64).powi(2) > 0.25, "{side} um is bigger than it needs to be");
+        assert!(area / (side as f64).powi(2) <= 0.25, "{side} nm is too small");
+        assert!(area / ((side - 1_000_000) as f64).powi(2) > 0.25, "{side} nm is bigger than it needs to be");
     }
 
     #[test]
@@ -286,7 +287,7 @@ mod tests {
         let m = model(&["PINHEADER-10"]);
         let o = square_for_parts(&m, 0.25).expect("a square");
         let (hw, hh) = m.footprint_of(&m.parts[0]).unwrap().courtyard_half();
-        assert!(o[1].x >= 2 * hw.max(hh) + 1000, "side {} for a part {} long", o[1].x, 2 * hw.max(hh));
+        assert!(o[1].x >= 2 * hw.max(hh) + 1_000_000, "side {} for a part {} long", o[1].x, 2 * hw.max(hh));
     }
 
     #[test]

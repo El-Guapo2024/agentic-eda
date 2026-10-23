@@ -7,7 +7,7 @@ use eda_model::ir::{Provenance, SchematicText};
 use eda_model::table::Table;
 use eda_model::table_edit::{CellEdit, TablePatch};
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -17,7 +17,7 @@ fn design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(eda_model::ir::SchematicSection { imported_from_kicad: true, ..Default::default() }),
         nets: None,
@@ -49,19 +49,19 @@ fn a_table_drawn_on_a_sheet_is_a_grid_of_sheet_cells_with_what_its_dialog_set() 
     let m = ConstraintModel::default();
     let mut b = Board::new(design(), &m, 100, 300);
     let patch = TablePatch { texts: Some(vec![vec!["a".into(), "b".into()]]), ..TablePatch::default() };
-    b.apply(&Cmd::SchTable(TableCmd::Draw { layer: String::new(), at: p(10_160, 20_320), cols: 2, rows: 1, cell_w_um: 25_400, cell_h_um: 5_080, line_width_um: 0, locked: true, patch })).unwrap();
+    b.apply(&Cmd::SchTable(TableCmd::Draw { layer: String::new(), at: p(10_160, 20_320), cols: 2, rows: 1, cell_w_nm: 25_400, cell_h_nm: 5_080, line_width_nm: 0, locked: true, patch })).unwrap();
     let (t, locked) = on_sheet(&b, |s| (s.extras.tables[0].clone(), s.extras.is_locked(&s.extras.tables[0].id)));
     assert!(t.id.starts_with("tbl_"), "{}", t.id);
     assert_eq!((t.col_count(), t.row_count(), t.at, t.layer.as_str()), (2, 1, p(10_160, 20_320), ""));
     assert_eq!(t.texts(), vec![vec!["a", "b"]]);
     // `SCH_TABLE( 0 )` and `SCH_TABLECELL`: a stroke of the default width, left and top 50 mil text, the margin of the constructor
-    assert_eq!((t.border.stroke.width_um, t.separators.stroke.width_um), (0, 0));
+    assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (0, 0));
     let c = t.cell(0, 0).unwrap();
-    assert_eq!((c.style.height_um, c.style.h_align, c.style.v_align, c.margins), (1_270, eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, [953; 4]));
+    assert_eq!((c.style.height_nm, c.style.h_align, c.style.v_align, c.margins), (1_270, eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, [953; 4]));
     assert!(locked);
     assert!(b.design().drawings.is_none(), "nothing went to the board");
     // refused: no size, the board's tables only
-    let bad = Cmd::SchTable(TableCmd::Draw { layer: String::new(), at: p(0, 0), cols: 0, rows: 1, cell_w_um: 1, cell_h_um: 1, line_width_um: 0, locked: false, patch: TablePatch::default() });
+    let bad = Cmd::SchTable(TableCmd::Draw { layer: String::new(), at: p(0, 0), cols: 0, rows: 1, cell_w_nm: 1, cell_h_nm: 1, line_width_nm: 0, locked: false, patch: TablePatch::default() });
     assert!(b.apply(&bad).is_err());
     let place = Cmd::SchTable(TableCmd::PlaceStackup { layer: "F.SilkS".into(), at: p(0, 0), units: None });
     assert!(b.apply(&place).is_err(), "a sheet has no stackup");
@@ -86,9 +86,9 @@ fn the_structure_edits_and_the_dialogs_work_on_a_sheets_table_as_on_a_boards() {
     let c = get(&b).cell(2, 1).unwrap().clone();
     assert_eq!((c.text.as_str(), c.style.bold, c.margins[0]), ("hello", true, 500));
     // Table Properties: the border and the lock; a layer is no property of a sheet's table
-    let patch = TablePatch { border: Some(eda_model::table_edit::BorderEdit { external: false, header: false, width_um: 300, style: Default::default() }), ..TablePatch::default() };
+    let patch = TablePatch { border: Some(eda_model::table_edit::BorderEdit { external: false, header: false, width_nm: 300, style: Default::default() }), ..TablePatch::default() };
     b.apply(&Cmd::SchTable(TableCmd::Set { id: id.clone(), layer: None, locked: Some(true), patch })).unwrap();
-    assert_eq!(get(&b).border.stroke.width_um, -1, "no border is a stroke that is not drawn");
+    assert_eq!(get(&b).border.stroke.width_nm, -1, "no border is a stroke that is not drawn");
     assert!(on_sheet(&b, |s| s.extras.is_locked(&id)));
     assert!(b.apply(&Cmd::SchTable(TableCmd::Set { id: id.clone(), layer: Some("F.SilkS".into()), locked: None, patch: TablePatch::default() })).is_err());
     // deleting every row deletes the table, and the lock goes with it
@@ -140,7 +140,7 @@ fn a_locked_table_does_not_move_and_a_table_can_be_locked_and_grouped_like_any_i
     let m = ConstraintModel::default();
     let mut b = Board::new(design(), &m, 100, 300);
     let id = add(&mut b, table(1, 2));
-    b.schematic_mut().unwrap().texts.push(SchematicText { id: "txt_a".into(), content: "a".into(), at: p(0, 0), angle: 0, size_um: 1_270 });
+    b.schematic_mut().unwrap().texts.push(SchematicText { id: "txt_a".into(), content: "a".into(), at: p(0, 0), angle: 0, size_nm: 1_270 });
     b.apply(&Cmd::SchEdit(sch_edit::SchCmd::SetLocked { ids: vec![id.clone()], locked: true })).unwrap();
     assert!(on_sheet(&b, |s| s.extras.is_locked(&id)));
     assert!(b.apply(&Cmd::SchMove(SchMoveCmd::Move { ids: vec![id.clone()], dx: 1_000, dy: 0, turns: vec![], about: None })).is_err(), "a locked item is left out, and nothing is left");

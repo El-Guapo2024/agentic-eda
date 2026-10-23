@@ -1,0 +1,2545 @@
+{
+  "schema": 1,
+  "provenance": {
+    "engine_version": "0.1.0",
+    "intent_hash": "",
+    "seed": 0
+  },
+  "schematic": {
+    "symbols": [
+      {
+        "id": "U1",
+        "at": {
+          "x": 52070,
+          "y": 73660
+        },
+        "rot": 0,
+        "mirrored": false,
+        "mirror_y": false,
+        "lib_id": "MCU_ST_STM32C0:STM32C011J_4-6_Mx",
+        "value": "STM32C011J_4-6_Mx",
+        "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+        "datasheet": "https://www.st.com/resource/en/datasheet/stm32c011j4.pdf"
+      },
+      {
+        "id": "R1",
+        "at": {
+          "x": 109220,
+          "y": 40640
+        },
+        "rot": 180000,
+        "mirrored": false,
+        "mirror_y": false,
+        "lib_id": "Device:R",
+        "value": "R"
+      }
+    ],
+    "wires": [
+      {
+        "id": "wire_8aa4ecc9678c",
+        "net": "${param}",
+        "pts": [
+          {
+            "x": 102870,
+            "y": 77470
+          },
+          {
+            "x": 90170,
+            "y": 77470
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_1ddae7db69d5",
+        "net": "G",
+        "pts": [
+          {
+            "x": 59690,
+            "y": 40640
+          },
+          {
+            "x": 59690,
+            "y": 53340
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_448bfdc5556f",
+        "net": "${param}",
+        "pts": [
+          {
+            "x": 139700,
+            "y": 77470
+          },
+          {
+            "x": 129540,
+            "y": 77470
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_663326d879e6",
+        "net": "G",
+        "pts": [
+          {
+            "x": 87630,
+            "y": 27940
+          },
+          {
+            "x": 80010,
+            "y": 27940
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_6f5d640c46c0",
+        "net": "${param}",
+        "pts": [
+          {
+            "x": 90170,
+            "y": 77470
+          },
+          {
+            "x": 90170,
+            "y": 63500
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_9d220bed75ad",
+        "net": "${param}",
+        "pts": [
+          {
+            "x": 139700,
+            "y": 63500
+          },
+          {
+            "x": 139700,
+            "y": 77470
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_4b331a28c69b",
+        "net": "G",
+        "pts": [
+          {
+            "x": 53340,
+            "y": 40640
+          },
+          {
+            "x": 59690,
+            "y": 40640
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_9f1ff1b640a5",
+        "net": "G",
+        "pts": [
+          {
+            "x": 80010,
+            "y": 27940
+          },
+          {
+            "x": 80010,
+            "y": 40640
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_450898967656",
+        "net": "B0",
+        "pts": [
+          {
+            "x": 53340,
+            "y": 38100
+          },
+          {
+            "x": 72390,
+            "y": 38100
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_1053f37f99eb",
+        "net": "G",
+        "pts": [
+          {
+            "x": 59690,
+            "y": 40640
+          },
+          {
+            "x": 80010,
+            "y": 40640
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_030c12f79463",
+        "net": "${param}",
+        "pts": [
+          {
+            "x": 90170,
+            "y": 63500
+          },
+          {
+            "x": 139700,
+            "y": 63500
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_679811a2a3df",
+        "net": "G",
+        "pts": [
+          {
+            "x": 59690,
+            "y": 53340
+          },
+          {
+            "x": 73660,
+            "y": 53340
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_673504a0fec6",
+        "net": "B[3..0]",
+        "pts": [
+          {
+            "x": 48260,
+            "y": 19050
+          },
+          {
+            "x": 58420,
+            "y": 19050
+          }
+        ],
+        "bus": true
+      },
+      {
+        "id": "wire_a223698c8590",
+        "net": "B[3..0]",
+        "pts": [
+          {
+            "x": 48260,
+            "y": 25400
+          },
+          {
+            "x": 48260,
+            "y": 19050
+          }
+        ],
+        "bus": true
+      },
+      {
+        "id": "wire_b419b2dc52d8",
+        "net": "B[3..0]",
+        "pts": [
+          {
+            "x": 25400,
+            "y": 25400
+          },
+          {
+            "x": 48260,
+            "y": 25400
+          }
+        ],
+        "bus": true
+      },
+      {
+        "id": "wire_54e17b1a6969",
+        "net": "B[3..0]",
+        "pts": [
+          {
+            "x": 58420,
+            "y": 19050
+          },
+          {
+            "x": 58420,
+            "y": 22860
+          }
+        ],
+        "bus": true
+      },
+      {
+        "id": "wire_cc3ba59e8ad0",
+        "net": "B[3..0]",
+        "pts": [
+          {
+            "x": 48260,
+            "y": 25400
+          },
+          {
+            "x": 50800,
+            "y": 25400
+          }
+        ],
+        "bus": true
+      },
+      {
+        "id": "wire_32657d1320f2",
+        "net": "B[3..0]",
+        "pts": [
+          {
+            "x": 58420,
+            "y": 15240
+          },
+          {
+            "x": 58420,
+            "y": 19050
+          }
+        ],
+        "bus": true
+      },
+      {
+        "id": "wire_4d5d151b5764",
+        "net": "B[3..0]",
+        "pts": [
+          {
+            "x": 50800,
+            "y": 25400
+          },
+          {
+            "x": 50800,
+            "y": 38100
+          }
+        ],
+        "bus": true
+      }
+    ],
+    "labels": [
+      {
+        "id": "lbl_1d8f46728a95",
+        "net": "B0",
+        "at": {
+          "x": 72390,
+          "y": 38100
+        }
+      },
+      {
+        "id": "lbl_2c5e25e510d4",
+        "net": "B1",
+        "at": {
+          "x": 72390,
+          "y": 40640
+        }
+      },
+      {
+        "id": "lbl_e8f09ad72a1c",
+        "net": "B[3..0]",
+        "at": {
+          "x": 25400,
+          "y": 25400
+        }
+      },
+      {
+        "id": "lbl_af13474b909a",
+        "net": "G",
+        "at": {
+          "x": 73660,
+          "y": 53340
+        },
+        "kind": {
+          "scope": "global",
+          "shape": "input"
+        }
+      },
+      {
+        "id": "lbl_6157484a6d61",
+        "net": "HL",
+        "at": {
+          "x": 87630,
+          "y": 27940
+        },
+        "kind": {
+          "scope": "hierarchical",
+          "shape": "input"
+        }
+      }
+    ],
+    "texts": [
+      {
+        "id": "txt_1b9c8546d6b6",
+        "content": "Some text",
+        "at": {
+          "x": 132334,
+          "y": 31750
+        },
+        "angle": 90000,
+        "size_um": 1905
+      },
+      {
+        "id": "txt_8376b84ec2ed",
+        "content": "A link",
+        "at": {
+          "x": 130302,
+          "y": 29210
+        },
+        "angle": 0,
+        "size_um": 1905
+      }
+    ],
+    "no_connects": [
+      {
+        "id": "nc_3e00b26dceca",
+        "at": {
+          "x": 72390,
+          "y": 38100
+        },
+        "pin": ""
+      }
+    ],
+    "bus_entries": [
+      {
+        "id": "00b02596-bd33-4fff-9ef5-ece809b842ff",
+        "at": {
+          "x": 50800,
+          "y": 35560
+        },
+        "size": {
+          "x": 2540,
+          "y": 2540
+        }
+      },
+      {
+        "id": "68535d27-d64d-4df4-9c14-1081156b6342",
+        "at": {
+          "x": 50800,
+          "y": 38100
+        },
+        "size": {
+          "x": 2540,
+          "y": 2540
+        }
+      }
+    ],
+    "junctions": [
+      {
+        "id": "jct_620f8c17281c",
+        "at": {
+          "x": 58420,
+          "y": 19050
+        }
+      },
+      {
+        "id": "jct_a28009818ad6",
+        "at": {
+          "x": 48260,
+          "y": 25400
+        }
+      },
+      {
+        "id": "jct_1b418bccafbf",
+        "at": {
+          "x": 59690,
+          "y": 40640
+        }
+      }
+    ],
+    "lines": [
+      {
+        "id": "sln_62057e9ec57d",
+        "pts": [
+          {
+            "x": 165100,
+            "y": 19050
+          },
+          {
+            "x": 168910,
+            "y": 19050
+          }
+        ]
+      },
+      {
+        "id": "sln_7e3e4425017e",
+        "pts": [
+          {
+            "x": 168910,
+            "y": 19050
+          },
+          {
+            "x": 175260,
+            "y": 25400
+          }
+        ]
+      },
+      {
+        "id": "sln_2162cc259643",
+        "pts": [
+          {
+            "x": 175260,
+            "y": 25400
+          },
+          {
+            "x": 181610,
+            "y": 25400
+          }
+        ],
+        "width_um": 178
+      },
+      {
+        "id": "sln_a25a869cb5c6",
+        "pts": [
+          {
+            "x": 181610,
+            "y": 25400
+          },
+          {
+            "x": 187960,
+            "y": 19050
+          }
+        ],
+        "width_um": 508
+      },
+      {
+        "id": "sln_9e58979c7a21",
+        "pts": [
+          {
+            "x": 161290,
+            "y": 25400
+          },
+          {
+            "x": 165100,
+            "y": 25400
+          }
+        ]
+      },
+      {
+        "id": "sln_446288fdafc8",
+        "pts": [
+          {
+            "x": 187960,
+            "y": 19050
+          },
+          {
+            "x": 190500,
+            "y": 19050
+          }
+        ]
+      },
+      {
+        "id": "sln_5d8cd971da4c",
+        "pts": [
+          {
+            "x": 165100,
+            "y": 25400
+          },
+          {
+            "x": 165100,
+            "y": 19050
+          }
+        ]
+      }
+    ],
+    "extras": {
+      "label_fields": {
+        "lbl_1d8f46728a95": [
+          {
+            "name": "Netclass",
+            "text": "Data",
+            "italic": true
+          }
+        ]
+      },
+      "graphics": [
+        {
+          "id": "shp_9013cbe73ce4",
+          "shape": {
+            "type": "circle",
+            "center": {
+              "x": 175260,
+              "y": 50800
+            },
+            "radius_um": 4016
+          },
+          "line_style": "solid",
+          "fill": "color",
+          "fill_color": {
+            "r": 58,
+            "g": 104,
+            "b": 255,
+            "a": 255
+          }
+        },
+        {
+          "id": "shp_63754cc31a4e",
+          "shape": {
+            "type": "circle",
+            "center": {
+              "x": 157480,
+              "y": 63500
+            },
+            "radius_um": 4016
+          },
+          "line_style": "solid",
+          "fill": "color",
+          "fill_color": {
+            "r": 58,
+            "g": 104,
+            "b": 255,
+            "a": 255
+          }
+        },
+        {
+          "id": "shp_588c72580514",
+          "shape": {
+            "type": "bezier",
+            "start": {
+              "x": 162560,
+              "y": 34290
+            },
+            "c1": {
+              "x": 173990,
+              "y": 34290
+            },
+            "c2": {
+              "x": 162560,
+              "y": 31750
+            },
+            "end": {
+              "x": 176530,
+              "y": 31750
+            }
+          },
+          "width_um": 356,
+          "line_style": "dot",
+          "color": {
+            "r": 255,
+            "g": 89,
+            "b": 101,
+            "a": 255
+          }
+        },
+        {
+          "id": "shp_c7bfbd97b1cc",
+          "shape": {
+            "type": "circle",
+            "center": {
+              "x": 186690,
+              "y": 50800
+            },
+            "radius_um": 4016
+          },
+          "line_style": "solid",
+          "fill": "color",
+          "fill_color": {
+            "r": 0,
+            "g": 0,
+            "b": 0,
+            "a": 0
+          }
+        },
+        {
+          "id": "shp_d0ef75bd6d77",
+          "shape": {
+            "type": "circle",
+            "center": {
+              "x": 165100,
+              "y": 50800
+            },
+            "radius_um": 4016
+          }
+        },
+        {
+          "id": "shp_9e1c5d0c2ba5",
+          "shape": {
+            "type": "bezier",
+            "start": {
+              "x": 162560,
+              "y": 33020
+            },
+            "c1": {
+              "x": 173990,
+              "y": 33020
+            },
+            "c2": {
+              "x": 162560,
+              "y": 30480
+            },
+            "end": {
+              "x": 176530,
+              "y": 30480
+            }
+          }
+        },
+        {
+          "id": "shp_89fe0b262e35",
+          "shape": {
+            "type": "arc",
+            "start": {
+              "x": 173990,
+              "y": 40640
+            },
+            "mid": {
+              "x": 171715,
+              "y": 39905
+            },
+            "end": {
+              "x": 169779,
+              "y": 38501
+            }
+          },
+          "line_style": "solid",
+          "fill": "color",
+          "fill_color": {
+            "r": 45,
+            "g": 208,
+            "b": 203,
+            "a": 255
+          }
+        },
+        {
+          "id": "shp_8dae03c5d336",
+          "shape": {
+            "type": "arc",
+            "start": {
+              "x": 163291,
+              "y": 40101
+            },
+            "mid": {
+              "x": 169545,
+              "y": 37511
+            },
+            "end": {
+              "x": 175799,
+              "y": 40101
+            }
+          }
+        },
+        {
+          "id": "shp_60a8450b8e99",
+          "shape": {
+            "type": "rectangle",
+            "start": {
+              "x": 138430,
+              "y": 50800
+            },
+            "end": {
+              "x": 156210,
+              "y": 53340
+            }
+          },
+          "line_style": "solid",
+          "fill": "color",
+          "fill_color": {
+            "r": 255,
+            "g": 64,
+            "b": 87,
+            "a": 255
+          }
+        },
+        {
+          "id": "shp_73ecbf8fb011",
+          "shape": {
+            "type": "circle",
+            "center": {
+              "x": 167640,
+              "y": 63500
+            },
+            "radius_um": 4016
+          }
+        },
+        {
+          "id": "shp_be21fd7ec108",
+          "shape": {
+            "type": "circle",
+            "center": {
+              "x": 201930,
+              "y": 35560
+            },
+            "radius_um": 14028
+          },
+          "width_um": 457,
+          "line_style": "dash"
+        },
+        {
+          "id": "shp_5c50e8b31e22",
+          "shape": {
+            "type": "circle",
+            "center": {
+              "x": 146050,
+              "y": 63500
+            },
+            "radius_um": 4016
+          },
+          "line_style": "solid",
+          "fill": "color",
+          "fill_color": {
+            "r": 0,
+            "g": 0,
+            "b": 0,
+            "a": 0
+          }
+        },
+        {
+          "id": "shp_0920310ce747",
+          "shape": {
+            "type": "rectangle",
+            "start": {
+              "x": 194310,
+              "y": 63500
+            },
+            "end": {
+              "x": 176530,
+              "y": 60960
+            }
+          },
+          "line_style": "solid",
+          "fill": "color",
+          "fill_color": {
+            "r": 255,
+            "g": 64,
+            "b": 87,
+            "a": 255
+          }
+        },
+        {
+          "id": "tbox_b78d44fb2db8",
+          "shape": {
+            "type": "text_box",
+            "start": {
+              "x": 138430,
+              "y": 31750
+            },
+            "end": {
+              "x": 156210,
+              "y": 44450
+            },
+            "text": "Bigger\nMultiline\nText",
+            "size_um": 1270,
+            "h_align": "center",
+            "v_align": "center",
+            "margin_um": 953
+          },
+          "width_um": 51,
+          "line_style": "dash_dot",
+          "color": {
+            "r": 255,
+            "g": 50,
+            "b": 55,
+            "a": 255
+          },
+          "fill": "color",
+          "fill_color": {
+            "r": 255,
+            "g": 228,
+            "b": 206,
+            "a": 191
+          }
+        },
+        {
+          "id": "img_0b50f66d8e45",
+          "shape": {
+            "type": "image",
+            "at": {
+              "x": 36830,
+              "y": 39370
+            },
+            "scale_ppm": 1500000,
+            "data": "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAABHNCSVQICAgIfAhkiAAABG9JREFUaIHtmF1MHFUYht/vzP4VhBRqi25JoBtaxFLZdk110VqsolCKGFiEC1trWo2RmBi98O/WxAuNJCZtozdCvaAIFg0SCLVmrQLWQAotLUUb2MY0kKbpD43bsu7O5wXdZbezs8CwdMDwJOfifOfkm/ed8ztDzIxw3O46yypzUhEz9sqMrUScFmw7N3yRPj94hIL1nA0Z/G5NdWSCuENjDOohWa43jnHnw5WVvvBWEV4Z6GqqSjUn3ZAZLQyUEeFBgESwEEDMjFABKLx9YQrWEtgFQa3+tXRj4LfmXVENnO45WgsSR5hhWtAXOg8YZIGg1v7u7z4KxgQw9eaZ+W39pM0NAj7uP9lSCADC7a6zkBCH9RY1Z+RAs9vtNog7C3bRThs1iCl5lelqvmDGXr3FaIWBKiEztuotRCsM3iKmtsolCiFNzNxrcbNsQG+ov6tZcZcZGLyAb77twLXrN+ecUJIE7Lnr8dqeF2A0GuIiUhXCaNQRONyoTTwABAIy+gaG0dN7dl7aZsuSn0JRDeypKkLKyiRtCYWAIy8bzkc3zkvYbIm6BoIMDF7AF181RcRq9pVjS142AODs+VHUHmpE+DfFU/l2vFJdvEBy74Iwqlhl/G8AAc9lsDUVjS3HI9pyNmSGxAPAxofWYcc2B46f6A3FTnT3Iy83C/bc9YrnnRkaQefPf2DEcwkAsC7Tiud3PIZNOTbNHhQGvF92wtc3Al+CCYmYAKSpOBGhuvxZRYLKsqdx7k8PxsavhGL1De2wvW9FclJiKPZD+69o7eiKGK2hYQ+Ghj0oKcxHeen2qAKvvXpAVTxZzBmKNeC/OCXE5PXhDe8KlE5aYABhe74d6dbViiRGowH7d5dCkqZTTdz8B/UN7aH6maERhfhw2o51o3/wL1WhsSCHwxGR9c1bibD5pYhO4wZG+gcVSLKpX5vaOrtx9MdfNIlQFUeETyfUNxOymGXFCFwhWdHxAT9BPngs5sN2Fjphy7BqkKmO2oiFozBwWQTUssVMRETYv7sURBSzX7xRGDht9MNnmppCMgA5PQWWos24770XZ0yWtiYVZcVPQoj4nI+zeRlRzwH2TiIwfh2SNQVkmf/X5tCwB58daIjZ563XXVG33hl2IeUaAABKMMNgS4uLeADIyc5EWfE21fZdz+VHFT8bYp7E8ab31Hkc+rolVJckgZp9FcjLzdKWUO02ulDkZGdG1C1mk3bxd/h/3kaXEssG9GbZgN4seQML/N9jmtttfZB9fjzjM4diJpZwu60PAGApcWjKe88M3Gr+HQBQjGkDmJyOazWw5KfQsgG9EcwY01uEZhhjAiSf1FuHVphxSkigOr2FaEUYuVGsWJPYQQTfzN0XF0w8cdV7f4/IyiqelMEv6y1orkgkKgoKCvwCAOxOVxMT1+otarYQ0YebHi//CQjbRu1O1ztM/NLink7klZl3PuIs/yQYiTgH7E5XU8LqhGRiKmPI3wO4dM813g3jbwI3MQdK/OaMlZufcLWHN/8Hn21x2JwtA5oAAAAASUVORK5CYII="
+          }
+        },
+        {
+          "id": "img_0e1e6263e92d",
+          "shape": {
+            "type": "image",
+            "at": {
+              "x": 36830,
+              "y": 33020
+            },
+            "data": "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAADLklEQVRo3u2a20/TUBzH9+CFv4QHBEPYBgKyjFtA5GJAoiwQEzH6BHJRIgrijXgjmghoMFyD3NZWeDBGJGRc2oJx2nWJTyQ+GOK7D8b4AD/7G+myS9k61q5r3MMnOWvSk+/n9PTXc7oaAMDgi8PhOORmKAvPUIMuhtxwseR3OawcL90Jhdx+gmBIhqPJAf4TkYfZAvP6/eA23xZzLPFLOAkixZGcH5KD9BkIZnNvUEWSAhxD3oqm81gIiPAs1ekn4FonyqPtNJYCyFeaOOUR+Ga3H+EZ4o/eBFwM9dvpdB5WZPS1ERDuCXquTJj7FKFXAWHm2A1CY1uvAi6a/CEIEDtKdmoymcBoNHrAtirBfVBcQAwvkhBICPxPAuNDD4ME8JguBG7faAoKL9LT2SSrj82bnWHLcSCKCEwOP9k3vMjE0KP4Fai31YQVyMw0gyUvNyRdGRZtBHJzssMKyKEjLSchcCAabGf1LYA3se8aSIrhgQfALL0Jyfq169oIIHe7ru4rca+rJb7LaKhyOjPal1hKJAR8+bwyCy/6uj1gWzy+9mECGi+cj3+Byxdt3nDYFhdx+VZLUHiz2Rx/Argk8A3Y2tQoWXmwIt3vbok/ATkPpNrqClicf616eMUF8Or09rQBRxMxCa+oQPnpEliYHYhZcMUEcK53tF7xq0gxFWiw1eziel4ugQJTI081Ce4VCLcIC4eW4RMCyOjLXm0Fpkf7dnHFKBcpifq6GnhHvNJGQKkyileyvfkSrE/2w2p2JayeqIAv8yP6epBlGU0wk2L1bjY2mtv0JXAnNddvt7RcUK2+AEeTP6MRwBdWZaXFUJueBcvJVn8BAW55Wk2BbQPPkAuRnFRUaPWGx7Znj/BxChbTSyT3rM7JQdUEOMY+b3Cz5JlITsIRLyywehBfFzrH+yXDL6YWAbc0pZoAT1OVBodjLIlnyb9RjcTKHDB1jbCaUwUjKRZ4fOwktKdlQ3GGehsazLy19f7o3h/dtP2c3vbEHEvU+n1qwLPUc70ICOGfSX7sgVci2umkpgBmE0deUmDvc5uxJLyxsTpFWmLVEMAMWG3cDFGFcz4w7z9KpizQfnAidAAAAABJRU5ErkJggg=="
+          }
+        },
+        {
+          "id": "rarea_ddcb0a4d7319",
+          "shape": {
+            "type": "rule_area",
+            "pts": [
+              {
+                "x": 120650,
+                "y": 30480
+              },
+              {
+                "x": 100330,
+                "y": 30480
+              },
+              {
+                "x": 100330,
+                "y": 53340
+              },
+              {
+                "x": 104140,
+                "y": 57150
+              },
+              {
+                "x": 116840,
+                "y": 57150
+              },
+              {
+                "x": 120650,
+                "y": 53340
+              }
+            ]
+          },
+          "line_style": "dash"
+        },
+        {
+          "id": "dirl_154ebe3fd053",
+          "shape": {
+            "type": "directive",
+            "at": {
+              "x": 102870,
+              "y": 30480
+            },
+            "shape": "dot",
+            "pin_length_um": 3810,
+            "component_class": "Classy"
+          }
+        },
+        {
+          "id": "dirl_0b93555d0a71",
+          "shape": {
+            "type": "directive",
+            "at": {
+              "x": 82550,
+              "y": 27940
+            },
+            "shape": "round",
+            "pin_length_um": 2540
+          }
+        }
+      ],
+      "locked": [
+        "grp_55b1d71945b3",
+        "shp_0920310ce747",
+        "shp_5c50e8b31e22",
+        "shp_63754cc31a4e",
+        "shp_73ecbf8fb011"
+      ],
+      "label_spins": {
+        "lbl_1d8f46728a95": "left",
+        "lbl_2c5e25e510d4": "bottom",
+        "lbl_6157484a6d61": "right",
+        "lbl_af13474b909a": "right",
+        "lbl_e8f09ad72a1c": "right"
+      },
+      "strokes": {
+        "sln_2162cc259643": {
+          "style": "dash_dot"
+        },
+        "sln_7e3e4425017e": {
+          "style": "dot"
+        },
+        "sln_a25a869cb5c6": {
+          "style": "dash",
+          "color": {
+            "r": 255,
+            "g": 176,
+            "b": 0,
+            "a": 255
+          }
+        }
+      },
+      "junction_looks": {
+        "jct_620f8c17281c": {
+          "color": {
+            "r": 255,
+            "g": 0,
+            "b": 239,
+            "a": 255
+          }
+        },
+        "jct_a28009818ad6": {
+          "diameter_um": 813
+        }
+      },
+      "label_looks": {
+        "lbl_1d8f46728a95": {
+          "size_um": 1651
+        }
+      },
+      "text_justify": {
+        "txt_1b9c8546d6b6": {
+          "h": "right",
+          "v": "bottom"
+        }
+      },
+      "groups": [
+        {
+          "id": "grp_55b1d71945b3",
+          "name": "MyGroup",
+          "member_ids": [
+            "shp_0920310ce747",
+            "shp_5c50e8b31e22",
+            "shp_63754cc31a4e",
+            "shp_73ecbf8fb011"
+          ]
+        }
+      ]
+    },
+    "sheets": [
+      {
+        "id": "1d56ee61-b958-4d93-aec6-604a5d265d83",
+        "name": "Subsheet",
+        "file": "erc_test_dynamic_power_symbol_subsheet.kicad_sch",
+        "at": {
+          "x": 102870,
+          "y": 71120
+        },
+        "size": [
+          26670,
+          12700
+        ],
+        "pins": [
+          {
+            "id": "598621ab-604d-47a7-9d1f-c07a463fadd1",
+            "name": "${param}",
+            "shape": "input",
+            "at": {
+              "x": 102870,
+              "y": 77470
+            }
+          },
+          {
+            "id": "decf0de1-4f7d-46c2-8944-9032e4b059e9",
+            "name": "REF_NODE",
+            "shape": "input",
+            "at": {
+              "x": 129540,
+              "y": 77470
+            }
+          }
+        ],
+        "page": "2"
+      }
+    ],
+    "instance_overrides": [
+      {
+        "at": {
+          "x": 52070,
+          "y": 73660
+        },
+        "parent_sheet_instance_id": "d6ee7e6a-6570-43fd-93e6-b98f9cea3e37",
+        "reference": "U1",
+        "unit": 1
+      },
+      {
+        "at": {
+          "x": 109220,
+          "y": 40640
+        },
+        "parent_sheet_instance_id": "d6ee7e6a-6570-43fd-93e6-b98f9cea3e37",
+        "reference": "R1",
+        "unit": 1
+      }
+    ],
+    "imported_from_kicad": true
+  },
+  "nets": [
+    {
+      "name": "${param}",
+      "pins": [
+        "R201.1"
+      ]
+    },
+    {
+      "name": "REF${#}",
+      "pins": [
+        "R201.2"
+      ]
+    },
+    {
+      "name": "unconnected-(R1-Pad1)",
+      "pins": [
+        "R1.1"
+      ]
+    },
+    {
+      "name": "unconnected-(R1-Pad2)",
+      "pins": [
+        "R1.2"
+      ]
+    },
+    {
+      "name": "unconnected-(U1-PA0{slash}PA1{slash}PA2{slash}PF2-Pad4)",
+      "pins": [
+        "U1.4"
+      ]
+    },
+    {
+      "name": "unconnected-(U1-PA10{slash}PA12-Pad6)",
+      "pins": [
+        "U1.6"
+      ]
+    },
+    {
+      "name": "unconnected-(U1-PA13-Pad7)",
+      "pins": [
+        "U1.7"
+      ]
+    },
+    {
+      "name": "unconnected-(U1-PA14{slash}PB6{slash}PC15-Pad8)",
+      "pins": [
+        "U1.8"
+      ]
+    },
+    {
+      "name": "unconnected-(U1-PA8{slash}PA9{slash}PA11-Pad5)",
+      "pins": [
+        "U1.5"
+      ]
+    },
+    {
+      "name": "unconnected-(U1-PB7{slash}PC14-Pad1)",
+      "pins": [
+        "U1.1"
+      ]
+    },
+    {
+      "name": "unconnected-(U1-VDD-Pad2)",
+      "pins": [
+        "U1.2"
+      ]
+    },
+    {
+      "name": "unconnected-(U1-VSS-Pad3)",
+      "pins": [
+        "U1.3"
+      ]
+    }
+  ],
+  "placement": {
+    "outline": [
+      {
+        "x": 0,
+        "y": 0
+      },
+      {
+        "x": 100000,
+        "y": 0
+      },
+      {
+        "x": 100000,
+        "y": 80000
+      },
+      {
+        "x": 0,
+        "y": 80000
+      }
+    ],
+    "footprints": []
+  },
+  "symbol_library": {
+    "symbols": [
+      {
+        "lib_id": ".Project_Library:REF${#}",
+        "reference_prefix": "#PWR",
+        "description": "Power symbol creates a local label (not global) with name \"REF${#}\", where the text variable \"#\" is the current sheet number ",
+        "keywords": "local power",
+        "power": true,
+        "in_bom": true,
+        "on_board": true,
+        "pin_numbers_hidden": false,
+        "pin_names_hidden": false,
+        "pin_name_offset_mm": 0.0,
+        "has_alternate_body_style": false,
+        "graphics": [
+          {
+            "kind": "polyline",
+            "id": "sym_3844a164168f",
+            "unit": 1,
+            "pts": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": -1.905
+              },
+              {
+                "x": 1.27,
+                "y": -1.27
+              },
+              {
+                "x": 0.0,
+                "y": -2.54
+              },
+              {
+                "x": -1.27,
+                "y": -1.27
+              },
+              {
+                "x": 0.0,
+                "y": -1.905
+              }
+            ],
+            "stroke_mm": 0.0,
+            "fill": "outline"
+          }
+        ],
+        "pins": [
+          {
+            "id": "pin_5ce82493d55c",
+            "number": "1",
+            "name": "REF${#}",
+            "electrical_type": "power_in",
+            "shape": "line",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "angle_deg": 270.0,
+            "length_mm": 0.0,
+            "hidden": true,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27
+          }
+        ],
+        "published": true,
+        "fields": [
+          {
+            "name": "Reference",
+            "text": "#PWR",
+            "at": {
+              "x": 0.0,
+              "y": -6.35
+            },
+            "hidden": true
+          },
+          {
+            "name": "Value",
+            "text": "REF${#}",
+            "at": {
+              "x": 0.0,
+              "y": -3.81
+            }
+          },
+          {
+            "name": "Footprint",
+            "text": "",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          },
+          {
+            "name": "Datasheet",
+            "text": "",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          },
+          {
+            "name": "Description",
+            "text": "Power symbol creates a local label (not global) with name \"REF${#}\", where the text variable \"#\" is the current sheet number ",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          }
+        ]
+      },
+      {
+        "lib_id": "MCU_ST_STM32C0:STM32C011J_4-6_Mx",
+        "reference_prefix": "U1",
+        "description": "STMicroelectronics Arm Cortex-M0+ MCU, 16-32KB flash, 6KB RAM, 48 MHz, 2.0-3.6V, 6 GPIO, SO8N",
+        "keywords": "Arm Cortex-M0+ STM32C0 STM32C0x1",
+        "datasheet": "https://www.st.com/resource/en/datasheet/stm32c011j4.pdf",
+        "power": false,
+        "in_bom": true,
+        "on_board": true,
+        "pin_numbers_hidden": true,
+        "pin_names_hidden": false,
+        "pin_name_offset_mm": 0.508,
+        "has_alternate_body_style": false,
+        "footprint_filters": [
+          "SO*3.9x4.9mm*P1.27mm*"
+        ],
+        "graphics": [
+          {
+            "kind": "rectangle",
+            "id": "sym_e85bc13c8681",
+            "unit": 0,
+            "start": {
+              "x": -22.86,
+              "y": -10.16
+            },
+            "end": {
+              "x": 22.86,
+              "y": 10.16
+            },
+            "stroke_mm": 0.254,
+            "fill": "background"
+          }
+        ],
+        "pins": [
+          {
+            "id": "pin_9bf088611404",
+            "number": "1",
+            "name": "PB7/PC14",
+            "electrical_type": "bidirectional",
+            "shape": "line",
+            "at": {
+              "x": -25.4,
+              "y": 5.08
+            },
+            "angle_deg": 0.0,
+            "length_mm": 2.54,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27,
+            "alternates": [
+              {
+                "name": "I2C1_SCL (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2C1_SDA (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2C1_SDA (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "IR_OUT (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PB7",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PC14",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_OSCX_IN (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RTC_REFIN (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM16_CH1 (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM17_CH1 (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM17_CH1N (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_BKIN2 (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH4 (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_ETR (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_CH1 (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_CH2 (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_CH4 (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_RX (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_TX (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_CK (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_CTS (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_DE (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_NSS (PB7)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_RTS (PC14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              }
+            ]
+          },
+          {
+            "id": "pin_c01680029a10",
+            "number": "2",
+            "name": "VDD",
+            "electrical_type": "power_in",
+            "shape": "line",
+            "at": {
+              "x": 0.0,
+              "y": 12.7
+            },
+            "angle_deg": 270.0,
+            "length_mm": 2.54,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27
+          },
+          {
+            "id": "pin_7d2d65e64c3d",
+            "number": "3",
+            "name": "VSS",
+            "electrical_type": "power_in",
+            "shape": "line",
+            "at": {
+              "x": 0.0,
+              "y": -12.7
+            },
+            "angle_deg": 90.0,
+            "length_mm": 2.54,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27
+          },
+          {
+            "id": "pin_158c2f89f151",
+            "number": "4",
+            "name": "PA0/PA1/PA2/PF2",
+            "electrical_type": "bidirectional",
+            "shape": "line",
+            "at": {
+              "x": 25.4,
+              "y": 5.08
+            },
+            "angle_deg": 180.0,
+            "length_mm": 2.54,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27,
+            "alternates": [
+              {
+                "name": "ADC1_IN0 (PA0)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "ADC1_IN1 (PA1)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "ADC1_IN2 (PA2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2C1_SMBA (PA1)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2S1_CK (PA1)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2S1_SD (PA2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PA0",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PA1",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PA2",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PF2",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PWR_WKUP1 (PA0)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PWR_WKUP4 (PA2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_LSCO (PA2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_MCO (PF2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "SPI1_MOSI (PA2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "SPI1_SCK (PA1)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM16_CH1 (PA0)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM16_CH1N (PA2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM17_CH1 (PA1)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH1 (PA0)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH2 (PA1)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH3 (PA2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH4 (PF2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_ETR (PA2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_RX (PA1)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_TX (PA0)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_CK (PA1)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_CTS (PA0)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_DE (PA1)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_NSS (PA0)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_RTS (PA1)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_TX (PA2)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              }
+            ]
+          },
+          {
+            "id": "pin_8464e5738366",
+            "number": "5",
+            "name": "PA8/PA9/PA11",
+            "electrical_type": "bidirectional",
+            "shape": "line",
+            "at": {
+              "x": 25.4,
+              "y": 2.54
+            },
+            "angle_deg": 180.0,
+            "length_mm": 2.54,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27,
+            "alternates": [
+              {
+                "name": "ADC1_EXTI11 (PA11)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "ADC1_IN11 (PA11)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "ADC1_IN8 (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2C1_SCL (PA9)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2S1_MCK (PA11)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2S1_WS (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PA11",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PA8",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PA9",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_MCO (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_MCO (PA9)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_MCO_2 (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "SPI1_MISO (PA11)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "SPI1_NSS (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM14_CH1 (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_BKIN2 (PA11)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH1 (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH2 (PA9)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH2N (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH3N (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH4 (PA11)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_CH3 (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_CH4 (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_ETR (PA9)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_CTS (PA11)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_NSS (PA11)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_RX (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_TX (PA9)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_TX (PA8)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              }
+            ]
+          },
+          {
+            "id": "pin_373f4bd29fc6",
+            "number": "6",
+            "name": "PA10/PA12",
+            "electrical_type": "bidirectional",
+            "shape": "line",
+            "at": {
+              "x": 25.4,
+              "y": 0.0
+            },
+            "angle_deg": 180.0,
+            "length_mm": 2.54,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27,
+            "alternates": [
+              {
+                "name": "ADC1_IN12 (PA12)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2C1_SDA (PA10)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2S1_SD (PA12)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2S_CKIN (PA12)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PA10",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PA12",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_MCO_2 (PA10)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "SPI1_MOSI (PA12)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM17_BKIN (PA10)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH3 (PA10)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_ETR (PA12)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_CK (PA12)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_DE (PA12)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_RTS (PA12)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_RX (PA10)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              }
+            ]
+          },
+          {
+            "id": "pin_dd8e5c0fdacf",
+            "number": "7",
+            "name": "PA13",
+            "electrical_type": "bidirectional",
+            "shape": "line",
+            "at": {
+              "x": 25.4,
+              "y": -2.54
+            },
+            "angle_deg": 180.0,
+            "length_mm": 2.54,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27,
+            "alternates": [
+              {
+                "name": "ADC1_IN13",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "DEBUG_SWDIO",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "IR_OUT",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_ETR",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_RX",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              }
+            ]
+          },
+          {
+            "id": "pin_3178fbfa8a22",
+            "number": "8",
+            "name": "PA14/PB6/PC15",
+            "electrical_type": "open_emitter",
+            "shape": "edge_clock_high",
+            "at": {
+              "x": 26.67,
+              "y": -5.08
+            },
+            "angle_deg": 180.0,
+            "length_mm": 3.81,
+            "hidden": false,
+            "name_size_mm": 1.143,
+            "number_size_mm": 1.016,
+            "alternates": [
+              {
+                "name": "ADC1_IN14 (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "DEBUG_SWCLK (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2C1_SCL (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2C1_SMBA (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2S1_CK (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2S1_MCK (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2S1_SD (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "I2S1_WS (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PA14",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PB6",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PC15",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "PWR_WKUP3 (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_MCO_2 (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_OSC32_EN (PC15)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_OSCX_OUT (PC15)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "RCC_OSC_EN (PC15)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "SPI1_MISO (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "SPI1_MOSI (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "SPI1_NSS (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "SPI1_SCK (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM16_BKIN (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM16_CH1N (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM17_BKIN (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH1 (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH2 (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_CH3 (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM1_ETR (PC15)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_CH1 (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_CH2 (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_CH3 (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "TIM3_CH3 (PC15)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_CK (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_CK (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_CTS (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_DE (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_DE (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_NSS (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_RTS (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_RTS (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART1_TX (PB6)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_RX (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "USART2_TX (PA14)",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              }
+            ]
+          }
+        ],
+        "published": true,
+        "fields": [
+          {
+            "name": "Reference",
+            "text": "U1",
+            "at": {
+              "x": 2.1433,
+              "y": 15.24
+            },
+            "h_align": "left"
+          },
+          {
+            "name": "Value",
+            "text": "STM32C011J_4-6_Mx",
+            "at": {
+              "x": 2.1433,
+              "y": 12.7
+            },
+            "h_align": "left"
+          },
+          {
+            "name": "Footprint",
+            "text": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+            "at": {
+              "x": -22.86,
+              "y": -10.16
+            },
+            "hidden": true,
+            "h_align": "right"
+          },
+          {
+            "name": "Datasheet",
+            "text": "https://www.st.com/resource/en/datasheet/stm32c011j4.pdf",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          },
+          {
+            "name": "Description",
+            "text": "STMicroelectronics Arm Cortex-M0+ MCU, 16-32KB flash, 6KB RAM, 48 MHz, 2.0-3.6V, 6 GPIO, SO8N",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          }
+        ]
+      },
+      {
+        "lib_id": "PCM_4ms_Power-symbol:PWR_FLAG",
+        "reference_prefix": "#FLG",
+        "power": true,
+        "in_bom": true,
+        "on_board": true,
+        "pin_numbers_hidden": true,
+        "pin_names_hidden": true,
+        "pin_name_offset_mm": 0.0,
+        "has_alternate_body_style": false,
+        "graphics": [
+          {
+            "kind": "polyline",
+            "id": "sym_8fde8efa6c6a",
+            "unit": 0,
+            "pts": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 1.27
+              },
+              {
+                "x": -1.016,
+                "y": 1.905
+              },
+              {
+                "x": 0.0,
+                "y": 2.54
+              },
+              {
+                "x": 1.016,
+                "y": 1.905
+              },
+              {
+                "x": 0.0,
+                "y": 1.27
+              }
+            ],
+            "stroke_mm": 0.0,
+            "fill": "none"
+          }
+        ],
+        "pins": [
+          {
+            "id": "pin_8b0d96c8317e",
+            "number": "1",
+            "name": "pwr",
+            "electrical_type": "power_out",
+            "shape": "line",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "angle_deg": 90.0,
+            "length_mm": 0.0,
+            "unit": 0,
+            "body_style": 0,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27
+          }
+        ],
+        "published": true,
+        "fields": [
+          {
+            "name": "Reference",
+            "text": "#FLG",
+            "at": {
+              "x": 0.0,
+              "y": 1.905
+            },
+            "hidden": true
+          },
+          {
+            "name": "Value",
+            "text": "PWR_FLAG",
+            "at": {
+              "x": 0.0,
+              "y": 3.81
+            }
+          },
+          {
+            "name": "Footprint",
+            "text": "",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          },
+          {
+            "name": "Datasheet",
+            "text": "",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          },
+          {
+            "name": "Description",
+            "text": "",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          }
+        ]
+      }
+    ]
+  },
+  "sheet_contents": {
+    "erc_test_dynamic_power_symbol_subsheet.kicad_sch": {
+      "symbols": [
+        {
+          "id": "R201",
+          "at": {
+            "x": 60960,
+            "y": 56515
+          },
+          "rot": 90000,
+          "mirrored": false,
+          "mirror_y": false,
+          "lib_id": "Device:R",
+          "value": "0R",
+          "datasheet": "~"
+        }
+      ],
+      "wires": [
+        {
+          "id": "wire_fae6de35d63a",
+          "net": "${param}",
+          "pins": [
+            "R201.1"
+          ],
+          "pts": [
+            {
+              "x": 52070,
+              "y": 56515
+            },
+            {
+              "x": 57150,
+              "y": 56515
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_2f137a1a0a74",
+          "net": "${param}",
+          "pts": [
+            {
+              "x": 52070,
+              "y": 72390
+            },
+            {
+              "x": 46355,
+              "y": 72390
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_8d4c918a8d64",
+          "net": "${param}",
+          "pts": [
+            {
+              "x": 46355,
+              "y": 56515
+            },
+            {
+              "x": 52070,
+              "y": 56515
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_76cb92dafa62",
+          "net": "REF${#}",
+          "pins": [
+            "R201.2"
+          ],
+          "pts": [
+            {
+              "x": 64770,
+              "y": 56515
+            },
+            {
+              "x": 76200,
+              "y": 56515
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_1b4170fed19f",
+          "net": "REF${#}",
+          "pts": [
+            {
+              "x": 76200,
+              "y": 56515
+            },
+            {
+              "x": 76200,
+              "y": 62230
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_bb462428b112",
+          "net": "${param}",
+          "pts": [
+            {
+              "x": 52070,
+              "y": 56515
+            },
+            {
+              "x": 52070,
+              "y": 72390
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_af0340af14c8",
+          "net": "REF${#}",
+          "pts": [
+            {
+              "x": 76200,
+              "y": 51435
+            },
+            {
+              "x": 76200,
+              "y": 56515
+            }
+          ],
+          "bus": false
+        }
+      ],
+      "labels": [
+        {
+          "id": "lbl_5f00ea562684",
+          "net": "${param}",
+          "at": {
+            "x": 46355,
+            "y": 72390
+          },
+          "kind": {
+            "scope": "hierarchical",
+            "shape": "input"
+          }
+        },
+        {
+          "id": "lbl_0511e4bf5d1e",
+          "net": "REF_NODE",
+          "at": {
+            "x": 46355,
+            "y": 56515
+          },
+          "kind": {
+            "scope": "hierarchical",
+            "shape": "input"
+          }
+        }
+      ],
+      "power_symbols": [
+        {
+          "id": "#FLG0201",
+          "lib_id": "PCM_4ms_Power-symbol:PWR_FLAG",
+          "at": {
+            "x": 76200,
+            "y": 51435
+          },
+          "rot": 0,
+          "net": "PWR_FLAG",
+          "pin": ""
+        },
+        {
+          "id": "#PWR0201",
+          "lib_id": ".Project_Library:REF${#}",
+          "at": {
+            "x": 76200,
+            "y": 62230
+          },
+          "rot": 0,
+          "net": "REF${#}",
+          "pin": ""
+        }
+      ],
+      "junctions": [
+        {
+          "id": "jct_df774034306f",
+          "at": {
+            "x": 52070,
+            "y": 56515
+          }
+        },
+        {
+          "id": "jct_347e3ab6691f",
+          "at": {
+            "x": 76200,
+            "y": 56515
+          }
+        }
+      ],
+      "extras": {
+        "label_spins": {
+          "lbl_0511e4bf5d1e": "left",
+          "lbl_5f00ea562684": "left"
+        }
+      },
+      "title_block": {
+        "paper": "A5"
+      },
+      "imported_from_kicad": true
+    }
+  }
+}

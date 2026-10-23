@@ -28,7 +28,7 @@ const TOL: f64 = 3.0;
 
 /// Two drawn boxes, each of which already reaches half its own pen past its strokes, that go into one another by less than a pen's
 /// width (micrometres) touch: their strokes do not cross. Only deeper than this is an overlap.
-const CONTACT_UM: f64 = 100.0;
+const CONTACT_NM: f64 = 100.0;
 
 // ------------------------------------------------------------------------------------------------------- items
 
@@ -265,7 +265,7 @@ pub struct Overlap {
     pub b: String,
     pub kinds: (Kind, Kind),
     /// How deep the two boxes run into one another, micrometres.
-    pub depth_um: f64,
+    pub depth_nm: f64,
     pub at: Pt,
 }
 
@@ -292,7 +292,7 @@ impl SheetReport {
     pub fn render(&self) -> String {
         let mut s = format!("{}: {} items, {} overlap(s), {} outside the frame\n", self.file, self.items, self.overlaps.len(), self.outside.len());
         for o in &self.overlaps {
-            s.push_str(&format!("  overlap {:.2} mm at ({:.2}, {:.2}): {} / {}\n", o.depth_um / 1000.0, o.at.0 / 1000.0, o.at.1 / 1000.0, o.a, o.b));
+            s.push_str(&format!("  overlap {:.2} mm at ({:.2}, {:.2}): {} / {}\n", o.depth_nm / 1000.0, o.at.0 / 1000.0, o.at.1 / 1000.0, o.a, o.b));
         }
         for o in &self.outside {
             s.push_str(&format!("  outside ({}): {} [{:.2},{:.2} - {:.2},{:.2}]\n", o.why, o.what, o.rect.x0 / 1000.0, o.rect.y0 / 1000.0, o.rect.x1 / 1000.0, o.rect.y1 / 1000.0));
@@ -302,7 +302,7 @@ impl SheetReport {
 }
 
 /// The paper sizes KiCad names, landscape, in micrometres.
-fn paper_um(name: &str) -> Option<(f64, f64)> {
+fn paper_nm(name: &str) -> Option<(f64, f64)> {
     Some(match name {
         "A5" => (210_000.0, 148_000.0),
         "A4" => (297_000.0, 210_000.0),
@@ -575,7 +575,7 @@ pub fn items_of_sheet(text: &str) -> Result<(Vec<Item>, Option<(f64, f64)>), Str
             _ => {}
         }
     }
-    let paper = find(root, "paper").and_then(|p| txt(p, 1)).and_then(paper_um);
+    let paper = find(root, "paper").and_then(|p| txt(p, 1)).and_then(paper_nm);
     Ok((b.items, paper))
 }
 
@@ -716,10 +716,10 @@ fn segs_conflict(a: (Pt, Pt), b: (Pt, Pt)) -> Option<f64> {
 
 fn conflict(a: &Item, b: &Item) -> Option<f64> {
     match (a.seg, b.seg) {
-        (None, None) => a.rect.shared(&b.rect, TOL).map(|(w, h)| w.min(h)).filter(|d| *d > CONTACT_UM),
+        (None, None) => a.rect.shared(&b.rect, TOL).map(|(w, h)| w.min(h)).filter(|d| *d > CONTACT_NM),
         // a wire a pen's width or less inside a box only touches it
-        (Some(s), None) => seg_through(s, &b.rect.inflate(-CONTACT_UM)),
-        (None, Some(s)) => seg_through(s, &a.rect.inflate(-CONTACT_UM)),
+        (Some(s), None) => seg_through(s, &b.rect.inflate(-CONTACT_NM)),
+        (None, Some(s)) => seg_through(s, &a.rect.inflate(-CONTACT_NM)),
         (Some(s), Some(t)) => segs_conflict(s, t),
     }
 }
@@ -741,7 +741,7 @@ pub fn check_items(file: &str, items: &[Item], paper: Option<(f64, f64)>) -> She
             if let Some(depth) = conflict(a, b) {
                 let shared_x = (a.rect.x0.max(b.rect.x0) + a.rect.x1.min(b.rect.x1)) / 2.0;
                 let shared_y = (a.rect.y0.max(b.rect.y0) + a.rect.y1.min(b.rect.y1)) / 2.0;
-                report.overlaps.push(Overlap { a: a.what.clone(), b: b.what.clone(), kinds: (a.kind, b.kind), depth_um: depth, at: (shared_x, shared_y) });
+                report.overlaps.push(Overlap { a: a.what.clone(), b: b.what.clone(), kinds: (a.kind, b.kind), depth_nm: depth, at: (shared_x, shared_y) });
             }
         }
     }

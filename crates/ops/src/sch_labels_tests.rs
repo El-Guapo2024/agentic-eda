@@ -17,7 +17,7 @@ fn design(sch: SchematicSection) -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(sch),
         nets: None,
@@ -27,7 +27,7 @@ fn design(sch: SchematicSection) -> Design {
     }
 }
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -76,7 +76,7 @@ fn ok(b: &mut Board, cmd: SchCmd) {
 }
 
 fn place(net: &str, at: Point, kind: LabelKind, auto: Option<bool>, spin: Option<LabelSpin>) -> SchCmd {
-    SchCmd::PlaceLabel { net: net.into(), at, kind, spin, size_um: None, bold: None, italic: None, auto_rotate: auto }
+    SchCmd::PlaceLabel { net: net.into(), at, kind, spin, size_nm: None, bold: None, italic: None, auto_rotate: auto }
 }
 
 fn glob(shape: LabelShape) -> LabelKind {
@@ -132,11 +132,11 @@ fn a_label_nothing_overlaps_keeps_the_spin_it_has() {
 fn a_diagonal_line_counts_as_horizontal_up_to_45_degrees_and_as_vertical_beyond() {
     let mut s = section();
     // exactly 45 degrees down-right: "-45 < angle <= 45" is horizontal
-    s.lines.push(SchLine { id: "line_a".into(), pts: vec![p(0, 0), p(5_080, 5_080)], width_um: 0 });
+    s.lines.push(SchLine { id: "line_a".into(), pts: vec![p(0, 0), p(5_080, 5_080)], width_nm: 0 });
     // steeper: vertical
-    s.lines.push(SchLine { id: "line_b".into(), pts: vec![p(20_320, 0), p(22_860, 5_080)], width_um: 0 });
+    s.lines.push(SchLine { id: "line_b".into(), pts: vec![p(20_320, 0), p(22_860, 5_080)], width_nm: 0 });
     // exactly 45 degrees up-right is -45, which is not above -45: vertical
-    s.lines.push(SchLine { id: "line_c".into(), pts: vec![p(40_640, 5_080), p(45_720, 0)], width_um: 0 });
+    s.lines.push(SchLine { id: "line_c".into(), pts: vec![p(40_640, 5_080), p(45_720, 0)], width_nm: 0 });
     assert_eq!(spin_at(&s, p(5_080, 5_080), LabelSpin::Up), LabelSpin::Right);
     assert_eq!(spin_at(&s, p(22_860, 5_080), LabelSpin::Up), LabelSpin::Bottom);
     assert_eq!(spin_at(&s, p(45_720, 0), LabelSpin::Up), LabelSpin::Up, "ends at the top of an upward line");
@@ -147,7 +147,7 @@ fn a_diagonal_line_counts_as_horizontal_up_to_45_degrees_and_as_vertical_beyond(
 #[test]
 fn a_line_counts_wherever_its_bounding_box_holds_the_point() {
     let mut s = section();
-    s.lines.push(SchLine { id: "line_d".into(), pts: vec![p(0, 0), p(10_000, 10_000)], width_um: 0 });
+    s.lines.push(SchLine { id: "line_d".into(), pts: vec![p(0, 0), p(10_000, 10_000)], width_nm: 0 });
     // 45 degrees: horizontal; not the end: LEFT
     assert_eq!(spin_at(&s, p(5_000, 2_000), LabelSpin::Right), LabelSpin::Left);
     let mut w = section();
@@ -302,14 +302,14 @@ fn place_label_with_auto_on_a_pin_reads_away_from_the_symbol() {
 fn place_label_applies_the_look_and_refuses_what_the_dialog_would() {
     let m = ConstraintModel::default();
     let mut b = board(section(), &m);
-    ok(&mut b, SchCmd::PlaceLabel { net: "VBUS".into(), at: p(0, 0), kind: LabelKind::Local, spin: Some(LabelSpin::Left), size_um: Some(2_000), bold: Some(true), italic: None, auto_rotate: None });
+    ok(&mut b, SchCmd::PlaceLabel { net: "VBUS".into(), at: p(0, 0), kind: LabelKind::Local, spin: Some(LabelSpin::Left), size_nm: Some(2_000), bold: Some(true), italic: None, auto_rotate: None });
     let sch = sch_of(&b);
     let look = sch.extras.label_looks[&sch.labels[0].id];
-    assert_eq!((look.size_um, look.bold, look.italic, look.auto_rotate), (2_000, true, false, false));
+    assert_eq!((look.size_nm, look.bold, look.italic, look.auto_rotate), (2_000, true, false, false));
     assert_eq!(sch.extras.label_spins[&sch.labels[0].id], LabelSpin::Left);
     // an empty name, a text too small and "Auto" on a plain label are refused, and nothing is placed
     assert_eq!(err(&mut b, place("  ", p(0, 0), LabelKind::Local, None, None)), "ops_bad_label");
-    assert_eq!(err(&mut b, SchCmd::PlaceLabel { net: "X".into(), at: p(0, 0), kind: LabelKind::Local, spin: None, size_um: Some(5), bold: None, italic: None, auto_rotate: None }), "ops_bad_text_size");
+    assert_eq!(err(&mut b, SchCmd::PlaceLabel { net: "X".into(), at: p(0, 0), kind: LabelKind::Local, spin: None, size_nm: Some(5), bold: None, italic: None, auto_rotate: None }), "ops_bad_text_size");
     assert_eq!(err(&mut b, place("X", p(0, 0), LabelKind::Local, Some(true), None)), "ops_label_no_auto_rotate");
     assert_eq!(sch_of(&b).labels.len(), 1);
 }
@@ -317,7 +317,7 @@ fn place_label_applies_the_look_and_refuses_what_the_dialog_would() {
 // ------------------------------------------------------------------------------------------------------------------------- Label Properties
 
 fn edit_label(id: &str, spin: Option<LabelSpin>, auto: Option<bool>) -> SchCmd {
-    SchCmd::EditLabel { id: id.into(), text: None, shape: None, spin, size_um: None, bold: None, italic: None, auto_rotate: auto, fields: None }
+    SchCmd::EditLabel { id: id.into(), text: None, shape: None, spin, size_nm: None, bold: None, italic: None, auto_rotate: auto, fields: None }
 }
 
 #[test]
@@ -358,7 +358,7 @@ fn label_properties_refuse_auto_on_a_plain_label_and_an_edit_that_changes_nothin
 
 // ------------------------------------------------------------------------------------------------------------------------------ Move and Drag
 
-fn mv(v: &[&str], dx: Um, dy: Um) -> SchMoveCmd {
+fn mv(v: &[&str], dx: Nm, dy: Nm) -> SchMoveCmd {
     SchMoveCmd::Move { ids: ids(v), dx, dy, turns: Vec::new(), about: None }
 }
 
@@ -407,7 +407,7 @@ fn dragging_labels_along_their_wire_gives_the_auto_one_the_spin_of_the_wire_agai
 
 fn text_sheet(angle: Millideg) -> SchematicSection {
     let mut s = section();
-    s.texts.push(SchematicText { id: "txt_a".into(), content: "hello".into(), at: p(0, 0), angle, size_um: 1_270 });
+    s.texts.push(SchematicText { id: "txt_a".into(), content: "hello".into(), at: p(0, 0), angle, size_nm: 1_270 });
     s
 }
 
@@ -431,9 +431,9 @@ fn mir(id: &str, vertical: bool) -> SchMoveCmd {
 fn place_text_justifies_it_centred_unless_the_dialog_said_otherwise() {
     let m = ConstraintModel::default();
     let mut b = board(section(), &m);
-    ok(&mut b, SchCmd::PlaceText { content: "centred".into(), at: p(0, 0), angle: 0, size_um: 1_270, h: None, v: None });
-    ok(&mut b, SchCmd::PlaceText { content: "left".into(), at: p(0, 5_080), angle: 90_000, size_um: 1_270, h: Some(TextJustify::Left), v: Some(TextVAlign::Bottom) });
-    ok(&mut b, SchCmd::PlaceText { content: "right".into(), at: p(0, 10_160), angle: 0, size_um: 1_270, h: Some(TextJustify::Right), v: Some(TextVAlign::Top) });
+    ok(&mut b, SchCmd::PlaceText { content: "centred".into(), at: p(0, 0), angle: 0, size_nm: 1_270, h: None, v: None });
+    ok(&mut b, SchCmd::PlaceText { content: "left".into(), at: p(0, 5_080), angle: 90_000, size_nm: 1_270, h: Some(TextJustify::Left), v: Some(TextVAlign::Bottom) });
+    ok(&mut b, SchCmd::PlaceText { content: "right".into(), at: p(0, 10_160), angle: 0, size_nm: 1_270, h: Some(TextJustify::Right), v: Some(TextVAlign::Top) });
     let sch = sch_of(&b);
     let id = |c: &str| sch.texts.iter().find(|t| t.content == c).unwrap().id.clone();
     assert!(sch.texts.iter().all(|t| !t.id.is_empty()));
@@ -443,7 +443,7 @@ fn place_text_justifies_it_centred_unless_the_dialog_said_otherwise() {
     assert_eq!(sch.extras.text_justify_of(&id("right")), j(TextJustify::Right, TextVAlign::Top));
     assert_eq!(sch.texts.iter().find(|t| t.content == "left").unwrap().angle, 90_000);
     // a slanted angle is made upright
-    ok(&mut b, SchCmd::PlaceText { content: "slanted".into(), at: p(0, 0), angle: 80_000, size_um: 1_270, h: None, v: None });
+    ok(&mut b, SchCmd::PlaceText { content: "slanted".into(), at: p(0, 0), angle: 80_000, size_nm: 1_270, h: None, v: None });
     assert_eq!(sch_of(&b).texts.last().unwrap().angle, 90_000);
 }
 
@@ -451,8 +451,8 @@ fn place_text_justifies_it_centred_unless_the_dialog_said_otherwise() {
 fn place_text_refuses_an_empty_text_and_a_size_the_dialog_would() {
     let m = ConstraintModel::default();
     let mut b = board(section(), &m);
-    assert_eq!(err(&mut b, SchCmd::PlaceText { content: " ".into(), at: p(0, 0), angle: 0, size_um: 1_270, h: None, v: None }), "ops_bad_text");
-    assert_eq!(err(&mut b, SchCmd::PlaceText { content: "x".into(), at: p(0, 0), angle: 0, size_um: 5, h: None, v: None }), "ops_bad_text_size");
+    assert_eq!(err(&mut b, SchCmd::PlaceText { content: " ".into(), at: p(0, 0), angle: 0, size_nm: 1_270, h: None, v: None }), "ops_bad_text");
+    assert_eq!(err(&mut b, SchCmd::PlaceText { content: "x".into(), at: p(0, 0), angle: 0, size_nm: 5, h: None, v: None }), "ops_bad_text_size");
     assert!(sch_of(&b).texts.is_empty());
 }
 
@@ -460,16 +460,16 @@ fn place_text_refuses_an_empty_text_and_a_size_the_dialog_would() {
 fn text_properties_set_the_justification_and_nothing_else_with_it() {
     let m = ConstraintModel::default();
     let mut b = board(text_sheet(0), &m);
-    ok(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_um: None, angle: None, h: Some(TextJustify::Right), v: None });
+    ok(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_nm: None, angle: None, h: Some(TextJustify::Right), v: None });
     assert_eq!(justify_of(&b, "txt_a"), j(TextJustify::Right, TextVAlign::Bottom));
-    ok(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_um: None, angle: None, h: None, v: Some(TextVAlign::Center) });
+    ok(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_nm: None, angle: None, h: None, v: Some(TextVAlign::Center) });
     assert_eq!(justify_of(&b, "txt_a"), j(TextJustify::Right, TextVAlign::Center));
     // the same again is no edit; back to the default drops the entry
-    assert_eq!(err(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_um: None, angle: None, h: Some(TextJustify::Right), v: Some(TextVAlign::Center) }), "ops_text_unchanged");
-    ok(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_um: None, angle: None, h: Some(TextJustify::Left), v: Some(TextVAlign::Bottom) });
+    assert_eq!(err(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_nm: None, angle: None, h: Some(TextJustify::Right), v: Some(TextVAlign::Center) }), "ops_text_unchanged");
+    ok(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_nm: None, angle: None, h: Some(TextJustify::Left), v: Some(TextVAlign::Bottom) });
     assert!(sch_of(&b).extras.text_justify.is_empty());
     // the angle is made upright
-    ok(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_um: None, angle: Some(270_000), h: None, v: None });
+    ok(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_nm: None, angle: Some(270_000), h: None, v: None });
     assert_eq!(sch_of(&b).texts[0].angle, 90_000);
 }
 
@@ -523,7 +523,7 @@ fn mirroring_a_lone_text_flips_its_justification_only_along_the_text() {
 fn texts_in_a_selection_of_several_items_turn_and_mirror_about_the_selection() {
     let m = ConstraintModel::default();
     let mut s = text_sheet(0);
-    s.texts.push(SchematicText { id: "txt_b".into(), content: "b".into(), at: p(10_160, 0), angle: 0, size_um: 1_270 });
+    s.texts.push(SchematicText { id: "txt_b".into(), content: "b".into(), at: p(10_160, 0), angle: 0, size_nm: 1_270 });
     let mut b = board(s, &m);
     // mirrored left-right about the middle of the two (`MirrorHorizontally`): the anchors swap sides and each text's justification flips
     b.apply(&Cmd::SchMove(SchMoveCmd::Mirror { ids: ids(&["txt_a", "txt_b"]), vertices: BTreeMap::new(), vertical: false, about: Some(p(5_080, 0)), grid: 0 })).unwrap();
@@ -541,7 +541,7 @@ fn texts_in_a_selection_of_several_items_turn_and_mirror_about_the_selection() {
 fn deleting_a_text_takes_its_justification_with_it() {
     let m = ConstraintModel::default();
     let mut b = board(text_sheet(0), &m);
-    ok(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_um: None, angle: None, h: Some(TextJustify::Center), v: None });
+    ok(&mut b, SchCmd::EditText { id: "txt_a".into(), text: None, size_nm: None, angle: None, h: Some(TextJustify::Center), v: None });
     assert!(!sch_of(&b).extras.text_justify.is_empty());
     b.apply(&Cmd::DeleteSchText { id: "txt_a".into() }).unwrap();
     assert!(sch_of(&b).extras.text_justify.is_empty() && sch_of(&b).texts.is_empty());
@@ -550,7 +550,7 @@ fn deleting_a_text_takes_its_justification_with_it() {
 #[test]
 fn an_overlay_from_before_the_feature_reads_as_it_always_drew() {
     // design.json written before text could be justified has no entry for the text: left and bottom, as the studio drew it
-    let s: SchematicSection = serde_json::from_str(r#"{"symbols":[],"wires":[],"labels":[],"texts":[{"id":"txt_a","content":"old","at":{"x":0,"y":0},"size_um":1270}]}"#).unwrap();
+    let s: SchematicSection = serde_json::from_str(r#"{"symbols":[],"wires":[],"labels":[],"texts":[{"id":"txt_a","content":"old","at":{"x":0,"y":0},"size_nm":1270}]}"#).unwrap();
     assert_eq!(s.extras.text_justify_of("txt_a"), SchTextJustify::default());
     assert_eq!(s.texts[0].angle, 0);
 }

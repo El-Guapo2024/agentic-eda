@@ -16,7 +16,7 @@
 use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
 use eda_model::fp_edit::{default_reference_layout, default_value_layout, field_id, pad_index, parse_field_id, patched_footprint, FieldLayout, FootprintAttrs, FootprintEdit, PadEdit, UserField, REFERENCE, VALUE};
-use eda_model::ir::{FootprintInstance, Um};
+use eda_model::ir::{FootprintInstance, Nm};
 use eda_model::CheckResult;
 use std::collections::BTreeSet;
 
@@ -25,12 +25,12 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 }
 
 /// `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM` (`include/eda_text.h`), µm.
-const TEXT_MIN_UM: Um = 1;
-const TEXT_MAX_UM: Um = 250_000;
+const TEXT_MIN_NM: Nm = 1;
+const TEXT_MAX_NM: Nm = 250_000;
 
 /// `ClampTextPenSize`: the thickest pen a text of this size takes (a quarter of its smaller side).
-fn max_pen(size: (Um, Um)) -> Um {
-    (size.0.abs().min(size.1.abs()) as f64 * 0.25).round() as Um
+fn max_pen(size: (Nm, Nm)) -> Nm {
+    (size.0.abs().min(size.1.abs()) as f64 * 0.25).round() as Nm
 }
 
 impl Board<'_> {
@@ -39,11 +39,11 @@ impl Board<'_> {
     pub(crate) fn check_layout(&self, what: &str, l: &FieldLayout) -> Result<(), Vec<CheckResult>> {
         let (w, h) = l.size;
         for (axis, v) in [("width", w), ("height", h)] {
-            if v < TEXT_MIN_UM {
-                return Err(fail("ops_bad_field", what, format!("Text {axis} must be at least {} mm.", TEXT_MIN_UM as f64 / 1000.0)));
+            if v < TEXT_MIN_NM {
+                return Err(fail("ops_bad_field", what, format!("Text {axis} must be at least {} mm.", TEXT_MIN_NM as f64 / 1000.0)));
             }
-            if v > TEXT_MAX_UM {
-                return Err(fail("ops_bad_field", what, format!("Text {axis} must be at most {} mm.", TEXT_MAX_UM as f64 / 1000.0)));
+            if v > TEXT_MAX_NM {
+                return Err(fail("ops_bad_field", what, format!("Text {axis} must be at most {} mm.", TEXT_MAX_NM as f64 / 1000.0)));
             }
         }
         if l.thickness < 0 {

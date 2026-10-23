@@ -5,7 +5,7 @@
 //! the same thing worked out on those: every point of the item is inside the outline (or on it), and no edge of the outline comes within the item's half width of its centre
 //! line. A text or a dimension is judged by the corners of its box, which is a little less exact than its glyphs and its arrows.
 
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::multichannel::{point_inside, Box4};
 
 /// A rule area's outline, to ask what it encloses.
@@ -58,7 +58,7 @@ impl Enclosure<'_> {
     }
 
     /// A stroke (a track, a line of a shape) of `half_width` along `pts`: every point inside, the outline no nearer to the stroke than its half width. A single point is a round dot.
-    pub fn contains_stroke(&self, pts: &[Point], half_width: Um) -> bool {
+    pub fn contains_stroke(&self, pts: &[Point], half_width: Nm) -> bool {
         if self.outline.len() < 3 || pts.is_empty() {
             return false;
         }
@@ -73,12 +73,12 @@ impl Enclosure<'_> {
     }
 
     /// A disc (a via): the centre inside and the outline no nearer than the radius.
-    pub fn contains_disc(&self, centre: Point, radius: Um) -> bool {
+    pub fn contains_disc(&self, centre: Point, radius: Nm) -> bool {
         self.contains_stroke(&[centre], radius)
     }
 
     /// A polygon or a ring drawn with a stroke of `half_width` (a zone's outline, a rectangle): its corners inside, no edge of the outline crossing it.
-    pub fn contains_ring(&self, pts: &[Point], half_width: Um) -> bool {
+    pub fn contains_ring(&self, pts: &[Point], half_width: Nm) -> bool {
         if pts.len() < 2 {
             return self.contains_stroke(pts, half_width);
         }
@@ -111,7 +111,7 @@ pub(crate) fn polygon_meets_box(poly: &[Point], b: Box4) -> bool {
 mod tests {
     use super::*;
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 

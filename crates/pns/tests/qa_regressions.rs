@@ -5,7 +5,7 @@
 //! Skipped (prints a line, passes) when the QA corpus is not on this machine:
 //! `KICAD_QA_DATA`, default `~/ws/kicad-src-8303b2ad/qa/data`.
 
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_pns::from_ir::build_node;
 use eda_pns::item::{net_of, Item, ItemId};
 use eda_pns::line::Line;
@@ -22,8 +22,8 @@ fn qa_root() -> Option<PathBuf> {
     p.join("pcbnew/pns_regressions").exists().then_some(p.join("pcbnew/pns_regressions"))
 }
 
-fn um(nm: &serde_json::Value) -> Um {
-    (nm.as_f64().unwrap() / 1000.0).round() as Um
+fn um(nm: &serde_json::Value) -> Nm {
+    (nm.as_f64().unwrap() / 1000.0).round() as Nm
 }
 
 fn pt(v: &serde_json::Value) -> Point {
@@ -131,11 +131,11 @@ fn recorded_segments(log: &serde_json::Value) -> Vec<(String, Point, Point)> {
     log["addedItems"].as_array().unwrap().iter().filter(|it| it["kind"] == "segment").map(|it| (it["net"].as_str().unwrap().to_string(), pt(&it["shape"]["start"]), pt(&it["shape"]["end"]))).collect()
 }
 
-fn close(a: Point, b: Point, tol: Um) -> bool {
+fn close(a: Point, b: Point, tol: Nm) -> bool {
     (a.x - b.x).abs() <= tol && (a.y - b.y).abs() <= tol
 }
 
-fn same_segment(x: &(String, Point, Point), y: &(String, Point, Point), tol: Um) -> bool {
+fn same_segment(x: &(String, Point, Point), y: &(String, Point, Point), tol: Nm) -> bool {
     x.0 == y.0 && ((close(x.1, y.1, tol) && close(x.2, y.2, tol)) || (close(x.1, y.2, tol) && close(x.2, y.1, tol)))
 }
 

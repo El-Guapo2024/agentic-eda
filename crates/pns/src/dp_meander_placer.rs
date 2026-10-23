@@ -22,7 +22,7 @@ use crate::meander::{tune_line_length, MeanderEnv, MeanderSettings, MeanderShape
 use crate::meander_placer::{chain_collides, chain_of, Tuned, TuningStatus};
 use crate::node::Node;
 use crate::tuning_path::{assemble_opts, assemble_tuning_path, LengthEnv, TuningPath};
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 
 /// `DP_PARALLELITY_THRESHOLD` (`pns_topology.h`), nanometres.
@@ -38,7 +38,7 @@ pub struct PairAssembly {
     pub net_p: Net,
     pub net_n: Net,
     /// Track width of the pair, micrometres.
-    pub width: Um,
+    pub width: Nm,
     /// Edge-to-edge gap, nanometres (-1: the two segments are not parallel enough to tell).
     pub gap: i64,
 }
@@ -196,7 +196,7 @@ struct FitEnv<'a> {
     net_p: Net,
     net_n: Net,
     layer: i32,
-    width_um: Um,
+    width_nm: Nm,
 }
 
 impl MeanderEnv for FitEnv<'_> {
@@ -214,10 +214,10 @@ impl MeanderEnv for FitEnv<'_> {
 
     /// `DP_MEANDER_PLACER::CheckFit`.
     fn check_fit(&mut self, shape: &MeanderShape, existing: &[MeanderShape]) -> bool {
-        if chain_collides(self.world, self.rules, &self.net_p, self.layer, self.width_um, shape.c_line(0)) {
+        if chain_collides(self.world, self.rules, &self.net_p, self.layer, self.width_nm, shape.c_line(0)) {
             return false;
         }
-        if chain_collides(self.world, self.rules, &self.net_n, self.layer, self.width_um, shape.c_line(1)) {
+        if chain_collides(self.world, self.rules, &self.net_n, self.layer, self.width_nm, shape.c_line(1)) {
             return false;
         }
         let w = shape.width();
@@ -557,7 +557,7 @@ impl DpMeanderPlacer {
         }
 
         let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None) * 1000;
-        let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net_p: self.pair.net_p.clone(), net_n: self.pair.net_n.clone(), layer: self.pair.p.layer, width_um: self.pair.width };
+        let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net_p: self.pair.net_p.clone(), net_n: self.pair.net_n.clone(), layer: self.pair.p.layer, width_nm: self.pair.width };
         let mut result = MeanderedLine::new(true);
         result.set_width(self.width_nm);
         let mut offset = (self.pair.gap + self.width_nm) / 2;
@@ -711,10 +711,10 @@ mod tests {
         (w, a, b)
     }
 
-    fn settings(target_um: i64) -> MeanderSettings {
+    fn settings(target_nm: i64) -> MeanderSettings {
         let mut s = MeanderSettings::default();
         s.spacing = 1_000_000;
-        s.set_target_length(target_um * 1000);
+        s.set_target_length(target_nm * 1000);
         s.keep_endpoints = true;
         s
     }
@@ -769,7 +769,7 @@ mod tests {
             profile_type: ProfileType::Differential,
             target_impedance: 90.0,
             enable_time_domain_tuning: true,
-            layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_um: 200, diff_pair_gap_um: 200, delay_as_per_mm: 6_100_000 }],
+            layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200, diff_pair_gap_nm: 200, delay_as_per_mm: 6_100_000 }],
             via_propagation_delay_as: 0,
             via_overrides: vec![],
         };

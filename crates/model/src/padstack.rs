@@ -14,7 +14,7 @@
 //! [`Pad::shape_groups`] takes the side and gives the shapes the board's layers have.
 
 use crate::footprint::{Pad, PadCustom, PadKind, PadShape, PadShapeExt};
-use crate::ir::{ChamferCorners, Side, Um};
+use crate::ir::{ChamferCorners, Side, Nm};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -114,15 +114,18 @@ pub enum Flash {
 pub struct PadLayerShape {
     pub shape: PadShape,
     /// The shape's size before the pad's rotation; a custom pad's anchor's.
-    pub size: (Um, Um),
+    #[serde(deserialize_with = "crate::units::de")]
+    pub size: (Nm, Nm),
     /// `roundrect_rratio`, as [`Pad::roundrect_ratio`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roundrect_ratio: Option<f64>,
     /// `PAD::GetOffset( layer )`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub offset: Option<(Um, Um)>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub offset: Option<(Nm, Nm)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trapezoid_delta: Option<(Um, Um)>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub trapezoid_delta: Option<(Nm, Nm)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chamfer_ratio: Option<f64>,
     #[serde(default, skip_serializing_if = "crate::ir::ChamferCorners::is_none")]
@@ -152,7 +155,7 @@ impl PadLayerShape {
     }
 
     /// A shape of nothing but `shape` and `size`, which is what a layer node that says no more than that reads as (`SHAPE_PROPS()`: no ratio, no offset).
-    pub fn plain(shape: PadShape, size: (Um, Um)) -> PadLayerShape {
+    pub fn plain(shape: PadShape, size: (Nm, Nm)) -> PadLayerShape {
         PadLayerShape { shape, size, roundrect_ratio: None, offset: None, trapezoid_delta: None, chamfer_ratio: None, chamfer_corners: ChamferCorners::default(), custom: None, tokens: Vec::new() }
     }
 

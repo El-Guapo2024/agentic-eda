@@ -29,7 +29,7 @@ fn profile() -> TuningProfile {
         profile_type: ProfileType::Differential,
         target_impedance: 90.0,
         enable_time_domain_tuning: true,
-        layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_um: 130, diff_pair_gap_um: 150, delay_as_per_mm: 6_100_000 }],
+        layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: 130, diff_pair_gap_nm: 150, delay_as_per_mm: 6_100_000 }],
         via_propagation_delay_as: 25_000_000,
         via_overrides: vec![ViaOverride { signal_layer_from: "F.Cu".into(), signal_layer_to: "B.Cu".into(), via_layer_from: "F.Cu".into(), via_layer_to: "B.Cu".into(), delay_as: 30_000_000 }],
     }
@@ -40,7 +40,7 @@ fn the_board_file_brings_the_dash_ratios_and_the_hatch_offsets_in_and_out() {
     let (design, model, _) = import_kicad_pcb(BOARD).expect("imports");
     assert_eq!((model.board.formatting.dash_length_ratio, model.board.formatting.gap_length_ratio), (8.0, 2.5));
     assert_eq!(model.board.hatch_offsets.keys().collect::<Vec<_>>(), ["F.Cu"], "a layer at 0, 0 has none and In7.Cu is not a layer of this board");
-    assert_eq!(model.board.hatch_offsets["F.Cu"], HatchOffset { x_um: 1_500, y_um: -2_000 });
+    assert_eq!(model.board.hatch_offsets["F.Cu"], HatchOffset { x_nm: 1_500, y_nm: -2_000 });
     let text = export(&design, &model);
     assert!(text.contains("(dashed_line_dash_ratio 8.000000)") && text.contains("(dashed_line_gap_ratio 2.500000)"), "{text}");
     assert!(text.contains("(zone_defaults (property (layer \"F.Cu\") (hatch_position (xy 1.5 -2))))"), "{text}");
@@ -67,7 +67,7 @@ fn the_project_carries_the_footprint_boxes_the_tuning_patterns_and_the_profiles(
     let (design, mut model, _) = import_kicad_pcb(BOARD).expect("imports");
     model.board.formatting.apply_to_fp_fields = true;
     model.board.formatting.apply_to_fp_shapes = true;
-    model.board.tuning_patterns.diff_pair = MeanderSettings { min_amplitude_um: 300, max_amplitude_um: 900, spacing_um: 1_100, corner_style: CornerStyle::Chamfer, corner_radius_percentage: 40, single_sided: true };
+    model.board.tuning_patterns.diff_pair = MeanderSettings { min_amplitude_nm: 300, max_amplitude_nm: 900, spacing_nm: 1_100, corner_style: CornerStyle::Chamfer, corner_radius_percentage: 40, single_sided: true };
     model.board.tuning_profiles.profiles = vec![profile()];
     let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
     let ds = &pro["board"]["design_settings"];

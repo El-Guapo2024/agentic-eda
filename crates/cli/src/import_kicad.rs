@@ -47,8 +47,8 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 #[derive(serde::Serialize)]
 struct Meta {
     intent: String,
-    snap_um: i64,
-    spacing_um: i64,
+    snap_nm: i64,
+    spacing_nm: i64,
 }
 
 const USAGE: &str = "usage: eda import-kicad <board.kicad_pcb | schematic.kicad_sch | file of another EDA format> -o <dir> [--format NAME] [--kind board|schematic] [--layer-map FILE] [--keep-kicad-layer-names] [--report FILE|-] [--no-pair]";
@@ -265,7 +265,7 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     // `board::load` reads `meta.intent` as a plain path (no relativizing to the board dir), so it has to survive the board directory moving relative to the cwd it was
     // created from -- same as `eda board new`.
     let abs_intent = std::fs::canonicalize(&intent_path).unwrap_or(intent_path);
-    let meta = Meta { intent: abs_intent.display().to_string(), snap_um: model.solver.place_snap_um, spacing_um: model.solver.place_spacing_um };
+    let meta = Meta { intent: abs_intent.display().to_string(), snap_nm: model.solver.place_snap_nm, spacing_nm: model.solver.place_spacing_nm };
     std::fs::write(out.join("board.json"), serde_json::to_string_pretty(&meta).expect("meta encodes")).map_err(|e| fail("io", "board.json", e.to_string()))?;
 
     // The libraries kicad-cli made of the footprints and symbols it read, and the tables that name them, so "Update from Library" finds them from this folder.
@@ -350,7 +350,7 @@ fn empty_board() -> eda_model::ir::Design {
     use eda_model::ir::{Design, PlacementSection, Point, Provenance};
     let pt = |x, y| Point { x, y };
     Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -494,7 +494,7 @@ mod tests {
         assert!(model.part("U1").is_some() && model.nets.iter().any(|n| n.pins.iter().any(|p| p.starts_with("U1."))));
         // The design rules and the net classes Eagle's board has are in the project kicad-cli makes of it, not in the board file: the board is judged by them.
         assert!(model.board.net_classes.iter().any(|c| c.name == "highpower" && c.track_width == Some(305)), "{:?}", model.board.net_classes.iter().map(|c| &c.name).collect::<Vec<_>>());
-        assert_eq!(model.board.min_clearance_um, 203, "Eagle's 8 mil minimum clearance");
+        assert_eq!(model.board.min_clearance_nm, 203, "Eagle's 8 mil minimum clearance");
         assert!(out.join("fp-lib-table").is_file() && out.join("sym-lib-table").is_file(), "the tables that name the libraries");
         assert!(std::fs::read_dir(&out).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with("-import-fps.pretty")));
         assert!(std::fs::read_dir(&out).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with(".kicad_sym")));
@@ -530,7 +530,7 @@ mod tests {
         import(&args(&prj, &out, &[]));
         let (_, design, model) = crate::board::load(&out).expect("a board the studio opens");
         assert_eq!(design.placement.as_ref().unwrap().footprints.len(), 115);
-        assert_eq!(model.board.min_clearance_um, 102, "Altium's clearance rule (4 mil), from the project kicad-cli made with the board");
+        assert_eq!(model.board.min_clearance_nm, 102, "Altium's clearance rule (4 mil), from the project kicad-cli made with the board");
         let root = design.schematic.as_ref().expect("a schematic");
         let names: Vec<(&str, &str)> = root.sheets.iter().map(|s| (s.name.as_str(), s.page.as_str())).collect();
         assert_eq!(names, vec![("it6251_core", "2"), ("power", "3")], "in the order the project lists them, from page 2");

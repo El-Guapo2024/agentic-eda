@@ -1,6 +1,6 @@
 //! A board that cannot exist must be rejected at the door.
 //!
-//! Each of these used to be absorbed downstream -- `grid_um.max(1)`,
+//! Each of these used to be absorbed downstream -- `grid_nm.max(1)`,
 //! `layers.first().unwrap_or("F.Cu")` -- which meant the reader picked a
 //! number nobody wrote down and every gate afterwards measured the board
 //! against that invention and reported the answer as fact.
@@ -56,7 +56,7 @@ fn a_via_with_no_annular_ring_is_rejected() {
 #[test]
 fn a_two_point_outline_is_rejected() {
     let mut b = BoardRules::default();
-    b.outline = Some(vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }]);
+    b.outline = Some(vec![Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 }]);
     assert!(failing_fields(&b).contains(&"board.outline".to_string()));
 }
 

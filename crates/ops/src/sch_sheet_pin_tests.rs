@@ -12,9 +12,9 @@ use eda_model::ir::{LabelKind, LabelShape, NetLabel, Provenance, SheetInstance, 
 use std::collections::BTreeMap;
 
 const SHEET_AT: Point = Point { x: 100_000, y: 50_000 };
-const SHEET_SIZE: (Um, Um) = (40_000, 30_000);
+const SHEET_SIZE: (Nm, Nm) = (40_000, 30_000);
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -60,7 +60,7 @@ fn design() -> Design {
         sheet_contents: Some([("sub.kicad_sch".to_string(), child)].into_iter().collect()),
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(root),
         nets: None,
@@ -115,11 +115,11 @@ fn nets(d: &Design) -> BTreeMap<String, String> {
     out
 }
 
-fn mv(ids: &[&str], dx: Um, dy: Um) -> Cmd {
+fn mv(ids: &[&str], dx: Nm, dy: Nm) -> Cmd {
     Cmd::SchMove(SchMoveCmd::Move { ids: ids.iter().map(|s| s.to_string()).collect(), dx, dy, turns: Vec::new(), about: None })
 }
 
-fn drag(ids: &[&str], dx: Um, dy: Um) -> Cmd {
+fn drag(ids: &[&str], dx: Nm, dy: Nm) -> Cmd {
     Cmd::SchMove(SchMoveCmd::Drag { ids: ids.iter().map(|s| s.to_string()).collect(), vertices: BTreeMap::new(), dx, dy, ortho: true, grid: 0, turns: Vec::new(), about: None })
 }
 
@@ -189,7 +189,7 @@ fn renaming_a_pin_ties_it_to_the_label_of_the_new_name() {
     let d = design();
     // IN -> OUT: the pin of the left border now stands for the label OUT, which is on R1's other pin (and the pin that was OUT now has the same name: the two sheet pins
     // of one name do not join, KiCad's "promote sheet pins ... if no conflict")
-    let renamed = ok(&d, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: Some("CLK".into()), shape: Some(LabelShape::Bidirectional), at: None, size_um: None, bold: None, italic: None }));
+    let renamed = ok(&d, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: Some("CLK".into()), shape: Some(LabelShape::Bidirectional), at: None, size_nm: None, bold: None, italic: None }));
     let sheet = &root_of(&renamed).sheets[0];
     let pin = sheet.pins.iter().find(|p| p.id == "shpin_in").unwrap();
     assert_eq!((pin.name.as_str(), pin.shape), ("CLK", LabelShape::Bidirectional));
@@ -197,9 +197,9 @@ fn renaming_a_pin_ties_it_to_the_label_of_the_new_name() {
     let n = nets(&renamed);
     assert_ne!(n["R1.1"], "SIG", "no label of the name CLK in the sheet's file: R1.1 is not on SIG any more ({n:?})");
     // an empty name and a point off the border are refused
-    let e = run(&d, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: Some("  ".into()), shape: None, at: None, size_um: None, bold: None, italic: None }));
+    let e = run(&d, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: Some("  ".into()), shape: None, at: None, size_nm: None, bold: None, italic: None }));
     assert!(e.is_err());
-    let e = run(&d, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: None, shape: None, at: Some(p(110_000, 65_000)), size_um: None, bold: None, italic: None })).unwrap_err();
+    let e = run(&d, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: None, shape: None, at: Some(p(110_000, 65_000)), size_nm: None, bold: None, italic: None })).unwrap_err();
     assert_eq!(e[0].check, "ops_sheet_pin_off_border");
 }
 
@@ -239,8 +239,8 @@ fn a_sheet_pin_swaps_only_with_another_pin_of_its_sheet() {
 
 // ------------------------------------------------------------------------------------------------------------------------------- the text look
 
-fn look_edit(id: &str, size_um: Option<Um>, bold: Option<bool>, italic: Option<bool>) -> Cmd {
-    Cmd::SchEdit(SchCmd::EditSheetPin { id: id.into(), name: None, shape: None, at: None, size_um, bold, italic })
+fn look_edit(id: &str, size_nm: Option<Nm>, bold: Option<bool>, italic: Option<bool>) -> Cmd {
+    Cmd::SchEdit(SchCmd::EditSheetPin { id: id.into(), name: None, shape: None, at: None, size_nm, bold, italic })
 }
 
 #[test]
@@ -248,12 +248,12 @@ fn a_pins_text_is_set_in_a_size_bold_and_italic_of_its_own_and_the_default_is_no
     let d = design();
     let after = ok(&d, look_edit("shpin_in", Some(2_000), Some(true), Some(true)));
     let look = root_of(&after).extras.sheet_pin_looks.get("shpin_in").copied().expect("the pin has a look");
-    assert_eq!((look.size_um, look.bold, look.italic), (2_000, true, true));
+    assert_eq!((look.size_nm, look.bold, look.italic), (2_000, true, true));
     assert!(!root_of(&after).extras.sheet_pin_looks.contains_key("shpin_out"), "the other pin is as it was");
     // each member alone leaves the others
     let bolder = ok(&after, look_edit("shpin_in", None, Some(false), None));
     let look = root_of(&bolder).extras.sheet_pin_looks.get("shpin_in").copied().unwrap();
-    assert_eq!((look.size_um, look.bold, look.italic), (2_000, false, true));
+    assert_eq!((look.size_nm, look.bold, look.italic), (2_000, false, true));
     // back to 50 mil, regular, upright: the entry goes
     let plain = ok(&bolder, look_edit("shpin_in", Some(1_270), None, Some(false)));
     assert!(root_of(&plain).extras.sheet_pin_looks.is_empty(), "{:?}", root_of(&plain).extras.sheet_pin_looks);
@@ -267,7 +267,7 @@ fn a_look_that_is_already_there_is_refused_and_a_size_is_clamped_as_set_text_siz
     // `TEXT_MIN_SIZE_MM` 0.001 and `TEXT_MAX_SIZE_MM` 250
     for (size, kept) in [(0, 1), (5, 5), (1_000_001, 250_000)] {
         let after = ok(&d, look_edit("shpin_in", Some(size), None, None));
-        assert_eq!(root_of(&after).extras.sheet_pin_looks["shpin_in"].size_um, kept, "{size}");
+        assert_eq!(root_of(&after).extras.sheet_pin_looks["shpin_in"].size_nm, kept, "{size}");
     }
     let styled = ok(&d, look_edit("shpin_in", None, Some(true), None));
     let e = run(&styled, look_edit("shpin_in", None, Some(true), None)).unwrap_err();
@@ -278,7 +278,7 @@ fn a_look_that_is_already_there_is_refused_and_a_size_is_clamped_as_set_text_siz
 fn the_look_stays_with_a_pin_that_is_renamed_or_moved_and_goes_with_a_pin_or_a_sheet_that_is_deleted() {
     let d = design();
     let styled = ok(&d, look_edit("shpin_in", Some(2_540), Some(true), None));
-    let renamed = ok(&styled, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: Some("CLK".into()), shape: None, at: None, size_um: None, bold: None, italic: None }));
+    let renamed = ok(&styled, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: Some("CLK".into()), shape: None, at: None, size_nm: None, bold: None, italic: None }));
     assert!(root_of(&renamed).extras.sheet_pin_looks.contains_key("shpin_in"), "the pin keeps its id, so its look");
     let moved = ok(&styled, Cmd::SchMove(SchMoveCmd::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000, turns: Vec::new(), about: None }));
     assert!(root_of(&moved).extras.sheet_pin_looks.contains_key("shpin_in"));

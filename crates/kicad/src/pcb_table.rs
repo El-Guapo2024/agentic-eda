@@ -8,7 +8,7 @@
 
 use std::fmt::Write as _;
 
-use eda_model::ir::{Point, TextJustify, TextVAlign, Um};
+use eda_model::ir::{Point, TextJustify, TextVAlign, Nm};
 use eda_model::sch_extras::{SchColor, SchFill};
 use eda_model::table::{Table, TableBorder, TableCell, TableLineStyle, TableSeparators, TableStroke, TableText};
 
@@ -23,7 +23,7 @@ fn flag(item: &[Sexpr], name: &str) -> Option<bool> {
     item.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == name)).then_some(true)
 }
 
-fn um(v: f64) -> Um {
+fn um(v: f64) -> Nm {
     mm_to_um(v)
 }
 
@@ -41,7 +41,7 @@ fn alpha_str(a: u8) -> String {
 
 /// `(stroke (width w) (type t) [(color r g b a)])` as `STROKE_PARAMS::Format` writes it.
 pub(crate) fn stroke_str(s: &TableStroke) -> String {
-    let mut out = format!("(stroke (width {}) (type {})", mm(s.width_um), s.style.token());
+    let mut out = format!("(stroke (width {}) (type {})", mm(s.width_nm), s.style.token());
     if let Some(c) = s.color {
         let _ = write!(out, " (color {} {} {} {})", c.r, c.g, c.b, alpha_str(c.a));
     }
@@ -53,7 +53,7 @@ pub(crate) fn stroke_str(s: &TableStroke) -> String {
 pub(crate) fn read_stroke(node: &[Sexpr], base: TableStroke) -> TableStroke {
     let mut s = base;
     if let Some(w) = sexpr::find(node, "width").and_then(|w| sexpr::num(w, 1)) {
-        s.width_um = um(w);
+        s.width_nm = um(w);
     }
     if let Some(t) = sexpr::find(node, "type").and_then(|t| sexpr::txt(t, 1)) {
         s.style = TableLineStyle::from_token(t);
@@ -76,11 +76,11 @@ pub(crate) fn read_effects(item: &[Sexpr]) -> TableText {
     if let Some(font) = sexpr::find(e, "font") {
         if let Some(s) = sexpr::find(font, "size") {
             // `(size HEIGHT WIDTH)`
-            t.height_um = um(sexpr::num(s, 1).unwrap_or(1.27));
-            t.width_um = um(sexpr::num(s, 2).unwrap_or(1.27));
+            t.height_nm = um(sexpr::num(s, 1).unwrap_or(1.27));
+            t.width_nm = um(sexpr::num(s, 2).unwrap_or(1.27));
             found_size = true;
         }
-        t.thickness_um = sexpr::find(font, "thickness").and_then(|x| sexpr::num(x, 1)).map(um).unwrap_or(0);
+        t.thickness_nm = sexpr::find(font, "thickness").and_then(|x| sexpr::num(x, 1)).map(um).unwrap_or(0);
         t.bold = flag(font, "bold").unwrap_or(false);
         t.italic = flag(font, "italic").unwrap_or(false);
         t.face = sexpr::find(font, "face").and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(str::to_string);
@@ -89,8 +89,8 @@ pub(crate) fn read_effects(item: &[Sexpr]) -> TableText {
     }
     if !found_size {
         // "Text size was not specified in file, force legacy default units: 60 mils is 1.524 mm".
-        t.height_um = 1_524;
-        t.width_um = 1_524;
+        t.height_nm = 1_524;
+        t.width_nm = 1_524;
     }
     if let Some(j) = sexpr::find(e, "justify") {
         for tok in j.iter().skip(1).filter_map(Sexpr::text) {
@@ -113,12 +113,12 @@ pub(crate) fn effects_str(t: &TableText) -> String {
     if let Some(f) = t.face.as_deref().filter(|f| !f.is_empty()) {
         let _ = write!(s, " (face {})", sexpr_str(f));
     }
-    let _ = write!(s, " (size {} {})", mm(t.height_um), mm(t.width_um));
+    let _ = write!(s, " (size {} {})", mm(t.height_nm), mm(t.width_nm));
     if t.line_spacing_permille != 0 && t.line_spacing_permille != 1000 {
         let _ = write!(s, " (line_spacing {})", fmt_mm_f(t.line_spacing_permille as f64 / 1000.0));
     }
-    if t.thickness_um != 0 {
-        let _ = write!(s, " (thickness {})", mm(t.thickness_um));
+    if t.thickness_nm != 0 {
+        let _ = write!(s, " (thickness {})", mm(t.thickness_nm));
     }
     if t.bold {
         s.push_str(" bold");
@@ -185,7 +185,7 @@ fn read_cell(item: &[Sexpr]) -> Option<(TableCell, FileCell)> {
     let margins = match sexpr::find(item, "margins") {
         Some(m) => [um(sexpr::num(m, 1).unwrap_or(0.0)), um(sexpr::num(m, 2).unwrap_or(0.0)), um(sexpr::num(m, 3).unwrap_or(0.0)), um(sexpr::num(m, 4).unwrap_or(0.0))],
         // `GetLegacyTextMargin` with the stroke of a cell read from a file (width -1 nm, which is no micrometre at all): three quarters of the height.
-        None => [TableCell::legacy_margin_um(&style, 0); 4],
+        None => [TableCell::legacy_margin_nm(&style, 0); 4],
     };
     let (col_span, row_span) = match sexpr::find(item, "span") {
         Some(s) => (sexpr::num(s, 1).unwrap_or(1.0).max(0.0) as u32, sexpr::num(s, 2).unwrap_or(1.0).max(0.0) as u32),
@@ -225,8 +225,8 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Table> {
     }
     let cols = cols as usize;
     let rows = cells.len() / cols;
-    let widths = |name: &str, n: usize| -> Vec<Um> {
-        let mut v: Vec<Um> = sexpr::find(item, name).map(|l| l.iter().skip(1).filter_map(|x| x.text()?.parse::<f64>().ok()).map(um).collect()).unwrap_or_default();
+    let widths = |name: &str, n: usize| -> Vec<Nm> {
+        let mut v: Vec<Nm> = sexpr::find(item, name).map(|l| l.iter().skip(1).filter_map(|x| x.text()?.parse::<f64>().ok()).map(um).collect()).unwrap_or_default();
         v.resize(n, 0);
         v
     };
@@ -410,13 +410,13 @@ mod tests {
         assert_eq!(t.uuid, "11111111-1111-1111-1111-111111111111");
         assert!(t.border.external && t.border.header && !t.separators.cols && t.separators.rows);
         assert_eq!(t.border.stroke, TableStroke::solid(100));
-        assert_eq!(t.separators.stroke.width_um, 50);
+        assert_eq!(t.separators.stroke.width_nm, 50);
         assert_eq!(t.separators.stroke.style, TableLineStyle::Dash);
         assert_eq!(t.separators.stroke.color, Some(SchColor { r: 255, g: 0, b: 0, a: 255 }));
         let c = t.cell(1, 1).unwrap();
         assert_eq!(c.text, "D");
         assert_eq!(c.margins, [1_000; 4]);
-        assert_eq!((c.style.height_um, c.style.width_um, c.style.thickness_um, c.style.bold, c.style.h_align, c.style.v_align), (1_500, 1_500, 200, true, TextJustify::Left, TextVAlign::Top));
+        assert_eq!((c.style.height_nm, c.style.width_nm, c.style.thickness_nm, c.style.bold, c.style.h_align, c.style.v_align), (1_500, 1_500, 200, true, TextJustify::Left, TextVAlign::Top));
         assert_eq!(t.cell_corners(1, 1)[2], Point { x: 40_000, y: 31_000 });
     }
 
@@ -489,7 +489,7 @@ mod tests {
         assert_eq!((c.style.h_align, c.style.v_align), (TextJustify::Center, TextVAlign::Center));
         // the border and separators the file does not mention: both on, the stroke of a table that has none
         assert!(t.border.external && t.border.header && t.separators.rows && t.separators.cols);
-        assert_eq!(t.border.stroke.width_um, -1);
+        assert_eq!(t.border.stroke.width_nm, -1);
         // a cell read from a file has the stroke -1 of `parseTextBoxContent`: -1 nm and three quarters of the 2 mm height
         assert_eq!(c.margins, [1_500; 4]);
     }

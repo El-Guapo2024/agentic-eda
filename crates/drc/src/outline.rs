@@ -2,8 +2,8 @@
 //! and `BOARD::GetBoardPolygonOutlines`, with the checks `DRC_TEST_PROVIDER_MISC::testOutline` makes of it.
 //!
 //! The items are the board's Edge.Cuts ([`eda_model::outline::edge_cuts_shapes`]): lines, arcs, circles, rectangles, polygons and
-//! Bezier curves. They are chained end to end, within [`CHAINING_EPSILON_UM`] (0.01 mm) of each other, into closed contours whose
-//! curves are flattened at [`MAX_ERROR_UM`] (0.005 mm); a contour inside an even number of others is an outline, inside an odd number a
+//! Bezier curves. They are chained end to end, within [`CHAINING_EPSILON_NM`] (0.01 mm) of each other, into closed contours whose
+//! curves are flattened at [`MAX_ERROR_NM`] (0.005 mm); a contour inside an even number of others is an outline, inside an odd number a
 //! hole of the one around it. Several outlines are allowed, as KiCad allows them; a closed shape on its own (a circle, a rectangle) is a
 //! contour; an open chain, a self-intersecting one and a contour crossing another are reported, not silently closed.
 //!
@@ -25,8 +25,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use eda_clipper2::Point64;
-use eda_model::ir::{Design, Point, Shape, Um};
-use eda_model::outline::{self as edge, Arc, CHAINING_EPSILON_UM, MAX_ERROR_UM};
+use eda_model::ir::{Design, Point, Shape, Nm};
+use eda_model::outline::{self as edge, Arc, CHAINING_EPSILON_NM, MAX_ERROR_NM};
 use eda_shape_poly_set::{LineChain, ShapePolySet};
 
 /// One call of KiCad's `OUTLINE_ERROR_HANDLER` (`void( msg, itemA, itemB, pt )`): what is wrong, the Edge.Cuts items it concerns (their ids;
@@ -118,7 +118,7 @@ fn norm(a: Point, b: Point) -> f64 {
 }
 
 /// `close_enough`: the squared distance is at most the squared limit.
-fn close_enough(a: Point, b: Point, limit: Um) -> bool {
+fn close_enough(a: Point, b: Point, limit: Nm) -> bool {
     sq_dist(a, b) <= (limit as i128) * (limit as i128)
 }
 
@@ -144,7 +144,7 @@ struct Seg {
 }
 
 impl Seg {
-    fn bbox(&self) -> (Um, Um, Um, Um) {
+    fn bbox(&self) -> (Nm, Nm, Nm, Nm) {
         (self.a.x.min(self.b.x), self.a.y.min(self.b.y), self.a.x.max(self.b.x), self.a.y.max(self.b.y))
     }
 }
@@ -167,7 +167,7 @@ fn collinear_overlap(s: Seg, o: Seg, use_x_axis: bool, ignore_endpoints: bool) -
         }
     }
     let proj = (overlap_start + overlap_end) / 2;
-    let other = if seg1_end != seg1_start { coord1_start + rescale((proj - seg1_start) as i128, (coord1_end - coord1_start) as i128, (seg1_end - seg1_start) as i128) as Um } else { coord1_start };
+    let other = if seg1_end != seg1_start { coord1_start + rescale((proj - seg1_start) as i128, (coord1_end - coord1_start) as i128, (seg1_end - seg1_start) as i128) as Nm } else { coord1_start };
     Some(if use_x_axis { Point { x: proj, y: other } } else { Point { x: other, y: proj } })
 }
 
@@ -202,11 +202,11 @@ fn seg_intersect(s: Seg, o: Seg, ignore_endpoints: bool) -> Option<Point> {
     if ignore_endpoints && (param1_num == 0 || param1_num == determinant) && (param2_num == 0 || param2_num == determinant) {
         return None;
     }
-    Some(Point { x: o.a.x + rescale(param1_num, d2x, determinant) as Um, y: o.a.y + rescale(param1_num, d2y, determinant) as Um })
+    Some(Point { x: o.a.x + rescale(param1_num, d2x, determinant) as Nm, y: o.a.y + rescale(param1_num, d2y, determinant) as Nm })
 }
 
-fn ring_bbox(ring: &[Point]) -> (Um, Um, Um, Um) {
-    let mut bb = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
+fn ring_bbox(ring: &[Point]) -> (Nm, Nm, Nm, Nm) {
+    let mut bb = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
     for p in ring {
         bb = (bb.0.min(p.x), bb.1.min(p.y), bb.2.max(p.x), bb.3.max(p.y));
     }
@@ -360,12 +360,12 @@ fn ends(s: &Shape) -> Option<(Point, Point)> {
 /// `PCB_SHAPE_ENDPOINTS_ADAPTOR` and its KD-tree, for `findNext` and the gap report.
 struct Endpoints {
     pts: Vec<(Point, usize)>,
-    grid: HashMap<(Um, Um), Vec<usize>>,
-    cell: Um,
+    grid: HashMap<(Nm, Nm), Vec<usize>>,
+    cell: Nm,
 }
 
 impl Endpoints {
-    fn new(shapes: &[Shape], epsilon: Um) -> Endpoints {
+    fn new(shapes: &[Shape], epsilon: Nm) -> Endpoints {
         let cell = epsilon.max(1);
         let mut pts = Vec::new();
         for (i, s) in shapes.iter().enumerate() {
@@ -374,7 +374,7 @@ impl Endpoints {
                 pts.push((b, i));
             }
         }
-        let mut grid: HashMap<(Um, Um), Vec<usize>> = HashMap::new();
+        let mut grid: HashMap<(Nm, Nm), Vec<usize>> = HashMap::new();
         for (k, (p, _)) in pts.iter().enumerate() {
             grid.entry((p.x.div_euclid(cell), p.y.div_euclid(cell))).or_default().push(k);
         }
@@ -382,7 +382,7 @@ impl Endpoints {
     }
 
     /// `knnSearch( 2 )` restricted to what `findNext` can accept: the end points within `epsilon` of `p`, nearest first, at most two.
-    fn two_within(&self, p: Point, epsilon: Um) -> Vec<(i128, usize)> {
+    fn two_within(&self, p: Point, epsilon: Nm) -> Vec<(i128, usize)> {
         let (cx, cy) = (p.x.div_euclid(self.cell), p.y.div_euclid(self.cell));
         let span = (epsilon + self.cell - 1) / self.cell;
         let mut found: Vec<(i128, usize, usize)> = Vec::new();
@@ -420,7 +420,7 @@ struct Converted {
 struct Chainer<'a> {
     shapes: &'a [Shape],
     max_error: f64,
-    epsilon: Um,
+    epsilon: Nm,
     index: Endpoints,
     /// `shapeOwners`: which shape a directed piece of a contour came from.
     owners: BTreeMap<(Point, Point), usize>,
@@ -516,7 +516,7 @@ impl<'a> Chainer<'a> {
             }
             Shape::Bezier { start, c1, c2, end, .. } => {
                 let (next, reverse) = if closer_to_first(*prev, start, end) { (end, false) } else { (start, true) };
-                let poly = eda_model::bezier::bezier_polyline(start, c1, c2, end, self.max_error.round() as Um);
+                let poly = eda_model::bezier::bezier_polyline(start, c1, c2, end, self.max_error.round() as Nm);
                 let walk: Vec<Point> = if reverse { poly.into_iter().rev().collect() } else { poly };
                 for pt in walk {
                     if *prev == pt {
@@ -579,7 +579,7 @@ fn nearest_on(s: Seg, p: Point) -> Point {
         return s.a;
     }
     let t = ((((p.x - s.a.x) as f64) * dx + ((p.y - s.a.y) as f64) * dy) / len2).clamp(0.0, 1.0);
-    Point { x: s.a.x + (t * dx).round() as Um, y: s.a.y + (t * dy).round() as Um }
+    Point { x: s.a.x + (t * dx).round() as Nm, y: s.a.y + (t * dy).round() as Nm }
 }
 
 /// `SEG::NearestPoints`.
@@ -593,7 +593,7 @@ fn nearest_points(a: Seg, b: Seg) -> (Point, Point) {
 
 /// `buildContourHierarchy`: for each contour, the contours that contain its first point.
 fn contour_hierarchy(contours: &[Contour]) -> BTreeMap<usize, Vec<usize>> {
-    let boxes: Vec<(Um, Um, Um, Um)> = contours.iter().map(|c| ring_bbox(&c.pts)).collect();
+    let boxes: Vec<(Nm, Nm, Nm, Nm)> = contours.iter().map(|c| ring_bbox(&c.pts)).collect();
     let mut map = BTreeMap::new();
     for (ii, c) in contours.iter().enumerate() {
         if c.pts.is_empty() {
@@ -626,7 +626,7 @@ fn has_overlapping_contours(contours: &[Contour]) -> bool {
 }
 
 /// `doConvertOutlineToPolygon`.
-fn convert(shapes: &[Shape], max_error: f64, epsilon: Um, allow_disjoint: bool) -> Converted {
+fn convert(shapes: &[Shape], max_error: f64, epsilon: Nm, allow_disjoint: bool) -> Converted {
     let mut c = Chainer { shapes, max_error, epsilon, index: Endpoints::new(shapes, epsilon), owners: BTreeMap::new(), errors: Vec::new() };
     let mut polys = ShapePolySet::new();
     if shapes.is_empty() {
@@ -863,7 +863,7 @@ fn check_self_intersections(polys: &ShapePolySet, c: &mut Chainer) -> bool {
 
 /// `ConvertOutlineToPolygon( aShapeList, aPolygons, aErrorMax, aChainingEpsilon, aAllowDisjoint, aErrorHandler )`: the contours the shapes
 /// chain into as outlines with holes, `true` when every contour closed and none crosses itself, and every error the chaining found.
-pub fn convert_outline_to_polygon(shapes: &[Shape], max_error: f64, chaining_epsilon: Um, allow_disjoint: bool) -> (ShapePolySet, bool, Vec<OutlineError>) {
+pub fn convert_outline_to_polygon(shapes: &[Shape], max_error: f64, chaining_epsilon: Nm, allow_disjoint: bool) -> (ShapePolySet, bool, Vec<OutlineError>) {
     let r = convert(shapes, max_error, chaining_epsilon, allow_disjoint);
     (r.polys, r.success, r.errors)
 }
@@ -871,7 +871,7 @@ pub fn convert_outline_to_polygon(shapes: &[Shape], max_error: f64, chaining_eps
 /// `BuildBoardPolygonOutlines( aBoard, aOutlines, aErrorMax, aChainingEpsilon, aInferOutlineIfNecessary )` over the board's Edge.Cuts
 /// items: [`convert_outline_to_polygon`] with disjoint outlines allowed, and, when `infer` and the edges do not make a closed outline,
 /// the rectangle round them. (The footprint pass is the importer's: see the module doc.)
-pub fn build_board_polygon_outlines(shapes: &[Shape], max_error: f64, chaining_epsilon: Um, infer: bool) -> BoardOutline {
+pub fn build_board_polygon_outlines(shapes: &[Shape], max_error: f64, chaining_epsilon: Nm, infer: bool) -> BoardOutline {
     let mut out = BoardOutline::default();
     if !shapes.is_empty() {
         let r = convert(shapes, max_error, chaining_epsilon, true);
@@ -907,7 +907,7 @@ pub fn board_outline(design: &Design, infer: bool) -> BoardOutline {
 
 /// [`board_outline`] of a list of Edge.Cuts items.
 pub fn board_outline_of(shapes: &[Shape], infer: bool) -> BoardOutline {
-    let mut out = build_board_polygon_outlines(shapes, MAX_ERROR_UM as f64, CHAINING_EPSILON_UM, infer);
+    let mut out = build_board_polygon_outlines(shapes, MAX_ERROR_NM as f64, CHAINING_EPSILON_NM, infer);
     // `aOutlines.Simplify()`: "make polygon strictly simple to avoid issues (especially in 3D viewer)".
     out.polys.simplify();
     out
@@ -935,7 +935,7 @@ pub fn refresh_outline_summary(design: &mut Design) {
 
 /// `TestBoardOutlinesGraphicItems`: shapes too small to chain (a few nanometres of line), and closed contours that touch or cross each
 /// other. `min_dist` is the smallest size a shape may have, micrometres.
-pub fn test_board_outlines_graphic_items(shapes: &[Shape], min_dist: f64, max_error: f64, chaining_epsilon: Um) -> Vec<OutlineError> {
+pub fn test_board_outlines_graphic_items(shapes: &[Shape], min_dist: f64, max_error: f64, chaining_epsilon: Nm) -> Vec<OutlineError> {
     let mut errors = Vec::new();
     let min_dist = min_dist.max(0.0);
     let nm = |um: f64| (um * 1000.0) as i64;
@@ -1020,7 +1020,7 @@ fn box_overlap_centre(a: &Shape, b: &Shape, max_error: f64) -> Option<Point> {
 
 /// `buildChainedClosedContour`, over all of `open`: the closed loops that segments, arcs and curves chain into, each with the first shape
 /// of its chain (the owner an error is reported against). Chains that do not close are not loops and are left out.
-fn chained_loops(shapes: &[Shape], open: &[usize], max_error: f64, epsilon: Um) -> Vec<(usize, Vec<Point>)> {
+fn chained_loops(shapes: &[Shape], open: &[usize], max_error: f64, epsilon: Nm) -> Vec<(usize, Vec<Point>)> {
     let subset: Vec<Shape> = open.iter().map(|&i| shapes[i].clone()).collect();
     let mut c = Chainer { shapes: &subset, max_error, epsilon, index: Endpoints::new(&subset, epsilon), owners: BTreeMap::new(), errors: Vec::new() };
     let mut remaining: Vec<bool> = vec![true; subset.len()];
@@ -1124,9 +1124,9 @@ pub fn check_edge_cuts(shapes: &[Shape]) -> Vec<OutlineError> {
         return Vec::new();
     }
     // `minSizeForValideGraphics`: 0.001 mm.
-    let mut errors = test_board_outlines_graphic_items(shapes, 1.0, MAX_ERROR_UM as f64, CHAINING_EPSILON_UM);
+    let mut errors = test_board_outlines_graphic_items(shapes, 1.0, MAX_ERROR_NM as f64, CHAINING_EPSILON_NM);
     // `maxError`: "not critical here: we do not use the outline shape" -- 0.05 mm.
-    let built = build_board_polygon_outlines(shapes, 50.0, CHAINING_EPSILON_UM, true);
+    let built = build_board_polygon_outlines(shapes, 50.0, CHAINING_EPSILON_NM, true);
     errors.extend(built.errors);
     if !built.valid && errors.is_empty() {
         // Not a single call of the handler, yet the outline is not valid: `testOutline`'s own wording.
@@ -1425,7 +1425,7 @@ mod tests {
 
     fn design_with(outline: Vec<Point>, shapes: Vec<Shape>, is_shapes: bool) -> Design {
         Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: eda_model::ir::Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,

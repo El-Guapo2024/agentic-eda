@@ -26,7 +26,7 @@
 
 use super::{rotate_point_about, Board};
 use eda_model::fp_edit::parse_field_id;
-use eda_model::ir::{tessellate_arc, Dimension, DimensionKind, FootprintInstance, LabelSide, Millideg, Point, Shape, Side, Text, Track, Um, Via, Zone, TRACK_ARC_SEGMENTS};
+use eda_model::ir::{tessellate_arc, Dimension, DimensionKind, FootprintInstance, LabelSide, Millideg, Point, Shape, Side, Text, Track, Nm, Via, Zone, TRACK_ARC_SEGMENTS};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -43,7 +43,7 @@ pub enum FlipDirection {
 /// One rigid transform of the board plane, applied to the points, the vectors and the orientations of an item.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Xform {
-    Move { dx: Um, dy: Um },
+    Move { dx: Nm, dy: Nm },
     /// Clockwise-positive millidegrees about `pivot`.
     Rotate { pivot: Point, angle: i64 },
     /// `Flip( aCentre, aFlipDirection )`: mirror across the axis through `pivot`, and turn the item over to the other
@@ -208,7 +208,7 @@ impl Board<'_> {
     }
 
     /// `Cmd::MoveItems`.
-    pub(crate) fn move_items(&mut self, ids: &[String], dx: Um, dy: Um) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn move_items(&mut self, ids: &[String], dx: Nm, dy: Nm) -> Result<(), Vec<CheckResult>> {
         self.transform_items("move_items", ids, Xform::Move { dx, dy })
     }
 

@@ -71,8 +71,8 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
             }
         }
         let shapes: Vec<Shape> = shapes.iter().map(shape_in_nm).collect();
-        let max_error = model.board.max_error_um * 1000;
-        let mut outline = eda_drc::outline::build_board_polygon_outlines(&shapes, max_error as f64, eda_model::outline::CHAINING_EPSILON_UM * 1000, true);
+        let max_error = model.board.max_error_nm * 1000;
+        let mut outline = eda_drc::outline::build_board_polygon_outlines(&shapes, max_error as f64, eda_model::outline::CHAINING_EPSILON_NM * 1000, true);
         // "Make polygon strictly simple to avoid issues (especially in 3D viewer)".
         outline.polys.simplify();
         outline
@@ -94,8 +94,8 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
         pcb_name: pcb_name.to_string(),
         host_version: HOST_VERSION.to_string(),
         outline: &outline,
-        hole_clearance: um(b.hole_clearance_um),
-        max_error: um(b.max_error_um),
+        hole_clearance: um(b.hole_clearance_nm),
+        max_error: um(b.max_error_nm),
         default_class,
         class_of_net: &facts_of,
     };

@@ -284,18 +284,18 @@ fn an_eagle_boards_project_carries_the_net_classes_and_the_rules_the_board_file_
         // What our reader makes of the board and the project, as `Cmd::ReplaceBoard` does: the classes and the minimums are the importer's.
         let (_, mut model, _) = import_kicad_pcb(&got.text).expect("the board reads");
         assert!(model.board.net_classes.iter().all(|c| c.name != "highpower"), "not before the project is merged");
-        let default_clearance = model.board.min_clearance_um;
+        let default_clearance = model.board.min_clearance_nm;
         eda_kicad::merge_project_net_classes(&mut model, got.project.as_deref().unwrap());
         eda_kicad::merge_project_design_rules(&mut model, got.project.as_deref().unwrap());
         let merged = model.board.net_classes.iter().find(|c| c.name == "highpower").expect("the net class is in the model after the merge");
         assert_eq!(merged.track_width, Some(305), "12 mil, in the micrometres the model uses: {merged:?}");
-        assert_eq!(model.board.min_clearance_um, 203, "Eagle's 8 mil minimum clearance (was {default_clearance})");
+        assert_eq!(model.board.min_clearance_nm, 203, "Eagle's 8 mil minimum clearance (was {default_clearance})");
 
         // Another Eagle board, another rule: it comes from the file and is not a default of ours.
         let theirs = import_foreign_pcb(&work.join("other"), &other, &ForeignOptions { project: true, ..Default::default() }).expect("the other board");
         let (_, mut model, _) = import_kicad_pcb(&theirs.text).expect("reads");
         eda_kicad::merge_project_design_rules(&mut model, theirs.project.as_deref().expect("its project"));
-        assert_eq!(model.board.min_clearance_um, 152, "6 mil");
+        assert_eq!(model.board.min_clearance_nm, 152, "6 mil");
     });
 }
 

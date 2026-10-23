@@ -13,7 +13,7 @@
 use crate::sch_move::effective_spin;
 use crate::sch_scene::{on_segment, Item, Matrix, Scene};
 use crate::Board;
-use eda_model::ir::{LabelKind, Millideg, NetLabel, Point, SchematicText, TextJustify, TextVAlign, Um};
+use eda_model::ir::{LabelKind, Millideg, NetLabel, Point, SchematicText, TextJustify, TextVAlign, Nm};
 use eda_model::sch_extras::{LabelLook, LabelSpin, SchTextJustify};
 use eda_model::CheckResult;
 
@@ -22,8 +22,8 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 }
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM` of the label and text dialogs: "Don't allow text to disappear".
-const TEXT_SIZE_MIN_UM: Um = 10;
-const TEXT_SIZE_MAX_UM: Um = 1_000_000;
+const TEXT_SIZE_MIN_NM: Nm = 10;
+const TEXT_SIZE_MAX_NM: Nm = 1_000_000;
 
 /// `AutoRotateOnPlacementSupported`: a global label and a hierarchical label rotate themselves, a plain label and a directive label do not.
 pub(crate) fn auto_rotate_supported(kind: &LabelKind) -> bool {
@@ -80,9 +80,9 @@ impl<'m> Scene<'m> {
 
         // SCH_LINE_T: wires, buses and graphic lines. `Items().Overlapping( aPosition )` is the R-tree of `SCH_LINE::GetBoundingBox`, the box of the two ends
         // grown by half the pen (`GetPenWidth() / 2`, and 1 IU on the far side): a point anywhere in that box counts, on the line or not.
-        let mut lines: Vec<(Point, Point, Um)> = self.segs.iter().filter(|s| !s.dead).map(|s| (s.a, s.b, if s.bus { HALF_BUS_PEN_UM } else { HALF_WIRE_PEN_UM })).collect();
+        let mut lines: Vec<(Point, Point, Nm)> = self.segs.iter().filter(|s| !s.dead).map(|s| (s.a, s.b, if s.bus { HALF_BUS_PEN_NM } else { HALF_WIRE_PEN_NM })).collect();
         for l in &self.sch.lines {
-            let half = if l.width_um > 0 { l.width_um / 2 } else { HALF_WIRE_PEN_UM };
+            let half = if l.width_nm > 0 { l.width_nm / 2 } else { HALF_WIRE_PEN_NM };
             lines.extend(l.pts.windows(2).map(|w| (w[0], w[1], half)));
         }
         for (start, end, half) in lines {
@@ -166,14 +166,14 @@ impl<'m> Scene<'m> {
 
 /// Half the pen `SCH_LINE::GetPenWidth` gives a wire with nothing set (the Default net class's 6 mil; a graphic line's `m_DefaultLineWidth` is 6 mil too) and a bus
 /// (12 mil), in micrometres.
-const HALF_WIRE_PEN_UM: Um = 76;
-const HALF_BUS_PEN_UM: Um = 152;
+const HALF_WIRE_PEN_NM: Nm = 76;
+const HALF_BUS_PEN_NM: Nm = 152;
 
 /// What Place Label sets on the label it puts down (`createNewLabel`: the properties dialog's result).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PlacedLabel {
     pub spin: Option<LabelSpin>,
-    pub size_um: Option<Um>,
+    pub size_nm: Option<Nm>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub auto_rotate: Option<bool>,
@@ -186,8 +186,8 @@ impl<'a> Board<'a> {
         if net.trim().is_empty() {
             return Err(fail("ops_bad_label", "label", "a label needs a net name"));
         }
-        if let Some(size) = props.size_um {
-            if !(TEXT_SIZE_MIN_UM..=TEXT_SIZE_MAX_UM).contains(&size) {
+        if let Some(size) = props.size_nm {
+            if !(TEXT_SIZE_MIN_NM..=TEXT_SIZE_MAX_NM).contains(&size) {
                 return Err(fail("ops_bad_text_size", net, "The text size must be between 0.01 and 1000 mm."));
             }
         }
@@ -201,8 +201,8 @@ impl<'a> Board<'a> {
         let id = sch.labels.last().map(|l| l.id.clone()).unwrap_or_default();
 
         let mut look = LabelLook::default();
-        if let Some(size) = props.size_um {
-            look.size_um = if size == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { size };
+        if let Some(size) = props.size_nm {
+            look.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { 0 } else { size };
         }
         look.bold = props.bold.unwrap_or(false);
         look.italic = props.italic.unwrap_or(false);
@@ -229,16 +229,16 @@ impl<'a> Board<'a> {
 
     /// Place Text ([`SchCmd::PlaceText`](crate::sch_edit::SchCmd::PlaceText)): `createNewText`'s result put down at `at`. The justification is KiCad's last-used one, centre and centre, unless the
     /// dialog gave another; the angle is made upright (along the sheet or up it).
-    pub(crate) fn place_text(&mut self, content: &str, at: Point, angle: Millideg, size_um: Um, h: Option<TextJustify>, v: Option<TextVAlign>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn place_text(&mut self, content: &str, at: Point, angle: Millideg, size_nm: Nm, h: Option<TextJustify>, v: Option<TextVAlign>) -> Result<(), Vec<CheckResult>> {
         if content.trim().is_empty() {
             return Err(fail("ops_bad_text", "text", "Text can not be empty."));
         }
-        if !(TEXT_SIZE_MIN_UM..=TEXT_SIZE_MAX_UM).contains(&size_um) {
+        if !(TEXT_SIZE_MIN_NM..=TEXT_SIZE_MAX_NM).contains(&size_nm) {
             return Err(fail("ops_bad_text_size", content, "The text size must be between 0.01 and 1000 mm."));
         }
         let angle = if eda_model::kicad_geom::keep_upright_is_vertical(angle as f64 / 1000.0) { 90_000 } else { 0 };
         let sch = self.schematic_mut_or_create();
-        sch.texts.push(SchematicText { id: String::new(), content: content.to_string(), at, angle, size_um });
+        sch.texts.push(SchematicText { id: String::new(), content: content.to_string(), at, angle, size_nm });
         sch.assign_missing_ids();
         let id = sch.texts.last().map(|t| t.id.clone()).unwrap_or_default();
         let file_default = SchTextJustify::FILE_DEFAULT;

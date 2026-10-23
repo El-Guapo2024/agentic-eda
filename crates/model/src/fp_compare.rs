@@ -12,14 +12,14 @@
 use crate::footprint::{Footprint, Pad, PadShape};
 use crate::fp_art::FpShape;
 use crate::fp_edit::{FootprintAttrs, FootprintKind};
-use crate::ir::{PadConnection, Point, Shape, Um};
+use crate::ir::{PadConnection, Point, Shape, Nm};
 use std::cmp::Ordering;
 
 /// The footprint-level overrides the board has on a footprint (`GetLocalClearance`, `GetLocalSolderMaskMargin`, `GetLocalZoneConnection`), `None` for one it does not set.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FootprintOverrides {
-    pub clearance: Option<Um>,
-    pub solder_mask_margin: Option<Um>,
+    pub clearance: Option<Nm>,
+    pub solder_mask_margin: Option<Nm>,
     pub zone_connection: Option<PadConnection>,
 }
 
@@ -27,13 +27,13 @@ pub struct FootprintOverrides {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PadOverrides {
     pub number: String,
-    pub clearance: Option<Um>,
-    pub solder_mask_margin: Option<Um>,
-    pub solder_paste_margin: Option<Um>,
+    pub clearance: Option<Nm>,
+    pub solder_mask_margin: Option<Nm>,
+    pub solder_paste_margin: Option<Nm>,
     pub solder_paste_margin_ratio: Option<f64>,
     pub zone_connection: Option<PadConnection>,
-    pub thermal_gap: Option<Um>,
-    pub thermal_spoke_width: Option<Um>,
+    pub thermal_gap: Option<Nm>,
+    pub thermal_spoke_width: Option<Nm>,
 }
 
 /// What the board has of a footprint, to be compared with the library's.
@@ -110,13 +110,13 @@ fn is_copper(layer: &str) -> bool {
 }
 
 /// `FOOTPRINT::cmp_drawings` for shapes: by layer, kind, start and end (not for a polygon), centre or control points, vertices, width.
-fn shape_key(s: &FpShape) -> (String, u8, Vec<(Um, Um)>, Um) {
+fn shape_key(s: &FpShape) -> (String, u8, Vec<(Nm, Nm)>, Nm) {
     let pts: Vec<Point> = match &s.shape {
         Shape::Segment { start, end, .. } | Shape::Rect { start, end, .. } => vec![*start, *end],
         Shape::Arc { start, mid, end, .. } => vec![*start, *end, *mid],
         Shape::Circle { center, end, .. } => vec![*center, *end],
         Shape::Polygon { pts, .. } => {
-            let mut v = vec![Point { x: pts.len() as Um, y: 0 }];
+            let mut v = vec![Point { x: pts.len() as Nm, y: 0 }];
             v.extend(pts.iter().copied());
             v
         }
@@ -125,9 +125,22 @@ fn shape_key(s: &FpShape) -> (String, u8, Vec<(Um, Um)>, Um) {
     (s.layer().to_string(), kind_rank(&s.shape), pts.into_iter().map(|p| (p.x, p.y)).collect(), s.shape.stroke_width())
 }
 
-/// Two outlines are the same when one is the other started at another vertex (`SHAPE_LINE_CHAIN::CompareGeometry`, cyclical).
+/// `EPSILON` of `drc_test_provider_library_parity.cpp`: two points closer than this on both axes are one (`TEST_PT`), nanometres.
+const EPSILON: Nm = 10;
+
+/// `TEST_PT( a, b )`: the points are more than [`EPSILON`] apart on an axis.
+fn pt_differs(a: (Nm, Nm), b: (Nm, Nm)) -> bool {
+    (a.0 - b.0).abs() > EPSILON || (a.1 - b.1).abs() > EPSILON
+}
+
+fn point_differs(a: &Point, b: &Point) -> bool {
+    pt_differs((a.x, a.y), (b.x, b.y))
+}
+
+/// Two outlines are the same when one is the other started at another vertex, each within [`EPSILON`] (`SHAPE_LINE_CHAIN::CompareGeometry( other, true,
+/// EPSILON )`, cyclical).
 fn same_outline(a: &[Point], b: &[Point]) -> bool {
-    a.len() == b.len() && (a.is_empty() || (0..a.len()).any(|shift| (0..a.len()).all(|i| a[i] == b[(i + shift) % a.len()])))
+    a.len() == b.len() && (a.is_empty() || (0..a.len()).any(|shift| (0..a.len()).all(|i| !point_differs(&a[i], &b[(i + shift) % a.len()]))))
 }
 
 /// `shapeNeedsUpdate`: the shapes (already in the footprint's frame) differ in kind, geometry, fill, layer, or -- on copper -- stroke.
@@ -140,14 +153,15 @@ fn shape_differs(a: &FpShape, b: &FpShape) -> bool {
     }
     match (&a.shape, &b.shape) {
         (Shape::Rect { start: s1, end: e1, .. }, Shape::Rect { start: s2, end: e2, .. }) => {
-            let norm = |s: &Point, e: &Point| (s.x.min(e.x), s.y.min(e.y), s.x.max(e.x), s.y.max(e.y));
-            norm(s1, e1) != norm(s2, e2)
+            let norm = |s: &Point, e: &Point| ((s.x.min(e.x), s.y.min(e.y)), (s.x.max(e.x), s.y.max(e.y)));
+            let ((o1, f1), (o2, f2)) = (norm(s1, e1), norm(s2, e2));
+            pt_differs(o1, o2) || pt_differs(f1, f2)
         }
-        (Shape::Segment { start: s1, end: e1, .. }, Shape::Segment { start: s2, end: e2, .. }) => s1 != s2 || e1 != e2,
-        (Shape::Circle { center: c1, end: e1, .. }, Shape::Circle { center: c2, end: e2, .. }) => c1 != c2 || e1 != e2,
-        // "Arc center is calculated and so may have round-off errors": the middle may be 0.5 um apart
-        (Shape::Arc { start: s1, mid: m1, end: e1, .. }, Shape::Arc { start: s2, mid: m2, end: e2, .. }) => s1 != s2 || e1 != e2 || ((m1.x - m2.x) as f64).hypot((m1.y - m2.y) as f64) > 0.5,
-        (Shape::Bezier { start: s1, c1: a1, c2: b1, end: e1, .. }, Shape::Bezier { start: s2, c1: a2, c2: b2, end: e2, .. }) => s1 != s2 || e1 != e2 || a1 != a2 || b1 != b2,
+        (Shape::Segment { start: s1, end: e1, .. }, Shape::Segment { start: s2, end: e2, .. }) => point_differs(s1, s2) || point_differs(e1, e2),
+        (Shape::Circle { center: c1, end: e1, .. }, Shape::Circle { center: c2, end: e2, .. }) => point_differs(c1, c2) || point_differs(e1, e2),
+        // "Arc center is calculated and so may have round-off errors": the middle may be `pcbIUScale.mmToIU( 0.0005 )` apart
+        (Shape::Arc { start: s1, mid: m1, end: e1, .. }, Shape::Arc { start: s2, mid: m2, end: e2, .. }) => point_differs(s1, s2) || point_differs(e1, e2) || ((m1.x - m2.x) as f64).hypot((m1.y - m2.y) as f64) > 500.0,
+        (Shape::Bezier { start: s1, c1: a1, c2: b1, end: e1, .. }, Shape::Bezier { start: s2, c1: a2, c2: b2, end: e2, .. }) => point_differs(s1, s2) || point_differs(e1, e2) || point_differs(a1, a2) || point_differs(b1, b2),
         (Shape::Polygon { pts: p1, .. }, Shape::Polygon { pts: p2, .. }) => !same_outline(p1, p2),
         _ => true,
     }
@@ -199,7 +213,7 @@ fn stack_roles(a: &Pad) -> Vec<String> {
 /// `padNeedsUpdate` with a reporter: the lines for the pad `a` (the board's) against `lib` (the library's).
 fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
     let name = format!("Pad {}", a.number);
-    if a.at != lib.at {
+    if pt_differs(a.at, lib.at) {
         out.push(format!("{name} position differs."));
     }
     // `layerSettingsDiffer`: whether the unconnected layers are removed, and, when they are, whether the outside ones are kept.
@@ -239,7 +253,7 @@ fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
                 out.push(format!("{name} chamfered corners differ on layer {layer}."));
             }
         }
-        if sa.offset.unwrap_or((0, 0)) != sl.offset.unwrap_or((0, 0)) {
+        if pt_differs(sa.offset.unwrap_or((0, 0)), sl.offset.unwrap_or((0, 0))) {
             out.push(format!("{name} shape offset from hole differs on layer {layer}."));
         }
     }
@@ -374,16 +388,16 @@ mod tests {
     use crate::footprint::PadKind;
     use crate::fp_art::FpArt;
 
-    fn pad(number: &str, x: Um, y: Um) -> Pad {
-        Pad { number: number.into(), at: (x, y), size: (900, 900), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
+    fn pad(number: &str, x: Nm, y: Nm) -> Pad {
+        Pad { number: number.into(), at: (x, y), size: (900_000, 900_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
     }
 
-    fn line(layer: &str, a: (Um, Um), b: (Um, Um)) -> FpShape {
-        FpShape::new(Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 120, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } })
+    fn line(layer: &str, a: (Nm, Nm), b: (Nm, Nm)) -> FpShape {
+        FpShape::new(Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 120_000, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } })
     }
 
     fn fp(pads: Vec<Pad>, shapes: Vec<FpShape>) -> Footprint {
-        Footprint { name: "X".into(), pads, art: FpArt { shapes, texts: vec![] }, courtyard: Some((1_700, 800)), ..Default::default() }
+        Footprint { name: "X".into(), pads, art: FpArt { shapes, texts: vec![] }, courtyard: Some((1_700_000, 800_000)), ..Default::default() }
     }
 
     fn facts(f: &Footprint) -> InstanceFacts<'_> {
@@ -392,22 +406,22 @@ mod tests {
 
     #[test]
     fn a_footprint_equal_to_its_library_copy_needs_no_update() {
-        let lib = fp(vec![pad("1", -1_000, 0), pad("2", 1_000, 0)], vec![line("F.SilkS", (-500, -700), (500, -700))]);
+        let lib = fp(vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)], vec![line("F.SilkS", (-500_000, -700_000), (500_000, -700_000))]);
         assert!(footprint_differences(&facts(&lib.clone()), &lib).is_empty());
         assert!(!needs_update(&facts(&lib.clone()), &lib));
     }
 
     #[test]
     fn the_lines_follow_kicads_order_and_wording() {
-        let lib = fp(vec![pad("1", -1_000, 0), pad("2", 1_000, 0)], vec![line("F.SilkS", (-500, -700), (500, -700))]);
+        let lib = fp(vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)], vec![line("F.SilkS", (-500_000, -700_000), (500_000, -700_000))]);
         let mut board = lib.clone();
-        board.pads[1].size = (1_100, 900);
-        board.pads[0].at = (-1_200, 0);
-        board.art.shapes[0] = line("F.SilkS", (-500, -700), (600, -700));
+        board.pads[1].size = (1_100_000, 900_000);
+        board.pads[0].at = (-1_200_000, 0);
+        board.art.shapes[0] = line("F.SilkS", (-500_000, -700_000), (600_000, -700_000));
         let mut f = facts(&board);
         f.attrs.dnp = true;
-        f.overrides.clearance = Some(250);
-        f.pad_overrides.push(PadOverrides { number: "2".into(), clearance: Some(300), ..Default::default() });
+        f.overrides.clearance = Some(250_000);
+        f.pad_overrides.push(PadOverrides { number: "2".into(), clearance: Some(300_000), ..Default::default() });
         let lines = footprint_differences(&f, &lib);
         assert_eq!(
             lines,
@@ -424,10 +438,10 @@ mod tests {
 
     #[test]
     fn a_count_that_differs_is_one_line_and_the_items_are_not_paired() {
-        let lib = fp(vec![pad("1", -1_000, 0), pad("2", 1_000, 0)], vec![]);
+        let lib = fp(vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)], vec![]);
         let mut board = lib.clone();
-        board.pads.push(pad("3", 0, 1_000));
-        board.art.shapes.push(line("F.Fab", (0, 0), (1, 1)));
+        board.pads.push(pad("3", 0, 1_000_000));
+        board.art.shapes.push(line("F.Fab", (0, 0), (1000, 1000)));
         assert_eq!(footprint_differences(&facts(&board), &lib), ["Graphic item count differs.", "Pad count differs."]);
     }
 
@@ -436,7 +450,7 @@ mod tests {
         let lib = fp(vec![pad("1", 0, 0)], vec![]);
         let mut th = lib.clone();
         th.pads[0].kind = PadKind::ThroughHole;
-        th.pads[0].drill = Some(800);
+        th.pads[0].drill = Some(800_000);
         let lines = footprint_differences(&facts(&th), &lib);
         assert!(lines.contains(&"Footprint types differ.".to_string()), "{lines:?}");
         assert!(lines.contains(&"Pad 1 pad type differs.".to_string()) && lines.contains(&"Pad 1 drill shape differs.".to_string()) && lines.contains(&"Pad 1 drill size differs.".to_string()), "{lines:?}");
@@ -444,29 +458,29 @@ mod tests {
 
     #[test]
     fn a_polygon_started_at_another_vertex_and_a_rectangle_drawn_the_other_way_are_the_same() {
-        let square = |pts: &[(Um, Um)]| FpShape::new(Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect() });
-        let rect = |a: (Um, Um), b: (Um, Um)| FpShape::new(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } });
-        let lib = fp(vec![pad("1", 0, 0)], vec![square(&[(0, 0), (10, 0), (10, 10), (0, 10)]), rect((0, 0), (10, 10))]);
+        let square = |pts: &[(Nm, Nm)]| FpShape::new(Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: 100_000, filled: false, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect() });
+        let rect = |a: (Nm, Nm), b: (Nm, Nm)| FpShape::new(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } });
+        let lib = fp(vec![pad("1", 0, 0)], vec![square(&[(0, 0), (10_000, 0), (10_000, 10_000), (0, 10_000)]), rect((0, 0), (10_000, 10_000))]);
         let mut board = lib.clone();
-        board.art.shapes = vec![square(&[(10, 10), (0, 10), (0, 0), (10, 0)]), rect((10, 10), (0, 0))];
+        board.art.shapes = vec![square(&[(10_000, 10_000), (0, 10_000), (0, 0), (10_000, 0)]), rect((10_000, 10_000), (0, 0))];
         assert!(footprint_differences(&facts(&board), &lib).is_empty());
-        board.art.shapes[0] = square(&[(0, 0), (10, 0), (10, 11), (0, 10)]);
+        board.art.shapes[0] = square(&[(0, 0), (10_000, 0), (10_000, 11_000), (0, 10_000)]);
         assert_eq!(footprint_differences(&facts(&board), &lib), ["Polygon on F.SilkS differs."]);
     }
 
     #[test]
     fn a_stroke_only_counts_on_copper() {
-        let lib = fp(vec![pad("1", 0, 0)], vec![line("F.SilkS", (0, 0), (1, 1)), line("F.Cu", (0, 0), (5, 5))]);
+        let lib = fp(vec![pad("1", 0, 0)], vec![line("F.SilkS", (0, 0), (1000, 1000)), line("F.Cu", (0, 0), (5000, 5000))]);
         let mut board = lib.clone();
-        board.art.shapes[0].shape.set_stroke_width(300);
+        board.art.shapes[0].shape.set_stroke_width(300_000);
         assert!(footprint_differences(&facts(&board), &lib).is_empty(), "a silkscreen line may be thicker");
-        board.art.shapes[1].shape.set_stroke_width(300);
+        board.art.shapes[1].shape.set_stroke_width(300_000);
         assert_eq!(footprint_differences(&facts(&board), &lib), ["Line on F.Cu differs."]);
     }
 
     #[test]
     fn pads_are_paired_by_number_the_way_a_person_counts() {
-        let lib = fp(vec![pad("2", 0, 0), pad("10", 1_000, 0), pad("1", -1_000, 0)], vec![]);
+        let lib = fp(vec![pad("2", 0, 0), pad("10", 1_000_000, 0), pad("1", -1_000_000, 0)], vec![]);
         let mut board = lib.clone();
         board.pads.reverse();
         assert!(footprint_differences(&facts(&board), &lib).is_empty());
@@ -479,7 +493,7 @@ mod tests {
     fn the_courtyard_is_compared_too() {
         let lib = fp(vec![pad("1", 0, 0)], vec![]);
         let mut board = lib.clone();
-        board.courtyard = Some((1_800, 800));
+        board.courtyard = Some((1_800_000, 800_000));
         assert_eq!(footprint_differences(&facts(&board), &lib), ["Courtyard differs."]);
     }
 }

@@ -165,7 +165,7 @@ mod tests {
 
     fn design(root: SchematicSection, screens: BTreeMap<String, SchematicSection>) -> Design {
         Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(root),
             nets: None,

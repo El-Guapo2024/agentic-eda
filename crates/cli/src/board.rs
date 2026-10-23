@@ -98,8 +98,8 @@ pub(crate) struct Meta {
     pub(crate) intent: String,
     /// Snap and spacing, kept so every command uses the same grid the
     /// board was created on.
-    pub(crate) snap_um: i64,
-    pub(crate) spacing_um: i64,
+    pub(crate) snap_nm: i64,
+    pub(crate) spacing_nm: i64,
 }
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
@@ -298,7 +298,7 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
             symbol: (!sym.lib_id.is_empty()).then(|| sym.lib_id.clone()),
             datasheet: (!sym.datasheet.is_empty()).then(|| sym.datasheet.clone()),
             pins,
-            body_um: None,
+            body_nm: None,
             edge: None,
         });
     }
@@ -422,7 +422,7 @@ fn fold_board_parts(design: &eda_model::ir::Design, model: &mut ConstraintModel)
             symbol: None,
             datasheet: None,
             pins: vec![],
-            body_um: None,
+            body_nm: None,
             edge: None,
         };
         // The part's pins are its electrical pads: one per number, a non-plated hole is none.
@@ -1178,7 +1178,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     let with_models = crate::embedded_api::with_collected_models(cmd, dir, &design, &model)?;
     let cmd = with_models.as_ref().unwrap_or(cmd);
     // KiCad 10's via stitching: the vias a `set_via_stitch` leaves out are placed here, from the zone fills (`crate::via_stitch_api`).
-    let with_vias = crate::via_stitch_api::with_planned_vias(cmd, dir, &design, &model, meta.snap_um, meta.spacing_um);
+    let with_vias = crate::via_stitch_api::with_planned_vias(cmd, dir, &design, &model, meta.snap_nm, meta.spacing_nm);
     let cmd = with_vias.as_ref().unwrap_or(cmd);
     // A board imported from another EDA format brings a model of its own: the file the command names is written before it runs (`crate::import_foreign`).
     crate::import_foreign::prepare_board(cmd, dir)?;
@@ -1202,7 +1202,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
         }
         before
     });
-    let mut board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+    let mut board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
     // Reorganizing into sheets draws the design's nets anew: let it give a net back the name the intent declared for it.
     if matches!(cmd, Cmd::ReorganizeSheets) {
         if let Some(intent) = std::fs::read_to_string(&meta.intent).ok().and_then(|t| serde_yaml::from_str::<ConstraintModel>(&t).ok()) {
@@ -1241,7 +1241,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
         })
     };
     let judged: &ConstraintModel = refolded.as_ref().unwrap_or(&model);
-    let mut board = if refolded.is_some() { Board::new(board.design().clone(), judged, meta.snap_um, meta.spacing_um) } else { board };
+    let mut board = if refolded.is_some() { Board::new(board.design().clone(), judged, meta.snap_nm, meta.spacing_nm) } else { board };
     // KiCad 10's drill charts report the board, so a command that changed a hole has made them wrong: they are built again in the same step (`OnModify`'s
     // `RefreshGeneratedTables`), against the board as the command left it -- the model with the footprints a Paste, a pad edit or a new board brought (`refolded`).
     board.refresh_drill_charts();
@@ -2007,8 +2007,8 @@ pub fn run(
             let abs = std::fs::canonicalize(intent).unwrap_or_else(|_| PathBuf::from(intent));
             let meta = Meta {
                 intent: abs.display().to_string(),
-                snap_um: model.solver.place_snap_um,
-                spacing_um: model.solver.place_spacing_um,
+                snap_nm: model.solver.place_snap_nm,
+                spacing_nm: model.solver.place_spacing_nm,
             };
             std::fs::write(meta_path(&out), serde_json::to_string_pretty(&meta).expect("meta encodes"))
                 .map_err(|e| fail("board_write", "board.json", e.to_string()))?;
@@ -2018,12 +2018,12 @@ pub fn run(
         }
         "status" => {
             let (meta, design, model) = load(&dir)?;
-            let board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+            let board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
             print_status(&board, &model)
         }
         "check" => {
             let (meta, design, model) = load(&dir)?;
-            let board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+            let board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
             let checks = judged_checks(&board, &model);
             let failed: Vec<CheckResult> = checks.iter().filter(|c| matches!(c.status, eda_model::CheckStatus::Fail)).cloned().collect();
             for c in &failed {
@@ -2155,7 +2155,7 @@ pub fn run(
                 // No --width: the line thickness Board Setup > Text & Graphics > Defaults gives the layer's class (`BOARD_DESIGN_SETTINGS::GetLineThickness`).
                 let stroke_width = match flag(rest, "--width") {
                     Some(w) => mm_arg(&w)?,
-                    None => load(&dir)?.2.board.text_graphics.line_thickness_um(&layer),
+                    None => load(&dir)?.2.board.text_graphics.line_thickness_nm(&layer),
                 };
                 let filled = has(rest, "--filled");
                 let pts = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "shape add", "needs --pts \"x,y ...\", mm"))?)?;
@@ -2182,17 +2182,17 @@ pub fn run(
                 let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "text add", "needs --layer L"))?;
                 // No --size or --width: what Board Setup > Text & Graphics > Defaults gives the layer's class (`GetTextSize`, `GetTextThickness`).
                 let defaults = load(&dir)?.2.board.text_graphics;
-                let size_um = match flag(rest, "--size") {
+                let size_nm = match flag(rest, "--size") {
                     Some(v) => mm_arg(&v)?,
-                    None => defaults.text_size_um(&layer).1,
+                    None => defaults.text_size_nm(&layer).1,
                 };
                 let stroke_width = match flag(rest, "--width") {
                     Some(v) => mm_arg(&v)?,
-                    None => defaults.text_thickness_um(&layer),
+                    None => defaults.text_thickness_nm(&layer),
                 };
                 let justify = parse_justify(flag(rest, "--justify").as_deref())?;
                 let mirror = has(rest, "--mirror");
-                let text = Text { id: String::new(), content, at, angle, layer, size_um, stroke_width, justify, mirror };
+                let text = Text { id: String::new(), content, at, angle, layer, size_nm, stroke_width, justify, mirror };
                 step_with(&dir, Cmd::AddText { text }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "edit" => {
@@ -2200,11 +2200,11 @@ pub fn run(
                 let content = flag(rest, "--content").ok_or_else(|| fail("board_usage", "text edit", "needs --content \"...\""))?;
                 let angle = parse_angle(flag(rest, "--angle").as_deref())?;
                 let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "text edit", "needs --layer L"))?;
-                let size_um = mm_arg(&flag(rest, "--size").ok_or_else(|| fail("board_usage", "text edit", "needs --size, mm"))?)?;
+                let size_nm = mm_arg(&flag(rest, "--size").ok_or_else(|| fail("board_usage", "text edit", "needs --size, mm"))?)?;
                 let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
                 let justify = parse_justify(flag(rest, "--justify").as_deref())?;
                 let mirror = has(rest, "--mirror");
-                step_with(&dir, Cmd::EditText { id, content, angle, layer, size_um, stroke_width, justify, mirror }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::EditText { id, content, angle, layer, size_nm, stroke_width, justify, mirror }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "text delete", "usage: eda board text delete <id>"))?;
@@ -2308,7 +2308,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eda_model::ir::{Design, FootprintInstance, PlacementSection, Provenance, Side, Um};
+    use eda_model::ir::{Design, FootprintInstance, PlacementSection, Provenance, Side, Nm};
     use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
     pub(super) fn scratch(name: &str) -> PathBuf {
@@ -2344,7 +2344,7 @@ mod tests {
             package: Some("2PAD".into()),
             footprint: Some("2PAD".into()),
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         };
         let model = ConstraintModel {
@@ -2358,7 +2358,7 @@ mod tests {
 
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -2374,7 +2374,7 @@ mod tests {
             drawings: None,
         };
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -2389,7 +2389,7 @@ mod tests {
         step(&dir, cmd, false, "test").expect("adding the track itself is legal; only the copper it creates is bad");
 
         let (meta, design, model) = load(&dir).unwrap();
-        let board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+        let board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
         let checks = all_checks(&board, &model);
         assert!(
             checks.iter().any(|c| c.check == "routing_clearance" && matches!(c.status, CheckStatus::Fail)),
@@ -2605,7 +2605,7 @@ mod tests {
             return;
         };
         let (with, plain) = (scratch("board_layers_cli_a"), scratch("board_layers_cli_b"));
-        let text = |content: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 3_000, y: 12_000 }, angle: 0, layer: "User.1".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        let text = |content: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 3_000, y: 12_000 }, angle: 0, layer: "User.1".into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
         for dir in [&with, &plain] {
             setup(dir);
             four_copper_layers(dir);
@@ -2629,7 +2629,7 @@ mod tests {
         assert_ne!(body(&a), body(&b), "the plots differ: 'Notes' is not 'User.1'");
         step(&plain, Cmd::SetBoardLayers { settings: { let mut p = a_layers_page(); p.names.clear(); p.names.insert("User.1".into(), "Notes".into()); p } }, false, "ui").unwrap();
         let text_id = load(&plain).unwrap().1.drawings.unwrap().texts[0].id.clone();
-        step(&plain, Cmd::EditText { id: text_id, content: "on Notes / Notes".into(), angle: 0, layer: "User.1".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false }, false, "ui").unwrap();
+        step(&plain, Cmd::EditText { id: text_id, content: "on Notes / Notes".into(), angle: 0, layer: "User.1".into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false }, false, "ui").unwrap();
         assert_eq!(body(&plot(&with)), body(&plot(&plain)), "the LAYER variable on a renamed layer is the user's name, as the studio shows it");
 
         // kicad-cli's own rewrite of the derived board file keeps what the page set: the names, the types and the layers.
@@ -2651,7 +2651,7 @@ mod tests {
 
     fn a_tuning_profile(name: &str) -> eda_model::setup_pages::TuningProfile {
         use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile};
-        TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("B.Cu".into()), width_um: 130, diff_pair_gap_um: 150, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
+        TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("B.Cu".into()), width_nm: 130, diff_pair_gap_nm: 150, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
     }
 
     /// Formatting, Zone Hatch Offsets, Length-tuning Patterns and Tuning Profiles: each a page of one undo step, in the state the studio reads, and in the derived board file and project
@@ -2669,14 +2669,14 @@ mod tests {
             (eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap(), serde_json::from_str::<serde_json::Value>(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap())
         };
         let before = rules(&dir);
-        assert_eq!((before["formatting"]["dash_length_ratio"].as_f64(), before["tuning_patterns"]["diff_pair"]["spacing_um"].as_i64(), before["zone_hatch_offsets"].as_object().map(|o| o.len()), before["tuning_profiles"]["profiles"].as_array().map(|a| a.len())), (Some(12.0), Some(1_000), Some(0), Some(0)));
+        assert_eq!((before["formatting"]["dash_length_ratio"].as_f64(), before["tuning_patterns"]["diff_pair"]["spacing_nm"].as_i64(), before["zone_hatch_offsets"].as_object().map(|o| o.len()), before["tuning_profiles"]["profiles"].as_array().map(|a| a.len())), (Some(12.0), Some(1_000), Some(0), Some(0)));
 
         let formatting = FormattingSettings { dash_length_ratio: 8.0, gap_length_ratio: 2.0, apply_to_fp_fields: true, ..Default::default() };
         step(&dir, Cmd::SetFormatting { settings: formatting.clone() }, false, "ui").unwrap();
-        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), HatchOffset { x_um: 1_500, y_um: -2_000 })].into() }, false, "ui").unwrap();
+        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), HatchOffset { x_nm: 1_500, y_nm: -2_000 })].into() }, false, "ui").unwrap();
         let mut patterns = TuningPatterns::default();
         patterns.diff_pair.corner_style = CornerStyle::Chamfer;
-        patterns.single_track.max_amplitude_um = 1_500;
+        patterns.single_track.max_amplitude_nm = 1_500;
         step(&dir, Cmd::SetTuningPatterns { settings: patterns.clone() }, false, "ui").unwrap();
         let power = eda_model::NetClass { name: "power".into(), nets: vec!["VCC".into()], track_width: Some(250), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
         let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
@@ -2686,7 +2686,7 @@ mod tests {
 
         let after = rules(&dir);
         assert_eq!(after["formatting"], serde_json::to_value(&formatting).unwrap());
-        assert_eq!(after["zone_hatch_offsets"], serde_json::json!({ "F.Cu": { "x_um": 1_500, "y_um": -2_000 } }));
+        assert_eq!(after["zone_hatch_offsets"], serde_json::json!({ "F.Cu": { "x_nm": 1_500, "y_nm": -2_000 } }));
         assert_eq!(after["tuning_patterns"], serde_json::to_value(&patterns).unwrap());
         assert_eq!(after["tuning_profiles"]["class_profiles"], serde_json::json!({ "power": "USB 90" }));
         for page in ["formatting", "zone_hatch_offsets", "tuning_patterns", "tuning_profiles"] {
@@ -2741,7 +2741,7 @@ mod tests {
         let dir = scratch("setup_pages_cli_board");
         setup(&dir);
         step(&dir, Cmd::SetFormatting { settings: eda_model::setup_pages::FormattingSettings { dash_length_ratio: 8.0, gap_length_ratio: 2.5, ..Default::default() } }, false, "ui").unwrap();
-        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_um: 1_500, y_um: -2_000 }), ("B.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_um: 0, y_um: 700 })].into() }, false, "ui").unwrap();
+        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_nm: 1_500, y_nm: -2_000 }), ("B.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_nm: 0, y_nm: 700 })].into() }, false, "ui").unwrap();
         let (_, design, model) = load(&dir).unwrap();
         let copy = dir.join("upgraded.kicad_pcb");
         std::fs::write(&copy, eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap()).unwrap();
@@ -2807,7 +2807,7 @@ mod tests {
         two_close_tracks(&dir);
         let count = |dir: &Path| drc_counts(dir).get("clearance").copied().unwrap_or(0);
         assert_eq!(count(&dir), 0, "250 um of air between GND and VCC is fine for the board's 200 um");
-        let class = |name: &str, nets: &[&str], clearance: Um| eda_model::NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(200), clearance: Some(clearance), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let class = |name: &str, nets: &[&str], clearance: Nm| eda_model::NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(200), clearance: Some(clearance), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
         let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
         // VCC is in both: `wide` names it, `power` has a pattern (`V??`, or the regular expression `V[A-Z]+`) that matches it. `wide` is first, so its 100 um is VCC's clearance.
         let (wide, power) = (class("wide", &["VCC"], 100), class("power", &["V[A-Z]{2}"], 400));
@@ -2842,23 +2842,23 @@ mod tests {
         cli(&["text", "add", "--content", "copper", "--at", "3,8", "--layer", "F.Cu"]);
         let (_, design, _) = load(&dir).unwrap();
         let d = design.drawings.as_ref().unwrap();
-        let widths: Vec<(String, Um)> = d.shapes.iter().map(|s| match s { Shape::Segment { layer, stroke_width, .. } => (layer.clone(), *stroke_width), _ => unreachable!() }).collect();
+        let widths: Vec<(String, Nm)> = d.shapes.iter().map(|s| match s { Shape::Segment { layer, stroke_width, .. } => (layer.clone(), *stroke_width), _ => unreachable!() }).collect();
         assert_eq!(widths, vec![("F.SilkS".into(), 100), ("F.Cu".into(), 200), ("Edge.Cuts".into(), 50), ("F.Fab".into(), 400)], "KiCad's line thickness of each class; an explicit --width wins");
-        assert_eq!(d.texts.iter().map(|t| (t.size_um, t.stroke_width)).collect::<Vec<_>>(), vec![(1_000, 100), (1_500, 300)]);
+        assert_eq!(d.texts.iter().map(|t| (t.size_nm, t.stroke_width)).collect::<Vec<_>>(), vec![(1_000, 100), (1_500, 300)]);
 
         // The page changes what the next item starts with.
         let mut defaults = eda_model::rules::TextGraphicsDefaults::default();
-        defaults.silk.line_width_um = 180;
-        defaults.silk.text_width_um = 1_200;
-        defaults.silk.text_height_um = 1_200;
-        defaults.silk.text_thickness_um = 200;
+        defaults.silk.line_width_nm = 180;
+        defaults.silk.text_width_nm = 1_200;
+        defaults.silk.text_height_nm = 1_200;
+        defaults.silk.text_thickness_nm = 200;
         step(&dir, Cmd::SetTextGraphicsDefaults { settings: defaults }, false, "ui").unwrap();
         cli(&["shape", "add", "--kind", "segment", "--layer", "B.SilkS", "--pts", "1,5 5,5"]);
         cli(&["text", "add", "--content", "again", "--at", "3,10", "--layer", "B.SilkS"]);
         let (_, design, _) = load(&dir).unwrap();
         let d = design.drawings.as_ref().unwrap();
         assert!(matches!(d.shapes.last(), Some(Shape::Segment { stroke_width: 180, .. })));
-        assert_eq!((d.texts.last().unwrap().size_um, d.texts.last().unwrap().stroke_width), (1_200, 200));
+        assert_eq!((d.texts.last().unwrap().size_nm, d.texts.last().unwrap().stroke_width), (1_200, 200));
     }
 
     fn variables_of(rows: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
@@ -2873,7 +2873,7 @@ mod tests {
         let dir = scratch("text_variables_shown");
         setup(&dir);
         step(&dir, Cmd::SetTextVariables { variables: variables_of(&[("REV", "B"), ("Designer name", "Ada")]) }, false, "ui").unwrap();
-        let text = |content: &str, layer: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 1_000, y: 1_000 }, angle: 0, layer: layer.into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        let text = |content: &str, layer: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 1_000, y: 1_000 }, angle: 0, layer: layer.into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
         for (content, layer) in [("Rev ${REV} by ${Designer name} on ${LAYER}, \\${REV}", "F.SilkS"), ("plain", "F.SilkS"), ("A{slash}B", "F.Fab"), ("${PROJECTNAME}/${FILENAME} ${CURRENT_DATE} ${U1:Value}", "F.SilkS")] {
             step(&dir, text(content, layer), false, "ui").unwrap();
         }
@@ -2882,7 +2882,7 @@ mod tests {
         let user = |name: &str, text: &str| UserField { name: name.into(), text: text.into(), layout: FieldLayout::new(Point { x: 0, y: 0 }, "F.Fab") };
         step(&dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: None, value: Some(value), fields: Some(vec![user("MPN", "ERJ ${REV} ${LAYER}")]), attrs: None }, false, "ui").unwrap();
         step(&dir, Cmd::EditBoardFootprint { part: "U2".into(), reference: None, value: None, fields: Some(vec![user("Twin", "${U1:Value}"), user("Plain", "nothing")]), attrs: None }, false, "ui").unwrap();
-        step(&dir, Cmd::SetBoardPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block: eda_model::ir::TitleBlock { title: "Board ${REV}".into(), rev: "C".into(), ..Default::default() } }, false, "ui").unwrap();
+        step(&dir, Cmd::SetBoardPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block: eda_model::ir::TitleBlock { title: "Board ${REV}".into(), rev: "C".into(), ..Default::default() } }, false, "ui").unwrap();
 
         let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
         let clock = crate::text_vars_json::clock_of("/api/state?clock=2026-10-10T21:30:05");
@@ -2926,8 +2926,8 @@ mod tests {
         step(&dir, Cmd::SetTextVariables { variables: variables_of(&[("REV", "B")]) }, false, "ui").unwrap();
         step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k ${REV}".into()), footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "ui").unwrap();
         step(&dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some("${R1:Value} twin, ${Footprint} ${FOOTPRINT_NAME}".into()), footprint: None, datasheet: None }, false, "ui").unwrap();
-        step(&dir, Cmd::AddSchText { content: "Sheet ${#}/${##} ${SHEETPATH} ${TITLE} ${REV}".into(), at: Point { x: 15_000, y: 5_000 }, angle_millideg: 0, size_um: 1_270 }, false, "ui").unwrap();
-        step(&dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block: eda_model::ir::TitleBlock { title: "Main ${REV}".into(), ..Default::default() } }, false, "ui").unwrap();
+        step(&dir, Cmd::AddSchText { content: "Sheet ${#}/${##} ${SHEETPATH} ${TITLE} ${REV}".into(), at: Point { x: 15_000, y: 5_000 }, angle_millideg: 0, size_nm: 1_270 }, false, "ui").unwrap();
+        step(&dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block: eda_model::ir::TitleBlock { title: "Main ${REV}".into(), ..Default::default() } }, false, "ui").unwrap();
 
         let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
         let sym = |r: &str| sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == r).unwrap().clone();
@@ -2982,15 +2982,15 @@ mod tests {
         if !variables.is_empty() {
             step(dir, Cmd::SetTextVariables { variables: variables_of(variables) }, false, "ui").unwrap();
         }
-        let add = Cmd::AddText { text: Text { id: String::new(), content: texts.board_text.clone(), at: Point { x: 3_000, y: 12_000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        let add = Cmd::AddText { text: Text { id: String::new(), content: texts.board_text.clone(), at: Point { x: 3_000, y: 12_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
         step(dir, add, false, "ui").unwrap();
         let mut value = FieldLayout::new(Point { x: 0, y: 2_500 }, "F.SilkS");
         value.text = Some(texts.value.clone());
-        let user = |name: &str, text: &str, y: Um| UserField { name: name.into(), text: text.into(), layout: FieldLayout::new(Point { x: 0, y }, "F.SilkS") };
+        let user = |name: &str, text: &str, y: Nm| UserField { name: name.into(), text: text.into(), layout: FieldLayout::new(Point { x: 0, y }, "F.SilkS") };
         step(dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: None, value: Some(value), fields: Some(vec![user("MPN", &texts.mpn, -2_500)]), attrs: None }, false, "ui").unwrap();
         step(dir, Cmd::EditBoardFootprint { part: "U2".into(), reference: None, value: None, fields: Some(vec![user("Twin", &texts.twin, -2_500)]), attrs: None }, false, "ui").unwrap();
         let title_block = eda_model::ir::TitleBlock { title: texts.title.clone(), rev: "C".into(), company: texts.company.clone(), ..Default::default() };
-        step(dir, Cmd::SetBoardPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block }, false, "ui").unwrap();
+        step(dir, Cmd::SetBoardPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block }, false, "ui").unwrap();
     }
 
     /// kicad-cli's plot of a board with `${NAME}` in a board text, in footprint fields and in the title block is the plot of a board that has what the studio
@@ -3060,9 +3060,9 @@ mod tests {
         }
         step(dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some(texts[0].into()), footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "ui").unwrap();
         step(dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some(texts[1].into()), footprint: None, datasheet: None }, false, "ui").unwrap();
-        step(dir, Cmd::AddSchText { content: texts[2].into(), at: Point { x: 15_000, y: 30_000 }, angle_millideg: 0, size_um: 1_270 }, false, "ui").unwrap();
+        step(dir, Cmd::AddSchText { content: texts[2].into(), at: Point { x: 15_000, y: 30_000 }, angle_millideg: 0, size_nm: 1_270 }, false, "ui").unwrap();
         let title_block = eda_model::ir::TitleBlock { title: texts[3].into(), ..Default::default() };
-        step(dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block }, false, "ui").unwrap();
+        step(dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block }, false, "ui").unwrap();
     }
 
     /// The same proof on the schematic: kicad-cli's plot of a sheet whose symbols' values, free text and title block name variables is the plot of the sheet
@@ -3224,7 +3224,7 @@ mod tests {
         let dir = scratch("transform_items_undo");
         setup(&dir);
         step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
-        step(&dir, Cmd::AddText { text: eda_model::ir::Text { id: String::new(), content: "hi".into(), at: Point { x: 8_000, y: 16_000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: eda_model::ir::TextJustify::Center, mirror: false } }, false, "test").unwrap();
+        step(&dir, Cmd::AddText { text: eda_model::ir::Text { id: String::new(), content: "hi".into(), at: Point { x: 8_000, y: 16_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000, stroke_width: 150, justify: eda_model::ir::TextJustify::Center, mirror: false } }, false, "test").unwrap();
         let (_, before, _) = load(&dir).unwrap();
         let (track, text) = (before.routing.as_ref().unwrap().tracks[0].id.clone(), before.drawings.as_ref().unwrap().texts[0].id.clone());
         let pivot = Point { x: 10_000, y: 10_000 };
@@ -3367,9 +3367,9 @@ mod tests {
             scale: 1.0,
             offset_x_nm: 0,
             offset_y_nm: 0,
-            line_width_um: 200,
+            line_width_nm: 200,
             group: true,
-            fix_tolerance_um: None,
+            fix_tolerance_nm: None,
             replace_outline: false,
         };
         step(&dir, Cmd::ImportGraphics(req), false, "test").unwrap();
@@ -3390,7 +3390,7 @@ mod tests {
         let dir = scratch("import_graphics_sch_undo");
         setup_both(&dir);
         let dxf = std::fs::read_to_string(format!("{}/../kicad/tests/fixtures/board_outline_lines_arcs.dxf", env!("CARGO_MANIFEST_DIR"))).unwrap();
-        let sch_req = eda_ops::ImportSchGraphics { format: eda_ops::GraphicsFormat::Dxf, text: dxf.clone(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 0 };
+        let sch_req = eda_ops::ImportSchGraphics { format: eda_ops::GraphicsFormat::Dxf, text: dxf.clone(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 0 };
         let counts = |dir: &Path| {
             let (_, d, _) = load(dir).unwrap();
             let s = d.schematic.as_ref().unwrap();
@@ -3405,7 +3405,7 @@ mod tests {
         assert_eq!(counts(&dir), (before.0 + 4, before.1 + 4));
 
         step(&dir, Cmd::OpenSymbolForEdit { lib_id: "TEST:R".into() }, false, "test").unwrap();
-        let sym_req = eda_ops::ImportSymbolGraphics { lib_id: "TEST:R".into(), unit: 1, body_style: 1, format: eda_ops::GraphicsFormat::Dxf, text: dxf, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 0 };
+        let sym_req = eda_ops::ImportSymbolGraphics { lib_id: "TEST:R".into(), unit: 1, body_style: 1, format: eda_ops::GraphicsFormat::Dxf, text: dxf, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 0 };
         let drawn = |dir: &Path| load(dir).unwrap().1.symbol_library.as_ref().and_then(|l| l.by_lib_id("TEST:R")).map(|s| s.graphics.len());
         let had = drawn(&dir).unwrap();
         step(&dir, Cmd::ImportSymbolGraphics(sym_req), false, "test").unwrap();
@@ -3422,7 +3422,7 @@ mod tests {
         let dir = scratch("import_carry_sch");
         setup_both(&dir);
         let dxf = std::fs::read_to_string(format!("{}/../kicad/tests/fixtures/board_outline_lines_arcs.dxf", env!("CARGO_MANIFEST_DIR"))).unwrap();
-        let req = eda_ops::ImportSchGraphics { format: eda_ops::GraphicsFormat::Dxf, text: dxf, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 0 };
+        let req = eda_ops::ImportSchGraphics { format: eda_ops::GraphicsFormat::Dxf, text: dxf, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 0 };
         let counts = |dir: &Path| {
             let (_, d, _) = load(dir).unwrap();
             let s = d.schematic.as_ref().unwrap();
@@ -3434,7 +3434,7 @@ mod tests {
         step_carrying(&dir, Cmd::ImportSchGraphics(req.clone()), Strictness::Off, "test", Some(carry::Carry::Begin)).unwrap();
         assert!(carry::is_carrying(&dir));
         assert_eq!(counts(&dir), (before.0 + 4, before.1 + 4), "the items are on the sheet while they are carried");
-        let drop = Cmd::AddSchLine { pts: vec![Point { x: 0, y: 0 }, Point { x: 5_000, y: 0 }], width_um: 0 };
+        let drop = Cmd::AddSchLine { pts: vec![Point { x: 0, y: 0 }, Point { x: 5_000, y: 0 }], width_nm: 0 };
         step_carrying(&dir, drop, Strictness::Off, "test", Some(carry::Carry::Commit)).unwrap();
         assert!(!carry::is_carrying(&dir));
         assert_eq!(counts(&dir), (before.0 + 5, before.1 + 4));
@@ -3479,7 +3479,7 @@ mod tests {
 
         // Constraints: a minimum track width above the tracks' 200 um.
         assert_eq!(count(&dir, "track_width"), 0);
-        let constraints = eda_model::rules::Constraints { min_track_width_um: 250, ..eda_model::rules::Constraints::of(&model.board) };
+        let constraints = eda_model::rules::Constraints { min_track_width_nm: 250, ..eda_model::rules::Constraints::of(&model.board) };
         step(&dir, Cmd::SetConstraints { constraints }, false, "ui").unwrap();
         assert_eq!(count(&dir, "track_width"), 2, "both tracks are under the new minimum");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
@@ -3623,7 +3623,7 @@ mod tests {
             footprint: None,
             symbol: Some("TEST:R".into()),
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
-            body_um: None,
+            body_nm: None,
             datasheet: None,
             edge: None,
         };
@@ -3652,10 +3652,10 @@ mod tests {
         let intent_path = dir.join("intent.yaml");
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
-        let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let sym = |id: &str, x: Nm, y: Nm| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(eda_model::ir::SchematicSection {
                 symbols: vec![sym("R1", 10_000, 10_000), sym("R2", 20_000, 10_000)],
@@ -3681,7 +3681,7 @@ mod tests {
             drawings: None,
         };
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -3824,7 +3824,7 @@ mod tests {
         let (_, _, before) = load(&dir).unwrap();
         assert_ne!(net_of(&before.nets, "R1.1").unwrap().name, net_of(&before.nets, "R2.1").unwrap().name, "sanity: starts on separate nets");
 
-        step(&dir, Cmd::AddSchText { content: "Power supply section".into(), at: Point { x: 15_000, y: 5_000 }, angle_millideg: 0, size_um: 1270 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSchText { content: "Power supply section".into(), at: Point { x: 15_000, y: 5_000 }, angle_millideg: 0, size_nm: 1270 }, false, "test").unwrap();
 
         // Reconciling at all (triggered by *any* Domain::Schematic Cmd, not
         // just this one) is free to rename an unlabeled net to its own
@@ -4272,7 +4272,7 @@ mod tests {
         setup_schematic(&dir);
         step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k".into()), footprint: None, datasheet: None }, false, "test").unwrap();
         step(&dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some("22K".into()), footprint: None, datasheet: None }, false, "test").unwrap();
-        step(&dir, Cmd::AddSchText { content: "set to 10k".into(), at: Point { x: 0, y: 0 }, angle_millideg: 0, size_um: 1270 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSchText { content: "set to 10k".into(), at: Point { x: 0, y: 0 }, angle_millideg: 0, size_nm: 1270 }, false, "test").unwrap();
 
         let values = |dir: &Path| -> Vec<String> {
             let (_, design, _) = load(dir).unwrap();
@@ -4514,7 +4514,7 @@ mod tests {
         setup_mcu30_flat(&dir);
         let before = load(&dir).unwrap().1;
         assert!(before.symbol_library.is_none());
-        let place = |id: &str, x: Um| Cmd::AddSymbol { id: id.into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x, y: 20_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
+        let place = |id: &str, x: Nm| Cmd::AddSymbol { id: id.into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x, y: 20_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
 
         step(&dir, place("U90", 200_000), false, "test").unwrap();
         let (_, design, model) = load(&dir).unwrap();
@@ -5039,7 +5039,7 @@ mod tests {
         let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -5069,7 +5069,7 @@ mod tests {
         let intent_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/mcu_board_30plus.yaml");
         let design: eda_model::ir::Design = serde_json::from_str(include_str!("../tests/fixtures/mcu30_legacy_flat.design.json")).unwrap();
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 600 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 600 };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -5213,19 +5213,19 @@ mod tests {
         let (_, mut design, _) = load(&dir).unwrap();
         {
             let sch = design.schematic.as_mut().unwrap();
-            let pt = |x: Um, y: Um| Point { x, y };
+            let pt = |x: Nm, y: Nm| Point { x, y };
             // R1.1 is at (10_000, 10_000) and R2.1 at (20_000, 10_000): wires to both, a label and a junction on them, and one of everything else
             sch.wires.push(eda_model::ir::Wire { id: "wire_a".into(), net: "N1".into(), pins: vec![], pts: vec![pt(10_000, 10_000), pt(10_000, 30_000)], bus: false });
             sch.wires.push(eda_model::ir::Wire { id: "wire_b".into(), net: "N2".into(), pins: vec![], pts: vec![pt(20_000, 10_000), pt(20_000, 40_000), pt(30_000, 40_000)], bus: false });
             sch.labels.push(eda_model::ir::NetLabel { id: "lbl_a".into(), net: "N1".into(), at: pt(10_000, 20_000), kind: eda_model::ir::LabelKind::Local });
             sch.labels.push(eda_model::ir::NetLabel { id: "lbl_g".into(), net: "N2".into(), at: pt(30_000, 40_000), kind: eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input } });
-            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "note".into(), at: pt(50_000, 10_000), angle: 0, size_um: 1_270 });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "note".into(), at: pt(50_000, 10_000), angle: 0, size_nm: 1_270 });
             sch.no_connects.push(eda_model::ir::NoConnect { id: "nc_a".into(), at: pt(60_000, 10_000), pin: String::new() });
             sch.bus_entries.push(eda_model::ir::BusEntry { id: "bent_a".into(), at: pt(70_000, 10_000), size: pt(2_540, 2_540) });
             sch.junctions.push(eda_model::ir::Junction { id: "jct_a".into(), at: pt(80_000, 10_000) });
-            sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(50_000, 30_000), pt(60_000, 30_000)], width_um: 0 });
+            sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(50_000, 30_000), pt(60_000, 30_000)], width_nm: 0 });
             sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: pt(10_000, 30_000), rot: 0, net: "N1".into(), pin: String::new() });
-            sch.extras.graphics.push(eda_model::sch_extras::SchGraphic::new(eda_model::sch_extras::SchGraphicKind::Rectangle { start: pt(70_000, 30_000), end: pt(80_000, 40_000), corner_radius_um: 0 }));
+            sch.extras.graphics.push(eda_model::sch_extras::SchGraphic::new(eda_model::sch_extras::SchGraphicKind::Rectangle { start: pt(70_000, 30_000), end: pt(80_000, 40_000), corner_radius_nm: 0 }));
             sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000), size: (20_000, 10_000), pins: vec![eda_model::ir::SheetPin { id: "shpin_a".into(), name: "IN".into(), shape: eda_model::ir::LabelShape::Input, at: pt(90_000, 15_000) }], page: String::new() });
             sch.assign_missing_ids();
         }
@@ -5273,14 +5273,14 @@ mod tests {
         let (_, mut design, _) = load(&dir).unwrap();
         {
             let sch = design.schematic.as_mut().unwrap();
-            let pt = |x: Um, y: Um| Point { x, y };
+            let pt = |x: Nm, y: Nm| Point { x, y };
             sch.wires.push(eda_model::ir::Wire { id: "wire_a".into(), net: "N1".into(), pins: vec![], pts: vec![pt(10_000, 10_000), pt(10_000, 30_000)], bus: false });
             sch.labels.push(eda_model::ir::NetLabel { id: "lbl_a".into(), net: "N1".into(), at: pt(10_000, 20_000), kind: eda_model::ir::LabelKind::Local });
             sch.labels.push(eda_model::ir::NetLabel { id: "lbl_g".into(), net: "N2".into(), at: pt(30_000, 40_000), kind: eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input } });
-            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "note".into(), at: pt(50_000, 10_000), angle: 0, size_um: 1_270 });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "note".into(), at: pt(50_000, 10_000), angle: 0, size_nm: 1_270 });
             sch.bus_entries.push(eda_model::ir::BusEntry { id: "bent_a".into(), at: pt(70_000, 10_000), size: pt(2_540, 2_540) });
             sch.junctions.push(eda_model::ir::Junction { id: "jct_a".into(), at: pt(80_000, 10_000) });
-            sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(50_000, 30_000), pt(60_000, 30_000)], width_um: 0 });
+            sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(50_000, 30_000), pt(60_000, 30_000)], width_nm: 0 });
             sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000), size: (20_000, 10_000), pins: vec![], page: String::new() });
             sch.assign_missing_ids();
         }
@@ -5290,11 +5290,11 @@ mod tests {
         let start = sheet_of(&load(&dir).unwrap().1);
         let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
         let commands = vec![
-            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None, auto_rotate: None, fields: None },
-            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None, auto_rotate: None, fields: None },
-            V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_um: Some(2_540), angle: Some(90_000), h: None, v: None },
+            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_nm: None, bold: None, italic: None, auto_rotate: None, fields: None },
+            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: None },
+            V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_nm: Some(2_540), angle: Some(90_000), h: None, v: None },
             V::EditSheet { id: "sheet_a".into(), name: Some("Power".into()), file: Some("power".into()) },
-            V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_um: Some(300), style: Some(SchLineStyle::Dash), color: Some(red), diameter_um: Some(900) },
+            V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_nm: Some(300), style: Some(SchLineStyle::Dash), color: Some(red), diameter_nm: Some(900) },
         ];
         for cmd in commands {
             let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(Cmd::SchEdit(cmd.clone())) };
@@ -5325,10 +5325,10 @@ mod tests {
             Cmd::SchMove(V::Rotate { ids: vec![field_id("R1", "Value")], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
             Cmd::SchMove(V::Mirror { ids: vec![field_id("R1", "Value")], vertices: Default::default(), vertical: false, about: None, grid: 0 }),
             Cmd::SchMove(V::Rotate { ids: vec!["R1".into()], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
-            Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_um: Some(2_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
-            Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_nm: Some(2_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::AutoplaceFields { ids: vec!["R1".into()] }),
-            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true), auto_rotate: None, fields: None }),
+            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_nm: Some(2_000), bold: Some(true), italic: Some(true), auto_rotate: None, fields: None }),
         ];
         for cmd in commands {
             let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd.clone()) };
@@ -5551,7 +5551,7 @@ mod tests {
         assert_every_routed_net_exists(&after, &model_after);
         // and the next edit, on a sheet, keeps them
         let mcu = after.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().id.clone();
-        let note = Cmd::AddSchText { content: "checked".into(), at: Point { x: 20_000, y: 20_000 }, angle_millideg: 0, size_um: 1_270 };
+        let note = Cmd::AddSchText { content: "checked".into(), at: Point { x: 20_000, y: 20_000 }, angle_millideg: 0, size_nm: 1_270 };
         step(&dir, Cmd::OnSheet { sheet: mcu, cmd: Box::new(note) }, true, "ui").unwrap();
         let (_, noted, model_noted) = load(&dir).unwrap();
         assert_eq!(joined(&model_noted.nets), intent);
@@ -5586,7 +5586,7 @@ mod tests {
 
         // An edit inside the MCU sheet lands on that sheet alone, and the nets are still read across all the sheets.
         let mcu = root.sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().clone();
-        let note = Cmd::AddSchText { content: "note".into(), at: Point { x: 20_000, y: 20_000 }, angle_millideg: 0, size_um: 1_270 };
+        let note = Cmd::AddSchText { content: "note".into(), at: Point { x: 20_000, y: 20_000 }, angle_millideg: 0, size_nm: 1_270 };
         step(&dir, Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(note) }, false, "test").unwrap();
         let (_, noted, _) = load(&dir).unwrap();
         assert_eq!(noted.sheet_contents.as_ref().unwrap()[&mcu.file].texts.len(), 1);
@@ -5935,7 +5935,7 @@ mod tests {
     /// and U2, a two-unit part with two pins in each unit, every pin on a wire to a label of its own (`L1`..`L4`). The intent has each pin on a net of its own.
     fn setup_pin_swap_board(dir: &Path) {
         let pin = |n: &str| Pin { number: n.into(), name: None, kind: PinKind::Passive };
-        let part = |r: &str, pins: &[&str], symbol: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, symbol: Some(symbol.into()), pins: pins.iter().map(|n| pin(n)).collect(), body_um: None, datasheet: None, edge: None };
+        let part = |r: &str, pins: &[&str], symbol: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, symbol: Some(symbol.into()), pins: pins.iter().map(|n| pin(n)).collect(), body_nm: None, datasheet: None, edge: None };
         let lib_pin = |n: &str, y: f64, unit: u32| eda_model::LibPin { number: n.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, y), angle_deg: 0.0, length_mm: 2.54, unit };
         let lib = |id: &str, units: u32, pins: Vec<eda_model::LibPin>| eda_model::LibSymbol {
             lib_id: id.into(),
@@ -5962,7 +5962,7 @@ mod tests {
         let intent_path = dir.join("intent.yaml");
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
-        let pt = |x: Um, y: Um| Point { x, y };
+        let pt = |x: Nm, y: Nm| Point { x, y };
         let sym = |id: &str, lib_id: &str, unit: u32, at: Point| eda_model::ir::SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         let mut sch = eda_model::ir::SchematicSection { symbols: vec![sym("R1", "TEST:R2", 1, pt(20_000, 20_000)), sym("U2", "TEST:DUAL", 1, pt(60_000, 20_000)), sym("U2", "TEST:DUAL", 2, pt(100_000, 20_000))], imported_from_kicad: true, ..Default::default() };
         // a pin is 2.54 mm above or below its symbol's origin: a wire 10 mm further out to a label
@@ -5980,7 +5980,7 @@ mod tests {
         sch.assign_missing_ids();
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(sch),
             nets: None,
@@ -5989,7 +5989,7 @@ mod tests {
             drawings: None,
         };
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -6004,7 +6004,7 @@ mod tests {
         let (_, mut design, _) = load(&dir).unwrap();
         {
             let sch = design.schematic.as_mut().unwrap();
-            let pt = |x: Um, y: Um| Point { x, y };
+            let pt = |x: Nm, y: Nm| Point { x, y };
             let pin = |id: &str, name: &str, at: Point| eda_model::ir::SheetPin { id: id.into(), name: name.into(), shape: eda_model::ir::LabelShape::Input, at };
             // a sheet 20 x 10 mm at (90, 10) mm with a pin on its left border (to a wire and a label) and one on its right border
             sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000), size: (20_000, 10_000), pins: vec![pin("shpin_in", "IN", pt(90_000, 15_000)), pin("shpin_out", "OUT", pt(110_000, 14_000))], page: String::new() });
@@ -6022,7 +6022,7 @@ mod tests {
             Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 18_000, dy: 2_000, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Drag { ids: vec!["shpin_in".into()], vertices: Default::default(), dx: 0, dy: 2_000, ortho: true, grid: 0, turns: Vec::new(), about: None }),
-            Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None, size_um: None, bold: None, italic: None }),
+            Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None, size_nm: None, bold: None, italic: None }),
             Cmd::SwapSchItems { a: "shpin_in".into(), b: "shpin_out".into() },
             Cmd::SchEdit(V::DeleteSheetPin { id: "shpin_out".into() }),
         ];
@@ -6046,9 +6046,9 @@ mod tests {
         let (_, mut design, _) = load(&dir).unwrap();
         {
             let sch = design.schematic.as_mut().unwrap();
-            let pt = |x: Um, y: Um| Point { x, y };
-            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "a".into(), at: pt(15_000, 30_000), angle: 0, size_um: 1_270 });
-            sch.texts.push(eda_model::ir::SchematicText { id: "txt_b".into(), content: "b".into(), at: pt(25_000, 30_000), angle: 0, size_um: 1_270 });
+            let pt = |x: Nm, y: Nm| Point { x, y };
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "a".into(), at: pt(15_000, 30_000), angle: 0, size_nm: 1_270 });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_b".into(), content: "b".into(), at: pt(25_000, 30_000), angle: 0, size_nm: 1_270 });
             sch.assign_missing_ids();
             // inner = {R1, R2}, outer = {inner, txt_a}
             sch.extras.groups = vec![
@@ -6149,7 +6149,7 @@ mod tests {
         let edit = |f: &dyn Fn(&mut Option<String>, &mut Option<bool>)| {
             let (mut text, mut visible) = (None, None);
             f(&mut text, &mut visible);
-            Cmd::SchEdit(V::EditField { id: "fld:R1:MPN".into(), text, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None })
+            Cmd::SchEdit(V::EditField { id: "fld:R1:MPN".into(), text, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None })
         };
         let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
         let start = sheet_of(&load(&dir).unwrap().1);
@@ -6259,7 +6259,7 @@ mod tests {
         setup_pin_swap_board(&dir);
         let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
         let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
-        let pt = |x: Um, y: Um| Point { x, y };
+        let pt = |x: Nm, y: Nm| Point { x, y };
         // one step that changes the sheet in the way `after` says, and one Undo that puts it back
         let check = |cmd: Cmd, after: &dyn Fn(&Design)| {
             let start = sheet_of(&load(&dir).unwrap().1);
@@ -6272,7 +6272,7 @@ mod tests {
         };
         let global = eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Output };
         // wire A runs from R1's top pin up to (20, 7.46) mm, where the local label A is
-        let place = V::PlaceLabel { net: "CLK".into(), at: pt(20_000, 7_460), kind: global.clone(), spin: Some(eda_model::sch_extras::LabelSpin::Left), size_um: None, bold: None, italic: None, auto_rotate: Some(true) };
+        let place = V::PlaceLabel { net: "CLK".into(), at: pt(20_000, 7_460), kind: global.clone(), spin: Some(eda_model::sch_extras::LabelSpin::Left), size_nm: None, bold: None, italic: None, auto_rotate: Some(true) };
         check(Cmd::SchEdit(place.clone()), &|d| {
             let sch = d.schematic.as_ref().unwrap();
             let l = sch.labels.iter().find(|l| l.net == "CLK").expect("the label is on the sheet");
@@ -6280,20 +6280,20 @@ mod tests {
             assert_eq!(sch.extras.label_spins.get(&l.id), Some(&eda_model::sch_extras::LabelSpin::Up));
             assert!(sch.extras.label_looks[&l.id].auto_rotate);
         });
-        check(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000, 50_000), angle: 0, size_um: 1_270, h: None, v: None }), &|d| {
+        check(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000, 50_000), angle: 0, size_nm: 1_270, h: None, v: None }), &|d| {
             let sch = d.schematic.as_ref().unwrap();
             let t = sch.texts.iter().find(|t| t.content == "note").expect("the text is on the sheet");
             assert_eq!(sch.extras.text_justify_of(&t.id), eda_model::sch_extras::SchTextJustify::FILE_DEFAULT);
         });
         // a refused one is no step at all
         let before = sheet_of(&load(&dir).unwrap().1);
-        let e = step(&dir, on_sheet(Cmd::SchEdit(V::PlaceLabel { net: "X".into(), at: pt(0, 0), kind: eda_model::ir::LabelKind::Local, spin: None, size_um: None, bold: None, italic: None, auto_rotate: Some(true) })), false, "test").unwrap_err();
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::PlaceLabel { net: "X".into(), at: pt(0, 0), kind: eda_model::ir::LabelKind::Local, spin: None, size_nm: None, bold: None, italic: None, auto_rotate: Some(true) })), false, "test").unwrap_err();
         assert!(reasons(&e).contains("rotate itself"), "{}", reasons(&e));
         assert_eq!(sheet_of(&load(&dir).unwrap().1), before);
 
         // keep a label and a text on the sheet to edit
         step(&dir, on_sheet(Cmd::SchEdit(place)), false, "test").unwrap();
-        step(&dir, on_sheet(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000, 50_000), angle: 0, size_um: 1_270, h: Some(eda_model::ir::TextJustify::Left), v: Some(eda_model::ir::TextVAlign::Bottom) })), false, "test").unwrap();
+        step(&dir, on_sheet(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000, 50_000), angle: 0, size_nm: 1_270, h: Some(eda_model::ir::TextJustify::Left), v: Some(eda_model::ir::TextVAlign::Bottom) })), false, "test").unwrap();
         let (label, text) = {
             let d = load(&dir).unwrap().1;
             let sch = d.schematic.unwrap();
@@ -6301,13 +6301,13 @@ mod tests {
         };
         // Label Properties with "Auto" off: the spin chosen is kept
         let l2 = label.clone();
-        check(Cmd::SchEdit(V::EditLabel { id: label.clone(), text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Left), size_um: None, bold: None, italic: None, auto_rotate: Some(false), fields: None }), &move |d| {
+        check(Cmd::SchEdit(V::EditLabel { id: label.clone(), text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Left), size_nm: None, bold: None, italic: None, auto_rotate: Some(false), fields: None }), &move |d| {
             let sch = d.schematic.as_ref().unwrap();
             assert_eq!(sch.extras.label_spins.get(&l2), Some(&eda_model::sch_extras::LabelSpin::Left));
             assert!(!sch.extras.label_looks.contains_key(&l2));
         });
         let t2 = text.clone();
-        check(Cmd::SchEdit(V::EditText { id: text.clone(), text: None, size_um: None, angle: None, h: Some(eda_model::ir::TextJustify::Right), v: Some(eda_model::ir::TextVAlign::Top) }), &move |d| {
+        check(Cmd::SchEdit(V::EditText { id: text.clone(), text: None, size_nm: None, angle: None, h: Some(eda_model::ir::TextJustify::Right), v: Some(eda_model::ir::TextVAlign::Top) }), &move |d| {
             let sch = d.schematic.as_ref().unwrap();
             assert_eq!(sch.extras.text_justify_of(&t2), eda_model::sch_extras::SchTextJustify { h: eda_model::ir::TextJustify::Right, v: eda_model::ir::TextVAlign::Top });
         });
@@ -6344,7 +6344,7 @@ mod tests {
         // carried onto wire A's middle: its end makes a T there, and the two are different nets
         let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["wire_h2"], "dx": -25_000, "dy": 0 }));
         assert_eq!(v["ok"], serde_json::json!(true), "{v}");
-        assert_eq!(v["net_collision"]["collisions"], serde_json::json!([{ "at": [20_000, 12_000], "radius_um": 914.4 * 1.5 }]), "{v}");
+        assert_eq!(v["net_collision"]["collisions"], serde_json::json!([{ "at": [20_000, 12_000], "radius_nm": 914.4 * 1.5 }]), "{v}");
         assert_eq!(v["net_collision"]["disconnections"], serde_json::json!([]));
         // short of it nothing is marked, and the patch is there all the same
         let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["wire_h2"], "dx": -10_000, "dy": 0 }));

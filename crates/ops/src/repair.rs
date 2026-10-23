@@ -41,17 +41,17 @@ pub struct Fix {
     /// What it should end up near.
     pub toward: String,
     /// How far apart they are now, µm.
-    pub apart_um: i64,
+    pub apart_nm: i64,
     /// How far apart they are allowed to be, µm.
-    pub allowed_um: i64,
+    pub allowed_nm: i64,
     /// The gate that objected.
     pub check: String,
 }
 
 impl Fix {
     /// How far the mover has to travel, µm.
-    pub fn close_um(&self) -> i64 {
-        (self.apart_um - self.allowed_um).max(0)
+    pub fn close_nm(&self) -> i64 {
+        (self.apart_nm - self.allowed_nm).max(0)
     }
 }
 
@@ -98,8 +98,8 @@ pub fn fixes_for(board: &Board, model: &ConstraintModel) -> Vec<Fix> {
         out.push(Fix {
             mover: mover.to_string(),
             toward: toward.to_string(),
-            apart_um: apart,
-            allowed_um: allowed,
+            apart_nm: apart,
+            allowed_nm: allowed,
             check: c.check.clone(),
         });
     }
@@ -227,9 +227,9 @@ pub fn repair(board: &mut Board, model: &ConstraintModel, max_steps: u32) -> usi
                     fix.mover,
                     fix.toward,
                     fix.check,
-                    fix.apart_um as f64 / 1000.0,
-                    fix.allowed_um as f64 / 1000.0,
-                    fix.close_um() as f64 / 1000.0
+                    fix.apart_nm as f64 / 1000.0,
+                    fix.allowed_nm as f64 / 1000.0,
+                    fix.close_nm() as f64 / 1000.0
                 );
             }
             apply_fix(board, &fix, max_steps);

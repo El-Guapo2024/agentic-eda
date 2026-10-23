@@ -13,7 +13,7 @@ use eda_model::{ConstraintModel, Part, PinKind};
 
 use crate::hier::items::{outward_rot, Items, RailPin};
 use crate::hier::kit::{nc_rect, power_rect, Placed, Rect, G};
-use crate::{pin_index, resolve_pin_ref, split_pin_ref, MAX_MERGED_STUB_BENDS, MAX_MERGED_STUB_LEN_UM};
+use crate::{pin_index, resolve_pin_ref, split_pin_ref, MAX_MERGED_STUB_BENDS, MAX_MERGED_STUB_LEN_NM};
 
 /// The nets that need a `PWR_FLAG` (a power or ground pin on them and no power output, a name that reads as a rail counting as a power
 /// input), each with the pin the flag goes on: the net's own first (sorted) pin.
@@ -194,7 +194,7 @@ pub fn hang_nets(
                 }
                 let stub_len: i64 = tips.windows(2).map(|w| (w[0].1.x - w[1].1.x).abs() + (w[0].1.y - w[1].1.y).abs()).sum();
                 let stub_bends = tips.len().saturating_sub(2);
-                if tips.len() == 1 || stub_len > MAX_MERGED_STUB_LEN_UM || stub_bends > MAX_MERGED_STUB_BENDS {
+                if tips.len() == 1 || stub_len > MAX_MERGED_STUB_LEN_NM || stub_bends > MAX_MERGED_STUB_BENDS {
                     // a single pin, or a run too wide to read as one local jumper: a label at each, no wire between them
                     for (pin_ref, tip, side) in &tips {
                         let len = if flag_pins.contains(pin_ref) { 3 * G } else { 2 * G };

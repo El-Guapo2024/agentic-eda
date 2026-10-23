@@ -75,7 +75,7 @@ use crate::settings::{OptEffort, RoutingSettings};
 use crate::time_limit::TimeLimit;
 use crate::walkaround::{self, WalkPolicy, WalkStatus, Walker};
 use eda_drc::kimath::{isqrt, Seg, Shape};
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -132,14 +132,14 @@ enum Status {
     TryWalk,
 }
 
-pub(crate) type Area = (Um, Um, Um, Um);
+pub(crate) type Area = (Nm, Nm, Nm, Nm);
 
 /// `SHOVE::Run`: `head.SetRank( 100000 )`.
 const HEAD_RANK: i32 = 100_000;
 /// `c_ENDPOINT_ON_HULL_THRESHOLD` (1000 nm) in this IR's µm.
 const ENDPOINT_ON_HULL_THRESHOLD: f64 = 1.0;
 /// `cHullFailureExpansionFactor` (1000 nm) in µm.
-const HULL_FAILURE_EXPANSION: Um = 1;
+const HULL_FAILURE_EXPANSION: Nm = 1;
 
 // ----------------------------------------------------------------------------
 // geometry helpers
@@ -249,7 +249,7 @@ fn via_changed_area(a: &Via, b: &Via) -> Option<Area> {
 /// `pushoutForce( SHAPE_CIRCLE, SEG, clearance )` (`shape_collisions.cpp:158`):
 /// the displacement that takes a circle out of `seg`'s clearance, found by
 /// trying a growing correction until the circle really clears.
-fn pushout_force(c: Point, r: Um, seg: Seg, clearance: Um) -> (i64, i64) {
+fn pushout_force(c: Point, r: Nm, seg: Seg, clearance: Nm) -> (i64, i64) {
     let nearest = seg.nearest_point(c);
     let dist = norm(nearest, c);
     let min_dist = clearance + r;
@@ -258,7 +258,7 @@ fn pushout_force(c: Point, r: Um, seg: Seg, clearance: Um) -> (i64, i64) {
     }
     let mut f = (0, 0);
     for corr in 0..5 {
-        f = crate::hull::resize(c.x - nearest.x, c.y - nearest.y, (min_dist - dist + corr) as Um);
+        f = crate::hull::resize(c.x - nearest.x, c.y - nearest.y, (min_dist - dist + corr) as Nm);
         let moved = Point { x: c.x + f.0, y: c.y + f.1 };
         if isqrt(seg.sq_distance_to_point(moved)) >= min_dist {
             break;
@@ -271,7 +271,7 @@ fn pushout_force(c: Point, r: Um, seg: Seg, clearance: Um) -> (i64, i64) {
 /// open chain (`shape_collisions.cpp:182`): `Some(mtv)` when the circle is
 /// within `clearance` of the chain, `mtv` being the sum of the push-outs of
 /// the circle out of each segment in turn.
-fn circle_chain_mtv(c: Point, r: Um, chain: &[Point], clearance: Um) -> Option<(i64, i64)> {
+fn circle_chain_mtv(c: Point, r: Nm, chain: &[Point], clearance: Nm) -> Option<(i64, i64)> {
     let reach = (r as i128 + clearance as i128).max(0);
     let hit = chain.windows(2).any(|w| {
         let d = Seg::new(w[0], w[1]).sq_distance_to_point(c);
@@ -283,7 +283,7 @@ fn circle_chain_mtv(c: Point, r: Um, chain: &[Point], clearance: Um) -> Option<(
     let (mut moved, mut total) = (c, (0i64, 0i64));
     for w in chain.windows(2) {
         let f = pushout_force(moved, r, Seg::new(w[0], w[1]), clearance);
-        moved = Point { x: moved.x + f.0 as Um, y: moved.y + f.1 as Um };
+        moved = Point { x: moved.x + f.0 as Nm, y: moved.y + f.1 as Nm };
         total = (total.0 + f.0, total.1 + f.1);
     }
     Some(total)
@@ -292,12 +292,12 @@ fn circle_chain_mtv(c: Point, r: Um, chain: &[Point], clearance: Um) -> Option<(
 /// `Collide( SHAPE_CIRCLE, SHAPE_CIRCLE, clearance, .., &mtv )` (`:43`): the
 /// vector from `a` to `b` resized to what is missing, plus the "apparent
 /// rounding error" 3.
-fn circle_circle_mtv(a: Point, ra: Um, b: Point, rb: Um, clearance: Um) -> Option<(i64, i64)> {
+fn circle_circle_mtv(a: Point, ra: Nm, b: Point, rb: Nm, clearance: Nm) -> Option<(i64, i64)> {
     let min_dist = clearance + ra + rb;
     let (dx, dy) = ((b.x - a.x) as i128, (b.y - a.y) as i128);
     let dist_sq = dx * dx + dy * dy;
     if dist_sq == 0 || dist_sq < (min_dist as i128) * (min_dist as i128) {
-        let len = (min_dist as f64 - (dist_sq as f64).sqrt() + 3.0) as Um;
+        let len = (min_dist as f64 - (dist_sq as f64).sqrt() + 3.0) as Nm;
         let m = crate::hull::resize(b.x - a.x, b.y - a.y, len);
         return Some((m.0 as i64, m.1 as i64));
     }
@@ -307,7 +307,7 @@ fn circle_circle_mtv(a: Point, ra: Um, b: Point, rb: Um, clearance: Um) -> Optio
 /// `Collide( SHAPE_RECT, SHAPE_CIRCLE, clearance, .., &mtv )` (`:70`), applied
 /// to whatever shape a pad has: away from the pad's nearest boundary point
 /// (towards the inside's far side when the via is inside it).
-fn solid_via_mtv(shape: &Shape, c: Point, r: Um, clearance: Um) -> Option<(i64, i64)> {
+fn solid_via_mtv(shape: &Shape, c: Point, r: Nm, clearance: Nm) -> Option<(i64, i64)> {
     // A compound (a custom pad): the via has to clear every part it is too close to, so the longest push-out is the one.
     if let Shape::Compound { parts } = shape {
         return parts.iter().filter_map(|p| solid_via_mtv(p, c, r, clearance)).max_by_key(|m| m.0 * m.0 + m.1 * m.1);
@@ -332,14 +332,14 @@ fn solid_via_mtv(shape: &Shape, c: Point, r: Um, clearance: Um) -> Option<(i64, 
     let inside = best > 0 && shape.collides(&Shape::Circle { c, r: 0 }, 0).is_some();
     let dist = (best as f64).sqrt() + shape.radius() as f64 * if inside { -1.0 } else { 0.0 };
     let min_dist = clearance as f64 + r as f64;
-    let (delta, len) = if inside { ((nearest.x - c.x, nearest.y - c.y), ((min_dist + 1.0 + dist).abs() + 1.0) as Um) } else { ((c.x - nearest.x, c.y - nearest.y), ((min_dist + 1.0 - dist).abs() + 1.0) as Um) };
+    let (delta, len) = if inside { ((nearest.x - c.x, nearest.y - c.y), ((min_dist + 1.0 + dist).abs() + 1.0) as Nm) } else { ((c.x - nearest.x, c.y - nearest.y), ((min_dist + 1.0 - dist).abs() + 1.0) as Nm) };
     let m = crate::hull::resize(delta.0, delta.1, len);
     Some((m.0 as i64, m.1 as i64))
 }
 
 /// `SHAPE::Collide( circle, aClearance, &mtv )` of one obstacle against the circle of radius `r` at `pos`: the displacement that takes
 /// the circle out of the obstacle's clearance, `None` when it is not in it.
-pub(crate) fn item_circle_mtv(other: &Item, pos: Point, r: Um, clearance: Um) -> Option<(i64, i64)> {
+pub(crate) fn item_circle_mtv(other: &Item, pos: Point, r: Nm, clearance: Nm) -> Option<(i64, i64)> {
     match other {
         Item::Solid(s) => solid_via_mtv(&s.shape, pos, r, clearance),
         Item::Segment(sg) => circle_chain_mtv(pos, r, &[sg.a, sg.b], clearance + sg.width / 2),
@@ -380,16 +380,16 @@ pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, dire
         }
         let magnitude = ((force.0 as f64).powi(2) + (force.1 as f64).powi(2)).sqrt();
         let step = if iter > max_iterations / 2 && magnitude > threshold as f64 {
-            let l = crate::hull::resize(direction.0 as Um, direction.1 as Um, threshold);
+            let l = crate::hull::resize(direction.0 as Nm, direction.1 as Nm, threshold);
             (l.0 as i64, l.1 as i64)
         } else if magnitude > threshold as f64 {
-            let f = crate::hull::resize(force.0 as Um, force.1 as Um, threshold);
+            let f = crate::hull::resize(force.0 as Nm, force.1 as Nm, threshold);
             (f.0 as i64, f.1 as i64)
         } else {
             force
         };
         total = (total.0 + step.0, total.1 + step.1);
-        pos = Point { x: pos.x + step.0 as Um, y: pos.y + step.1 as Um };
+        pos = Point { x: pos.x + step.0 as Nm, y: pos.y + step.1 as Nm };
         iter += 1;
     }
     if iter == max_iterations {
@@ -491,7 +491,7 @@ struct RootEntry {
 struct ObstacleInfo {
     id: ItemId,
     kind: Kind,
-    max_fanout_width: Um,
+    max_fanout_width: Nm,
 }
 
 /// The first argument of `onCollidingVia`: what pushes the via.
@@ -531,7 +531,7 @@ struct Shove<'a> {
     dragged_away: HashSet<ItemId>,
     /// `SHOVE::ForceClearance( true, aClearance )` (`m_forceClearance`): the clearance every hull is built at, whatever the rules say.
     /// The pair placer shoves one line of a pair away from the other at the pair's gap.
-    force_clearance: Option<Um>,
+    force_clearance: Option<Nm>,
     /// The area of the springback frame this shove starts from (`m_nodeStack.back().m_affectedArea`): `totalAffectedArea()` is it
     /// merged with this shove's own, and that is where `runOptimizer` may straighten the shoved lines.
     prior_area: Option<Area>,
@@ -542,13 +542,13 @@ impl<'a> Shove<'a> {
         Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new(), force_clearance: None, prior_area: None }
     }
 
-    fn clearance(&self, a: &Net, b: &Net) -> Um {
+    fn clearance(&self, a: &Net, b: &Net) -> Nm {
         Node::clearance(self.rules, a, b)
     }
 
     /// `SHOVE::getClearance`: what a hull is built at -- the forced clearance if there is one, else the rules'. (A *collision* between
     /// two lines is always judged at the rules' clearance: `ITEM::Collide` asks the node, not the shove.)
-    fn get_clearance(&self, a: &Net, b: &Net) -> Um {
+    fn get_clearance(&self, a: &Net, b: &Net) -> Nm {
         self.force_clearance.unwrap_or_else(|| self.clearance(a, b))
     }
 
@@ -1194,14 +1194,14 @@ impl<'a> Shove<'a> {
         if force == (0, 0) {
             return Status::Ok; // nothing to do...
         }
-        let mut p0_pushed = Point { x: p0.x + force.0 as Um, y: p0.y + force.1 as Um };
+        let mut p0_pushed = Point { x: p0.x + force.0 as Nm, y: p0.y + force.1 as Nm };
         let Some(joint) = self.node.joint_at(p0, &via.net) else { return Status::Incomplete };
         let fan_ids: Vec<ItemId> = joint.links.clone();
         if !self.settings.shove_vias || via.locked {
             return Status::TryWalk;
         }
         // "make sure pushed via does not overlap with any existing joint"
-        let step = crate::hull::resize(force.0 as Um, force.1 as Um, 2);
+        let step = crate::hull::resize(force.0 as Nm, force.1 as Nm, 2);
         for _ in 0..10_000 {
             if self.node.joint_at(p0_pushed, &via.net).is_none() {
                 break;
@@ -1757,7 +1757,7 @@ impl<'a> Shove<'a> {
 /// shove failed outright (a pad it could not walk around, a track it could
 /// not push, or the limit) -- the caller should fall back to walkaround,
 /// same as upstream's `rhShoveOnly`.
-pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
+pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Nm, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
     shove_head(node, &[], raw, &[], net, layer, width, rules, settings, false)
 }
 
@@ -1766,12 +1766,12 @@ pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, 
 /// of its own. `reversed` is `SHP_REVERSED`, set when the head is dragged by its first vertex: the *last* point of the head is then
 /// the pusher `checkShoveDirection` tests the shoved lines against.
 #[allow(clippy::too_many_arguments)] // `shove_line`'s query context plus the dragged line and the one flag
-pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
+pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Nm, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
     shove_head(node, dragged, raw, arcs, net, layer, width, rules, settings, reversed)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
+fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Nm, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
     if raw.len() < 2 {
         return Some(ShoveOutcome { head: raw.to_vec(), heads: vec![raw.to_vec()], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone(), area: None });
     }
@@ -1831,7 +1831,7 @@ pub fn shove_heads_after(node: &Node, heads: Vec<ShoveHead>, rules: &BoardRules,
 /// the rules' -- from it, its ends where they were. The pair placer uses it to put one line of a pair at the gap from the other
 /// after walking that other around an obstacle (`DIFF_PAIR_PLACER::attemptWalk`). `None` when no way of re-walking it works.
 #[allow(clippy::too_many_arguments)] // the shove's query context (node, rules, settings), the two lines with their vias, and the forced clearance
-pub fn shove_obstacle_line(node: &Node, rules: &BoardRules, settings: &RoutingSettings, pusher: &Line, pusher_via: Option<&Via>, obstacle: &Line, obstacle_via: Option<&Via>, forced_clearance: Option<Um>) -> Option<Line> {
+pub fn shove_obstacle_line(node: &Node, rules: &BoardRules, settings: &RoutingSettings, pusher: &Line, pusher_via: Option<&Via>, obstacle: &Line, obstacle_via: Option<&Via>, forced_clearance: Option<Nm>) -> Option<Line> {
     let mut shove = Shove::new(node, rules, settings);
     shove.force_clearance = forced_clearance;
     let sline = |l: &Line, v: Option<&Via>| {

@@ -17,7 +17,7 @@
 //! A report is the violations of those checks only: the board DRC's clearances, edge, mask and parity tests have nothing to say about a footprint alone.
 
 use super::{cli_version, fail, need_cli, run_report, with_scratch, work_dir, write_file, Violation};
-use eda_model::ir::{LibraryFootprint, Shape, Um};
+use eda_model::ir::{LibraryFootprint, Shape, Nm};
 use eda_model::CheckResult;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -62,7 +62,7 @@ fn uuid_of(n: usize) -> String {
 }
 
 /// Millimetres as KiCad's files write them.
-fn mm(um: Um) -> String {
+fn mm(um: Nm) -> String {
     let s = format!("{:.6}", um as f64 / 1000.0);
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s.is_empty() || s == "-" || s == "-0" {
@@ -171,15 +171,15 @@ fn rewrite_form(form: &str, uuid: &str, extra: &str) -> String {
     out
 }
 
-fn shape_extent(s: &Shape) -> Um {
+fn shape_extent(s: &Shape) -> Nm {
     s.points().iter().map(|p| p.x.abs().max(p.y.abs())).max().unwrap_or(0) + s.stroke_width()
 }
 
 /// How far from the origin anything of the footprint reaches, in micrometres: what the scratch board's outline has to keep clear of.
-fn reach(fp: &LibraryFootprint) -> Um {
+fn reach(fp: &LibraryFootprint) -> Nm {
     let pads = fp.pads.iter().map(|p| p.at.x.abs().max(p.at.y.abs()) + p.size.0.max(p.size.1) + p.offset.x.abs().max(p.offset.y.abs()));
     let graphics = fp.graphics.iter().map(shape_extent);
-    let texts = fp.texts.iter().map(|t| t.at.x.abs().max(t.at.y.abs()) + t.size_um * (t.content.chars().count() as Um + 1));
+    let texts = fp.texts.iter().map(|t| t.at.x.abs().max(t.at.y.abs()) + t.size_nm * (t.content.chars().count() as Nm + 1));
     pads.chain(graphics).chain(texts).max().unwrap_or(0)
 }
 
@@ -289,7 +289,7 @@ pub struct FootprintCheck {
 
 /// Where a violation's marker goes (micrometres, the footprint's own frame): its first item's position, the middle of the first two when there are two (a short is
 /// marked where the pads meet), the origin for a violation that names the footprint alone.
-pub fn marker_at(v: &Violation) -> (Um, Um) {
+pub fn marker_at(v: &Violation) -> (Nm, Nm) {
     match v.items.as_slice() {
         [] => (0, 0),
         [a] => a.pos,
@@ -355,7 +355,7 @@ mod tests {
     use eda_model::ir::{FootprintAttributes, LibraryPad, LibraryPadShape, Point};
     use eda_model::PadKind;
 
-    fn pad(id: &str, number: &str, x: Um, y: Um, kind: PadKind, drill: Option<Um>) -> LibraryPad {
+    fn pad(id: &str, number: &str, x: Nm, y: Nm, kind: PadKind, drill: Option<Nm>) -> LibraryPad {
         LibraryPad {
             id: id.into(),
             number: number.into(),
@@ -387,7 +387,7 @@ mod tests {
         LibraryFootprint { name: "TEST:Two".into(), pads, attributes: FootprintAttributes::default(), ..Default::default() }
     }
 
-    fn line(id: &str, layer: &str, a: (Um, Um), b: (Um, Um)) -> Shape {
+    fn line(id: &str, layer: &str, a: (Nm, Nm), b: (Nm, Nm)) -> Shape {
         Shape::Segment { id: id.into(), layer: layer.into(), stroke_width: 50, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
     }
 
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn marker_positions_follow_the_items() {
-        let item = |x: Um, y: Um| super::super::Item { description: "d".into(), pos: (x, y), id: None, uuid: String::new() };
+        let item = |x: Nm, y: Nm| super::super::Item { description: "d".into(), pos: (x, y), id: None, uuid: String::new() };
         let mut v = Violation { kind: "shorting_items".into(), ..Default::default() };
         assert_eq!(marker_at(&v), (0, 0));
         v.items = vec![item(1_000, 2_000)];

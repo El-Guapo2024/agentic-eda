@@ -48,7 +48,7 @@ fn model() -> ConstraintModel {
         symbol: Some("test:GATE".into()),
         datasheet: None,
         pins,
-        body_um: None,
+        body_nm: None,
         edge: None,
     };
     ConstraintModel { parts: vec![part], symbols: vec![gate()], ..Default::default() }
@@ -56,7 +56,7 @@ fn model() -> ConstraintModel {
 
 fn design_with(sch: SchematicSection) -> Design {
     Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(sch),
         nets: None,
@@ -95,7 +95,7 @@ fn sheet(rot: u32, mirrored: bool) -> SchematicSection {
     user.insert("Manufacturer".into(), "TI".into());
     sch.field_layout.insert(
         "U1".into(),
-        vec![FieldPlacement { dx: 12_700, dy: -15_240, h: TextJustify::Left, v: TextVAlign::Center, visible: true, size_um: 2_000, bold: true, italic: true, name_shown: true, ..FieldPlacement::at_origin("MPN") }],
+        vec![FieldPlacement { dx: 12_700, dy: -15_240, h: TextJustify::Left, v: TextVAlign::Center, visible: true, size_nm: 2_000, bold: true, italic: true, name_shown: true, ..FieldPlacement::at_origin("MPN") }],
     );
     sch
 }
@@ -167,7 +167,7 @@ fn a_file_with_user_fields_reads_back_with_their_texts_their_looks_and_their_pla
     let mpn = placed.iter().find(|p| p.name == "MPN").expect("the place of MPN");
     assert_eq!((mpn.dx, mpn.dy), (12_700, -15_240));
     assert!(mpn.visible && mpn.bold && mpn.italic && mpn.name_shown && !mpn.no_autoplace);
-    assert_eq!((mpn.h, mpn.v, mpn.size_um, mpn.angle), (TextJustify::Left, TextVAlign::Center, 2_000, 0));
+    assert_eq!((mpn.h, mpn.v, mpn.size_nm, mpn.angle), (TextJustify::Left, TextVAlign::Center, 2_000, 0));
     let maker = placed.iter().find(|p| p.name == "Manufacturer").expect("the place of Manufacturer");
     assert!(!maker.visible);
     assert!(placed.iter().all(|p| p.name == "MPN" || p.name == "Manufacturer"), "only the user fields keep a place on a sheet read from a file");
@@ -235,7 +235,7 @@ fn the_properties_beyond_the_standard_ones_are_the_user_fields_of_a_file_made_by
     assert!(!get("Sim.Device").visible, "(hide yes) in the property, as KiCad 9 writes it");
     assert!(!get("Empty").visible, "a bare `hide` in the effects");
     let note = get("Internal note");
-    assert!(note.visible && note.size_um == 1_016);
+    assert!(note.visible && note.size_nm == 1_016);
     assert_eq!((note.dx, note.dy), (4_000, -4_000), "from the symbol's origin");
     assert_eq!(note.angle, 90_000, "a vertical text");
     assert_eq!((note.h, note.v), (TextJustify::Right, TextVAlign::Bottom));
@@ -272,7 +272,7 @@ fn a_sheet_pins_text_look_is_written_and_read_back() {
         ],
         page: String::new(),
     });
-    sch.extras.sheet_pin_looks.insert("22222222-2222-4222-8222-222222222222".into(), LabelLook { size_um: 2_000, bold: true, italic: true, auto_rotate: false });
+    sch.extras.sheet_pin_looks.insert("22222222-2222-4222-8222-222222222222".into(), LabelLook { size_nm: 2_000, bold: true, italic: true, auto_rotate: false });
     let text = export_kicad_sch(&design_with(sch), &m, &META).expect("the sheet exports");
     // the font of the pin says its size, bold and italic; the other pin has the default text
     let pin = |name: &str| {
@@ -287,5 +287,5 @@ fn a_sheet_pins_text_look_is_written_and_read_back() {
     let looks = &back.extras.sheet_pin_looks;
     assert_eq!(looks.len(), 1, "only a pin that is set differently has an entry: {looks:?}");
     let look = looks.get("22222222-2222-4222-8222-222222222222").copied().expect("the look of CLK");
-    assert_eq!((look.size_um, look.bold, look.italic), (2_000, true, true));
+    assert_eq!((look.size_nm, look.bold, look.italic), (2_000, true, true));
 }

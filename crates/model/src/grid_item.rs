@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ir::{Point, Um};
+use crate::ir::{Point, Nm};
 
 /// `PCB_GRID_TYPE`: the file's `xy` and `polar`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,8 +129,8 @@ impl GridItem {
             id: String::new(),
             kind: GridKind::Cartesian,
             at,
-            extent: Point { x: 5_000, y: 5_000 },
-            spacing: Point { x: 1_000, y: 1_000 },
+            extent: Point { x: 5_000_000, y: 5_000_000 },
+            spacing: Point { x: 1_000_000, y: 1_000_000 },
             angle: 0.0,
             phi_extent_deg: 360.0,
             phi_spacing_deg: 10.0,
@@ -141,7 +141,7 @@ impl GridItem {
         }
     }
 
-    /// What the item's setters make of the values (`SetExtent`: magnitudes; `SetSpacing`: at least 1 nm, here 1 um; `SetPhi*Degrees`: magnitudes of at least 0.001 degree;
+    /// What the item's setters make of the values (`SetExtent`: magnitudes; `SetSpacing`: at least 1 nm; `SetPhi*Degrees`: magnitudes of at least 0.001 degree;
     /// `SetAssignedPriority`: 0 is 1; `SetOrientation`: normalised).
     pub fn normalized(mut self) -> GridItem {
         self.extent = Point { x: self.extent.x.abs(), y: self.extent.y.abs() };
@@ -160,7 +160,7 @@ impl GridItem {
     }
 
     /// `PCB_GRID_ITEM::buildOutlineWorld`'s box (`GetBoundingBox`): the rectangle or the wedge turned by the orientation, `[x0, y0, x1, y1]`.
-    pub fn bounds(&self) -> [Um; 4] {
+    pub fn bounds(&self) -> [Nm; 4] {
         let pts = self.outline();
         let mut b = [i64::MAX, i64::MAX, i64::MIN, i64::MIN];
         for p in pts {
@@ -222,28 +222,28 @@ mod tests {
 
     #[test]
     fn the_setters_keep_what_kicad_keeps() {
-        let g = GridItem { extent: Point { x: -3_000, y: 2_000 }, spacing: Point { x: 0, y: -5 }, phi_extent_deg: -0.0, phi_spacing_deg: 15.0, priority: 0, angle: -90.0, ..GridItem::new(Point { x: 0, y: 0 }) }.normalized();
-        assert_eq!((g.extent, g.spacing, g.priority, g.angle), (Point { x: 3_000, y: 2_000 }, Point { x: 1, y: 1 }, 1, 270.0));
+        let g = GridItem { extent: Point { x: -3_000_000, y: 2_000_000 }, spacing: Point { x: 0, y: -5000 }, phi_extent_deg: -0.0, phi_spacing_deg: 15.0, priority: 0, angle: -90.0, ..GridItem::new(Point { x: 0, y: 0 }) }.normalized();
+        assert_eq!((g.extent, g.spacing, g.priority, g.angle), (Point { x: 3_000_000, y: 2_000_000 }, Point { x: 1, y: 1 }, 1, 270.0));
         assert_eq!((g.phi_extent_deg, g.phi_spacing_deg), (0.001, 15.0));
     }
 
     #[test]
     fn a_turn_and_a_flip_move_the_centre_and_the_orientation_as_pcb_grid_item_does() {
-        let mut g = GridItem::new(Point { x: 10_000, y: 0 });
+        let mut g = GridItem::new(Point { x: 10_000_000, y: 0 });
         g.rotate(Point { x: 0, y: 0 }, 90.0);
-        assert_eq!((g.at, g.angle), (Point { x: 0, y: -10_000 }, 90.0), "counter-clockwise on the screen is up");
+        assert_eq!((g.at, g.angle), (Point { x: 0, y: -10_000_000 }, 90.0), "counter-clockwise on the screen is up");
         g.flip(Point { x: 0, y: 0 }, true);
         assert_eq!(g.angle, 90.0, "180 - 90");
         g.flip(Point { x: 0, y: 0 }, false);
-        assert_eq!((g.at, g.angle), (Point { x: 0, y: 10_000 }, 270.0));
+        assert_eq!((g.at, g.angle), (Point { x: 0, y: 10_000_000 }, 270.0));
     }
 
     #[test]
     fn the_outline_is_the_box_or_the_wedge() {
         let g = GridItem::new(Point { x: 0, y: 0 });
-        assert_eq!(g.bounds(), [-5_000, -5_000, 5_000, 5_000]);
-        let wedge = GridItem { kind: GridKind::Polar, extent: Point { x: 4_000, y: 0 }, phi_extent_deg: 90.0, ..GridItem::new(Point { x: 0, y: 0 }) };
+        assert_eq!(g.bounds(), [-5_000_000, -5_000_000, 5_000_000, 5_000_000]);
+        let wedge = GridItem { kind: GridKind::Polar, extent: Point { x: 4_000_000, y: 0 }, phi_extent_deg: 90.0, ..GridItem::new(Point { x: 0, y: 0 }) };
         assert_eq!(wedge.outline().len(), 34, "the apex and 33 arc points");
-        assert_eq!(wedge.bounds(), [0, 0, 4_000, 4_000]);
+        assert_eq!(wedge.bounds(), [0, 0, 4_000_000, 4_000_000]);
     }
 }

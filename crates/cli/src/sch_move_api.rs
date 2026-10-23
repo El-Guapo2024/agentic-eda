@@ -33,7 +33,7 @@ fn preview(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
         design.schematic = derived.schematic;
         design.sheet_contents = derived.sheet_contents;
     }
-    let mut b = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+    let mut b = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
     for cmd in cmds {
         let cmd = if sheet.is_empty() { cmd } else { Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(cmd) } };
         b.apply(&cmd)?;
@@ -49,8 +49,8 @@ fn preview(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
     // what the net-collision monitor draws for the held selection (`SCH_DRAG_NET_COLLISION_MONITOR`): where the move would join two nets and where it pulls a connection apart
     if let Some(o) = b.net_collision() {
         patch["net_collision"] = json!({
-            "collisions": o.collisions.iter().map(|m| json!({ "at": pt(m.at), "radius_um": m.radius_um })).collect::<Vec<_>>(),
-            "disconnections": o.disconnections.iter().map(|d| json!({ "a": pt(d.a), "b": pt(d.b), "radius_um": d.radius_um })).collect::<Vec<_>>(),
+            "collisions": o.collisions.iter().map(|m| json!({ "at": pt(m.at), "radius_nm": m.radius_nm })).collect::<Vec<_>>(),
+            "disconnections": o.disconnections.iter().map(|d| json!({ "a": pt(d.a), "b": pt(d.b), "radius_nm": d.radius_nm })).collect::<Vec<_>>(),
         });
     }
     Ok(patch)

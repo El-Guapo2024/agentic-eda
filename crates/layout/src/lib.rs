@@ -46,7 +46,7 @@ pub struct LayoutOptions {
     /// no other net's wire is ever routed where a label will be drawn.
     /// (Screen "above"/"below" is the within-layer packing axis; see the
     /// `layout` doc comment for the transpose.) `eda-engine` sets these
-    /// from `geometry::SLOT_ABOVE_UM`/`SLOT_BELOW_UM`, the same constants
+    /// from `geometry::SLOT_ABOVE_NM`/`SLOT_BELOW_NM`, the same constants
     /// `eda-render` and `eda-gates` place the text with.
     pub label_slot_above: i64,
     pub label_slot_below: i64,

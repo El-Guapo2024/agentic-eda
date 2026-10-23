@@ -15,7 +15,7 @@ use eda_model::sch_extras::{LabelField, LabelSpin, INTERSHEET_REFS_FIELD};
 use std::fmt::Write as _;
 
 /// The height of a label's field text: `SCH_FIELD`'s default, 50 mil.
-const FIELD_SIZE_UM: f64 = 1270.0;
+const FIELD_SIZE_NM: f64 = 1270.0;
 
 /// One field of a label, where `AutoplaceFields` puts it.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,7 +53,7 @@ pub fn label_fields_placed(sch: &SchematicSection, l: &NetLabel, show_intersheet
     }
     fields.extend(own.iter().cloned().map(|f| (f, false)));
     let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
-    let size_iu = look.text_size_um() * 10;
+    let size_iu = look.text_size_nm() * 10;
     let fx = TextStyle { size_iu, thickness_iu: if look.bold { eda_model::kicad_font::kiround(size_iu as f64 / 5.0) } else { 0 }, h: HJustify::Left, v: eda_model::kicad_font::VJustify::Center };
     let spin = spin_of(crate::label_spin_of(sch, l));
     let at = (l.at.x as f64, l.at.y as f64);
@@ -66,7 +66,7 @@ pub fn label_fields_placed(sch: &SchematicSection, l: &NetLabel, show_intersheet
         }
     };
     let body_len = body.w().max(body.h());
-    let sizes: Vec<(bool, f64)> = fields.iter().map(|(_, isr)| (*isr, FIELD_SIZE_UM)).collect();
+    let sizes: Vec<(bool, f64)> = fields.iter().map(|(_, isr)| (*isr, FIELD_SIZE_NM)).collect();
     let places = kicad_geom::autoplace_label_fields(&fx, global, body_len, spin, at, &sizes);
     fields
         .into_iter()

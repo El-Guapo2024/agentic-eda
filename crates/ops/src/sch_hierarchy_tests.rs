@@ -40,11 +40,11 @@ fn replace_all_over_sheets_renames_references_where_asked_and_keeps_the_focus() 
 
 use super::sch_annotate_tests::{placement, section, symbol};
 use crate::sch_edit::SchCmd;
-use eda_model::ir::{LibrarySymbol, Point, SchematicSection, SheetPin, Um};
+use eda_model::ir::{LibrarySymbol, Point, SchematicSection, SheetPin, Nm};
 use eda_model::sch_clipboard::{PasteMode, SchFragment};
 use eda_model::sheet_file::SheetFile;
 
-fn pt(x: Um, y: Um) -> Point {
+fn pt(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -55,7 +55,7 @@ fn lib(ids: &[&str]) -> Vec<LibrarySymbol> {
 /// root -> Power (power.kicad_sch: R1, R2, C1) -> Filter (filter.kicad_sch: R3).
 fn power_design() -> Design {
     let mut d = super::sch_annotate_tests::design();
-    let r = |id: &str, x: Um| symbol(id, "Device:R", "10k", 1, pt(x, 0));
+    let r = |id: &str, x: Nm| symbol(id, "Device:R", "10k", 1, pt(x, 0));
     let contents: BTreeMap<String, SchematicSection> = [
         ("power.kicad_sch".to_string(), section(vec![r("R1", 10), r("R2", 20), symbol("C1", "Device:C", "100n", 1, pt(30, 0))], vec![placement("sf", "Filter", "filter.kicad_sch", "")])),
         ("filter.kicad_sch".to_string(), section(vec![r("R3", 10)], vec![])),
@@ -153,7 +153,7 @@ fn a_pasted_sheet_s_pins_keep_their_text_look() {
     let mut fragment = power_fragment(&d);
     let pin_id = fragment.section.sheets[0].pins[0].id.clone();
     assert!(!pin_id.is_empty());
-    let look = eda_model::sch_extras::LabelLook { size_um: 2_540, bold: true, ..Default::default() };
+    let look = eda_model::sch_extras::LabelLook { size_nm: 2_540, bold: true, ..Default::default() };
     fragment.section.extras.sheet_pin_looks.insert(pin_id, look);
     let mut b = Board::new(d, &m, 100, 300);
     b.apply(&Cmd::PasteSch { fragment, dx: 60_000, dy: 0, mode: PasteMode::Unique }).unwrap();
@@ -205,7 +205,7 @@ fn a_sheet_whose_screen_the_clipboard_lacks_is_pasted_from_the_design_else_empty
 
 /// A file: R1, R2 and C1 on its screen, a sheet Sub inside it with R7.
 fn a_file() -> SheetFile {
-    let r = |id: &str, x: Um| symbol(id, "Device:R", "4k7", 1, pt(x, 0));
+    let r = |id: &str, x: Nm| symbol(id, "Device:R", "4k7", 1, pt(x, 0));
     let mut root = section(vec![r("R1", 10), r("R2", 20), symbol("C1", "Device:C", "1u", 1, pt(30, 0))], vec![placement("sub", "Sub", "sub.kicad_sch", "")]);
     root.imported_from_kicad = true;
     let mut sub = section(vec![r("R7", 10)], vec![]);

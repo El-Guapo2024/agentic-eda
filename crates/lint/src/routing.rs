@@ -49,7 +49,7 @@ mod tests {
         let track = Track { id: "t1".into(), net: "A".into(), pins: vec![], layer: "F.Cu".into(), width, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 1000 }], arc_mid_offset: None };
         Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] }),

@@ -18,7 +18,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -28,7 +28,7 @@ fn empty_design() -> Design {
     }
 }
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -43,7 +43,7 @@ fn part(reference: &str) -> Part {
         symbol: None,
         datasheet: None,
         pins: (1..=2).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_nm: None,
         edge: None,
     }
 }
@@ -77,7 +77,7 @@ fn ids(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| s.to_string()).collect()
 }
 
-fn mv(v: &[&str], dx: Um, dy: Um) -> Cmd {
+fn mv(v: &[&str], dx: Nm, dy: Nm) -> Cmd {
     Cmd::SchMove(SchMoveCmd::Move { ids: ids(v), dx, dy, turns: Vec::new(), about: None })
 }
 
@@ -92,7 +92,7 @@ fn mirror(v: &[&str], vertical: bool) -> Cmd {
 fn edit(id: &str, f: impl FnOnce(&mut Edit)) -> Cmd {
     let mut e = Edit::default();
     f(&mut e);
-    Cmd::SchEdit(SchCmd::EditField { id: id.into(), text: e.text, at: e.at, vertical: e.vertical, h: e.h, v: e.v, size_um: e.size_um, bold: e.bold, italic: e.italic, visible: e.visible, name_shown: e.name_shown, allow_autoplace: e.allow_autoplace })
+    Cmd::SchEdit(SchCmd::EditField { id: id.into(), text: e.text, at: e.at, vertical: e.vertical, h: e.h, v: e.v, size_nm: e.size_nm, bold: e.bold, italic: e.italic, visible: e.visible, name_shown: e.name_shown, allow_autoplace: e.allow_autoplace })
 }
 
 #[derive(Default)]
@@ -102,7 +102,7 @@ struct Edit {
     vertical: Option<bool>,
     h: Option<TextJustify>,
     v: Option<TextVAlign>,
-    size_um: Option<Um>,
+    size_nm: Option<Nm>,
     bold: Option<bool>,
     italic: Option<bool>,
     visible: Option<bool>,
@@ -260,7 +260,7 @@ fn field_properties_set_the_text_size_look_and_place_in_one_command() {
     let before = field_named(&start, "Value");
     let after = run(start, edit(&field_id("R1", "Value"), |e| {
         e.text = Some("470".into());
-        e.size_um = Some(2_000);
+        e.size_nm = Some(2_000);
         e.bold = Some(true);
         e.italic = Some(true);
         e.at = Some(p(before.at.0 as i64 + 2_540, before.at.1 as i64 + 2_540));
@@ -271,7 +271,7 @@ fn field_properties_set_the_text_size_look_and_place_in_one_command() {
     assert_eq!(after.symbols[0].value, "470");
     let f = field_named(&after, "Value");
     assert_eq!(f.text, "470");
-    assert!(f.size_um == 2_000.0 && f.bold && f.italic && f.vertical);
+    assert!(f.size_nm == 2_000.0 && f.bold && f.italic && f.vertical);
     assert_eq!(f.h, eda_model::kicad_font::HJustify::Right);
     assert!(near(f.at, (before.at.0 + 2_540.0, before.at.1 + 2_540.0)), "{:?}", f.at);
 }
@@ -301,7 +301,7 @@ fn a_field_command_that_changes_nothing_is_refused_so_it_leaves_no_undo_step() {
     let now = field_named(&start, "Value");
     let e = run(start.clone(), edit(&field_id("R1", "Value"), |e| e.text = Some(now.text.clone()))).unwrap_err();
     assert_eq!(e[0].check, "ops_field_unchanged");
-    let e = run(start, edit(&field_id("R1", "Value"), |e| e.size_um = Some(0))).unwrap_err();
+    let e = run(start, edit(&field_id("R1", "Value"), |e| e.size_nm = Some(0))).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_text_size");
 }
 

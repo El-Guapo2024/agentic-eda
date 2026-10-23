@@ -369,7 +369,7 @@ fn simplify(path: &[(i64, i64)], grid: &Grid) -> Vec<Point> {
 /// Re-routes every edge in `overlapping_edges` around the others. Edges
 /// the maze cannot route keep their original wire (the gate will report
 /// them). Returns the number of edges rerouted.
-pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>], grid_um: i64, slot_boxes: &[(usize, Point, i64, i64)]) -> usize {
+pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>], grid_nm: i64, slot_boxes: &[(usize, Point, i64, i64)]) -> usize {
     let t0 = std::time::Instant::now();
     let bad = overlapping_edges(g, node_top_left, polys);
     let debug = std::env::var_os("EDA_MAZE_DEBUG").is_some();
@@ -379,7 +379,7 @@ pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>]
     if bad.is_empty() {
         return 0;
     }
-    let grid_um = grid_um.max(1);
+    let grid_nm = grid_nm.max(1);
     // Extent: nodes and existing wires, plus margin.
     let mut min_x = i64::MAX;
     let mut min_y = i64::MAX;
@@ -398,11 +398,11 @@ pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>]
         max_x = max_x.max(p.x);
         max_y = max_y.max(p.y);
     }
-    let min_x = min_x.div_euclid(grid_um) * grid_um - MARGIN_CELLS * grid_um;
-    let min_y = min_y.div_euclid(grid_um) * grid_um - MARGIN_CELLS * grid_um;
-    let cells_x = (max_x - min_x) / grid_um + MARGIN_CELLS + 1;
-    let cells_y = (max_y - min_y) / grid_um + MARGIN_CELLS + 1;
-    let mut grid = Grid { grid: grid_um, min_x, min_y, cells_x, cells_y, cells: vec![Cell::Free; (cells_x * cells_y) as usize] };
+    let min_x = min_x.div_euclid(grid_nm) * grid_nm - MARGIN_CELLS * grid_nm;
+    let min_y = min_y.div_euclid(grid_nm) * grid_nm - MARGIN_CELLS * grid_nm;
+    let cells_x = (max_x - min_x) / grid_nm + MARGIN_CELLS + 1;
+    let cells_y = (max_y - min_y) / grid_nm + MARGIN_CELLS + 1;
+    let mut grid = Grid { grid: grid_nm, min_x, min_y, cells_x, cells_y, cells: vec![Cell::Free; (cells_x * cells_y) as usize] };
 
     // Boxes (grown by their reserved refdes/value label slots, so the maze
     // never re-routes a wire into space the renderer will fill with text)

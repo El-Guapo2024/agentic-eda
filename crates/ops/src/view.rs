@@ -131,9 +131,9 @@ fn problems(board: &Board, model: &ConstraintModel) -> Value {
                 "check": f.check,
                 "move": f.mover,
                 "toward": f.toward,
-                "apart_mm": mm(f.apart_um),
-                "allowed_mm": mm(f.allowed_um),
-                "close_by_mm": mm(f.close_um()),
+                "apart_mm": mm(f.apart_nm),
+                "allowed_mm": mm(f.allowed_nm),
+                "close_by_mm": mm(f.close_nm()),
                 "actionable": true,
             })
         })

@@ -13,7 +13,7 @@ fn design(sch: SchematicSection) -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(sch),
         nets: None,
@@ -23,7 +23,7 @@ fn design(sch: SchematicSection) -> Design {
     }
 }
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -51,11 +51,11 @@ fn overlay(sch: SchematicSection, cmd: SchMoveCmd) -> NetCollision {
     b.net_collision().cloned().expect("a move leaves an overlay, empty or not")
 }
 
-fn mv(v: &[&str], dx: Um, dy: Um) -> SchMoveCmd {
+fn mv(v: &[&str], dx: Nm, dy: Nm) -> SchMoveCmd {
     SchMoveCmd::Move { ids: ids(v), dx, dy, turns: Vec::new(), about: None }
 }
 
-fn drag(v: &[&str], dx: Um, dy: Um) -> SchMoveCmd {
+fn drag(v: &[&str], dx: Nm, dy: Nm) -> SchMoveCmd {
     SchMoveCmd::Drag { ids: ids(v), vertices: BTreeMap::new(), dx, dy, ortho: true, grid: 0, turns: Vec::new(), about: None }
 }
 
@@ -71,7 +71,7 @@ fn tee() -> SchematicSection {
 fn a_wire_dragged_onto_another_net_is_marked_where_a_junction_would_join_them() {
     let o = overlay(tee(), mv(&["wire_v"], 0, -5_080));
     // 1.5 times the 36 mil junction, at the point where the foot of the vertical wire meets the middle of the horizontal one
-    assert_eq!(o.collisions, vec![CollisionMarker { at: p(10_160, 0), radius_um: 914.4 * 1.5 }]);
+    assert_eq!(o.collisions, vec![CollisionMarker { at: p(10_160, 0), radius_nm: 914.4 * 1.5 }]);
     assert!(o.disconnections.is_empty(), "{:?}", o.disconnections);
     assert!(!o.is_empty());
 }
@@ -131,7 +131,7 @@ fn a_wire_moved_away_from_the_one_it_ended_on_is_marked_as_a_connection_pulled_a
     s.wires.push(wire("wire_b", &[p(10_160, 0), p(10_160, 10_160)]));
     // Move leaves the wires where they are, so the joint comes apart: a circle at each end and the line between them
     let o = overlay(s.clone(), mv(&["wire_b"], 5_080, 0));
-    assert_eq!(o.disconnections, vec![DisconnectionMarker { a: p(10_160, 0), b: p(15_240, 0), radius_um: 152.4 }], "{o:?}");
+    assert_eq!(o.disconnections, vec![DisconnectionMarker { a: p(10_160, 0), b: p(15_240, 0), radius_nm: 152.4 }], "{o:?}");
     assert!(o.collisions.is_empty());
     // a Drag stretches the first wire to follow, so nothing comes apart
     let o = overlay(s.clone(), drag(&["wire_b"], 5_080, 0));

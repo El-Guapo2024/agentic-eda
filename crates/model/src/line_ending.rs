@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ir::Um;
+use crate::ir::Nm;
 use crate::pcb_items::LineStyle;
 
 /// `LINE_ENDING_STYLE`.
@@ -50,12 +50,12 @@ impl LineEndingStyle {
     }
 }
 
-fn is_zero(v: &Um) -> bool {
+fn is_zero(v: &Nm) -> bool {
     *v == 0
 }
 
-/// One `LINE_ENDING`: its style, its size along the line (`length_um`) and across it (`width_um`), 0 being automatic (`DEFAULT_RATIO_LENGTH` and `DEFAULT_RATIO_WIDTH`
-/// times the line's width, or the other size when one is set: `GetEffectiveSize`), and the width of its outline (`stroke_width_um`; 0 is a sharp, filled shape) with
+/// One `LINE_ENDING`: its style, its size along the line (`length_nm`) and across it (`width_nm`), 0 being automatic (`DEFAULT_RATIO_LENGTH` and `DEFAULT_RATIO_WIDTH`
+/// times the line's width, or the other size when one is set: `GetEffectiveSize`), and the width of its outline (`stroke_width_nm`; 0 is a sharp, filled shape) with
 /// the outline's line type, which the file carries and nothing draws.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,11 +63,14 @@ pub struct LineEnding {
     #[serde(default)]
     pub style: LineEndingStyle,
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub length_um: Um,
+    #[serde(alias = "length_um", deserialize_with = "crate::units::de")]
+    pub length_nm: Nm,
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub width_um: Um,
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Nm,
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub stroke_width_um: Um,
+    #[serde(alias = "stroke_width_um", deserialize_with = "crate::units::de")]
+    pub stroke_width_nm: Nm,
     #[serde(default, skip_serializing_if = "LineStyle::is_default")]
     pub stroke_style: LineStyle,
 }
@@ -84,27 +87,27 @@ impl LineEnding {
 
     /// `LINE_ENDING::SetLength`, `SetWidth`, `SetStrokeWidth` as `DIALOG_SHAPE_PROPERTIES::TransferDataFromWindow` calls them: a negative size is 0 (`std::max( 0, .. )`).
     pub fn clamped(mut self) -> LineEnding {
-        self.length_um = self.length_um.max(0);
-        self.width_um = self.width_um.max(0);
-        self.stroke_width_um = self.stroke_width_um.max(0);
+        self.length_nm = self.length_nm.max(0);
+        self.width_nm = self.width_nm.max(0);
+        self.stroke_width_nm = self.stroke_width_nm.max(0);
         self
     }
 
     /// `LINE_ENDING::Format( aOut, pcbIUScale, aToken )`: `(<token> <style> [(length ..)] [(width ..)] [(stroke (width ..) (type ..))])`, or nothing for no ending.
-    /// `mm` formats micrometres as KiCad's `FormatInternalUnits` does.
-    pub fn format(&self, token: &str, mm: impl Fn(Um) -> String) -> String {
+    /// `mm` formats nanometres as KiCad's `FormatInternalUnits` does.
+    pub fn format(&self, token: &str, mm: impl Fn(Nm) -> String) -> String {
         if self.is_none() {
             return String::new();
         }
         let mut out = format!("({token} {}", self.style.token());
-        if self.length_um > 0 {
-            out.push_str(&format!(" (length {})", mm(self.length_um)));
+        if self.length_nm > 0 {
+            out.push_str(&format!(" (length {})", mm(self.length_nm)));
         }
-        if self.width_um > 0 {
-            out.push_str(&format!(" (width {})", mm(self.width_um)));
+        if self.width_nm > 0 {
+            out.push_str(&format!(" (width {})", mm(self.width_nm)));
         }
-        if self.stroke_width_um > 0 {
-            out.push_str(&format!(" (stroke (width {}) (type {}))", mm(self.stroke_width_um), self.stroke_style.token()));
+        if self.stroke_width_nm > 0 {
+            out.push_str(&format!(" (stroke (width {}) (type {}))", mm(self.stroke_width_nm), self.stroke_style.token()));
         }
         out.push(')');
         out
@@ -127,7 +130,7 @@ impl LineEndings {
     }
 
     /// Both endings as the file writes them after the shape's stroke: `start_shape` then `end_shape`, each preceded by a space when there is one.
-    pub fn format(&self, mm: impl Fn(Um) -> String) -> String {
+    pub fn format(&self, mm: impl Fn(Nm) -> String) -> String {
         let mut out = String::new();
         for (e, token) in [(&self.start, "start_shape"), (&self.end, "end_shape")] {
             let s = e.format(token, &mm);
@@ -144,7 +147,7 @@ impl LineEndings {
 mod tests {
     use super::*;
 
-    fn mm(v: Um) -> String {
+    fn mm(v: Nm) -> String {
         let s = format!("{:.6}", v as f64 / 1000.0);
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     }
@@ -153,9 +156,9 @@ mod tests {
     fn an_ending_is_written_as_line_ending_format_writes_it() {
         assert_eq!(LineEnding::new(LineEndingStyle::None).format("start_shape", mm), "", "no ending, no token");
         assert_eq!(LineEnding::new(LineEndingStyle::Arrow).format("start_shape", mm), "(start_shape arrow)", "an automatic size says none");
-        let e = LineEnding { style: LineEndingStyle::ArrowOpen, length_um: 3000, width_um: 3000, stroke_width_um: 600, stroke_style: LineStyle::Default };
+        let e = LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: 3000, width_nm: 3000, stroke_width_nm: 600, stroke_style: LineStyle::Default };
         assert_eq!(e.format("end_shape", mm), "(end_shape arrow_open (length 3) (width 3) (stroke (width 0.6) (type default)))");
-        let both = LineEndings { start: LineEnding { width_um: 1500, ..LineEnding::new(LineEndingStyle::Square) }, end: LineEnding::new(LineEndingStyle::Circle) };
+        let both = LineEndings { start: LineEnding { width_nm: 1500, ..LineEnding::new(LineEndingStyle::Square) }, end: LineEnding::new(LineEndingStyle::Circle) };
         assert_eq!(both.format(mm), " (start_shape square (width 1.5)) (end_shape circle)");
     }
 

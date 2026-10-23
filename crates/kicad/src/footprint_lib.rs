@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use eda_model::footprint::Model3d;
-use eda_model::ir::{Side, Um};
+use eda_model::ir::{Side, Nm};
 use eda_model::{ConstraintModel, Footprint};
 
 use crate::import::{parse_pad_geometry, ImportNotes};
@@ -176,7 +176,7 @@ pub fn footprint_attributes(text: &str) -> Vec<String> {
 /// symmetric box that contains it, not represented exactly. `None` when
 /// the footprint has no courtyard layer at all -- callers fall back to the
 /// pad-bounding-box derivation the same as any other footprint with none.
-pub(crate) fn courtyard_from(root: &[Sexpr]) -> Option<(Um, Um)> {
+pub(crate) fn courtyard_from(root: &[Sexpr]) -> Option<(Nm, Nm)> {
     let on_crtyd = |item: &[Sexpr]| matches!(sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd"));
     let mm_to_um = crate::import::mm_to_um;
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
@@ -657,7 +657,7 @@ mod tests {
             package: None,
             footprint: Some(footprint.into()),
             pins: vec![],
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         };
         let mut model = ConstraintModel {
@@ -704,7 +704,7 @@ mod tests {
 
     // -------------------------------------------------- export_kicad_mod
 
-    fn lib_pad(number: &str, x: eda_model::ir::Um, y: eda_model::ir::Um, shape: eda_model::ir::LibraryPadShape, kind: PadKind) -> eda_model::ir::LibraryPad {
+    fn lib_pad(number: &str, x: eda_model::ir::Nm, y: eda_model::ir::Nm, shape: eda_model::ir::LibraryPadShape, kind: PadKind) -> eda_model::ir::LibraryPad {
         eda_model::ir::LibraryPad {
             id: format!("pad_{number}"),
             number: number.into(),

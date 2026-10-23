@@ -6,13 +6,13 @@ use eda_model::ir::TitleBlock;
 use eda_model::page::PageSettings;
 use serde_json::{json, Value};
 
-/// `{ paper, portrait, user_size_um, size_um }`: the paper as the dialog edits it and its resolved width and height, µm.
+/// `{ paper, portrait, user_size_nm, size_nm }`: the paper as the dialog edits it and its resolved width and height, µm.
 pub(crate) fn page_json(page: &PageSettings) -> Value {
     json!({
         "paper": page.paper,
         "portrait": page.portrait,
-        "user_size_um": page.user_size_um.map(|(w, h)| json!([w, h])),
-        "size_um": page.size_um().ok().map(|(w, h)| json!([w, h])),
+        "user_size_nm": page.user_size_nm.map(|(w, h)| json!([w, h])),
+        "size_nm": page.size_nm().ok().map(|(w, h)| json!([w, h])),
     })
 }
 
@@ -26,18 +26,18 @@ mod tests {
 
     #[test]
     fn a_standard_paper_reports_its_size_in_its_orientation() {
-        let v = page_json(&PageSettings { paper: "A4".into(), portrait: true, user_size_um: None });
+        let v = page_json(&PageSettings { paper: "A4".into(), portrait: true, user_size_nm: None });
         assert_eq!(v["paper"], "A4");
         assert_eq!(v["portrait"], true);
-        assert_eq!(v["size_um"], json!([210_000, 297_000]));
-        assert_eq!(v["user_size_um"], Value::Null);
+        assert_eq!(v["size_nm"], json!([210_000, 297_000]));
+        assert_eq!(v["user_size_nm"], Value::Null);
     }
 
     #[test]
     fn a_user_paper_reports_the_size_it_was_given() {
-        let v = page_json(&PageSettings { paper: "User".into(), portrait: false, user_size_um: Some((300_000, 200_000)) });
-        assert_eq!(v["size_um"], json!([300_000, 200_000]));
-        assert_eq!(v["user_size_um"], json!([300_000, 200_000]));
+        let v = page_json(&PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((300_000, 200_000)) });
+        assert_eq!(v["size_nm"], json!([300_000, 200_000]));
+        assert_eq!(v["user_size_nm"], json!([300_000, 200_000]));
     }
 
     #[test]

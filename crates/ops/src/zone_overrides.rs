@@ -22,7 +22,7 @@ impl Board<'_> {
     }
 
     /// `Cmd::SetFootprintZoneConnection`.
-    pub(crate) fn set_footprint_zone_connection(&mut self, part: &str, zone_connection: Option<PadConnection>, clearance: Option<Um>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn set_footprint_zone_connection(&mut self, part: &str, zone_connection: Option<PadConnection>, clearance: Option<Nm>) -> Result<(), Vec<CheckResult>> {
         self.require_placed(part)?;
         if clearance.is_some_and(|c| c < 0) {
             return Err(vec![CheckResult::fail("ops_bad_clearance", part, "a clearance override cannot be negative")]);
@@ -72,7 +72,7 @@ mod tests {
             package: Some(pkg.into()),
             footprint: None,
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-            body_um: None,
+            body_nm: None,
             symbol: None,
             datasheet: None,
             edge: None,
@@ -85,7 +85,7 @@ mod tests {
             sheet_contents: None,
             bus_aliases: vec![],
             symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -173,7 +173,7 @@ mod tests {
     fn a_pad_that_does_not_exist_or_a_negative_value_is_refused() {
         let (m, d) = placed();
         let mut b = Board::new(d, &m, 100, 300);
-        let cmd = |pad: &str, gap: Option<Um>| Cmd::SetPadZoneOverrides { part: "C1".into(), pad: pad.into(), zone_connection: None, thermal_gap: gap, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
+        let cmd = |pad: &str, gap: Option<Nm>| Cmd::SetPadZoneOverrides { part: "C1".into(), pad: pad.into(), zone_connection: None, thermal_gap: gap, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
         assert_eq!(b.apply(&cmd("9", None)).unwrap_err()[0].check, "ops_unknown_pad");
         assert_eq!(b.apply(&cmd("1", Some(-5))).unwrap_err()[0].check, "ops_bad_pad_override");
         assert!(b.design().drawings.is_none() || pad_edit(&b).is_empty(), "a refused edit changes nothing");

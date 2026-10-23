@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 
 use eda_model::fp_edit::{default_reference_layout, default_value_layout, FieldLayout, FootprintAttrs, FootprintEdit, FootprintKind, PadEdit, UserField, REFERENCE, VALUE};
-use eda_model::ir::{FootprintInstance, Millideg, Point, Side, Um};
+use eda_model::ir::{FootprintInstance, Millideg, Point, Side, Nm};
 use eda_model::{Footprint, Part};
 
 use crate::sexpr::{self, Sexpr};
@@ -312,7 +312,7 @@ pub(crate) fn parse_pad_extras(pad: &[Sexpr], side: Side, file_version: i64) -> 
             }
         }
     }
-    let margin = |name: &str| -> Option<Um> {
+    let margin = |name: &str| -> Option<Nm> {
         let m = sexpr::find(pad, name).and_then(|f| sexpr::num(f, 1)).map(mm_to_um_f)?;
         if file_version <= 20240201 && m == 0 {
             None

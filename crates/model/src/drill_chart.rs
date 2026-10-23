@@ -11,7 +11,7 @@
 //!
 //! Additive: absent in an older `design.json` reads as "none".
 
-use crate::ir::{Point, Um};
+use crate::ir::{Point, Nm};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -130,9 +130,11 @@ pub struct DrillSymbolProfile {
     /// `m_groupBy`, in [`DrillGroupKey`] order.
     pub group_by: Vec<DrillGroupKey>,
     pub mark_policy: DrillMarkPolicy,
-    /// `m_symbolSize` and `m_symbolWidth`, µm.
-    pub size_um: Um,
-    pub width_um: Um,
+    /// `m_symbolSize` and `m_symbolWidth`, nm.
+    #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
+    pub size_nm: Nm,
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Nm,
     pub freeze_assignments: bool,
     /// `m_assignments`: group key (`GroupKeyString`) -> mark, in the key's byte order (a `std::map<std::string, ..>`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -147,8 +149,8 @@ impl Default for DrillSymbolProfile {
             name: String::new(),
             group_by: vec![DrillGroupKey::Size, DrillGroupKey::Slot, DrillGroupKey::Plating, DrillGroupKey::Span, DrillGroupKey::Operation, DrillGroupKey::PostMachining],
             mark_policy: DrillMarkPolicy::ShapesThenLetters,
-            size_um: 1_500,
-            width_um: 150,
+            size_nm: 1_500_000,
+            width_nm: 150_000,
             freeze_assignments: true,
             assignments: BTreeMap::new(),
         }
@@ -290,14 +292,15 @@ pub struct DrillChartColumn {
     pub heading: String,
     pub align: TableAlign,
     #[serde(default)]
-    pub width_um: Um,
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Nm,
 }
 
 impl DrillChartColumn {
     /// `GENERATED_TABLE_SCHEMA::DefaultColumn`.
     pub fn default_of(id: DrillChartColumnId) -> Self {
         let (_, heading, align, _, _) = id.def();
-        DrillChartColumn { id, heading: heading.to_string(), align, width_um: 0 }
+        DrillChartColumn { id, heading: heading.to_string(), align, width_nm: 0 }
     }
 
     /// `GENERATED_TABLE_SCHEMA::Defaults`: the columns a new chart has.
@@ -411,11 +414,12 @@ pub struct DrillMap {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
     pub layer: String,
-    /// `m_offset`: how far every mark is slid from its hole, µm.
+    /// `m_offset`: how far every mark is slid from its hole, nm.
     #[serde(default)]
     pub offset: Point,
-    /// `m_symbolSize`, µm.
-    pub size_um: Um,
+    /// `m_symbolSize`, nm.
+    #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
+    pub size_nm: Nm,
     /// `m_span` when the map shows one span only (`m_allSpans` false); `None` shows them all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<DrillSpan>,
@@ -430,8 +434,8 @@ pub struct DrillMap {
 
 impl DrillMap {
     /// `PCB_DRILL_MAP( board )`: on `layer`, no offset, the profile's mark size, every span, slots outlined, no guide cross.
-    pub fn new(layer: &str, size_um: Um) -> Self {
-        DrillMap { id: String::new(), layer: layer.to_string(), offset: Point { x: 0, y: 0 }, size_um, span: None, outline_slots: true, guide_cross: false, custom_properties: vec![] }
+    pub fn new(layer: &str, size_nm: Nm) -> Self {
+        DrillMap { id: String::new(), layer: layer.to_string(), offset: Point { x: 0, y: 0 }, size_nm, span: None, outline_slots: true, guide_cross: false, custom_properties: vec![] }
     }
 
     pub fn id_seed(&self) -> String {

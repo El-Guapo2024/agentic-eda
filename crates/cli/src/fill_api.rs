@@ -237,13 +237,13 @@ mod tests {
         let model = ConstraintModel { nets: vec![Net { name: "GND".into(), pins: vec![] }, Net { name: "VCC".into(), pins: vec![] }], ..Default::default() };
         std::fs::write(dir.join("intent.yaml"), serde_yaml::to_string(&model).unwrap()).unwrap();
         write_zones(&dir, zones);
-        std::fs::write(dir.join("board.json"), serde_json::to_string(&json!({ "intent": dir.join("intent.yaml").display().to_string(), "snap_um": 100, "spacing_um": 500 })).unwrap()).unwrap();
+        std::fs::write(dir.join("board.json"), serde_json::to_string(&json!({ "intent": dir.join("intent.yaml").display().to_string(), "snap_nm": 100, "spacing_nm": 500 })).unwrap()).unwrap();
         dir
     }
 
     fn write_zones(dir: &Path, zones: Vec<Zone>) {
         let design = Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -365,7 +365,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let (a, b) = (square("za", "uuid-a", "F.Cu", 0), square("zb", "uuid-b", "B.Cu", 0));
         let design = Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,

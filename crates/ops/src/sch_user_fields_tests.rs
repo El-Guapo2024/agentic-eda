@@ -20,7 +20,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -30,7 +30,7 @@ fn empty_design() -> Design {
     }
 }
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -45,7 +45,7 @@ fn part(reference: &str) -> Part {
         symbol: None,
         datasheet: None,
         pins: (1..=2).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_nm: None,
         edge: None,
     }
 }
@@ -103,7 +103,7 @@ fn edit(id: &str, f: impl FnOnce(&mut Edit)) -> Cmd {
         vertical: e.vertical,
         h: e.h,
         v: e.v,
-        size_um: e.size_um,
+        size_nm: e.size_nm,
         bold: e.bold,
         italic: e.italic,
         visible: e.visible,
@@ -119,7 +119,7 @@ struct Edit {
     vertical: Option<bool>,
     h: Option<TextJustify>,
     v: Option<TextVAlign>,
-    size_um: Option<Um>,
+    size_nm: Option<Nm>,
     bold: Option<bool>,
     italic: Option<bool>,
     visible: Option<bool>,
@@ -131,7 +131,7 @@ fn show(sch: SchematicSection, name: &str) -> SchematicSection {
     run(sch, edit(&field_id("R1", name), |e| e.visible = Some(true))).unwrap_or_else(|e| panic!("{e:?}"))
 }
 
-fn mv(v: &[&str], dx: Um, dy: Um) -> Cmd {
+fn mv(v: &[&str], dx: Nm, dy: Nm) -> Cmd {
     Cmd::SchMove(SchMoveCmd::Move { ids: ids(v), dx, dy, turns: Vec::new(), about: None })
 }
 
@@ -289,7 +289,7 @@ fn field_properties_set_the_look_and_the_place_of_a_user_field_in_one_command() 
     let after = run(
         start,
         edit(&field_id("R1", "MPN"), |e| {
-            e.size_um = Some(2_000);
+            e.size_nm = Some(2_000);
             e.bold = Some(true);
             e.italic = Some(true);
             e.name_shown = Some(true);
@@ -301,7 +301,7 @@ fn field_properties_set_the_look_and_the_place_of_a_user_field_in_one_command() 
     )
     .unwrap_or_else(|e| panic!("{e:?}"));
     let f = field_named(&after, "MPN");
-    assert!(f.size_um == 2_000.0 && f.bold && f.italic && f.name_shown && f.no_autoplace && f.vertical, "{f:?}");
+    assert!(f.size_nm == 2_000.0 && f.bold && f.italic && f.name_shown && f.no_autoplace && f.vertical, "{f:?}");
     assert_eq!(f.h, eda_model::kicad_font::HJustify::Right);
     assert!(near(f.at, (before.at.0 + 2_540.0, before.at.1 + 2_540.0)), "{:?}", f.at);
     assert_eq!(f.shown_text(), "MPN: ERJ-3EKF");

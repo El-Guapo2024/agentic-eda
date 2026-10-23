@@ -29,7 +29,7 @@ use super::pcb_paste::{Copies, Member};
 use super::pcb_transform::{part_pose, transform_dimension, transform_shape, transform_text, transform_track, transform_via, transform_zone, Xform};
 use super::{rotate_point_about, Board};
 use eda_model::fp_edit::{parse_field_id, parse_pad_id};
-use eda_model::ir::{FootprintInstance, Point, Shape, Um};
+use eda_model::ir::{FootprintInstance, Point, Shape, Nm};
 use eda_model::CheckResult;
 use std::collections::BTreeSet;
 
@@ -49,12 +49,12 @@ pub enum ArrayGeometry {
     Grid {
         nx: i64,
         ny: i64,
-        dx: Um,
-        dy: Um,
+        dx: Nm,
+        dy: Nm,
         #[serde(default)]
-        offset_x: Um,
+        offset_x: Nm,
         #[serde(default)]
-        offset_y: Um,
+        offset_y: Nm,
         #[serde(default)]
         centred: bool,
         /// `ARRAY_GRID_OPTIONS::m_stagger` -- a brick/honeycomb offset every `stagger`-th row (or column, see `stagger_rows`). 0 or 1
@@ -207,7 +207,7 @@ fn arc_centre(a: Point, b: Point, c: Point) -> Option<Point> {
         return None;
     }
     let (a2, b2, c2) = (ax * ax + ay * ay, bx * bx + by * by, cx * cx + cy * cy);
-    Some(Point { x: ((a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d).round() as Um, y: ((a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d).round() as Um })
+    Some(Point { x: ((a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d).round() as Nm, y: ((a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d).round() as Nm })
 }
 
 /// The centre of the box the points span (`PCB_GROUP::GetPosition` is the middle of its bounding box).

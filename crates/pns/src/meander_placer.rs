@@ -32,7 +32,7 @@ use crate::meander::{tune_line_length, MeanderEnv, MeanderSettings, MeanderShape
 use crate::node::Node;
 use crate::tuning_path::{assemble_opts, assemble_tuning_path, LengthEnv, TuningPath};
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 
 /// `MEANDER_PLACER_BASE::TUNING_STATUS`.
@@ -62,12 +62,12 @@ impl TuningStatus {
     }
 }
 
-/// Does the polyline `chain` (nanometres) of a track of width `width_um` collide with the world? The shape's chords are tested as the stadiums
+/// Does the polyline `chain` (nanometres) of a track of width `width_nm` collide with the world? The shape's chords are tested as the stadiums
 /// they are, on micrometres: the grid the board is on.
-pub fn chain_collides(world: &Node, rules: &BoardRules, net: &Net, layer: i32, width_um: Um, chain: &ShapeLineChain) -> bool {
+pub fn chain_collides(world: &Node, rules: &BoardRules, net: &Net, layer: i32, width_nm: Nm, chain: &ShapeLineChain) -> bool {
     let layers = LayerRange::single(layer);
     let pts: Vec<Point> = chain.points().iter().map(|&p| to_um(p)).collect();
-    pts.windows(2).any(|w| w[0] != w[1] && world.first_colliding(&Shape::Stadium { a: w[0], b: w[1], r: width_um / 2 }, net, layers, rules, &[]).is_some())
+    pts.windows(2).any(|w| w[0] != w[1] && world.first_colliding(&Shape::Stadium { a: w[0], b: w[1], r: width_nm / 2 }, net, layers, rules, &[]).is_some())
 }
 
 /// What the shapes ask their placer for a single line: the settings, the clearance, and `CheckFit`.
@@ -78,7 +78,7 @@ struct FitEnv<'a> {
     rules: &'a BoardRules,
     net: Net,
     layer: i32,
-    width_um: Um,
+    width_nm: Nm,
 }
 
 impl MeanderEnv for FitEnv<'_> {
@@ -96,7 +96,7 @@ impl MeanderEnv for FitEnv<'_> {
 
     /// `MEANDER_PLACER::CheckFit`.
     fn check_fit(&mut self, shape: &MeanderShape, existing: &[MeanderShape]) -> bool {
-        if chain_collides(self.world, self.rules, &self.net, self.layer, self.width_um, shape.c_line(0)) {
+        if chain_collides(self.world, self.rules, &self.net, self.layer, self.width_nm, shape.c_line(0)) {
             return false;
         }
         let w = shape.width();
@@ -389,7 +389,7 @@ impl MeanderPlacer {
         let raw = tuned.clone();
 
         let clearance = Node::clearance(&self.env.rules, &self.origin_line.net, &None) * 1000;
-        let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net: self.origin_line.net.clone(), layer: self.origin_line.layer, width_um: self.origin_line.width };
+        let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net: self.origin_line.net.clone(), layer: self.origin_line.layer, width_nm: self.origin_line.width };
         let zero = Point { x: 0, y: 0 };
         let mut result = MeanderedLine::new(false);
         result.set_width(self.width_nm);
@@ -525,9 +525,9 @@ mod tests {
         (w, s)
     }
 
-    fn settings(target_um: i64) -> MeanderSettings {
+    fn settings(target_nm: i64) -> MeanderSettings {
         let mut s = MeanderSettings::default();
-        s.set_target_length(target_um * 1000);
+        s.set_target_length(target_nm * 1000);
         s.keep_endpoints = true;
         s
     }
@@ -651,7 +651,7 @@ mod tests {
     fn profiled_env(time_domain: bool) -> LengthEnv {
         use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile, TuningProfiles};
         let mut e = env();
-        let entry = |layer: &str, delay: i64| ProfileLayerEntry { signal_layer: layer.into(), top_reference_layer: None, bottom_reference_layer: None, width_um: 200, diff_pair_gap_um: 0, delay_as_per_mm: delay };
+        let entry = |layer: &str, delay: i64| ProfileLayerEntry { signal_layer: layer.into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200, diff_pair_gap_nm: 0, delay_as_per_mm: delay };
         let profile = TuningProfile { name: "FR4".into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: time_domain, layer_entries: vec![entry("F.Cu", 6_100_000), entry("B.Cu", 6_500_000)], via_propagation_delay_as: 5_000_000, via_overrides: vec![] };
         e.rules.tuning_profiles = TuningProfiles { profiles: vec![profile], class_profiles: [("Default".to_string(), "FR4".to_string())].into() };
         e

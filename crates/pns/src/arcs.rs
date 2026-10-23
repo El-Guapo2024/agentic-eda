@@ -10,7 +10,7 @@
 
 use crate::kigeom::{angle_of, normalize, rotate_about, to_nm, to_um, ShapeArc, ARC_POLYGONIZATION_MAX_ERROR_NM};
 use eda_drc::kimath::{Seg, Shape};
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 
 /// `ARC_HIGH_DEF` (0.005 mm) in nanometres: `SHAPE_ARC::DefaultAccuracyForPCB()`, the slack KiCad adds to an arc's hull and, in a shove, to the
 /// hull of each arc segment of the pushing line.
@@ -19,7 +19,7 @@ pub const ARC_HIGH_DEF_NM: i64 = 5_000;
 /// How far an arc's collision shape is fattened (um) past the track's half width. None: the polyline it is made of is held to half a micrometre of the
 /// curve (vertices a little outside it, chord midpoints a little inside, `ConvertToPolyline`), inside the 1 um the router's clearance epsilon allows, and
 /// the segments of a line that goes through the arc are the very same chords -- so an arc as an item and as part of a line are judged alike.
-pub const ARC_SHAPE_PAD_UM: Um = 0;
+pub const ARC_SHAPE_PAD_NM: Nm = 0;
 
 /// An arc by three of its points, micrometres: where it starts, a point on it, where it ends (`PCB_ARC`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,7 +142,7 @@ impl ArcPts {
             let l = dx.hypot(dy);
             if l > 0.0 {
                 let r = self.radius();
-                return Point { x: (cx + dx / l * r).round() as Um, y: (cy + dy / l * r).round() as Um };
+                return Point { x: (cx + dx / l * r).round() as Nm, y: (cy + dy / l * r).round() as Nm };
             }
         }
         if dist(p, self.start) <= dist(p, self.end) {
@@ -205,9 +205,9 @@ pub fn calc_arc_mid(start: Point, end: Point, center: Point) -> Point {
     to_um(rotate_about(s, c, d / 2.0))
 }
 
-/// The collision shape of an arc track: the stroke of its polyline, fattened by [`ARC_SHAPE_PAD_UM`] so that it holds the stroke of the true arc.
-pub fn arc_shape(poly: &[Point], width: Um) -> Shape {
-    Shape::Strokes { segs: poly.windows(2).map(|w| Seg::new(w[0], w[1])).collect(), r: width / 2 + ARC_SHAPE_PAD_UM }
+/// The collision shape of an arc track: the stroke of its polyline, fattened by [`ARC_SHAPE_PAD_NM`] so that it holds the stroke of the true arc.
+pub fn arc_shape(poly: &[Point], width: Nm) -> Shape {
+    Shape::Strokes { segs: poly.windows(2).map(|w| Seg::new(w[0], w[1])).collect(), r: width / 2 + ARC_SHAPE_PAD_NM }
 }
 
 /// `ArcHull( aArc, aClearance, aWalkaroundThickness )` (`pns_utils.cpp:68`): the closed ring, clockwise, round an arc track of width `width` that a
@@ -216,7 +216,7 @@ pub fn arc_shape(poly: &[Point], width: Um) -> Shape {
 ///
 /// KiCad builds it in nanometres from a polygonisation at `ARC_LOW_DEF` (0.02 mm) and pads it by `ARC_HIGH_DEF`; the polygonisation here is held to
 /// `ARC_HIGH_DEF` (0.005 mm), so the ring's inner and outer sides are never closer to the curve than the pad allows for.
-pub fn arc_hull(arc: &ArcPts, width: Um, clearance: Um, walk: Um) -> Vec<Point> {
+pub fn arc_hull(arc: &ArcPts, width: Nm, clearance: Nm, walk: Nm) -> Vec<Point> {
     let cl = clearance + (walk + 1) / 2;
     let (cl_nm, width_nm) = (cl * 1000, width * 1000);
     let shape = arc.shape_nm();

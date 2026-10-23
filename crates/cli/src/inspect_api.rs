@@ -120,7 +120,7 @@ mod tests {
             package: Some("PAIR2".into()),
             footprint: Some("PAIR2".into()),
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-            body_um: None,
+            body_nm: None,
             symbol: None,
             datasheet: None,
             edge: None,
@@ -139,7 +139,7 @@ mod tests {
             sheet_contents: None,
             bus_aliases: vec![],
             symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -152,7 +152,7 @@ mod tests {
             drawings: None,
         };
         board::save(dir, &design).unwrap();
-        let meta = board::Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -303,13 +303,13 @@ mod tests {
             ("explicit rule", Some("(version 1)\n(rule \"hv pads\"\n\t(condition \"A.NetClass == 'HV' && B.Type == 'Pad'\")\n\t(constraint clearance (min 0.65mm)))\n"), 650),
             ("loosening rule", Some("(version 1)\n(rule \"loose\"\n\t(condition \"A.NetName == 'HV'\")\n\t(constraint clearance (min 0.3mm)))\n"), 300),
         ];
-        for (name, dru, expected_um) in cases {
+        for (name, dru, expected_nm) in cases {
             // what the report says, on a board whose pads are far apart
             let dir = scratch(&format!("proof_{}", name.replace(' ', "_")));
             setup(&dir, 3_000, hv_rules(dru));
             let reply = clearance(&dir, &body(json!({"a": "U1.1", "b": "U1.2"})));
             let resolved = resolved_min(&reply).unwrap_or_else(|| panic!("{name}: {reply}"));
-            assert_eq!(resolved, expected_um * 1000, "{name}: {reply}");
+            assert_eq!(resolved, expected_nm * 1000, "{name}: {reply}");
             let um = resolved / 1000;
             // kicad-cli on the same board with the pads (copper gap) 10 um under and 10 um over it
             for (delta, violation) in [(-10, true), (10, false)] {

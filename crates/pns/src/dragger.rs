@@ -56,7 +56,7 @@ use crate::settings::{Mode, RoutingSettings};
 use crate::shove::{self, DisplacedLine, DisplacedVia};
 use crate::walkaround::{path_collides, WalkPolicy, WalkStatus, Walker};
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 use std::collections::HashSet;
 
@@ -92,7 +92,7 @@ pub struct Dragger {
     pub kind: DragKind,
     pub net: Net,
     pub layer: i32,
-    pub width: Um,
+    pub width: Nm,
     /// The assembled line at drag start (`Corner`, `Segment`) -- its own segment ids
     /// are exactly what must be removed from the committed board on
     /// finish. Unused (empty) for `Via`.
@@ -102,8 +102,8 @@ pub struct Dragger {
     /// `Via` only: the via's own identity/position/size at drag start.
     pub via_id: Option<ItemId>,
     pub via_pos: Point,
-    pub via_diameter: Um,
-    pub via_drill: Um,
+    pub via_diameter: Nm,
+    pub via_drill: Nm,
     /// `Via` only: the layers the via spans.
     pub via_layers: LayerRange,
     pub source_via: Option<String>,
@@ -173,7 +173,7 @@ pub struct DragCommit {
     pub remove_track_ids: Vec<String>,
     pub remove_via_ids: Vec<String>,
     pub tracks: Vec<Line>,
-    pub vias: Vec<(Point, Um, Um, Option<String>)>,
+    pub vias: Vec<(Point, Nm, Nm, Option<String>)>,
 }
 
 /// What a drag may not take hold of (`DRAGGER::Start`, `ROUTER_TOOL::performDragging`).
@@ -305,7 +305,7 @@ impl Dragger {
 
     /// `m_snapThreshhold` of the dragged line: `SmoothDraggedSegments() ? Width() / 4 : 0` for Highlight collisions and Walk around,
     /// `Width() / 2` for Shove (`dragMarkObstacles`, `dragWalkaround`, `dragShove`).
-    fn snap_threshold(&self, settings: &RoutingSettings, shove: bool) -> Um {
+    fn snap_threshold(&self, settings: &RoutingSettings, shove: bool) -> Nm {
         if !settings.smooth_dragged_segments {
             0
         } else if shove {
@@ -317,7 +317,7 @@ impl Dragger {
 
     /// The dragged line's points with the cursor at `to`: `LINE::DragSegment` for a segment drag, `LINE::DragCorner` for a corner drag
     /// (in `free_angle` mode `dragCornerFree`).
-    fn dragged_line(&self, to: Point, snap: Um, free_angle: bool) -> Line {
+    fn dragged_line(&self, to: Point, snap: Nm, free_angle: bool) -> Line {
         let mut line = self.original.clone();
         match self.kind {
             DragKind::Segment => line.drag_segment45(to, self.grabbed_index, snap),
@@ -560,7 +560,7 @@ impl Dragger {
             let fanout = self.via_candidate(node, to);
             return DragPreview { pts: vec![to], colliding: true, fanout, ..DragPreview::default() };
         };
-        let target = Point { x: to.x + force.0 as Um, y: to.y + force.1 as Um };
+        let target = Point { x: to.x + force.0 as Nm, y: to.y + force.1 as Nm };
         let mut colliding = false;
         let mut fanout = Vec::new();
         for original in self.attached_lines(node) {
@@ -688,7 +688,7 @@ fn split_chain_at(pts: &mut Vec<Point>, p: Point) {
 }
 
 #[allow(clippy::too_many_arguments)] // the query context, the line's net, layer and width, its points and its arcs
-fn try_walkaround(node: &Node, rules: &BoardRules, settings: &RoutingSettings, net: &Net, layer: i32, width: Um, pts: &[Point], arcs: &[crate::arcs::ArcPts]) -> Option<Vec<Point>> {
+fn try_walkaround(node: &Node, rules: &BoardRules, settings: &RoutingSettings, net: &Net, layer: i32, width: Nm, pts: &[Point], arcs: &[crate::arcs::ArcPts]) -> Option<Vec<Point>> {
     let mut walker = Walker::new(node, rules);
     walker.corner_mode = settings.corner_mode;
     walker.arcs = arcs.to_vec();

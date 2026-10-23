@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ir::Um;
+use crate::ir::Nm;
 use crate::CheckResult;
 
 // ------------------------------------------------------------------------------------------------------------------------------------ Formatting
@@ -96,21 +96,23 @@ impl FormattingSettings {
 // ------------------------------------------------------------------------------------------------------------------------------------ Zone Hatch Offsets
 
 /// The most a hatch offset may be: a metre. The filler reduces it modulo the pattern's pitch, so more would mean nothing.
-pub const MAX_HATCH_OFFSET_UM: Um = 1_000_000;
+pub const MAX_HATCH_OFFSET_NM: Nm = 1_000_000_000;
 
 /// `ZONE_LAYER_PROPERTIES::hatching_offset`: how far the hatch pattern of the zones on a copper layer is moved from where the board's origin puts it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HatchOffset {
     #[serde(default)]
-    pub x_um: Um,
+    #[serde(alias = "x_um", deserialize_with = "crate::units::de")]
+    pub x_nm: Nm,
     #[serde(default)]
-    pub y_um: Um,
+    #[serde(alias = "y_um", deserialize_with = "crate::units::de")]
+    pub y_nm: Nm,
 }
 
 impl HatchOffset {
     pub fn is_zero(&self) -> bool {
-        self.x_um == 0 && self.y_um == 0
+        self.x_nm == 0 && self.y_nm == 0
     }
 }
 
@@ -122,14 +124,14 @@ pub fn canonical_hatch_offsets(offsets: &HatchOffsets) -> HatchOffsets {
     offsets.iter().filter(|(_, o)| !o.is_zero()).map(|(l, o)| (l.clone(), *o)).collect()
 }
 
-/// A page's check: every entry is for a copper layer the board has, and its offset is within [`MAX_HATCH_OFFSET_UM`]. The refusal's `location` is the layer.
+/// A page's check: every entry is for a copper layer the board has, and its offset is within [`MAX_HATCH_OFFSET_NM`]. The refusal's `location` is the layer.
 pub fn validate_hatch_offsets(offsets: &HatchOffsets, copper: &[String]) -> Result<(), CheckResult> {
     for (layer, o) in offsets {
         if !copper.iter().any(|c| c == layer) {
             return Err(CheckResult::fail("ops_bad_hatch_offsets", layer, format!("{layer} is not a copper layer of this board")));
         }
-        if o.x_um.abs() > MAX_HATCH_OFFSET_UM || o.y_um.abs() > MAX_HATCH_OFFSET_UM {
-            return Err(CheckResult::fail("ops_bad_hatch_offsets", layer, format!("The hatch offset of {layer} is at most {} mm either way", MAX_HATCH_OFFSET_UM / 1000)));
+        if o.x_nm.abs() > MAX_HATCH_OFFSET_NM || o.y_nm.abs() > MAX_HATCH_OFFSET_NM {
+            return Err(CheckResult::fail("ops_bad_hatch_offsets", layer, format!("The hatch offset of {layer} is at most {} mm either way", MAX_HATCH_OFFSET_NM / crate::units::NM_PER_MM)));
         }
     }
     Ok(())
@@ -168,11 +170,14 @@ impl CornerStyle {
 #[serde(deny_unknown_fields)]
 pub struct MeanderSettings {
     /// "Minimum amplitude" (`m_minAmplitude`): the shortest a meander's swing may be. Stepping the amplitude never goes below it.
-    pub min_amplitude_um: Um,
+    #[serde(alias = "min_amplitude_um", deserialize_with = "crate::units::de")]
+    pub min_amplitude_nm: Nm,
     /// "Maximum amplitude" (`m_maxAmplitude`): the longest it may be, and what a new pattern starts at; the amplitude hot keys step it.
-    pub max_amplitude_um: Um,
+    #[serde(alias = "max_amplitude_um", deserialize_with = "crate::units::de")]
+    pub max_amplitude_nm: Nm,
     /// "Spacing" (`m_spacing`): the distance between two swings.
-    pub spacing_um: Um,
+    #[serde(alias = "spacing_um", deserialize_with = "crate::units::de")]
+    pub spacing_nm: Nm,
     /// "Corner style".
     pub corner_style: CornerStyle,
     /// "Corner radius" as a percentage (`m_cornerRadiusPercentage`), 0 to 100.
@@ -184,12 +189,12 @@ pub struct MeanderSettings {
 impl MeanderSettings {
     /// `MEANDER_SETTINGS()` with the spacing `BOARD_DESIGN_SETTINGS` gives a single track and a skew pattern (`DEFAULT_MEANDER_SPACING`, 0.6 mm).
     pub fn single_track() -> Self {
-        MeanderSettings { min_amplitude_um: 200, max_amplitude_um: 1_000, spacing_um: 600, corner_style: CornerStyle::Round, corner_radius_percentage: 80, single_sided: false }
+        MeanderSettings { min_amplitude_nm: 200_000, max_amplitude_nm: 1_000_000, spacing_nm: 600_000, corner_style: CornerStyle::Round, corner_radius_percentage: 80, single_sided: false }
     }
 
     /// The same with a differential pair's spacing (`DEFAULT_DP_MEANDER_SPACING`, 1 mm).
     pub fn diff_pair() -> Self {
-        MeanderSettings { spacing_um: 1_000, ..MeanderSettings::single_track() }
+        MeanderSettings { spacing_nm: 1_000_000, ..MeanderSettings::single_track() }
     }
 }
 
@@ -215,7 +220,7 @@ impl Default for TuningPatterns {
 }
 
 /// The most an amplitude or a spacing may be: 100 mm (KiCad's own limit for a text, a line and most lengths a user types).
-pub const MAX_MEANDER_UM: Um = 100_000;
+pub const MAX_MEANDER_NM: Nm = 100_000_000;
 
 impl TuningPatterns {
     pub fn is_default(&self) -> bool {
@@ -227,15 +232,15 @@ impl TuningPatterns {
     pub fn validate(&self) -> Result<(), CheckResult> {
         for (group, s) in [("single_track", &self.single_track), ("diff_pair", &self.diff_pair), ("diff_pair_skew", &self.diff_pair_skew)] {
             let bad = |field: &str, why: &str| Err(CheckResult::fail("ops_bad_tuning_patterns", format!("{group}.{field}"), why.to_string()));
-            for (field, v) in [("min_amplitude", s.min_amplitude_um), ("max_amplitude", s.max_amplitude_um), ("spacing", s.spacing_um)] {
+            for (field, v) in [("min_amplitude", s.min_amplitude_nm), ("max_amplitude", s.max_amplitude_nm), ("spacing", s.spacing_nm)] {
                 if v <= 0 {
                     return bad(field, &format!("The {} must be above 0.", field.replace('_', " ")));
                 }
-                if v > MAX_MEANDER_UM {
-                    return bad(field, &format!("The {} is at most {} mm.", field.replace('_', " "), MAX_MEANDER_UM / 1000));
+                if v > MAX_MEANDER_NM {
+                    return bad(field, &format!("The {} is at most {} mm.", field.replace('_', " "), MAX_MEANDER_NM / crate::units::NM_PER_MM));
                 }
             }
-            if s.min_amplitude_um > s.max_amplitude_um {
+            if s.min_amplitude_nm > s.max_amplitude_nm {
                 return bad("min_amplitude", "The minimum amplitude cannot be above the maximum amplitude.");
             }
             if s.corner_radius_percentage > 100 {
@@ -286,10 +291,12 @@ pub struct ProfileLayerEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bottom_reference_layer: Option<String>,
     #[serde(default)]
-    pub width_um: Um,
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Nm,
     /// The gap of a differential pair on this layer; 0 in a single-ended profile.
     #[serde(default)]
-    pub diff_pair_gap_um: Um,
+    #[serde(alias = "diff_pair_gap_um", deserialize_with = "crate::units::de")]
+    pub diff_pair_gap_nm: Nm,
     #[serde(default)]
     pub delay_as_per_mm: i64,
 }
@@ -401,7 +408,7 @@ impl TuningProfiles {
                 if !layers.insert(e.signal_layer.as_str()) {
                     return bad("Duplicated signal layer configuration in tuning profile".into());
                 }
-                if e.width_um < 0 || e.diff_pair_gap_um < 0 || e.width_um > 100_000 || e.diff_pair_gap_um > 100_000 {
+                if e.width_nm < 0 || e.diff_pair_gap_nm < 0 || e.width_nm > 100_000_000 || e.diff_pair_gap_nm > 100_000_000 {
                     return bad(format!("Row {}: the width and the gap are from 0 to 100 mm", row + 1));
                 }
                 if e.delay_as_per_mm < 0 || e.delay_as_per_mm > MAX_DELAY_AS {
@@ -445,7 +452,7 @@ mod tests {
     }
 
     fn profile(name: &str) -> TuningProfile {
-        TuningProfile { name: name.into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_um: 150, diff_pair_gap_um: 0, delay_as_per_mm: 5_600_000 }], via_propagation_delay_as: 20_000_000, via_overrides: vec![] }
+        TuningProfile { name: name.into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: 150, diff_pair_gap_nm: 0, delay_as_per_mm: 5_600_000 }], via_propagation_delay_as: 20_000_000, via_overrides: vec![] }
     }
 
     #[test]
@@ -463,13 +470,13 @@ mod tests {
 
     #[test]
     fn hatch_offsets_are_for_copper_layers_and_a_zero_offset_is_none() {
-        let page: HatchOffsets = [("F.Cu".to_string(), HatchOffset { x_um: 1500, y_um: -2000 }), ("In1.Cu".to_string(), HatchOffset::default())].into();
+        let page: HatchOffsets = [("F.Cu".to_string(), HatchOffset { x_nm: 1_500_000, y_nm: -2_000_000 }), ("In1.Cu".to_string(), HatchOffset::default())].into();
         assert!(validate_hatch_offsets(&page, &copper()).is_ok());
         assert_eq!(canonical_hatch_offsets(&page).keys().collect::<Vec<_>>(), ["F.Cu"]);
         assert_eq!(validate_hatch_offsets(&page, &crate::rules::copper_layer_names(2)).unwrap_err().location.as_deref(), Some("In1.Cu"), "a layer the board does not have");
-        let far: HatchOffsets = [("F.Cu".to_string(), HatchOffset { x_um: 2_000_000, y_um: 0 })].into();
+        let far: HatchOffsets = [("F.Cu".to_string(), HatchOffset { x_nm: 2_000_000_000, y_nm: 0 })].into();
         assert_eq!(validate_hatch_offsets(&far, &copper()).unwrap_err().location.as_deref(), Some("F.Cu"));
-        let silk: HatchOffsets = [("F.SilkS".to_string(), HatchOffset { x_um: 1, y_um: 0 })].into();
+        let silk: HatchOffsets = [("F.SilkS".to_string(), HatchOffset { x_nm: 1, y_nm: 0 })].into();
         assert!(validate_hatch_offsets(&silk, &copper()).is_err(), "hatch offsets are for copper");
     }
 
@@ -477,18 +484,18 @@ mod tests {
     fn the_tuning_patterns_start_as_pns_meander_settings_and_are_checked_like_a_meander() {
         let p = TuningPatterns::default();
         assert!(p.is_default() && p.validate().is_ok());
-        assert_eq!((p.single_track.spacing_um, p.diff_pair.spacing_um, p.diff_pair_skew.spacing_um), (600, 1000, 600), "a differential pair's spacing is 1 mm, the others 0.6 mm");
-        assert_eq!((p.single_track.min_amplitude_um, p.single_track.max_amplitude_um, p.single_track.corner_style, p.single_track.corner_radius_percentage, p.single_track.single_sided), (200, 1000, CornerStyle::Round, 80, false));
+        assert_eq!((p.single_track.spacing_nm, p.diff_pair.spacing_nm, p.diff_pair_skew.spacing_nm), (600_000, 1_000_000, 600_000), "a differential pair's spacing is 1 mm, the others 0.6 mm");
+        assert_eq!((p.single_track.min_amplitude_nm, p.single_track.max_amplitude_nm, p.single_track.corner_style, p.single_track.corner_radius_percentage, p.single_track.single_sided), (200_000, 1_000_000, CornerStyle::Round, 80, false));
         assert_eq!(serde_json::from_str::<TuningPatterns>("{}").unwrap(), p);
         let with = |f: &dyn Fn(&mut TuningPatterns)| {
             let mut q = TuningPatterns::default();
             f(&mut q);
             q.validate().unwrap_err()
         };
-        assert_eq!(with(&|q| q.diff_pair.max_amplitude_um = 0).location.as_deref(), Some("diff_pair.max_amplitude"));
-        assert_eq!(with(&|q| q.single_track.min_amplitude_um = 2_000).location.as_deref(), Some("single_track.min_amplitude"), "the minimum is above the maximum");
+        assert_eq!(with(&|q| q.diff_pair.max_amplitude_nm = 0).location.as_deref(), Some("diff_pair.max_amplitude"));
+        assert_eq!(with(&|q| q.single_track.min_amplitude_nm = 2_000_000).location.as_deref(), Some("single_track.min_amplitude"), "the minimum is above the maximum");
         assert_eq!(with(&|q| q.diff_pair_skew.corner_radius_percentage = 101).location.as_deref(), Some("diff_pair_skew.corner_radius_percentage"));
-        assert_eq!(with(&|q| q.single_track.spacing_um = 200_000).location.as_deref(), Some("single_track.spacing"));
+        assert_eq!(with(&|q| q.single_track.spacing_nm = 200_000_000).location.as_deref(), Some("single_track.spacing"));
         assert_eq!((CornerStyle::from_code(0), CornerStyle::from_code(1), CornerStyle::Chamfer.code(), CornerStyle::Round.code()), (CornerStyle::Chamfer, CornerStyle::Round, 0, 1));
     }
 

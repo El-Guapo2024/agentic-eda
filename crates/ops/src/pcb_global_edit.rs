@@ -17,7 +17,7 @@
 //! text on `Edge.Cuts` or a courtyard layer keeps `BOARD_DESIGN_SETTINGS`' own constants (`DEFAULT_TEXT_SIZE` 1 mm, `DEFAULT_TEXT_WIDTH` 0.15 mm).
 
 use super::Board;
-use eda_model::ir::Um;
+use eda_model::ir::Nm;
 use eda_model::rules::TextGraphicsDefaults;
 use eda_model::CheckResult;
 use std::collections::BTreeSet;
@@ -25,19 +25,19 @@ use std::collections::BTreeSet;
 #[cfg(test)]
 pub use eda_model::rules::{layer_class, LayerClass};
 
-/// `BOARD_DESIGN_SETTINGS::GetLineThickness( aLayer )` (`TextGraphicsDefaults::line_thickness_um`).
-pub fn line_thickness(d: &TextGraphicsDefaults, layer: &str) -> Um {
-    d.line_thickness_um(layer)
+/// `BOARD_DESIGN_SETTINGS::GetLineThickness( aLayer )` (`TextGraphicsDefaults::line_thickness_nm`).
+pub fn line_thickness(d: &TextGraphicsDefaults, layer: &str) -> Nm {
+    d.line_thickness_nm(layer)
 }
 
 /// `BOARD_DESIGN_SETTINGS::GetTextSize( aLayer )`, as the one size a text of this model has (its height).
-pub fn text_size(d: &TextGraphicsDefaults, layer: &str) -> Um {
-    d.text_size_um(layer).1
+pub fn text_size(d: &TextGraphicsDefaults, layer: &str) -> Nm {
+    d.text_size_nm(layer).1
 }
 
 /// `BOARD_DESIGN_SETTINGS::GetTextThickness( aLayer )`.
-pub fn text_thickness(d: &TextGraphicsDefaults, layer: &str) -> Um {
-    d.text_thickness_um(layer)
+pub fn text_thickness(d: &TextGraphicsDefaults, layer: &str) -> Nm {
+    d.text_thickness_nm(layer)
 }
 
 /// What `Cmd::EditTextAndGraphics` asks for.
@@ -48,9 +48,9 @@ pub(crate) struct GlobalTextEdit<'a> {
     /// "Set to layer default values:" instead of "Set to specified values:".
     pub layer_defaults: bool,
     pub layer: Option<&'a str>,
-    pub line_width: Option<Um>,
-    pub text_size: Option<Um>,
-    pub text_thickness: Option<Um>,
+    pub line_width: Option<Nm>,
+    pub text_size: Option<Nm>,
+    pub text_thickness: Option<Nm>,
 }
 
 fn refuse(check: &str, message: &str) -> Result<(), Vec<CheckResult>> {
@@ -104,7 +104,7 @@ impl Board<'_> {
         }
         for t in dr.texts.iter_mut().filter(|t| texts.contains(t.id.as_str())) {
             if e.layer_defaults {
-                t.size_um = text_size(&defaults, &t.layer);
+                t.size_nm = text_size(&defaults, &t.layer);
                 t.stroke_width = text_thickness(&defaults, &t.layer);
                 continue;
             }
@@ -112,7 +112,7 @@ impl Board<'_> {
                 t.layer = l.to_string();
             }
             if let Some(s) = e.text_size {
-                t.size_um = s;
+                t.size_nm = s;
             }
             if let Some(th) = e.text_thickness {
                 t.stroke_width = th;
@@ -122,7 +122,7 @@ impl Board<'_> {
         let (new_size, new_stroke) = (e.layer_defaults || e.text_size.is_some(), e.layer_defaults || e.text_thickness.is_some());
         for x in dr.text_extras.iter_mut().filter(|x| texts.contains(x.id.as_str())) {
             if new_size {
-                x.width_um = None;
+                x.width_nm = None;
             }
             if new_stroke {
                 x.auto_thickness = false;
@@ -131,8 +131,8 @@ impl Board<'_> {
         for d in dr.dimensions.iter_mut().filter(|d| dims.contains(d.id.as_str())) {
             if e.layer_defaults {
                 // `PCB_TEXT::StyleFromSettings`, then `PCB_DIMENSION_BASE::StyleFromSettings`.
-                d.text_size_um = text_size(&defaults, &d.layer);
-                d.text_thickness_um = Some(text_thickness(&defaults, &d.layer));
+                d.text_size_nm = text_size(&defaults, &d.layer);
+                d.text_thickness_nm = Some(text_thickness(&defaults, &d.layer));
                 d.stroke_width = line_thickness(&defaults, &d.layer);
                 d.units = dim_style.units;
                 d.units_format = dim_style.units_format;
@@ -149,10 +149,10 @@ impl Board<'_> {
                 d.stroke_width = w;
             }
             if let Some(s) = e.text_size {
-                d.text_size_um = s;
+                d.text_size_nm = s;
             }
             if let Some(th) = e.text_thickness {
-                d.text_thickness_um = Some(th);
+                d.text_thickness_nm = Some(th);
             }
         }
         Ok(())

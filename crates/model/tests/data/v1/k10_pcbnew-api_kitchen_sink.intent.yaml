@@ -1,0 +1,6504 @@
+parts:
+- reference: R1
+  mpn: null
+  value: R
+  package: null
+  footprint: Resistor_SMD:R_0603_1608Metric
+  pins:
+  - number: '1'
+    name: null
+    kind: signal
+  - number: '2'
+    name: null
+    kind: signal
+- reference: JP1
+  mpn: null
+  value: Jumper
+  package: null
+  footprint: Resistor_SMD:R_0603_1608Metric
+  pins:
+  - number: '1'
+    name: null
+    kind: signal
+  - number: '2'
+    name: null
+    kind: signal
+- reference: D1
+  mpn: null
+  value: 1N4007
+  package: null
+  footprint: D5
+  pins:
+  - number: '1'
+    name: null
+    kind: signal
+  - number: '2'
+    name: null
+    kind: signal
+- reference: NT1
+  mpn: null
+  value: Tie
+  package: null
+  footprint: Resistor_SMD:R_0603_1608Metric
+  pins:
+  - number: '1'
+    name: null
+    kind: signal
+  - number: '2'
+    name: null
+    kind: signal
+- reference: P2
+  mpn: null
+  value: CONN_2
+  package: null
+  footprint: bornier2
+  pins:
+  - number: '1'
+    name: null
+    kind: signal
+  - number: '2'
+    name: null
+    kind: signal
+- reference: REF**
+  mpn: null
+  value: ScrollWheel-40x12mm
+  package: null
+  footprint: fpw-legacy-compare:ScrollWheel-40x12mm
+  pins:
+  - number: '1'
+    name: null
+    kind: signal
+  - number: '2'
+    name: null
+    kind: signal
+  - number: '3'
+    name: null
+    kind: signal
+- reference: REF**#2
+  mpn: null
+  value: QFN-12-1EP_3x3mm_P0.5mm_EP1.45x1.45mm
+  package: null
+  footprint: Package_DFN_QFN:QFN-12-1EP_3x3mm_P0.5mm_EP1.45x1.45mm
+  pins:
+  - number: '1'
+    name: null
+    kind: signal
+  - number: '2'
+    name: null
+    kind: signal
+  - number: '3'
+    name: null
+    kind: signal
+  - number: '4'
+    name: null
+    kind: signal
+  - number: '5'
+    name: null
+    kind: signal
+  - number: '6'
+    name: null
+    kind: signal
+  - number: '7'
+    name: null
+    kind: signal
+  - number: '8'
+    name: null
+    kind: signal
+  - number: '9'
+    name: null
+    kind: signal
+  - number: '10'
+    name: null
+    kind: signal
+  - number: '11'
+    name: null
+    kind: signal
+  - number: '12'
+    name: null
+    kind: signal
+  - number: '13'
+    name: null
+    kind: signal
+nets:
+- name: A
+  pins:
+  - D1.1
+  - P2.1
+clusters: []
+placement_rules: []
+stackup: null
+impedance_targets: []
+footprints:
+- name: D5
+  pads:
+  - number: '1'
+    at:
+    - -6350
+    - 0
+    size:
+    - 2032
+    - 2032
+    shape: circle
+    kind: through_hole
+    drill: 1143
+    rot: 0
+  - number: '2'
+    at:
+    - 6350
+    - 0
+    size:
+    - 2032
+    - 2032
+    shape: rect
+    kind: through_hole
+    drill: 1143
+    rot: 0
+  courtyard: null
+  model: discret/diode.wrl
+  models3d:
+  - path: discret/diode.wrl
+    scale:
+    - 0.5
+    - 0.5
+    - 0.5
+  art:
+    shapes:
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: -5080
+          y: -1270
+        end:
+          x: -5080
+          y: 0
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: -5080
+          y: 0
+        end:
+          x: -6350
+          y: 0
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: -5080
+          y: 0
+        end:
+          x: -5080
+          y: 1270
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: -5080
+          y: 1270
+        end:
+          x: 5080
+          y: 1270
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: 3810
+          y: -1270
+        end:
+          x: 3810
+          y: 1270
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: 4064
+          y: -1270
+        end:
+          x: 4064
+          y: 1270
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: 5080
+          y: -1270
+        end:
+          x: -5080
+          y: -1270
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: 5080
+          y: 0
+        end:
+          x: 5080
+          y: -1270
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: 5080
+          y: 1270
+        end:
+          x: 5080
+          y: 0
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: 6350
+          y: 0
+        end:
+          x: 5080
+          y: 0
+- name: Package_DFN_QFN:QFN-12-1EP_3x3mm_P0.5mm_EP1.45x1.45mm
+  pads:
+  - number: '1'
+    at:
+    - -1438
+    - -500
+    size:
+    - 825
+    - 250
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '2'
+    at:
+    - -1438
+    - 0
+    size:
+    - 825
+    - 250
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '3'
+    at:
+    - -1438
+    - 500
+    size:
+    - 825
+    - 250
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '4'
+    at:
+    - -500
+    - 1438
+    size:
+    - 250
+    - 825
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '5'
+    at:
+    - 0
+    - 1438
+    size:
+    - 250
+    - 825
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '6'
+    at:
+    - 500
+    - 1438
+    size:
+    - 250
+    - 825
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '7'
+    at:
+    - 1438
+    - 500
+    size:
+    - 825
+    - 250
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '8'
+    at:
+    - 1438
+    - 0
+    size:
+    - 825
+    - 250
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '9'
+    at:
+    - 1438
+    - -500
+    size:
+    - 825
+    - 250
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '10'
+    at:
+    - 500
+    - -1438
+    size:
+    - 250
+    - 825
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '11'
+    at:
+    - 0
+    - -1438
+    size:
+    - 250
+    - 825
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '12'
+    at:
+    - -500
+    - -1438
+    size:
+    - 250
+    - 825
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '13'
+    at:
+    - 0
+    - 0
+    size:
+    - 1450
+    - 1450
+    shape: rect
+    kind: smd
+    drill: null
+    rot: 0
+  courtyard:
+  - 2100
+  - 2100
+  courtyard_outlines:
+  - - - -2100
+      - -880
+    - - -1750
+      - -880
+    - - -1750
+      - -1750
+    - - -880
+      - -1750
+    - - -880
+      - -2100
+    - - 880
+      - -2100
+    - - 880
+      - -1750
+    - - 1750
+      - -1750
+    - - 1750
+      - -880
+    - - 2100
+      - -880
+    - - 2100
+      - 880
+    - - 1750
+      - 880
+    - - 1750
+      - 1750
+    - - 880
+      - 1750
+    - - 880
+      - 2100
+    - - -880
+      - 2100
+    - - -880
+      - 1750
+    - - -1750
+      - 1750
+    - - -1750
+      - 880
+    - - -2100
+      - 880
+  model: null
+  models3d:
+  - path: ${KICAD10_3DMODEL_DIR}/Package_DFN_QFN.3dshapes/QFN-12-1EP_3x3mm_P0.5mm_EP1.45x1.45mm.step
+  art:
+    shapes:
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -1610
+          y: -1610
+        end:
+          x: -885
+          y: -1610
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -1610
+          y: -885
+        end:
+          x: -1610
+          y: -1610
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -1610
+          y: 1610
+        end:
+          x: -1610
+          y: 885
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -885
+          y: 1610
+        end:
+          x: -1610
+          y: 1610
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 885
+          y: -1610
+        end:
+          x: 1610
+          y: -1610
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 1610
+          y: -1610
+        end:
+          x: 1610
+          y: -885
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 1610
+          y: 885
+        end:
+          x: 1610
+          y: 1610
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: 1610
+          y: 1610
+        end:
+          x: 885
+          y: 1610
+    - shape:
+        kind: polygon
+        layer: F.SilkS
+        stroke_width: 120
+        filled: true
+        pts:
+        - x: -2120
+          y: -500
+        - x: -2450
+          y: -260
+        - x: -2450
+          y: -740
+    - shape:
+        kind: polygon
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        pts:
+        - x: -750
+          y: -1500
+        - x: 1500
+          y: -1500
+        - x: 1500
+          y: 1500
+        - x: -1500
+          y: 1500
+        - x: -1500
+          y: -750
+    texts:
+    - text: ${REFERENCE}
+      layout:
+        at:
+          x: 0
+          y: 0
+        size:
+        - 750
+        - 750
+        thickness: 110
+        layer: F.Fab
+- name: Resistor_SMD:R_0603_1608Metric
+  pads:
+  - number: '1'
+    at:
+    - -825
+    - 0
+    size:
+    - 800
+    - 950
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  - number: '2'
+    at:
+    - 825
+    - 0
+    size:
+    - 800
+    - 950
+    shape: round_rect
+    kind: smd
+    drill: null
+    rot: 0
+    roundrect_ratio: 0.25
+  courtyard:
+  - 1480
+  - 730
+  courtyard_outlines:
+  - - - -1480
+      - -730
+    - - 1480
+      - -730
+    - - 1480
+      - 730
+    - - -1480
+      - 730
+  model: null
+  models3d:
+  - path: ${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step
+  art:
+    shapes:
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -237
+          y: -523
+        end:
+          x: 237
+          y: -523
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 120
+        filled: false
+        start:
+          x: -237
+          y: 523
+        end:
+          x: 237
+          y: 523
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -800
+          y: -413
+        end:
+          x: 800
+          y: -413
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: -800
+          y: 413
+        end:
+          x: -800
+          y: -413
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 800
+          y: -413
+        end:
+          x: 800
+          y: 413
+    - shape:
+        kind: segment
+        layer: F.Fab
+        stroke_width: 100
+        filled: false
+        start:
+          x: 800
+          y: 413
+        end:
+          x: -800
+          y: 413
+    texts:
+    - text: ${REFERENCE}
+      layout:
+        at:
+          x: 0
+          y: 0
+        size:
+        - 400
+        - 400
+        thickness: 60
+        layer: F.Fab
+- name: bornier2
+  pads:
+  - number: '1'
+    at:
+    - -2540
+    - 0
+    size:
+    - 2540
+    - 2540
+    shape: rect
+    kind: through_hole
+    drill: 1524
+    rot: 0
+  - number: '2'
+    at:
+    - 2540
+    - 0
+    size:
+    - 2540
+    - 2540
+    shape: circle
+    kind: through_hole
+    drill: 1524
+    rot: 0
+  courtyard: null
+  model: device/bornier_2.wrl
+  models3d:
+  - path: device/bornier_2.wrl
+  art:
+    shapes:
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: -5080
+          y: -3810
+        end:
+          x: -5080
+          y: 3810
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: -5080
+          y: 3810
+        end:
+          x: 5080
+          y: 3810
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: 5080
+          y: -3810
+        end:
+          x: -5080
+          y: -3810
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: 5080
+          y: 2540
+        end:
+          x: -5080
+          y: 2540
+    - shape:
+        kind: segment
+        layer: F.SilkS
+        stroke_width: 305
+        filled: false
+        start:
+          x: 5080
+          y: 3810
+        end:
+          x: 5080
+          y: -3810
+- name: fpw-legacy-compare:ScrollWheel-40x12mm
+  pads:
+  - number: '1'
+    at:
+    - 0
+    - -13000
+    size:
+    - 2000
+    - 2000
+    shape: custom
+    kind: smd
+    drill: null
+    rot: 0
+    ext:
+      custom:
+        anchor: circle
+        zone: outline
+        primitives:
+        - shape:
+            kind: segment
+            layer: ''
+            stroke_width: 0
+            filled: false
+            start:
+              x: -1177
+              y: -5794
+            end:
+              x: -1177
+              y: -11000
+          proxy: true
+        - shape:
+            kind: polygon
+            layer: ''
+            stroke_width: 0
+            filled: true
+            pts:
+            - x: 2083
+              y: -6609
+            - x: 2061
+              y: -6586
+            - x: 1961
+              y: -6455
+            - x: 1938
+              y: -6420
+            - x: 1861
+              y: -6275
+            - x: 1845
+              y: -6237
+            - x: 1792
+              y: -6080
+            - x: 1782
+              y: -6040
+            - x: 1756
+              y: -5877
+            - x: 1753
+              y: -5836
+            - x: 1754
+              y: -5671
+            - x: 1758
+              y: -5629
+            - x: 1786
+              y: -5467
+            - x: 1796
+              y: -5427
+            - x: 1851
+              y: -5271
+            - x: 1868
+              y: -5233
+            - x: 1948
+              y: -5089
+            - x: 1970
+              y: -5054
+            - x: 2073
+              y: -4925
+            - x: 2101
+              y: -4894
+            - x: 2223
+              y: -4783
+            - x: 2256
+              y: -4758
+            - x: 2395
+              y: -4669
+            - x: 2431
+              y: -4649
+            - x: 2583
+              y: -4584
+            - x: 2630
+              y: -4569
+            - x: 4407
+              y: -4192
+            - x: 5975
+              y: -3710
+            - x: 7491
+              y: -3085
+            - x: 8942
+              y: -2323
+            - x: 10318
+              y: -1430
+            - x: 11604
+              y: -414
+            - x: 12792
+              y: 717
+            - x: 13870
+              y: 1952
+            - x: 14829
+              y: 3282
+            - x: 15661
+              y: 4695
+            - x: 16359
+              y: 6179
+            - x: 16917
+              y: 7721
+            - x: 17330
+              y: 9308
+            - x: 17595
+              y: 10926
+            - x: 17709
+              y: 12562
+            - x: 17671
+              y: 14201
+            - x: 17482
+              y: 15830
+            - x: 17144
+              y: 17434
+            - x: 16660
+              y: 18996
+            - x: 16606
+              y: 19113
+            - x: 16537
+              y: 19215
+            - x: 16452
+              y: 19305
+            - x: 16353
+              y: 19380
+            - x: 16244
+              y: 19437
+            - x: 16126
+              y: 19475
+            - x: 16004
+              y: 19494
+            - x: 15880
+              y: 19492
+            - x: 15758
+              y: 19470
+            - x: 15642
+              y: 19428
+            - x: 15534
+              y: 19367
+            - x: 15437
+              y: 19290
+            - x: 15355
+              y: 19198
+            - x: 15289
+              y: 19093
+            - x: 15241
+              y: 18979
+            - x: 15212
+              y: 18859
+            - x: 15204
+              y: 18735
+            - x: 15216
+              y: 18612
+            - x: 15252
+              y: 18477
+            - x: 15675
+              y: 17108
+            - x: 15681
+              y: 17086
+            - x: 15980
+              y: 15680
+            - x: 15984
+              y: 15658
+            - x: 16154
+              y: 14231
+            - x: 16156
+              y: 14208
+            - x: 16198
+              y: 12771
+            - x: 16198
+              y: 12749
+            - x: 16110
+              y: 11314
+            - x: 16107
+              y: 11292
+            - x: 15890
+              y: 9871
+            - x: 15886
+              y: 9849
+            - x: 15542
+              y: 8453
+            - x: 15536
+              y: 8431
+            - x: 15067
+              y: 7072
+            - x: 15059
+              y: 7051
+            - x: 14470
+              y: 5740
+            - x: 14460
+              y: 5720
+            - x: 13756
+              y: 4467
+            - x: 13744
+              y: 4448
+            - x: 12929
+              y: 3264
+            - x: 12915
+              y: 3246
+            - x: 11997
+              y: 2140
+            - x: 11982
+              y: 2123
+            - x: 10968
+              y: 1104
+            - x: 10952
+              y: 1089
+            - x: 9850
+              y: 165
+            - x: 9832
+              y: 152
+            - x: 8652
+              y: -669
+            - x: 8633
+              y: -681
+            - x: 7384
+              y: -1392
+            - x: 7364
+              y: -1402
+            - x: 6055
+              y: -1997
+            - x: 6034
+              y: -2006
+            - x: 4678
+              y: -2481
+            - x: 4656
+              y: -2487
+            - x: 3262
+              y: -2838
+            - x: 3231
+              y: -2844
+            - x: 3067
+              y: -2863
+            - x: 3026
+              y: -2865
+            - x: 2861
+              y: -2857
+            - x: 2820
+              y: -2852
+            - x: 2658
+              y: -2818
+            - x: 2619
+              y: -2806
+            - x: 2465
+              y: -2745
+            - x: 2428
+              y: -2727
+            - x: 2287
+              y: -2642
+            - x: 2253
+              y: -2617
+            - x: 2128
+              y: -2510
+            - x: 2098
+              y: -2481
+            - x: 1992
+              y: -2354
+            - x: 1968
+              y: -2321
+            - x: 1884
+              y: -2178
+            - x: 1866
+              y: -2141
+            - x: 1807
+              y: -1987
+            - x: 1795
+              y: -1947
+            - x: 1762
+              y: -1786
+            - x: 1757
+              y: -1745
+            - x: 1751
+              y: -1580
+            - x: 1753
+              y: -1538
+            - x: 1774
+              y: -1375
+            - x: 1783
+              y: -1334
+            - x: 1831
+              y: -1176
+            - x: 1846
+              y: -1138
+            - x: 1919
+              y: -990
+            - x: 1940
+              y: -954
+            - x: 2037
+              y: -820
+            - x: 2064
+              y: -789
+            - x: 2181
+              y: -673
+            - x: 2213
+              y: -646
+            - x: 2347
+              y: -551
+            - x: 2383
+              y: -530
+            - x: 2532
+              y: -458
+            - x: 2578
+              y: -441
+            - x: 3903
+              y: -100
+            - x: 5028
+              y: 290
+            - x: 6115
+              y: 777
+            - x: 7155
+              y: 1357
+            - x: 8141
+              y: 2025
+            - x: 9065
+              y: 2777
+            - x: 9920
+              y: 3606
+            - x: 10699
+              y: 4506
+            - x: 11397
+              y: 5471
+            - x: 12008
+              y: 6494
+            - x: 12528
+              y: 7565
+            - x: 12953
+              y: 8678
+            - x: 13279
+              y: 9823
+            - x: 13504
+              y: 10993
+            - x: 13626
+              y: 12177
+            - x: 13645
+              y: 13368
+            - x: 13560
+              y: 14556
+            - x: 13371
+              y: 15732
+            - x: 13083
+              y: 16882
+            - x: 13036
+              y: 17002
+            - x: 12973
+              y: 17108
+            - x: 12893
+              y: 17203
+            - x: 12798
+              y: 17283
+            - x: 12692
+              y: 17346
+            - x: 12577
+              y: 17391
+            - x: 12456
+              y: 17417
+            - x: 12332
+              y: 17422
+            - x: 12209
+              y: 17407
+            - x: 12091
+              y: 17372
+            - x: 11980
+              y: 17317
+            - x: 11879
+              y: 17245
+            - x: 11791
+              y: 17158
+            - x: 11719
+              y: 17057
+            - x: 11665
+              y: 16946
+            - x: 11630
+              y: 16828
+            - x: 11614
+              y: 16705
+            - x: 11619
+              y: 16581
+            - x: 11648
+              y: 16445
+            - x: 11888
+              y: 15491
+            - x: 11893
+              y: 15470
+            - x: 12054
+              y: 14494
+            - x: 12056
+              y: 14474
+            - x: 12136
+              y: 13488
+            - x: 12137
+              y: 13467
+            - x: 12134
+              y: 12478
+            - x: 12134
+              y: 12457
+            - x: 12049
+              y: 11471
+            - x: 12046
+              y: 11451
+            - x: 11880
+              y: 10476
+            - x: 11876
+              y: 10455
+            - x: 11629
+              y: 9498
+            - x: 11623
+              y: 9478
+            - x: 11297
+              y: 8544
+            - x: 11290
+              y: 8524
+            - x: 10888
+              y: 7620
+            - x: 10878
+              y: 7602
+            - x: 10403
+              y: 6734
+            - x: 10392
+              y: 6717
+            - x: 9846
+              y: 5892
+            - x: 9834
+              y: 5875
+            - x: 9221
+              y: 5099
+            - x: 9207
+              y: 5083
+            - x: 8532
+              y: 4360
+            - x: 8517
+              y: 4345
+            - x: 7784
+              y: 3681
+            - x: 7769
+              y: 3668
+            - x: 6983
+              y: 3066
+            - x: 6966
+              y: 3055
+            - x: 6133
+              y: 2521
+            - x: 6115
+              y: 2510
+            - x: 5241
+              y: 2048
+            - x: 5222
+              y: 2039
+            - x: 4312
+              y: 1650
+            - x: 4293
+              y: 1643
+            - x: 3354
+              y: 1331
+            - x: 3324
+              y: 1323
+            - x: 3162
+              y: 1291
+            - x: 3121
+              y: 1286
+            - x: 2956
+              y: 1281
+            - x: 2915
+              y: 1283
+            - x: 2751
+              y: 1305
+            - x: 2711
+              y: 1314
+            - x: 2553
+              y: 1363
+            - x: 2515
+              y: 1378
+            - x: 2367
+              y: 1453
+            - x: 2332
+              y: 1474
+            - x: 2199
+              y: 1571
+            - x: 2167
+              y: 1598
+            - x: 2052
+              y: 1716
+            - x: 2025
+              y: 1748
+            - x: 1931
+              y: 1884
+            - x: 1910
+              y: 1919
+            - x: 1839
+              y: 2068
+            - x: 1824
+              y: 2107
+            - x: 1779
+              y: 2266
+            - x: 1771
+              y: 2306
+            - x: 1752
+              y: 2470
+            - x: 1751
+              y: 2512
+            - x: 1759
+              y: 2677
+            - x: 1765
+              y: 2717
+            - x: 1800
+              y: 2879
+            - x: 1813
+              y: 2918
+            - x: 1874
+              y: 3071
+            - x: 1893
+              y: 3108
+            - x: 1979
+              y: 3249
+            - x: 2003
+              y: 3283
+            - x: 2111
+              y: 3408
+            - x: 2141
+              y: 3437
+            - x: 2268
+              y: 3542
+            - x: 2302
+              y: 3566
+            - x: 2444
+              y: 3649
+            - x: 2490
+              y: 3670
+            - x: 3366
+              y: 3964
+            - x: 4057
+              y: 4251
+            - x: 4724
+              y: 4591
+            - x: 5362
+              y: 4981
+            - x: 5968
+              y: 5419
+            - x: 6538
+              y: 5903
+            - x: 7069
+              y: 6430
+            - x: 7557
+              y: 6996
+            - x: 8001
+              y: 7599
+            - x: 8396
+              y: 8233
+            - x: 8741
+              y: 8897
+            - x: 9034
+              y: 9585
+            - x: 9272
+              y: 10294
+            - x: 9455
+              y: 11019
+            - x: 9582
+              y: 11756
+            - x: 9651
+              y: 12501
+            - x: 9661
+              y: 13249
+            - x: 9615
+              y: 13995
+            - x: 9511
+              y: 14730
+            - x: 9477
+              y: 14855
+            - x: 9426
+              y: 14967
+            - x: 9357
+              y: 15070
+            - x: 9271
+              y: 15159
+            - x: 9173
+              y: 15234
+            - x: 9063
+              y: 15291
+            - x: 8945
+              y: 15330
+            - x: 8823
+              y: 15348
+            - x: 8699
+              y: 15346
+            - x: 8577
+              y: 15324
+            - x: 8461
+              y: 15282
+            - x: 8353
+              y: 15222
+            - x: 8257
+              y: 15144
+            - x: 8174
+              y: 15052
+            - x: 8108
+              y: 14947
+            - x: 8060
+              y: 14833
+            - x: 8032
+              y: 14713
+            - x: 8023
+              y: 14589
+            - x: 8037
+              y: 14452
+            - x: 8119
+              y: 13918
+            - x: 8121
+              y: 13901
+            - x: 8167
+              y: 13355
+            - x: 8168
+              y: 13337
+            - x: 8176
+              y: 12789
+            - x: 8176
+              y: 12772
+            - x: 8146
+              y: 12225
+            - x: 8145
+              y: 12208
+            - x: 8078
+              y: 11664
+            - x: 8075
+              y: 11647
+            - x: 7971
+              y: 11109
+            - x: 7967
+              y: 11092
+            - x: 7826
+              y: 10563
+            - x: 7821
+              y: 10546
+            - x: 7644
+              y: 10028
+            - x: 7638
+              y: 10012
+            - x: 7425
+              y: 9507
+            - x: 7418
+              y: 9491
+            - x: 7172
+              y: 9002
+            - x: 7163
+              y: 8987
+            - x: 6884
+              y: 8516
+            - x: 6874
+              y: 8501
+            - x: 6563
+              y: 8050
+            - x: 6553
+              y: 8036
+            - x: 6211
+              y: 7608
+            - x: 6200
+              y: 7595
+            - x: 5829
+              y: 7191
+            - x: 5817
+              y: 7179
+            - x: 5420
+              y: 6802
+            - x: 5407
+              y: 6790
+            - x: 4984
+              y: 6441
+            - x: 4971
+              y: 6431
+            - x: 4525
+              y: 6112
+            - x: 4511
+              y: 6102
+            - x: 4045
+              y: 5814
+            - x: 4030
+              y: 5806
+            - x: 3545
+              y: 5551
+            - x: 3517
+              y: 5538
+            - x: 3362
+              y: 5480
+            - x: 3322
+              y: 5468
+            - x: 3160
+              y: 5436
+            - x: 3119
+              y: 5432
+            - x: 2954
+              y: 5427
+            - x: 2913
+              y: 5429
+            - x: 2749
+              y: 5452
+            - x: 2709
+              y: 5460
+            - x: 2551
+              y: 5509
+            - x: 2513
+              y: 5525
+            - x: 2366
+              y: 5599
+            - x: 2330
+              y: 5621
+            - x: 2197
+              y: 5718
+            - x: 2166
+              y: 5745
+            - x: 2050
+              y: 5864
+            - x: 2024
+              y: 5895
+            - x: 1930
+              y: 6031
+            - x: 1909
+              y: 6067
+            - x: 1838
+              y: 6216
+            - x: 1824
+              y: 6254
+            - x: 1779
+              y: 6413
+            - x: 1771
+              y: 6454
+            - x: 1752
+              y: 6618
+            - x: 1751
+              y: 6659
+            - x: 1760
+              y: 6824
+            - x: 1765
+              y: 6865
+            - x: 1800
+              y: 7024
+            - x: 1392
+              y: 6907
+            - x: 1365
+              y: 6901
+            - x: 714
+              y: 6791
+            - x: 686
+              y: 6788
+            - x: 26
+              y: 6750
+            - x: -1
+              y: 6750
+            - x: -661
+              y: 6785
+            - x: -689
+              y: 6788
+            - x: -1341
+              y: 6896
+            - x: -1368
+              y: 6902
+            - x: -2004
+              y: 7081
+            - x: -2031
+              y: 7089
+            - x: -2643
+              y: 7337
+            - x: -2668
+              y: 7349
+            - x: -3250
+              y: 7662
+            - x: -3274
+              y: 7677
+            - x: -3818
+              y: 8052
+            - x: -3840
+              y: 8069
+            - x: -4339
+              y: 8502
+            - x: -4359
+              y: 8521
+            - x: -4808
+              y: 9007
+            - x: -4825
+              y: 9028
+            - x: -5218
+              y: 9560
+            - x: -5233
+              y: 9583
+            - x: -5564
+              y: 10155
+            - x: -5577
+              y: 10179
+            - x: -5844
+              y: 10784
+            - x: -5853
+              y: 10810
+            - x: -6052
+              y: 11440
+            - x: -6059
+              y: 11467
+            - x: -6187
+              y: 12116
+            - x: -6191
+              y: 12143
+            - x: -6246
+              y: 12802
+            - x: -6247
+              y: 12828
+            - x: -6231
+              y: 13630
+            - x: -6251
+              y: 13750
+            - x: -6292
+              y: 13866
+            - x: -6351
+              y: 13975
+            - x: -6427
+              y: 14073
+            - x: -6518
+              y: 14156
+            - x: -6622
+              y: 14224
+            - x: -6735
+              y: 14273
+            - x: -6855
+              y: 14303
+            - x: -6979
+              y: 14313
+            - x: -7102
+              y: 14303
+            - x: -7222
+              y: 14272
+            - x: -7335
+              y: 14222
+            - x: -7439
+              y: 14154
+            - x: -7529
+              y: 14070
+            - x: -7605
+              y: 13973
+            - x: -7664
+              y: 13864
+            - x: -7704
+              y: 13747
+            - x: -7725
+              y: 13619
+            - x: -7745
+              y: 13096
+            - x: -7730
+              y: 12566
+            - x: -7678
+              y: 12037
+            - x: -7590
+              y: 11514
+            - x: -7465
+              y: 10998
+            - x: -7306
+              y: 10492
+            - x: -7112
+              y: 9998
+            - x: -6885
+              y: 9518
+            - x: -6625
+              y: 9055
+            - x: -6334
+              y: 8611
+            - x: -6014
+              y: 8189
+            - x: -5664
+              y: 7789
+            - x: -5289
+              y: 7414
+            - x: -4888
+              y: 7066
+            - x: -4464
+              y: 6747
+            - x: -4020
+              y: 6457
+            - x: -3556
+              y: 6199
+            - x: -3076
+              y: 5973
+            - x: -2573
+              y: 5777
+            - x: -2560
+              y: 5772
+            - x: -2410
+              y: 5704
+            - x: -2374
+              y: 5684
+            - x: -2237
+              y: 5592
+            - x: -2204
+              y: 5566
+            - x: -2084
+              y: 5452
+            - x: -2057
+              y: 5422
+            - x: -1957
+              y: 5290
+            - x: -1935
+              y: 5255
+            - x: -1858
+              y: 5109
+            - x: -1842
+              y: 5071
+            - x: -1790
+              y: 4914
+            - x: -1781
+              y: 4874
+            - x: -1755
+              y: 4711
+            - x: -1752
+              y: 4670
+            - x: -1755
+              y: 4505
+            - x: -1758
+              y: 4463
+            - x: -1788
+              y: 4301
+            - x: -1798
+              y: 4261
+            - x: -1854
+              y: 4105
+            - x: -1871
+              y: 4068
+            - x: -1951
+              y: 3924
+            - x: -1974
+              y: 3889
+            - x: -2077
+              y: 3760
+            - x: -2106
+              y: 3730
+            - x: -2229
+              y: 3620
+            - x: -2262
+              y: 3595
+            - x: -2401
+              y: 3506
+            - x: -2437
+              y: 3487
+            - x: -2590
+              y: 3423
+            - x: -2629
+              y: 3410
+            - x: -2789
+              y: 3371
+            - x: -2830
+              y: 3365
+            - x: -2995
+              y: 3353
+            - x: -3036
+              y: 3354
+            - x: -3201
+              y: 3369
+            - x: -3241
+              y: 3377
+            - x: -3401
+              y: 3419
+            - x: -3430
+              y: 3429
+            - x: -4142
+              y: 3716
+            - x: -4159
+              y: 3724
+            - x: -4846
+              y: 4065
+            - x: -4863
+              y: 4074
+            - x: -5522
+              y: 4468
+            - x: -5538
+              y: 4478
+            - x: -6165
+              y: 4921
+            - x: -6180
+              y: 4933
+            - x: -6770
+              y: 5423
+            - x: -6785
+              y: 5436
+            - x: -7335
+              y: 5971
+            - x: -7348
+              y: 5985
+            - x: -7856
+              y: 6560
+            - x: -7868
+              y: 6575
+            - x: -8329
+              y: 7189
+            - x: -8340
+              y: 7204
+            - x: -8753
+              y: 7851
+            - x: -8763
+              y: 7868
+            - x: -9124
+              y: 8545
+            - x: -9132
+              y: 8562
+            - x: -9440
+              y: 9265
+            - x: -9447
+              y: 9283
+            - x: -9700
+              y: 10008
+            - x: -9705
+              y: 10026
+            - x: -9901
+              y: 10768
+            - x: -9905
+              y: 10787
+            - x: -10042
+              y: 11542
+            - x: -10045
+              y: 11561
+            - x: -10124
+              y: 12324
+            - x: -10125
+              y: 12344
+            - x: -10144
+              y: 13111
+            - x: -10144
+              y: 13130
+            - x: -10104
+              y: 13896
+            - x: -10102
+              y: 13916
+            - x: -10003
+              y: 14676
+            - x: -10000
+              y: 14694
+            - x: -9821
+              y: 15582
+            - x: -9821
+              y: 15702
+            - x: -9842
+              y: 15823
+            - x: -9854
+              y: 15857
+            - x: -9883
+              y: 15940
+            - x: -9942
+              y: 16049
+            - x: -10018
+              y: 16146
+            - x: -10109
+              y: 16230
+            - x: -10213
+              y: 16297
+            - x: -10327
+              y: 16346
+            - x: -10447
+              y: 16376
+            - x: -10570
+              y: 16386
+            - x: -10693
+              y: 16376
+            - x: -10813
+              y: 16345
+            - x: -10926
+              y: 16295
+            - x: -11030
+              y: 16227
+            - x: -11120
+              y: 16143
+            - x: -11174
+              y: 16073
+            - x: -11196
+              y: 16045
+            - x: -11255
+              y: 15936
+            - x: -11296
+              y: 15814
+            - x: -11490
+              y: 14870
+            - x: -11606
+              y: 13909
+            - x: -11642
+              y: 12941
+            - x: -11597
+              y: 11974
+            - x: -11472
+              y: 11013
+            - x: -11267
+              y: 10067
+            - x: -10985
+              y: 9141
+            - x: -10627
+              y: 8241
+            - x: -10195
+              y: 7374
+            - x: -9692
+              y: 6546
+            - x: -9123
+              y: 5763
+            - x: -8490
+              y: 5030
+            - x: -7799
+              y: 4352
+            - x: -7053
+              y: 3734
+            - x: -6259
+              y: 3180
+            - x: -5422
+              y: 2693
+            - x: -4547
+              y: 2278
+            - x: -3641
+              y: 1937
+            - x: -2699
+              y: 1670
+            - x: -2689
+              y: 1667
+            - x: -2532
+              y: 1615
+            - x: -2494
+              y: 1599
+            - x: -2348
+              y: 1523
+            - x: -2313
+              y: 1501
+            - x: -2182
+              y: 1401
+            - x: -2151
+              y: 1373
+            - x: -2037
+              y: 1253
+            - x: -2012
+              y: 1221
+            - x: -1919
+              y: 1084
+            - x: -1899
+              y: 1048
+            - x: -1831
+              y: 898
+            - x: -1817
+              y: 859
+            - x: -1774
+              y: 699
+            - x: -1767
+              y: 658
+            - x: -1751
+              y: 494
+            - x: -1751
+              y: 453
+            - x: -1762
+              y: 288
+            - x: -1768
+              y: 247
+            - x: -1807
+              y: 87
+            - x: -1820
+              y: 47
+            - x: -1884
+              y: -105
+            - x: -1903
+              y: -141
+            - x: -1992
+              y: -281
+            - x: -2017
+              y: -314
+            - x: -2127
+              y: -437
+            - x: -2157
+              y: -465
+            - x: -2286
+              y: -568
+            - x: -2320
+              y: -591
+            - x: -2464
+              y: -672
+            - x: -2502
+              y: -689
+            - x: -2657
+              y: -745
+            - x: -2697
+              y: -755
+            - x: -2860
+              y: -785
+            - x: -2901
+              y: -788
+            - x: -3066
+              y: -791
+            - x: -3107
+              y: -788
+            - x: -3270
+              y: -763
+            - x: -3301
+              y: -756
+            - x: -4467
+              y: -424
+            - x: -4488
+              y: -417
+            - x: -5621
+              y: 16
+            - x: -5641
+              y: 24
+            - x: -6732
+              y: 554
+            - x: -6751
+              y: 565
+            - x: -7792
+              y: 1187
+            - x: -7810
+              y: 1199
+            - x: -8792
+              y: 1910
+            - x: -8810
+              y: 1924
+            - x: -9726
+              y: 2718
+            - x: -9742
+              y: 2733
+            - x: -10586
+              y: 3603
+            - x: -10601
+              y: 3620
+            - x: -11366
+              y: 4561
+            - x: -11379
+              y: 4578
+            - x: -12059
+              y: 5582
+            - x: -12070
+              y: 5601
+            - x: -12661
+              y: 6660
+            - x: -12670
+              y: 6680
+            - x: -13166
+              y: 7787
+            - x: -13174
+              y: 7807
+            - x: -13571
+              y: 8953
+            - x: -13578
+              y: 8974
+            - x: -13874
+              y: 10150
+            - x: -13878
+              y: 10171
+            - x: -14070
+              y: 11368
+            - x: -14073
+              y: 11390
+            - x: -14160
+              y: 12600
+            - x: -14161
+              y: 12621
+            - x: -14143
+              y: 13834
+            - x: -14141
+              y: 13856
+            - x: -14017
+              y: 15062
+            - x: -14014
+              y: 15084
+            - x: -13786
+              y: 16275
+            - x: -13781
+              y: 16295
+            - x: -13417
+              y: 17598
+            - x: -13409
+              y: 17717
+            - x: -13420
+              y: 17840
+            - x: -13429
+              y: 17875
+            - x: -13452
+              y: 17960
+            - x: -13502
+              y: 18073
+            - x: -13571
+              y: 18176
+            - x: -13656
+              y: 18266
+            - x: -13754
+              y: 18341
+            - x: -13863
+              y: 18399
+            - x: -13981
+              y: 18438
+            - x: -14103
+              y: 18457
+            - x: -14227
+              y: 18456
+            - x: -14349
+              y: 18434
+            - x: -14465
+              y: 18393
+            - x: -14573
+              y: 18333
+            - x: -14670
+              y: 18256
+            - x: -14729
+              y: 18191
+            - x: -14753
+              y: 18164
+            - x: -14820
+              y: 18060
+            - x: -14871
+              y: 17942
+            - x: -15256
+              y: 16585
+            - x: -15519
+              y: 15195
+            - x: -15655
+              y: 13787
+            - x: -15664
+              y: 12372
+            - x: -15546
+              y: 10962
+            - x: -15301
+              y: 9569
+            - x: -14931
+              y: 8203
+            - x: -14440
+              y: 6876
+            - x: -13832
+              y: 5599
+            - x: -13110
+              y: 4382
+            - x: -12282
+              y: 3235
+            - x: -11354
+              y: 2167
+            - x: -10334
+              y: 1186
+            - x: -9229
+              y: 302
+            - x: -8050
+              y: -479
+            - x: -6804
+              y: -1150
+            - x: -5504
+              y: -1707
+            - x: -4158
+              y: -2144
+            - x: -2768
+              y: -2461
+            - x: -2759
+              y: -2463
+            - x: -2599
+              y: -2506
+            - x: -2560
+              y: -2519
+            - x: -2410
+              y: -2588
+            - x: -2374
+              y: -2608
+            - x: -2237
+              y: -2700
+            - x: -2204
+              y: -2726
+            - x: -2084
+              y: -2839
+            - x: -2057
+              y: -2870
+            - x: -1957
+              y: -3001
+            - x: -1935
+              y: -3036
+            - x: -1858
+              y: -3182
+            - x: -1842
+              y: -3220
+            - x: -1790
+              y: -3377
+            - x: -1781
+              y: -3417
+            - x: -1755
+              y: -3581
+            - x: -1752
+              y: -3622
+            - x: -1755
+              y: -3787
+            - x: -1758
+              y: -3828
+            - x: -1788
+              y: -3991
+            - x: -1798
+              y: -4031
+            - x: -1854
+              y: -4186
+            - x: -1871
+              y: -4224
+            - x: -1951
+              y: -4368
+            - x: -1974
+              y: -4402
+            - x: -2077
+              y: -4531
+            - x: -2106
+              y: -4561
+            - x: -2229
+              y: -4672
+            - x: -2262
+              y: -4697
+            - x: -2401
+              y: -4785
+            - x: -2438
+              y: -4804
+            - x: -2590
+              y: -4869
+            - x: -2629
+              y: -4882
+            - x: -2789
+              y: -4920
+            - x: -2830
+              y: -4927
+            - x: -2995
+              y: -4938
+            - x: -3036
+              y: -4938
+            - x: -3201
+              y: -4922
+            - x: -3232
+              y: -4917
+            - x: -4854
+              y: -4549
+            - x: -4876
+              y: -4543
+            - x: -6457
+              y: -4027
+            - x: -6478
+              y: -4018
+            - x: -8005
+              y: -3358
+            - x: -8025
+              y: -3348
+            - x: -9484
+              y: -2550
+            - x: -9504
+              y: -2538
+            - x: -10883
+              y: -1608
+            - x: -10901
+              y: -1595
+            - x: -12188
+              y: -542
+            - x: -12205
+              y: -526
+            - x: -13390
+              y: 641
+            - x: -13405
+              y: 658
+            - x: -14476
+              y: 1930
+            - x: -14491
+              y: 1948
+            - x: -15440
+              y: 3314
+            - x: -15452
+              y: 3333
+            - x: -16271
+              y: 4780
+            - x: -16281
+              y: 4801
+            - x: -16963
+              y: 6318
+            - x: -16972
+              y: 6339
+            - x: -17510
+              y: 7912
+            - x: -17517
+              y: 7935
+            - x: -17908
+              y: 9551
+            - x: -17912
+              y: 9574
+            - x: -18152
+              y: 11219
+            - x: -18154
+              y: 11242
+            - x: -18241
+              y: 12903
+            - x: -18242
+              y: 12926
+            - x: -18175
+              y: 14587
+            - x: -18173
+              y: 14610
+            - x: -17953
+              y: 16258
+            - x: -17949
+              y: 16281
+            - x: -17577
+              y: 17902
+            - x: -17571
+              y: 17924
+            - x: -17013
+              y: 19638
+            - x: -16999
+              y: 19757
+            - x: -17005
+              y: 19881
+            - x: -17032
+              y: 20002
+            - x: -17077
+              y: 20116
+            - x: -17141
+              y: 20222
+            - x: -17222
+              y: 20316
+            - x: -17317
+              y: 20395
+            - x: -17424
+              y: 20458
+            - x: -17539
+              y: 20502
+            - x: -17661
+              y: 20527
+            - x: -17784
+              y: 20531
+            - x: -17907
+              y: 20515
+            - x: -18025
+              y: 20479
+            - x: -18136
+              y: 20424
+            - x: -18236
+              y: 20351
+            - x: -18323
+              y: 20263
+            - x: -18394
+              y: 20162
+            - x: -18449
+              y: 20047
+            - x: -19112
+              y: 17978
+            - x: -19544
+              y: 15845
+            - x: -19738
+              y: 13678
+            - x: -19693
+              y: 11503
+            - x: -19409
+              y: 9345
+            - x: -18889
+              y: 7233
+            - x: -18140
+              y: 5190
+            - x: -17170
+              y: 3242
+            - x: -15993
+              y: 1412
+            - x: -14621
+              y: -277
+            - x: -13071
+              y: -1805
+            - x: -11363
+              y: -3153
+            - x: -9517
+              y: -4305
+            - x: -7556
+              y: -5247
+            - x: -5503
+              y: -5968
+            - x: -3383
+              y: -6458
+            - x: -1177
+              y: -6712
+            - x: 954
+              y: -6727
+        - shape:
+            kind: rect
+            layer: ''
+            stroke_width: 0
+            filled: false
+            start:
+              x: -1798
+              y: -5000
+            end:
+              x: 1500
+              y: 4000
+          proxy: true
+  - number: '2'
+    at:
+    - -11258
+    - 6500
+    size:
+    - 2000
+    - 2000
+    shape: custom
+    kind: smd
+    drill: null
+    rot: 240000
+    ext:
+      custom:
+        anchor: circle
+        zone: outline
+        primitives:
+        - shape:
+            kind: polygon
+            layer: ''
+            stroke_width: 0
+            filled: true
+            pts:
+            - x: 2083
+              y: -6609
+            - x: 2061
+              y: -6586
+            - x: 1961
+              y: -6455
+            - x: 1938
+              y: -6420
+            - x: 1861
+              y: -6275
+            - x: 1845
+              y: -6237
+            - x: 1792
+              y: -6080
+            - x: 1782
+              y: -6040
+            - x: 1756
+              y: -5877
+            - x: 1753
+              y: -5836
+            - x: 1754
+              y: -5671
+            - x: 1758
+              y: -5629
+            - x: 1786
+              y: -5467
+            - x: 1796
+              y: -5427
+            - x: 1851
+              y: -5271
+            - x: 1868
+              y: -5233
+            - x: 1948
+              y: -5089
+            - x: 1970
+              y: -5054
+            - x: 2073
+              y: -4925
+            - x: 2101
+              y: -4894
+            - x: 2223
+              y: -4783
+            - x: 2256
+              y: -4758
+            - x: 2395
+              y: -4669
+            - x: 2431
+              y: -4649
+            - x: 2583
+              y: -4584
+            - x: 2630
+              y: -4569
+            - x: 4407
+              y: -4192
+            - x: 5975
+              y: -3710
+            - x: 7491
+              y: -3085
+            - x: 8942
+              y: -2323
+            - x: 10318
+              y: -1430
+            - x: 11604
+              y: -414
+            - x: 12792
+              y: 717
+            - x: 13870
+              y: 1952
+            - x: 14829
+              y: 3282
+            - x: 15661
+              y: 4695
+            - x: 16359
+              y: 6179
+            - x: 16917
+              y: 7721
+            - x: 17330
+              y: 9308
+            - x: 17595
+              y: 10926
+            - x: 17709
+              y: 12562
+            - x: 17671
+              y: 14201
+            - x: 17482
+              y: 15830
+            - x: 17144
+              y: 17434
+            - x: 16660
+              y: 18996
+            - x: 16606
+              y: 19113
+            - x: 16537
+              y: 19215
+            - x: 16452
+              y: 19305
+            - x: 16353
+              y: 19380
+            - x: 16244
+              y: 19437
+            - x: 16126
+              y: 19475
+            - x: 16004
+              y: 19494
+            - x: 15880
+              y: 19492
+            - x: 15758
+              y: 19470
+            - x: 15642
+              y: 19428
+            - x: 15534
+              y: 19367
+            - x: 15437
+              y: 19290
+            - x: 15355
+              y: 19198
+            - x: 15289
+              y: 19093
+            - x: 15241
+              y: 18979
+            - x: 15212
+              y: 18859
+            - x: 15204
+              y: 18735
+            - x: 15216
+              y: 18612
+            - x: 15252
+              y: 18477
+            - x: 15675
+              y: 17108
+            - x: 15681
+              y: 17086
+            - x: 15980
+              y: 15680
+            - x: 15984
+              y: 15658
+            - x: 16154
+              y: 14231
+            - x: 16156
+              y: 14208
+            - x: 16198
+              y: 12771
+            - x: 16198
+              y: 12749
+            - x: 16110
+              y: 11314
+            - x: 16107
+              y: 11292
+            - x: 15890
+              y: 9871
+            - x: 15886
+              y: 9849
+            - x: 15542
+              y: 8453
+            - x: 15536
+              y: 8431
+            - x: 15067
+              y: 7072
+            - x: 15059
+              y: 7051
+            - x: 14470
+              y: 5740
+            - x: 14460
+              y: 5720
+            - x: 13756
+              y: 4467
+            - x: 13744
+              y: 4448
+            - x: 12929
+              y: 3264
+            - x: 12915
+              y: 3246
+            - x: 11997
+              y: 2140
+            - x: 11982
+              y: 2123
+            - x: 10968
+              y: 1104
+            - x: 10952
+              y: 1089
+            - x: 9850
+              y: 165
+            - x: 9832
+              y: 152
+            - x: 8652
+              y: -669
+            - x: 8633
+              y: -681
+            - x: 7384
+              y: -1392
+            - x: 7364
+              y: -1402
+            - x: 6055
+              y: -1997
+            - x: 6034
+              y: -2006
+            - x: 4678
+              y: -2481
+            - x: 4656
+              y: -2487
+            - x: 3262
+              y: -2838
+            - x: 3231
+              y: -2844
+            - x: 3067
+              y: -2863
+            - x: 3026
+              y: -2865
+            - x: 2861
+              y: -2857
+            - x: 2820
+              y: -2852
+            - x: 2658
+              y: -2818
+            - x: 2619
+              y: -2806
+            - x: 2465
+              y: -2745
+            - x: 2428
+              y: -2727
+            - x: 2287
+              y: -2642
+            - x: 2253
+              y: -2617
+            - x: 2128
+              y: -2510
+            - x: 2098
+              y: -2481
+            - x: 1992
+              y: -2354
+            - x: 1968
+              y: -2321
+            - x: 1884
+              y: -2178
+            - x: 1866
+              y: -2141
+            - x: 1807
+              y: -1987
+            - x: 1795
+              y: -1947
+            - x: 1762
+              y: -1786
+            - x: 1757
+              y: -1745
+            - x: 1751
+              y: -1580
+            - x: 1753
+              y: -1538
+            - x: 1774
+              y: -1375
+            - x: 1783
+              y: -1334
+            - x: 1831
+              y: -1176
+            - x: 1846
+              y: -1138
+            - x: 1919
+              y: -990
+            - x: 1940
+              y: -954
+            - x: 2037
+              y: -820
+            - x: 2064
+              y: -789
+            - x: 2181
+              y: -673
+            - x: 2213
+              y: -646
+            - x: 2347
+              y: -551
+            - x: 2383
+              y: -530
+            - x: 2532
+              y: -458
+            - x: 2578
+              y: -441
+            - x: 3903
+              y: -100
+            - x: 5028
+              y: 290
+            - x: 6115
+              y: 777
+            - x: 7155
+              y: 1357
+            - x: 8141
+              y: 2025
+            - x: 9065
+              y: 2777
+            - x: 9920
+              y: 3606
+            - x: 10699
+              y: 4506
+            - x: 11397
+              y: 5471
+            - x: 12008
+              y: 6494
+            - x: 12528
+              y: 7565
+            - x: 12953
+              y: 8678
+            - x: 13279
+              y: 9823
+            - x: 13504
+              y: 10993
+            - x: 13626
+              y: 12177
+            - x: 13645
+              y: 13368
+            - x: 13560
+              y: 14556
+            - x: 13371
+              y: 15732
+            - x: 13083
+              y: 16882
+            - x: 13036
+              y: 17002
+            - x: 12973
+              y: 17108
+            - x: 12893
+              y: 17203
+            - x: 12798
+              y: 17283
+            - x: 12692
+              y: 17346
+            - x: 12577
+              y: 17391
+            - x: 12456
+              y: 17417
+            - x: 12332
+              y: 17422
+            - x: 12209
+              y: 17407
+            - x: 12091
+              y: 17372
+            - x: 11980
+              y: 17317
+            - x: 11879
+              y: 17245
+            - x: 11791
+              y: 17158
+            - x: 11719
+              y: 17057
+            - x: 11665
+              y: 16946
+            - x: 11630
+              y: 16828
+            - x: 11614
+              y: 16705
+            - x: 11619
+              y: 16581
+            - x: 11648
+              y: 16445
+            - x: 11888
+              y: 15491
+            - x: 11893
+              y: 15470
+            - x: 12054
+              y: 14494
+            - x: 12056
+              y: 14474
+            - x: 12136
+              y: 13488
+            - x: 12137
+              y: 13467
+            - x: 12134
+              y: 12478
+            - x: 12134
+              y: 12457
+            - x: 12049
+              y: 11471
+            - x: 12046
+              y: 11451
+            - x: 11880
+              y: 10476
+            - x: 11876
+              y: 10455
+            - x: 11629
+              y: 9498
+            - x: 11623
+              y: 9478
+            - x: 11297
+              y: 8544
+            - x: 11290
+              y: 8524
+            - x: 10888
+              y: 7620
+            - x: 10878
+              y: 7602
+            - x: 10403
+              y: 6734
+            - x: 10392
+              y: 6717
+            - x: 9846
+              y: 5892
+            - x: 9834
+              y: 5875
+            - x: 9221
+              y: 5099
+            - x: 9207
+              y: 5083
+            - x: 8532
+              y: 4360
+            - x: 8517
+              y: 4345
+            - x: 7784
+              y: 3681
+            - x: 7769
+              y: 3668
+            - x: 6983
+              y: 3066
+            - x: 6966
+              y: 3055
+            - x: 6133
+              y: 2521
+            - x: 6115
+              y: 2510
+            - x: 5241
+              y: 2048
+            - x: 5222
+              y: 2039
+            - x: 4312
+              y: 1650
+            - x: 4293
+              y: 1643
+            - x: 3354
+              y: 1331
+            - x: 3324
+              y: 1323
+            - x: 3162
+              y: 1291
+            - x: 3121
+              y: 1286
+            - x: 2956
+              y: 1281
+            - x: 2915
+              y: 1283
+            - x: 2751
+              y: 1305
+            - x: 2711
+              y: 1314
+            - x: 2553
+              y: 1363
+            - x: 2515
+              y: 1378
+            - x: 2367
+              y: 1453
+            - x: 2332
+              y: 1474
+            - x: 2199
+              y: 1571
+            - x: 2167
+              y: 1598
+            - x: 2052
+              y: 1716
+            - x: 2025
+              y: 1748
+            - x: 1931
+              y: 1884
+            - x: 1910
+              y: 1919
+            - x: 1839
+              y: 2068
+            - x: 1824
+              y: 2107
+            - x: 1779
+              y: 2266
+            - x: 1771
+              y: 2306
+            - x: 1752
+              y: 2470
+            - x: 1751
+              y: 2512
+            - x: 1759
+              y: 2677
+            - x: 1765
+              y: 2717
+            - x: 1800
+              y: 2879
+            - x: 1813
+              y: 2918
+            - x: 1874
+              y: 3071
+            - x: 1893
+              y: 3108
+            - x: 1979
+              y: 3249
+            - x: 2003
+              y: 3283
+            - x: 2111
+              y: 3408
+            - x: 2141
+              y: 3437
+            - x: 2268
+              y: 3542
+            - x: 2302
+              y: 3566
+            - x: 2444
+              y: 3649
+            - x: 2490
+              y: 3670
+            - x: 3366
+              y: 3964
+            - x: 4057
+              y: 4251
+            - x: 4724
+              y: 4591
+            - x: 5362
+              y: 4981
+            - x: 5968
+              y: 5419
+            - x: 6538
+              y: 5903
+            - x: 7069
+              y: 6430
+            - x: 7557
+              y: 6996
+            - x: 8001
+              y: 7599
+            - x: 8396
+              y: 8233
+            - x: 8741
+              y: 8897
+            - x: 9034
+              y: 9585
+            - x: 9272
+              y: 10294
+            - x: 9455
+              y: 11019
+            - x: 9582
+              y: 11756
+            - x: 9651
+              y: 12501
+            - x: 9661
+              y: 13249
+            - x: 9615
+              y: 13995
+            - x: 9511
+              y: 14730
+            - x: 9477
+              y: 14855
+            - x: 9426
+              y: 14967
+            - x: 9357
+              y: 15070
+            - x: 9271
+              y: 15159
+            - x: 9173
+              y: 15234
+            - x: 9063
+              y: 15291
+            - x: 8945
+              y: 15330
+            - x: 8823
+              y: 15348
+            - x: 8699
+              y: 15346
+            - x: 8577
+              y: 15324
+            - x: 8461
+              y: 15282
+            - x: 8353
+              y: 15222
+            - x: 8257
+              y: 15144
+            - x: 8174
+              y: 15052
+            - x: 8108
+              y: 14947
+            - x: 8060
+              y: 14833
+            - x: 8032
+              y: 14713
+            - x: 8023
+              y: 14589
+            - x: 8037
+              y: 14452
+            - x: 8119
+              y: 13918
+            - x: 8121
+              y: 13901
+            - x: 8167
+              y: 13355
+            - x: 8168
+              y: 13337
+            - x: 8176
+              y: 12789
+            - x: 8176
+              y: 12772
+            - x: 8146
+              y: 12225
+            - x: 8145
+              y: 12208
+            - x: 8078
+              y: 11664
+            - x: 8075
+              y: 11647
+            - x: 7971
+              y: 11109
+            - x: 7967
+              y: 11092
+            - x: 7826
+              y: 10563
+            - x: 7821
+              y: 10546
+            - x: 7644
+              y: 10028
+            - x: 7638
+              y: 10012
+            - x: 7425
+              y: 9507
+            - x: 7418
+              y: 9491
+            - x: 7172
+              y: 9002
+            - x: 7163
+              y: 8987
+            - x: 6884
+              y: 8516
+            - x: 6874
+              y: 8501
+            - x: 6563
+              y: 8050
+            - x: 6553
+              y: 8036
+            - x: 6211
+              y: 7608
+            - x: 6200
+              y: 7595
+            - x: 5829
+              y: 7191
+            - x: 5817
+              y: 7179
+            - x: 5420
+              y: 6802
+            - x: 5407
+              y: 6790
+            - x: 4984
+              y: 6441
+            - x: 4971
+              y: 6431
+            - x: 4525
+              y: 6112
+            - x: 4511
+              y: 6102
+            - x: 4045
+              y: 5814
+            - x: 4030
+              y: 5806
+            - x: 3545
+              y: 5551
+            - x: 3517
+              y: 5538
+            - x: 3362
+              y: 5480
+            - x: 3322
+              y: 5468
+            - x: 3160
+              y: 5436
+            - x: 3119
+              y: 5432
+            - x: 2954
+              y: 5427
+            - x: 2913
+              y: 5429
+            - x: 2749
+              y: 5452
+            - x: 2709
+              y: 5460
+            - x: 2551
+              y: 5509
+            - x: 2513
+              y: 5525
+            - x: 2366
+              y: 5599
+            - x: 2330
+              y: 5621
+            - x: 2197
+              y: 5718
+            - x: 2166
+              y: 5745
+            - x: 2050
+              y: 5864
+            - x: 2024
+              y: 5895
+            - x: 1930
+              y: 6031
+            - x: 1909
+              y: 6067
+            - x: 1838
+              y: 6216
+            - x: 1824
+              y: 6254
+            - x: 1779
+              y: 6413
+            - x: 1771
+              y: 6454
+            - x: 1752
+              y: 6618
+            - x: 1751
+              y: 6659
+            - x: 1760
+              y: 6824
+            - x: 1765
+              y: 6865
+            - x: 1800
+              y: 7024
+            - x: 1392
+              y: 6907
+            - x: 1365
+              y: 6901
+            - x: 714
+              y: 6791
+            - x: 686
+              y: 6788
+            - x: 26
+              y: 6750
+            - x: -1
+              y: 6750
+            - x: -661
+              y: 6785
+            - x: -689
+              y: 6788
+            - x: -1341
+              y: 6896
+            - x: -1368
+              y: 6902
+            - x: -2004
+              y: 7081
+            - x: -2031
+              y: 7089
+            - x: -2643
+              y: 7337
+            - x: -2668
+              y: 7349
+            - x: -3250
+              y: 7662
+            - x: -3274
+              y: 7677
+            - x: -3818
+              y: 8052
+            - x: -3840
+              y: 8069
+            - x: -4339
+              y: 8502
+            - x: -4359
+              y: 8521
+            - x: -4808
+              y: 9007
+            - x: -4825
+              y: 9028
+            - x: -5218
+              y: 9560
+            - x: -5233
+              y: 9583
+            - x: -5564
+              y: 10155
+            - x: -5577
+              y: 10179
+            - x: -5844
+              y: 10784
+            - x: -5853
+              y: 10810
+            - x: -6052
+              y: 11440
+            - x: -6059
+              y: 11467
+            - x: -6187
+              y: 12116
+            - x: -6191
+              y: 12143
+            - x: -6246
+              y: 12802
+            - x: -6247
+              y: 12828
+            - x: -6231
+              y: 13630
+            - x: -6251
+              y: 13750
+            - x: -6292
+              y: 13866
+            - x: -6351
+              y: 13975
+            - x: -6427
+              y: 14073
+            - x: -6518
+              y: 14156
+            - x: -6622
+              y: 14224
+            - x: -6735
+              y: 14273
+            - x: -6855
+              y: 14303
+            - x: -6979
+              y: 14313
+            - x: -7102
+              y: 14303
+            - x: -7222
+              y: 14272
+            - x: -7335
+              y: 14222
+            - x: -7439
+              y: 14154
+            - x: -7529
+              y: 14070
+            - x: -7605
+              y: 13973
+            - x: -7664
+              y: 13864
+            - x: -7704
+              y: 13747
+            - x: -7725
+              y: 13619
+            - x: -7745
+              y: 13096
+            - x: -7730
+              y: 12566
+            - x: -7678
+              y: 12037
+            - x: -7590
+              y: 11514
+            - x: -7465
+              y: 10998
+            - x: -7306
+              y: 10492
+            - x: -7112
+              y: 9998
+            - x: -6885
+              y: 9518
+            - x: -6625
+              y: 9055
+            - x: -6334
+              y: 8611
+            - x: -6014
+              y: 8189
+            - x: -5664
+              y: 7789
+            - x: -5289
+              y: 7414
+            - x: -4888
+              y: 7066
+            - x: -4464
+              y: 6747
+            - x: -4020
+              y: 6457
+            - x: -3556
+              y: 6199
+            - x: -3076
+              y: 5973
+            - x: -2573
+              y: 5777
+            - x: -2560
+              y: 5772
+            - x: -2410
+              y: 5704
+            - x: -2374
+              y: 5684
+            - x: -2237
+              y: 5592
+            - x: -2204
+              y: 5566
+            - x: -2084
+              y: 5452
+            - x: -2057
+              y: 5422
+            - x: -1957
+              y: 5290
+            - x: -1935
+              y: 5255
+            - x: -1858
+              y: 5109
+            - x: -1842
+              y: 5071
+            - x: -1790
+              y: 4914
+            - x: -1781
+              y: 4874
+            - x: -1755
+              y: 4711
+            - x: -1752
+              y: 4670
+            - x: -1755
+              y: 4505
+            - x: -1758
+              y: 4463
+            - x: -1788
+              y: 4301
+            - x: -1798
+              y: 4261
+            - x: -1854
+              y: 4105
+            - x: -1871
+              y: 4068
+            - x: -1951
+              y: 3924
+            - x: -1974
+              y: 3889
+            - x: -2077
+              y: 3760
+            - x: -2106
+              y: 3730
+            - x: -2229
+              y: 3620
+            - x: -2262
+              y: 3595
+            - x: -2401
+              y: 3506
+            - x: -2437
+              y: 3487
+            - x: -2590
+              y: 3423
+            - x: -2629
+              y: 3410
+            - x: -2789
+              y: 3371
+            - x: -2830
+              y: 3365
+            - x: -2995
+              y: 3353
+            - x: -3036
+              y: 3354
+            - x: -3201
+              y: 3369
+            - x: -3241
+              y: 3377
+            - x: -3401
+              y: 3419
+            - x: -3430
+              y: 3429
+            - x: -4142
+              y: 3716
+            - x: -4159
+              y: 3724
+            - x: -4846
+              y: 4065
+            - x: -4863
+              y: 4074
+            - x: -5522
+              y: 4468
+            - x: -5538
+              y: 4478
+            - x: -6165
+              y: 4921
+            - x: -6180
+              y: 4933
+            - x: -6770
+              y: 5423
+            - x: -6785
+              y: 5436
+            - x: -7335
+              y: 5971
+            - x: -7348
+              y: 5985
+            - x: -7856
+              y: 6560
+            - x: -7868
+              y: 6575
+            - x: -8329
+              y: 7189
+            - x: -8340
+              y: 7204
+            - x: -8753
+              y: 7851
+            - x: -8763
+              y: 7868
+            - x: -9124
+              y: 8545
+            - x: -9132
+              y: 8562
+            - x: -9440
+              y: 9265
+            - x: -9447
+              y: 9283
+            - x: -9700
+              y: 10008
+            - x: -9705
+              y: 10026
+            - x: -9901
+              y: 10768
+            - x: -9905
+              y: 10787
+            - x: -10042
+              y: 11542
+            - x: -10045
+              y: 11561
+            - x: -10124
+              y: 12324
+            - x: -10125
+              y: 12344
+            - x: -10144
+              y: 13111
+            - x: -10144
+              y: 13130
+            - x: -10104
+              y: 13896
+            - x: -10102
+              y: 13916
+            - x: -10003
+              y: 14676
+            - x: -10000
+              y: 14694
+            - x: -9821
+              y: 15582
+            - x: -9821
+              y: 15702
+            - x: -9842
+              y: 15823
+            - x: -9854
+              y: 15857
+            - x: -9883
+              y: 15940
+            - x: -9942
+              y: 16049
+            - x: -10018
+              y: 16146
+            - x: -10109
+              y: 16230
+            - x: -10213
+              y: 16297
+            - x: -10327
+              y: 16346
+            - x: -10447
+              y: 16376
+            - x: -10570
+              y: 16386
+            - x: -10693
+              y: 16376
+            - x: -10813
+              y: 16345
+            - x: -10926
+              y: 16295
+            - x: -11030
+              y: 16227
+            - x: -11120
+              y: 16143
+            - x: -11174
+              y: 16073
+            - x: -11196
+              y: 16045
+            - x: -11255
+              y: 15936
+            - x: -11296
+              y: 15814
+            - x: -11490
+              y: 14870
+            - x: -11606
+              y: 13909
+            - x: -11642
+              y: 12941
+            - x: -11597
+              y: 11974
+            - x: -11472
+              y: 11013
+            - x: -11267
+              y: 10067
+            - x: -10985
+              y: 9141
+            - x: -10627
+              y: 8241
+            - x: -10195
+              y: 7374
+            - x: -9692
+              y: 6546
+            - x: -9123
+              y: 5763
+            - x: -8490
+              y: 5030
+            - x: -7799
+              y: 4352
+            - x: -7053
+              y: 3734
+            - x: -6259
+              y: 3180
+            - x: -5422
+              y: 2693
+            - x: -4547
+              y: 2278
+            - x: -3641
+              y: 1937
+            - x: -2699
+              y: 1670
+            - x: -2689
+              y: 1667
+            - x: -2532
+              y: 1615
+            - x: -2494
+              y: 1599
+            - x: -2348
+              y: 1523
+            - x: -2313
+              y: 1501
+            - x: -2182
+              y: 1401
+            - x: -2151
+              y: 1373
+            - x: -2037
+              y: 1253
+            - x: -2012
+              y: 1221
+            - x: -1919
+              y: 1084
+            - x: -1899
+              y: 1048
+            - x: -1831
+              y: 898
+            - x: -1817
+              y: 859
+            - x: -1774
+              y: 699
+            - x: -1767
+              y: 658
+            - x: -1751
+              y: 494
+            - x: -1751
+              y: 453
+            - x: -1762
+              y: 288
+            - x: -1768
+              y: 247
+            - x: -1807
+              y: 87
+            - x: -1820
+              y: 47
+            - x: -1884
+              y: -105
+            - x: -1903
+              y: -141
+            - x: -1992
+              y: -281
+            - x: -2017
+              y: -314
+            - x: -2127
+              y: -437
+            - x: -2157
+              y: -465
+            - x: -2286
+              y: -568
+            - x: -2320
+              y: -591
+            - x: -2464
+              y: -672
+            - x: -2502
+              y: -689
+            - x: -2657
+              y: -745
+            - x: -2697
+              y: -755
+            - x: -2860
+              y: -785
+            - x: -2901
+              y: -788
+            - x: -3066
+              y: -791
+            - x: -3107
+              y: -788
+            - x: -3270
+              y: -763
+            - x: -3301
+              y: -756
+            - x: -4467
+              y: -424
+            - x: -4488
+              y: -417
+            - x: -5621
+              y: 16
+            - x: -5641
+              y: 24
+            - x: -6732
+              y: 554
+            - x: -6751
+              y: 565
+            - x: -7792
+              y: 1187
+            - x: -7810
+              y: 1199
+            - x: -8792
+              y: 1910
+            - x: -8810
+              y: 1924
+            - x: -9726
+              y: 2718
+            - x: -9742
+              y: 2733
+            - x: -10586
+              y: 3603
+            - x: -10601
+              y: 3620
+            - x: -11366
+              y: 4561
+            - x: -11379
+              y: 4578
+            - x: -12059
+              y: 5582
+            - x: -12070
+              y: 5601
+            - x: -12661
+              y: 6660
+            - x: -12670
+              y: 6680
+            - x: -13166
+              y: 7787
+            - x: -13174
+              y: 7807
+            - x: -13571
+              y: 8953
+            - x: -13578
+              y: 8974
+            - x: -13874
+              y: 10150
+            - x: -13878
+              y: 10171
+            - x: -14070
+              y: 11368
+            - x: -14073
+              y: 11390
+            - x: -14160
+              y: 12600
+            - x: -14161
+              y: 12621
+            - x: -14143
+              y: 13834
+            - x: -14141
+              y: 13856
+            - x: -14017
+              y: 15062
+            - x: -14014
+              y: 15084
+            - x: -13786
+              y: 16275
+            - x: -13781
+              y: 16295
+            - x: -13417
+              y: 17598
+            - x: -13409
+              y: 17717
+            - x: -13420
+              y: 17840
+            - x: -13429
+              y: 17875
+            - x: -13452
+              y: 17960
+            - x: -13502
+              y: 18073
+            - x: -13571
+              y: 18176
+            - x: -13656
+              y: 18266
+            - x: -13754
+              y: 18341
+            - x: -13863
+              y: 18399
+            - x: -13981
+              y: 18438
+            - x: -14103
+              y: 18457
+            - x: -14227
+              y: 18456
+            - x: -14349
+              y: 18434
+            - x: -14465
+              y: 18393
+            - x: -14573
+              y: 18333
+            - x: -14670
+              y: 18256
+            - x: -14729
+              y: 18191
+            - x: -14753
+              y: 18164
+            - x: -14820
+              y: 18060
+            - x: -14871
+              y: 17942
+            - x: -15256
+              y: 16585
+            - x: -15519
+              y: 15195
+            - x: -15655
+              y: 13787
+            - x: -15664
+              y: 12372
+            - x: -15546
+              y: 10962
+            - x: -15301
+              y: 9569
+            - x: -14931
+              y: 8203
+            - x: -14440
+              y: 6876
+            - x: -13832
+              y: 5599
+            - x: -13110
+              y: 4382
+            - x: -12282
+              y: 3235
+            - x: -11354
+              y: 2167
+            - x: -10334
+              y: 1186
+            - x: -9229
+              y: 302
+            - x: -8050
+              y: -479
+            - x: -6804
+              y: -1150
+            - x: -5504
+              y: -1707
+            - x: -4158
+              y: -2144
+            - x: -2768
+              y: -2461
+            - x: -2759
+              y: -2463
+            - x: -2599
+              y: -2506
+            - x: -2560
+              y: -2519
+            - x: -2410
+              y: -2588
+            - x: -2374
+              y: -2608
+            - x: -2237
+              y: -2700
+            - x: -2204
+              y: -2726
+            - x: -2084
+              y: -2839
+            - x: -2057
+              y: -2870
+            - x: -1957
+              y: -3001
+            - x: -1935
+              y: -3036
+            - x: -1858
+              y: -3182
+            - x: -1842
+              y: -3220
+            - x: -1790
+              y: -3377
+            - x: -1781
+              y: -3417
+            - x: -1755
+              y: -3581
+            - x: -1752
+              y: -3622
+            - x: -1755
+              y: -3787
+            - x: -1758
+              y: -3828
+            - x: -1788
+              y: -3991
+            - x: -1798
+              y: -4031
+            - x: -1854
+              y: -4186
+            - x: -1871
+              y: -4224
+            - x: -1951
+              y: -4368
+            - x: -1974
+              y: -4402
+            - x: -2077
+              y: -4531
+            - x: -2106
+              y: -4561
+            - x: -2229
+              y: -4672
+            - x: -2262
+              y: -4697
+            - x: -2401
+              y: -4785
+            - x: -2438
+              y: -4804
+            - x: -2590
+              y: -4869
+            - x: -2629
+              y: -4882
+            - x: -2789
+              y: -4920
+            - x: -2830
+              y: -4927
+            - x: -2995
+              y: -4938
+            - x: -3036
+              y: -4938
+            - x: -3201
+              y: -4922
+            - x: -3232
+              y: -4917
+            - x: -4854
+              y: -4549
+            - x: -4876
+              y: -4543
+            - x: -6457
+              y: -4027
+            - x: -6478
+              y: -4018
+            - x: -8005
+              y: -3358
+            - x: -8025
+              y: -3348
+            - x: -9484
+              y: -2550
+            - x: -9504
+              y: -2538
+            - x: -10883
+              y: -1608
+            - x: -10901
+              y: -1595
+            - x: -12188
+              y: -542
+            - x: -12205
+              y: -526
+            - x: -13390
+              y: 641
+            - x: -13405
+              y: 658
+            - x: -14476
+              y: 1930
+            - x: -14491
+              y: 1948
+            - x: -15440
+              y: 3314
+            - x: -15452
+              y: 3333
+            - x: -16271
+              y: 4780
+            - x: -16281
+              y: 4801
+            - x: -16963
+              y: 6318
+            - x: -16972
+              y: 6339
+            - x: -17510
+              y: 7912
+            - x: -17517
+              y: 7935
+            - x: -17908
+              y: 9551
+            - x: -17912
+              y: 9574
+            - x: -18152
+              y: 11219
+            - x: -18154
+              y: 11242
+            - x: -18241
+              y: 12903
+            - x: -18242
+              y: 12926
+            - x: -18175
+              y: 14587
+            - x: -18173
+              y: 14610
+            - x: -17953
+              y: 16258
+            - x: -17949
+              y: 16281
+            - x: -17577
+              y: 17902
+            - x: -17571
+              y: 17924
+            - x: -17013
+              y: 19638
+            - x: -16999
+              y: 19757
+            - x: -17005
+              y: 19881
+            - x: -17032
+              y: 20002
+            - x: -17077
+              y: 20116
+            - x: -17141
+              y: 20222
+            - x: -17222
+              y: 20316
+            - x: -17317
+              y: 20395
+            - x: -17424
+              y: 20458
+            - x: -17539
+              y: 20502
+            - x: -17661
+              y: 20527
+            - x: -17784
+              y: 20531
+            - x: -17907
+              y: 20515
+            - x: -18025
+              y: 20479
+            - x: -18136
+              y: 20424
+            - x: -18236
+              y: 20351
+            - x: -18323
+              y: 20263
+            - x: -18394
+              y: 20162
+            - x: -18449
+              y: 20047
+            - x: -19112
+              y: 17978
+            - x: -19544
+              y: 15845
+            - x: -19738
+              y: 13678
+            - x: -19693
+              y: 11503
+            - x: -19409
+              y: 9345
+            - x: -18889
+              y: 7233
+            - x: -18140
+              y: 5190
+            - x: -17170
+              y: 3242
+            - x: -15993
+              y: 1412
+            - x: -14621
+              y: -277
+            - x: -13071
+              y: -1805
+            - x: -11363
+              y: -3153
+            - x: -9517
+              y: -4305
+            - x: -7556
+              y: -5247
+            - x: -5503
+              y: -5968
+            - x: -3383
+              y: -6458
+            - x: -1222
+              y: -6712
+            - x: 954
+              y: -6727
+  - number: '3'
+    at:
+    - 11258
+    - 6500
+    size:
+    - 2000
+    - 2000
+    shape: custom
+    kind: smd
+    drill: null
+    rot: 120000
+    ext:
+      custom:
+        anchor: circle
+        zone: outline
+        primitives:
+        - shape:
+            kind: polygon
+            layer: ''
+            stroke_width: 0
+            filled: true
+            pts:
+            - x: 2083
+              y: -6609
+            - x: 2061
+              y: -6586
+            - x: 1961
+              y: -6455
+            - x: 1938
+              y: -6420
+            - x: 1861
+              y: -6275
+            - x: 1845
+              y: -6237
+            - x: 1792
+              y: -6080
+            - x: 1782
+              y: -6040
+            - x: 1756
+              y: -5877
+            - x: 1753
+              y: -5836
+            - x: 1754
+              y: -5671
+            - x: 1758
+              y: -5629
+            - x: 1786
+              y: -5467
+            - x: 1796
+              y: -5427
+            - x: 1851
+              y: -5271
+            - x: 1868
+              y: -5233
+            - x: 1948
+              y: -5089
+            - x: 1970
+              y: -5054
+            - x: 2073
+              y: -4925
+            - x: 2101
+              y: -4894
+            - x: 2223
+              y: -4783
+            - x: 2256
+              y: -4758
+            - x: 2395
+              y: -4669
+            - x: 2431
+              y: -4649
+            - x: 2583
+              y: -4584
+            - x: 2630
+              y: -4569
+            - x: 4407
+              y: -4192
+            - x: 5975
+              y: -3710
+            - x: 7491
+              y: -3085
+            - x: 8942
+              y: -2323
+            - x: 10318
+              y: -1430
+            - x: 11604
+              y: -414
+            - x: 12792
+              y: 717
+            - x: 13870
+              y: 1952
+            - x: 14829
+              y: 3282
+            - x: 15661
+              y: 4695
+            - x: 16359
+              y: 6179
+            - x: 16917
+              y: 7721
+            - x: 17330
+              y: 9308
+            - x: 17595
+              y: 10926
+            - x: 17709
+              y: 12562
+            - x: 17671
+              y: 14201
+            - x: 17482
+              y: 15830
+            - x: 17144
+              y: 17434
+            - x: 16660
+              y: 18996
+            - x: 16606
+              y: 19113
+            - x: 16537
+              y: 19215
+            - x: 16452
+              y: 19305
+            - x: 16353
+              y: 19380
+            - x: 16244
+              y: 19437
+            - x: 16126
+              y: 19475
+            - x: 16004
+              y: 19494
+            - x: 15880
+              y: 19492
+            - x: 15758
+              y: 19470
+            - x: 15642
+              y: 19428
+            - x: 15534
+              y: 19367
+            - x: 15437
+              y: 19290
+            - x: 15355
+              y: 19198
+            - x: 15289
+              y: 19093
+            - x: 15241
+              y: 18979
+            - x: 15212
+              y: 18859
+            - x: 15204
+              y: 18735
+            - x: 15216
+              y: 18612
+            - x: 15252
+              y: 18477
+            - x: 15675
+              y: 17108
+            - x: 15681
+              y: 17086
+            - x: 15980
+              y: 15680
+            - x: 15984
+              y: 15658
+            - x: 16154
+              y: 14231
+            - x: 16156
+              y: 14208
+            - x: 16198
+              y: 12771
+            - x: 16198
+              y: 12749
+            - x: 16110
+              y: 11314
+            - x: 16107
+              y: 11292
+            - x: 15890
+              y: 9871
+            - x: 15886
+              y: 9849
+            - x: 15542
+              y: 8453
+            - x: 15536
+              y: 8431
+            - x: 15067
+              y: 7072
+            - x: 15059
+              y: 7051
+            - x: 14470
+              y: 5740
+            - x: 14460
+              y: 5720
+            - x: 13756
+              y: 4467
+            - x: 13744
+              y: 4448
+            - x: 12929
+              y: 3264
+            - x: 12915
+              y: 3246
+            - x: 11997
+              y: 2140
+            - x: 11982
+              y: 2123
+            - x: 10968
+              y: 1104
+            - x: 10952
+              y: 1089
+            - x: 9850
+              y: 165
+            - x: 9832
+              y: 152
+            - x: 8652
+              y: -669
+            - x: 8633
+              y: -681
+            - x: 7384
+              y: -1392
+            - x: 7364
+              y: -1402
+            - x: 6055
+              y: -1997
+            - x: 6034
+              y: -2006
+            - x: 4678
+              y: -2481
+            - x: 4656
+              y: -2487
+            - x: 3262
+              y: -2838
+            - x: 3231
+              y: -2844
+            - x: 3067
+              y: -2863
+            - x: 3026
+              y: -2865
+            - x: 2861
+              y: -2857
+            - x: 2820
+              y: -2852
+            - x: 2658
+              y: -2818
+            - x: 2619
+              y: -2806
+            - x: 2465
+              y: -2745
+            - x: 2428
+              y: -2727
+            - x: 2287
+              y: -2642
+            - x: 2253
+              y: -2617
+            - x: 2128
+              y: -2510
+            - x: 2098
+              y: -2481
+            - x: 1992
+              y: -2354
+            - x: 1968
+              y: -2321
+            - x: 1884
+              y: -2178
+            - x: 1866
+              y: -2141
+            - x: 1807
+              y: -1987
+            - x: 1795
+              y: -1947
+            - x: 1762
+              y: -1786
+            - x: 1757
+              y: -1745
+            - x: 1751
+              y: -1580
+            - x: 1753
+              y: -1538
+            - x: 1774
+              y: -1375
+            - x: 1783
+              y: -1334
+            - x: 1831
+              y: -1176
+            - x: 1846
+              y: -1138
+            - x: 1919
+              y: -990
+            - x: 1940
+              y: -954
+            - x: 2037
+              y: -820
+            - x: 2064
+              y: -789
+            - x: 2181
+              y: -673
+            - x: 2213
+              y: -646
+            - x: 2347
+              y: -551
+            - x: 2383
+              y: -530
+            - x: 2532
+              y: -458
+            - x: 2578
+              y: -441
+            - x: 3903
+              y: -100
+            - x: 5028
+              y: 290
+            - x: 6115
+              y: 777
+            - x: 7155
+              y: 1357
+            - x: 8141
+              y: 2025
+            - x: 9065
+              y: 2777
+            - x: 9920
+              y: 3606
+            - x: 10699
+              y: 4506
+            - x: 11397
+              y: 5471
+            - x: 12008
+              y: 6494
+            - x: 12528
+              y: 7565
+            - x: 12953
+              y: 8678
+            - x: 13279
+              y: 9823
+            - x: 13504
+              y: 10993
+            - x: 13626
+              y: 12177
+            - x: 13645
+              y: 13368
+            - x: 13560
+              y: 14556
+            - x: 13371
+              y: 15732
+            - x: 13083
+              y: 16882
+            - x: 13036
+              y: 17002
+            - x: 12973
+              y: 17108
+            - x: 12893
+              y: 17203
+            - x: 12798
+              y: 17283
+            - x: 12692
+              y: 17346
+            - x: 12577
+              y: 17391
+            - x: 12456
+              y: 17417
+            - x: 12332
+              y: 17422
+            - x: 12209
+              y: 17407
+            - x: 12091
+              y: 17372
+            - x: 11980
+              y: 17317
+            - x: 11879
+              y: 17245
+            - x: 11791
+              y: 17158
+            - x: 11719
+              y: 17057
+            - x: 11665
+              y: 16946
+            - x: 11630
+              y: 16828
+            - x: 11614
+              y: 16705
+            - x: 11619
+              y: 16581
+            - x: 11648
+              y: 16445
+            - x: 11888
+              y: 15491
+            - x: 11893
+              y: 15470
+            - x: 12054
+              y: 14494
+            - x: 12056
+              y: 14474
+            - x: 12136
+              y: 13488
+            - x: 12137
+              y: 13467
+            - x: 12134
+              y: 12478
+            - x: 12134
+              y: 12457
+            - x: 12049
+              y: 11471
+            - x: 12046
+              y: 11451
+            - x: 11880
+              y: 10476
+            - x: 11876
+              y: 10455
+            - x: 11629
+              y: 9498
+            - x: 11623
+              y: 9478
+            - x: 11297
+              y: 8544
+            - x: 11290
+              y: 8524
+            - x: 10888
+              y: 7620
+            - x: 10878
+              y: 7602
+            - x: 10403
+              y: 6734
+            - x: 10392
+              y: 6717
+            - x: 9846
+              y: 5892
+            - x: 9834
+              y: 5875
+            - x: 9221
+              y: 5099
+            - x: 9207
+              y: 5083
+            - x: 8532
+              y: 4360
+            - x: 8517
+              y: 4345
+            - x: 7784
+              y: 3681
+            - x: 7769
+              y: 3668
+            - x: 6983
+              y: 3066
+            - x: 6966
+              y: 3055
+            - x: 6133
+              y: 2521
+            - x: 6115
+              y: 2510
+            - x: 5241
+              y: 2048
+            - x: 5222
+              y: 2039
+            - x: 4312
+              y: 1650
+            - x: 4293
+              y: 1643
+            - x: 3354
+              y: 1331
+            - x: 3324
+              y: 1323
+            - x: 3162
+              y: 1291
+            - x: 3121
+              y: 1286
+            - x: 2956
+              y: 1281
+            - x: 2915
+              y: 1283
+            - x: 2751
+              y: 1305
+            - x: 2711
+              y: 1314
+            - x: 2553
+              y: 1363
+            - x: 2515
+              y: 1378
+            - x: 2367
+              y: 1453
+            - x: 2332
+              y: 1474
+            - x: 2199
+              y: 1571
+            - x: 2167
+              y: 1598
+            - x: 2052
+              y: 1716
+            - x: 2025
+              y: 1748
+            - x: 1931
+              y: 1884
+            - x: 1910
+              y: 1919
+            - x: 1839
+              y: 2068
+            - x: 1824
+              y: 2107
+            - x: 1779
+              y: 2266
+            - x: 1771
+              y: 2306
+            - x: 1752
+              y: 2470
+            - x: 1751
+              y: 2512
+            - x: 1759
+              y: 2677
+            - x: 1765
+              y: 2717
+            - x: 1800
+              y: 2879
+            - x: 1813
+              y: 2918
+            - x: 1874
+              y: 3071
+            - x: 1893
+              y: 3108
+            - x: 1979
+              y: 3249
+            - x: 2003
+              y: 3283
+            - x: 2111
+              y: 3408
+            - x: 2141
+              y: 3437
+            - x: 2268
+              y: 3542
+            - x: 2302
+              y: 3566
+            - x: 2444
+              y: 3649
+            - x: 2490
+              y: 3670
+            - x: 3366
+              y: 3964
+            - x: 4057
+              y: 4251
+            - x: 4724
+              y: 4591
+            - x: 5362
+              y: 4981
+            - x: 5968
+              y: 5419
+            - x: 6538
+              y: 5903
+            - x: 7069
+              y: 6430
+            - x: 7557
+              y: 6996
+            - x: 8001
+              y: 7599
+            - x: 8396
+              y: 8233
+            - x: 8741
+              y: 8897
+            - x: 9034
+              y: 9585
+            - x: 9272
+              y: 10294
+            - x: 9455
+              y: 11019
+            - x: 9582
+              y: 11756
+            - x: 9651
+              y: 12501
+            - x: 9661
+              y: 13249
+            - x: 9615
+              y: 13995
+            - x: 9511
+              y: 14730
+            - x: 9477
+              y: 14855
+            - x: 9426
+              y: 14967
+            - x: 9357
+              y: 15070
+            - x: 9271
+              y: 15159
+            - x: 9173
+              y: 15234
+            - x: 9063
+              y: 15291
+            - x: 8945
+              y: 15330
+            - x: 8823
+              y: 15348
+            - x: 8699
+              y: 15346
+            - x: 8577
+              y: 15324
+            - x: 8461
+              y: 15282
+            - x: 8353
+              y: 15222
+            - x: 8257
+              y: 15144
+            - x: 8174
+              y: 15052
+            - x: 8108
+              y: 14947
+            - x: 8060
+              y: 14833
+            - x: 8032
+              y: 14713
+            - x: 8023
+              y: 14589
+            - x: 8037
+              y: 14452
+            - x: 8119
+              y: 13918
+            - x: 8121
+              y: 13901
+            - x: 8167
+              y: 13355
+            - x: 8168
+              y: 13337
+            - x: 8176
+              y: 12789
+            - x: 8176
+              y: 12772
+            - x: 8146
+              y: 12225
+            - x: 8145
+              y: 12208
+            - x: 8078
+              y: 11664
+            - x: 8075
+              y: 11647
+            - x: 7971
+              y: 11109
+            - x: 7967
+              y: 11092
+            - x: 7826
+              y: 10563
+            - x: 7821
+              y: 10546
+            - x: 7644
+              y: 10028
+            - x: 7638
+              y: 10012
+            - x: 7425
+              y: 9507
+            - x: 7418
+              y: 9491
+            - x: 7172
+              y: 9002
+            - x: 7163
+              y: 8987
+            - x: 6884
+              y: 8516
+            - x: 6874
+              y: 8501
+            - x: 6563
+              y: 8050
+            - x: 6553
+              y: 8036
+            - x: 6211
+              y: 7608
+            - x: 6200
+              y: 7595
+            - x: 5829
+              y: 7191
+            - x: 5817
+              y: 7179
+            - x: 5420
+              y: 6802
+            - x: 5407
+              y: 6790
+            - x: 4984
+              y: 6441
+            - x: 4971
+              y: 6431
+            - x: 4525
+              y: 6112
+            - x: 4511
+              y: 6102
+            - x: 4045
+              y: 5814
+            - x: 4030
+              y: 5806
+            - x: 3545
+              y: 5551
+            - x: 3517
+              y: 5538
+            - x: 3362
+              y: 5480
+            - x: 3322
+              y: 5468
+            - x: 3160
+              y: 5436
+            - x: 3119
+              y: 5432
+            - x: 2954
+              y: 5427
+            - x: 2913
+              y: 5429
+            - x: 2749
+              y: 5452
+            - x: 2709
+              y: 5460
+            - x: 2551
+              y: 5509
+            - x: 2513
+              y: 5525
+            - x: 2366
+              y: 5599
+            - x: 2330
+              y: 5621
+            - x: 2197
+              y: 5718
+            - x: 2166
+              y: 5745
+            - x: 2050
+              y: 5864
+            - x: 2024
+              y: 5895
+            - x: 1930
+              y: 6031
+            - x: 1909
+              y: 6067
+            - x: 1838
+              y: 6216
+            - x: 1824
+              y: 6254
+            - x: 1779
+              y: 6413
+            - x: 1771
+              y: 6454
+            - x: 1752
+              y: 6618
+            - x: 1751
+              y: 6659
+            - x: 1760
+              y: 6824
+            - x: 1765
+              y: 6865
+            - x: 1800
+              y: 7024
+            - x: 1392
+              y: 6907
+            - x: 1365
+              y: 6901
+            - x: 714
+              y: 6791
+            - x: 686
+              y: 6788
+            - x: 26
+              y: 6750
+            - x: -1
+              y: 6750
+            - x: -661
+              y: 6785
+            - x: -689
+              y: 6788
+            - x: -1341
+              y: 6896
+            - x: -1368
+              y: 6902
+            - x: -2004
+              y: 7081
+            - x: -2031
+              y: 7089
+            - x: -2643
+              y: 7337
+            - x: -2668
+              y: 7349
+            - x: -3250
+              y: 7662
+            - x: -3274
+              y: 7677
+            - x: -3818
+              y: 8052
+            - x: -3840
+              y: 8069
+            - x: -4339
+              y: 8502
+            - x: -4359
+              y: 8521
+            - x: -4808
+              y: 9007
+            - x: -4825
+              y: 9028
+            - x: -5218
+              y: 9560
+            - x: -5233
+              y: 9583
+            - x: -5564
+              y: 10155
+            - x: -5577
+              y: 10179
+            - x: -5844
+              y: 10784
+            - x: -5853
+              y: 10810
+            - x: -6052
+              y: 11440
+            - x: -6059
+              y: 11467
+            - x: -6187
+              y: 12116
+            - x: -6191
+              y: 12143
+            - x: -6246
+              y: 12802
+            - x: -6247
+              y: 12828
+            - x: -6231
+              y: 13630
+            - x: -6251
+              y: 13750
+            - x: -6292
+              y: 13866
+            - x: -6351
+              y: 13975
+            - x: -6427
+              y: 14073
+            - x: -6518
+              y: 14156
+            - x: -6622
+              y: 14224
+            - x: -6735
+              y: 14273
+            - x: -6855
+              y: 14303
+            - x: -6979
+              y: 14313
+            - x: -7102
+              y: 14303
+            - x: -7222
+              y: 14272
+            - x: -7335
+              y: 14222
+            - x: -7439
+              y: 14154
+            - x: -7529
+              y: 14070
+            - x: -7605
+              y: 13973
+            - x: -7664
+              y: 13864
+            - x: -7704
+              y: 13747
+            - x: -7725
+              y: 13619
+            - x: -7745
+              y: 13096
+            - x: -7730
+              y: 12566
+            - x: -7678
+              y: 12037
+            - x: -7590
+              y: 11514
+            - x: -7465
+              y: 10998
+            - x: -7306
+              y: 10492
+            - x: -7112
+              y: 9998
+            - x: -6885
+              y: 9518
+            - x: -6625
+              y: 9055
+            - x: -6334
+              y: 8611
+            - x: -6014
+              y: 8189
+            - x: -5664
+              y: 7789
+            - x: -5289
+              y: 7414
+            - x: -4888
+              y: 7066
+            - x: -4464
+              y: 6747
+            - x: -4020
+              y: 6457
+            - x: -3556
+              y: 6199
+            - x: -3076
+              y: 5973
+            - x: -2573
+              y: 5777
+            - x: -2560
+              y: 5772
+            - x: -2410
+              y: 5704
+            - x: -2374
+              y: 5684
+            - x: -2237
+              y: 5592
+            - x: -2204
+              y: 5566
+            - x: -2084
+              y: 5452
+            - x: -2057
+              y: 5422
+            - x: -1957
+              y: 5290
+            - x: -1935
+              y: 5255
+            - x: -1858
+              y: 5109
+            - x: -1842
+              y: 5071
+            - x: -1790
+              y: 4914
+            - x: -1781
+              y: 4874
+            - x: -1755
+              y: 4711
+            - x: -1752
+              y: 4670
+            - x: -1755
+              y: 4505
+            - x: -1758
+              y: 4463
+            - x: -1788
+              y: 4301
+            - x: -1798
+              y: 4261
+            - x: -1854
+              y: 4105
+            - x: -1871
+              y: 4068
+            - x: -1951
+              y: 3924
+            - x: -1974
+              y: 3889
+            - x: -2077
+              y: 3760
+            - x: -2106
+              y: 3730
+            - x: -2229
+              y: 3620
+            - x: -2262
+              y: 3595
+            - x: -2401
+              y: 3506
+            - x: -2437
+              y: 3487
+            - x: -2590
+              y: 3423
+            - x: -2629
+              y: 3410
+            - x: -2789
+              y: 3371
+            - x: -2830
+              y: 3365
+            - x: -2995
+              y: 3353
+            - x: -3036
+              y: 3354
+            - x: -3201
+              y: 3369
+            - x: -3241
+              y: 3377
+            - x: -3401
+              y: 3419
+            - x: -3430
+              y: 3429
+            - x: -4142
+              y: 3716
+            - x: -4159
+              y: 3724
+            - x: -4846
+              y: 4065
+            - x: -4863
+              y: 4074
+            - x: -5522
+              y: 4468
+            - x: -5538
+              y: 4478
+            - x: -6165
+              y: 4921
+            - x: -6180
+              y: 4933
+            - x: -6770
+              y: 5423
+            - x: -6785
+              y: 5436
+            - x: -7335
+              y: 5971
+            - x: -7348
+              y: 5985
+            - x: -7856
+              y: 6560
+            - x: -7868
+              y: 6575
+            - x: -8329
+              y: 7189
+            - x: -8340
+              y: 7204
+            - x: -8753
+              y: 7851
+            - x: -8763
+              y: 7868
+            - x: -9124
+              y: 8545
+            - x: -9132
+              y: 8562
+            - x: -9440
+              y: 9265
+            - x: -9447
+              y: 9283
+            - x: -9700
+              y: 10008
+            - x: -9705
+              y: 10026
+            - x: -9901
+              y: 10768
+            - x: -9905
+              y: 10787
+            - x: -10042
+              y: 11542
+            - x: -10045
+              y: 11561
+            - x: -10124
+              y: 12324
+            - x: -10125
+              y: 12344
+            - x: -10144
+              y: 13111
+            - x: -10144
+              y: 13130
+            - x: -10104
+              y: 13896
+            - x: -10102
+              y: 13916
+            - x: -10003
+              y: 14676
+            - x: -10000
+              y: 14694
+            - x: -9821
+              y: 15582
+            - x: -9821
+              y: 15702
+            - x: -9842
+              y: 15823
+            - x: -9854
+              y: 15857
+            - x: -9883
+              y: 15940
+            - x: -9942
+              y: 16049
+            - x: -10018
+              y: 16146
+            - x: -10109
+              y: 16230
+            - x: -10213
+              y: 16297
+            - x: -10327
+              y: 16346
+            - x: -10447
+              y: 16376
+            - x: -10570
+              y: 16386
+            - x: -10693
+              y: 16376
+            - x: -10813
+              y: 16345
+            - x: -10926
+              y: 16295
+            - x: -11030
+              y: 16227
+            - x: -11120
+              y: 16143
+            - x: -11174
+              y: 16073
+            - x: -11196
+              y: 16045
+            - x: -11255
+              y: 15936
+            - x: -11296
+              y: 15814
+            - x: -11490
+              y: 14870
+            - x: -11606
+              y: 13909
+            - x: -11642
+              y: 12941
+            - x: -11597
+              y: 11974
+            - x: -11472
+              y: 11013
+            - x: -11267
+              y: 10067
+            - x: -10985
+              y: 9141
+            - x: -10627
+              y: 8241
+            - x: -10195
+              y: 7374
+            - x: -9692
+              y: 6546
+            - x: -9123
+              y: 5763
+            - x: -8490
+              y: 5030
+            - x: -7799
+              y: 4352
+            - x: -7053
+              y: 3734
+            - x: -6259
+              y: 3180
+            - x: -5422
+              y: 2693
+            - x: -4547
+              y: 2278
+            - x: -3641
+              y: 1937
+            - x: -2699
+              y: 1670
+            - x: -2689
+              y: 1667
+            - x: -2532
+              y: 1615
+            - x: -2494
+              y: 1599
+            - x: -2348
+              y: 1523
+            - x: -2313
+              y: 1501
+            - x: -2182
+              y: 1401
+            - x: -2151
+              y: 1373
+            - x: -2037
+              y: 1253
+            - x: -2012
+              y: 1221
+            - x: -1919
+              y: 1084
+            - x: -1899
+              y: 1048
+            - x: -1831
+              y: 898
+            - x: -1817
+              y: 859
+            - x: -1774
+              y: 699
+            - x: -1767
+              y: 658
+            - x: -1751
+              y: 494
+            - x: -1751
+              y: 453
+            - x: -1762
+              y: 288
+            - x: -1768
+              y: 247
+            - x: -1807
+              y: 87
+            - x: -1820
+              y: 47
+            - x: -1884
+              y: -105
+            - x: -1903
+              y: -141
+            - x: -1992
+              y: -281
+            - x: -2017
+              y: -314
+            - x: -2127
+              y: -437
+            - x: -2157
+              y: -465
+            - x: -2286
+              y: -568
+            - x: -2320
+              y: -591
+            - x: -2464
+              y: -672
+            - x: -2502
+              y: -689
+            - x: -2657
+              y: -745
+            - x: -2697
+              y: -755
+            - x: -2860
+              y: -785
+            - x: -2901
+              y: -788
+            - x: -3066
+              y: -791
+            - x: -3107
+              y: -788
+            - x: -3270
+              y: -763
+            - x: -3301
+              y: -756
+            - x: -4467
+              y: -424
+            - x: -4488
+              y: -417
+            - x: -5621
+              y: 16
+            - x: -5641
+              y: 24
+            - x: -6732
+              y: 554
+            - x: -6751
+              y: 565
+            - x: -7792
+              y: 1187
+            - x: -7810
+              y: 1199
+            - x: -8792
+              y: 1910
+            - x: -8810
+              y: 1924
+            - x: -9726
+              y: 2718
+            - x: -9742
+              y: 2733
+            - x: -10586
+              y: 3603
+            - x: -10601
+              y: 3620
+            - x: -11366
+              y: 4561
+            - x: -11379
+              y: 4578
+            - x: -12059
+              y: 5582
+            - x: -12070
+              y: 5601
+            - x: -12661
+              y: 6660
+            - x: -12670
+              y: 6680
+            - x: -13166
+              y: 7787
+            - x: -13174
+              y: 7807
+            - x: -13571
+              y: 8953
+            - x: -13578
+              y: 8974
+            - x: -13874
+              y: 10150
+            - x: -13878
+              y: 10171
+            - x: -14070
+              y: 11368
+            - x: -14073
+              y: 11390
+            - x: -14160
+              y: 12600
+            - x: -14161
+              y: 12621
+            - x: -14143
+              y: 13834
+            - x: -14141
+              y: 13856
+            - x: -14017
+              y: 15062
+            - x: -14014
+              y: 15084
+            - x: -13786
+              y: 16275
+            - x: -13781
+              y: 16295
+            - x: -13417
+              y: 17598
+            - x: -13409
+              y: 17717
+            - x: -13420
+              y: 17840
+            - x: -13429
+              y: 17875
+            - x: -13452
+              y: 17960
+            - x: -13502
+              y: 18073
+            - x: -13571
+              y: 18176
+            - x: -13656
+              y: 18266
+            - x: -13754
+              y: 18341
+            - x: -13863
+              y: 18399
+            - x: -13981
+              y: 18438
+            - x: -14103
+              y: 18457
+            - x: -14227
+              y: 18456
+            - x: -14349
+              y: 18434
+            - x: -14465
+              y: 18393
+            - x: -14573
+              y: 18333
+            - x: -14670
+              y: 18256
+            - x: -14729
+              y: 18191
+            - x: -14753
+              y: 18164
+            - x: -14820
+              y: 18060
+            - x: -14871
+              y: 17942
+            - x: -15256
+              y: 16585
+            - x: -15519
+              y: 15195
+            - x: -15655
+              y: 13787
+            - x: -15664
+              y: 12372
+            - x: -15546
+              y: 10962
+            - x: -15301
+              y: 9569
+            - x: -14931
+              y: 8203
+            - x: -14440
+              y: 6876
+            - x: -13832
+              y: 5599
+            - x: -13110
+              y: 4382
+            - x: -12282
+              y: 3235
+            - x: -11354
+              y: 2167
+            - x: -10334
+              y: 1186
+            - x: -9229
+              y: 302
+            - x: -8050
+              y: -479
+            - x: -6804
+              y: -1150
+            - x: -5504
+              y: -1707
+            - x: -4158
+              y: -2144
+            - x: -2768
+              y: -2461
+            - x: -2759
+              y: -2463
+            - x: -2599
+              y: -2506
+            - x: -2560
+              y: -2519
+            - x: -2410
+              y: -2588
+            - x: -2374
+              y: -2608
+            - x: -2237
+              y: -2700
+            - x: -2204
+              y: -2726
+            - x: -2084
+              y: -2839
+            - x: -2057
+              y: -2870
+            - x: -1957
+              y: -3001
+            - x: -1935
+              y: -3036
+            - x: -1858
+              y: -3182
+            - x: -1842
+              y: -3220
+            - x: -1790
+              y: -3377
+            - x: -1781
+              y: -3417
+            - x: -1755
+              y: -3581
+            - x: -1752
+              y: -3622
+            - x: -1755
+              y: -3787
+            - x: -1758
+              y: -3828
+            - x: -1788
+              y: -3991
+            - x: -1798
+              y: -4031
+            - x: -1854
+              y: -4186
+            - x: -1871
+              y: -4224
+            - x: -1951
+              y: -4368
+            - x: -1974
+              y: -4402
+            - x: -2077
+              y: -4531
+            - x: -2106
+              y: -4561
+            - x: -2229
+              y: -4672
+            - x: -2262
+              y: -4697
+            - x: -2401
+              y: -4785
+            - x: -2438
+              y: -4804
+            - x: -2590
+              y: -4869
+            - x: -2629
+              y: -4882
+            - x: -2789
+              y: -4920
+            - x: -2830
+              y: -4927
+            - x: -2995
+              y: -4938
+            - x: -3036
+              y: -4938
+            - x: -3201
+              y: -4922
+            - x: -3232
+              y: -4917
+            - x: -4854
+              y: -4549
+            - x: -4876
+              y: -4543
+            - x: -6457
+              y: -4027
+            - x: -6478
+              y: -4018
+            - x: -8005
+              y: -3358
+            - x: -8025
+              y: -3348
+            - x: -9484
+              y: -2550
+            - x: -9504
+              y: -2538
+            - x: -10883
+              y: -1608
+            - x: -10901
+              y: -1595
+            - x: -12188
+              y: -542
+            - x: -12205
+              y: -526
+            - x: -13390
+              y: 641
+            - x: -13405
+              y: 658
+            - x: -14476
+              y: 1930
+            - x: -14491
+              y: 1948
+            - x: -15440
+              y: 3314
+            - x: -15452
+              y: 3333
+            - x: -16271
+              y: 4780
+            - x: -16281
+              y: 4801
+            - x: -16963
+              y: 6318
+            - x: -16972
+              y: 6339
+            - x: -17510
+              y: 7912
+            - x: -17517
+              y: 7935
+            - x: -17908
+              y: 9551
+            - x: -17912
+              y: 9574
+            - x: -18152
+              y: 11219
+            - x: -18154
+              y: 11242
+            - x: -18241
+              y: 12903
+            - x: -18242
+              y: 12926
+            - x: -18175
+              y: 14587
+            - x: -18173
+              y: 14610
+            - x: -17953
+              y: 16258
+            - x: -17949
+              y: 16281
+            - x: -17577
+              y: 17902
+            - x: -17571
+              y: 17924
+            - x: -17013
+              y: 19638
+            - x: -16999
+              y: 19757
+            - x: -17005
+              y: 19881
+            - x: -17032
+              y: 20002
+            - x: -17077
+              y: 20116
+            - x: -17141
+              y: 20222
+            - x: -17222
+              y: 20316
+            - x: -17317
+              y: 20395
+            - x: -17424
+              y: 20458
+            - x: -17539
+              y: 20502
+            - x: -17661
+              y: 20527
+            - x: -17784
+              y: 20531
+            - x: -17907
+              y: 20515
+            - x: -18025
+              y: 20479
+            - x: -18136
+              y: 20424
+            - x: -18236
+              y: 20351
+            - x: -18323
+              y: 20263
+            - x: -18394
+              y: 20162
+            - x: -18449
+              y: 20047
+            - x: -19112
+              y: 17978
+            - x: -19544
+              y: 15845
+            - x: -19738
+              y: 13678
+            - x: -19693
+              y: 11503
+            - x: -19409
+              y: 9345
+            - x: -18889
+              y: 7233
+            - x: -18140
+              y: 5190
+            - x: -17170
+              y: 3242
+            - x: -15993
+              y: 1412
+            - x: -14621
+              y: -277
+            - x: -13071
+              y: -1805
+            - x: -11363
+              y: -3153
+            - x: -9517
+              y: -4305
+            - x: -7556
+              y: -5247
+            - x: -5503
+              y: -5968
+            - x: -3383
+              y: -6458
+            - x: -1222
+              y: -6712
+            - x: 954
+              y: -6727
+  courtyard:
+  - 20250
+  - 20250
+  courtyard_outlines:
+  - - - -20250
+      - -20250
+    - - 20250
+      - -20250
+    - - 20250
+      - 20250
+    - - -20250
+      - 20250
+  model: null
+  art:
+    shapes:
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -18682
+          y: 7140
+        mid:
+          x: -15524
+          y: -12609
+        end:
+          x: 3158
+          y: -19749
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -16814
+          y: 6426
+        mid:
+          x: -17391
+          y: 7717
+        end:
+          x: -18682
+          y: 7140
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -16814
+          y: 6426
+        mid:
+          x: -15661
+          y: -8829
+        end:
+          x: -3177
+          y: -17673
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -15107
+          y: 5026
+        mid:
+          x: -13700
+          y: -8145
+        end:
+          x: -2823
+          y: -15705
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -13717
+          y: 11588
+        mid:
+          x: -13598
+          y: 10179
+        end:
+          x: -12189
+          y: 10297
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -13209
+          y: 4394
+        mid:
+          x: -13842
+          y: 5659
+        end:
+          x: -15107
+          y: 5026
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -13209
+          y: 4394
+        mid:
+          x: -12159
+          y: -6754
+        end:
+          x: -3233
+          y: -13516
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -11538
+          y: 2879
+        mid:
+          x: -10166
+          y: -6175
+        end:
+          x: -2767
+          y: -11571
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -10089
+          y: 9557
+        mid:
+          x: -10050
+          y: 8144
+        end:
+          x: -8637
+          y: 8182
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -9597
+          y: 2395
+        mid:
+          x: -10325
+          y: 3607
+        end:
+          x: -11538
+          y: 2879
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -9597
+          y: 2395
+        mid:
+          x: -8729
+          y: -4679
+        end:
+          x: -3336
+          y: -9339
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -7974
+          y: 645
+        mid:
+          x: -6693
+          y: -4306
+        end:
+          x: -2664
+          y: -7456
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -6420
+          y: 7559
+        mid:
+          x: -6535
+          y: 6149
+        end:
+          x: -5125
+          y: 6035
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -5980
+          y: 484
+        mid:
+          x: -6897
+          y: 1561
+        end:
+          x: -7974
+          y: 645
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -5980
+          y: 484
+        mid:
+          x: 2571
+          y: -5421
+        end:
+          x: 3409
+          y: 4937
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -5980
+          y: 484
+        mid:
+          x: 2571
+          y: -5421
+        end:
+          x: 3409
+          y: 4937
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -5980
+          y: 484
+        mid:
+          x: 2571
+          y: -5421
+        end:
+          x: 3409
+          y: 4937
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -3336
+          y: -9339
+        mid:
+          x: -2058
+          y: -8734
+        end:
+          x: -2664
+          y: -7456
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -3233
+          y: -13516
+        mid:
+          x: -2027
+          y: -12776
+        end:
+          x: -2767
+          y: -11571
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: -3177
+          y: -17673
+        mid:
+          x: -2016
+          y: -16866
+        end:
+          x: -2823
+          y: -15705
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 2571
+          y: -5421
+        mid:
+          x: 3409
+          y: 4937
+        end:
+          x: -5980
+          y: 484
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 2571
+          y: -5421
+        mid:
+          x: 3409
+          y: 4937
+        end:
+          x: -5980
+          y: 484
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 2571
+          y: -5421
+        mid:
+          x: 3409
+          y: 4937
+        end:
+          x: -5980
+          y: 484
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 2571
+          y: -5421
+        mid:
+          x: 2096
+          y: -6753
+        end:
+          x: 3429
+          y: -7228
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 2725
+          y: -9509
+        mid:
+          x: 2039
+          y: -10746
+        end:
+          x: 3275
+          y: -11432
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 2725
+          y: -9509
+        mid:
+          x: 8417
+          y: -5220
+        end:
+          x: 9756
+          y: 1780
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 2799
+          y: -13636
+        mid:
+          x: 2020
+          y: -14817
+        end:
+          x: 3201
+          y: -15596
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 2799
+          y: -13636
+        mid:
+          x: 11929
+          y: -7153
+        end:
+          x: 13321
+          y: 3958
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 2842
+          y: -17774
+        mid:
+          x: 2013
+          y: -18920
+        end:
+          x: 3158
+          y: -19749
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 2842
+          y: -17774
+        mid:
+          x: 15477
+          y: -9148
+        end:
+          x: 16894
+          y: 6085
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 3158
+          y: -19749
+        mid:
+          x: 18682
+          y: -7140
+        end:
+          x: 15524
+          y: 12609
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 3201
+          y: -15596
+        mid:
+          x: 13904
+          y: -7792
+        end:
+          x: 15012
+          y: 5407
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 3275
+          y: -11432
+        mid:
+          x: 10430
+          y: -5717
+        end:
+          x: 11404
+          y: 3389
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 3409
+          y: 4937
+        mid:
+          x: -5980
+          y: 484
+        end:
+          x: 2571
+          y: -5421
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 3409
+          y: 4937
+        mid:
+          x: -5980
+          y: 484
+        end:
+          x: 2571
+          y: -5421
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 3409
+          y: 4937
+        mid:
+          x: -5980
+          y: 484
+        end:
+          x: 2571
+          y: -5421
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 3409
+          y: 4937
+        mid:
+          x: 4800
+          y: 5192
+        end:
+          x: 4545
+          y: 6583
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 3429
+          y: -7228
+        mid:
+          x: 7076
+          y: -3643
+        end:
+          x: 7789
+          y: 1421
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 4545
+          y: 6583
+        mid:
+          x: -383
+          y: 7949
+        end:
+          x: -5125
+          y: 6035
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 6873
+          y: 7114
+        mid:
+          x: 312
+          y: 9899
+        end:
+          x: -6420
+          y: 7559
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 6873
+          y: 7114
+        mid:
+          x: 8287
+          y: 7138
+        end:
+          x: 8262
+          y: 8552
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 8262
+          y: 8552
+        mid:
+          x: -264
+          y: 11891
+        end:
+          x: -8637
+          y: 8182
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 9756
+          y: 1780
+        mid:
+          x: 8593
+          y: 2584
+        end:
+          x: 7789
+          y: 1421
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 10410
+          y: 9242
+        mid:
+          x: 230
+          y: 13907
+        end:
+          x: -10089
+          y: 9557
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 10410
+          y: 9242
+        mid:
+          x: 11822
+          y: 9158
+        end:
+          x: 11906
+          y: 10570
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 11906
+          y: 10570
+        mid:
+          x: -204
+          y: 15937
+        end:
+          x: -12189
+          y: 10297
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 13321
+          y: 3958
+        mid:
+          x: 12078
+          y: 4632
+        end:
+          x: 11404
+          y: 3389
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 13972
+          y: 11348
+        mid:
+          x: 184
+          y: 17977
+        end:
+          x: -13717
+          y: 11588
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 13972
+          y: 11348
+        mid:
+          x: 15379
+          y: 11203
+        end:
+          x: 15524
+          y: 12609
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 15524
+          y: 12609
+        mid:
+          x: -3158
+          y: 19749
+        end:
+          x: -18682
+          y: 7140
+      style: default
+    - shape:
+        kind: arc
+        layer: F.SilkS
+        stroke_width: 100
+        filled: false
+        start:
+          x: 16894
+          y: 6085
+        mid:
+          x: 15614
+          y: 6687
+        end:
+          x: 15012
+          y: 5407
+      style: default
+symbols: []
+board:
+  grid: 254
+  track_width: 200
+  clearance: 200
+  via_drill: 300
+  via_diameter: 600
+  layers:
+  - F.Cu
+  - B.Cu
+  outline:
+  - x: 215500
+    y: 49500
+  - x: 222000
+    y: 79200
+  - x: 258750
+    y: 96900
+  - x: 187850
+    y: 168100
+  - x: 76550
+    y: 170700
+  - x: 35650
+    y: 100850
+  - x: 106250
+    y: 29400
+  refdes_font_um: null
+  tuning:
+    edge_clearance_um: 500
+    between_pads_max_gap_um: 2000
+    preflight_reach_cells: 2000
+    optimizer_passes: 10
+  hole_to_hole_min_um: 250
+  hole_clearance_um: 250
+  copper_edge_clearance_um: 500
+  silk_clearance_um: 0
+  annular_width_min_um: 100
+  min_silk_text_height_um: 800
+  min_silk_text_thickness_um: 80
+  track_width_min_um: 0
+  min_clearance_um: 0
+  via_diameter_min_um: 500
+  via_drill_min_um: 300
+  rule_severities:
+    annular_width: warning
+    assertion_failure: error
+    clearance: error
+    connection_width: warning
+    copper_edge_clearance: error
+    copper_sliver: warning
+    courtyards_overlap: ignore
+    creepage: error
+    diff_pair_gap_out_of_range: error
+    diff_pair_uncoupled_length_too_long: error
+    drill_out_of_range: ignore
+    duplicate_footprints: warning
+    extra_footprint: warning
+    footprint: error
+    footprint_filters_mismatch: ignore
+    footprint_scaled_with_pads: warning
+    footprint_symbol_field_mismatch: warning
+    footprint_symbol_mismatch: warning
+    footprint_type_mismatch: ignore
+    hole_aspect_ratio: error
+    hole_clearance: error
+    hole_near_hole: error
+    hole_to_hole: warning
+    holes_co_located: warning
+    invalid_outline: error
+    isolated_copper: warning
+    item_on_disabled_layer: error
+    items_not_allowed: error
+    length_out_of_range: error
+    lib_footprint_issues: warning
+    lib_footprint_mismatch: warning
+    malformed_courtyard: error
+    malformed_microvia_stack_span: error
+    microvia_aspect_ratio: error
+    microvia_crosses_core: warning
+    microvia_drill_out_of_range: warning
+    microvia_stack_depth: error
+    microvia_stack_not_filled: warning
+    mirrored_text_on_front_layer: warning
+    missing_courtyard: ignore
+    missing_footprint: warning
+    missing_tuning_profile: warning
+    net_chain_return_path: error
+    net_chain_stub_length: error
+    net_chain_tuning_profiles: error
+    net_conflict: warning
+    nonmirrored_text_on_back_layer: warning
+    npth_inside_courtyard: ignore
+    padstack: warning
+    pth_inside_courtyard: ignore
+    shorting_items: error
+    silk_edge_clearance: warning
+    silk_over_copper: warning
+    silk_overlap: warning
+    skew_out_of_range: error
+    solder_mask_bridge: error
+    starved_thermal: error
+    text_height: warning
+    text_on_edge_cuts: error
+    text_thickness: warning
+    through_hole_pad_without_hole: error
+    too_many_vias: error
+    track_angle: warning
+    track_dangling: warning
+    track_not_centered_on_via: ignore
+    track_on_post_machined_layer: error
+    track_segment_length: ignore
+    track_width: error
+    tracks_crossing: error
+    tuning_profile_track_geometries: ignore
+    unconnected_items: error
+    unresolved_variable: error
+    via_dangling: warning
+    via_diameter: error
+    via_stitch_overlap: error
+    zones_intersect: error
+  custom_rules_text: |
+    (version 1)
+
+    (rule myrule
+     # just something to see what happens
+     (layer inner)
+     (condition "A.Name == 'test'")
+     (constraint annular_width (min 3mm))
+     (constraint disallow track))
+  custom_rules:
+  - name: myrule
+    constraint_type: annular_width
+    min: 3000
+    layer: inner
+    condition: A.Name == 'test'
+  outline_closed: true
+  microvia_diameter_min_um: 200
+  microvia_drill_min_um: 100
+  min_resolved_spokes: 2
+  max_error_um: 5
+  use_height_for_length_calcs: true
+  zones_allow_external_fillets: false
+  constraints_explicit: true
+  board_thickness_um: 1600
+  text_graphics:
+    silk:
+      line_width_um: 100
+      text_width_um: 1000
+      text_height_um: 1000
+      text_thickness_um: 100
+      italic: false
+      upright: false
+    copper:
+      line_width_um: 200
+      text_width_um: 1500
+      text_height_um: 1500
+      text_thickness_um: 300
+      italic: false
+      upright: false
+    edge_cuts_line_width_um: 50
+    courtyard_line_width_um: 50
+    fab:
+      line_width_um: 100
+      text_width_um: 1000
+      text_height_um: 1000
+      text_thickness_um: 150
+      italic: false
+      upright: false
+    others:
+      line_width_um: 100
+      text_width_um: 1000
+      text_height_um: 1000
+      text_thickness_um: 150
+      italic: false
+      upright: false
+  layer_setup:
+    enabled:
+    - F.Adhes
+    - B.Adhes
+    - F.Paste
+    - B.Paste
+    - F.SilkS
+    - B.SilkS
+    - F.Mask
+    - B.Mask
+    - Dwgs.User
+    - Cmts.User
+    - Eco1.User
+    - Eco2.User
+    - Edge.Cuts
+    - Margin
+    - F.CrtYd
+    - B.CrtYd
+    - F.Fab
+    - B.Fab
+    - User.1
+    - User.2
+    - User.3
+    - User.4
+    - User.5
+    - User.6
+    - User.7
+    - User.8
+    - User.9
+allow:
+  max_layers: null
+  min_track: null
+  min_clearance: null
+  placers: []
+solver:
+  placer: build
+  place_spacing_um: 600
+  place_moves_per_part: 4000
+  place_snap_um: 100
+  cypress_proximity_weight: 50.0
+  fit_board_utilization: 0.25
+  place_attempts: 3
+  floorplan: false

@@ -123,7 +123,7 @@ fn clip_line(pts: &[Point], center: Point, inside: &dyn Fn(Point) -> bool, forwa
 /// `OptimiseTraceInPad( aLine, aPad, aLayer )` / `OptimiseTraceInVia`: a line that ends on the centre of `item` (a pad: its position; a via: any
 /// point of it inside) has its end clipped to the item's outline. `layer` is the line's.
 fn optimise_trace_in(chain: &mut ShapeLineChain, item: &Item, layer: i32, via: bool) {
-    let (center_um, shape, layers) = match item {
+    let (center_nm, shape, layers) = match item {
         Item::Solid(s) => (s.pos, s.shape.clone(), s.layers),
         Item::Via(v) => (v.pos, Shape::Circle { c: v.pos, r: v.diameter / 2 }, v.layers),
         Item::Segment(_) | Item::Arc(_) => return,
@@ -131,7 +131,7 @@ fn optimise_trace_in(chain: &mut ShapeLineChain, item: &Item, layer: i32, via: b
     if !layers.overlaps_layer(layer) || chain.point_count() < 2 {
         return;
     }
-    let center = to_nm(center_um);
+    let center = to_nm(center_nm);
     let first = chain.c_point(0);
     let last = chain.c_last_point();
     let inside = |p: Point| contains(&shape, Point { x: ki_round(p.x as f64 / 1000.0), y: ki_round(p.y as f64 / 1000.0) });

@@ -10,7 +10,7 @@ use std::process::Command;
 use eda_engine::{derive_schematic, EngineOptions};
 use eda_kicad::{export_kicad_pcb, export_kicad_sch, ExportMeta};
 use eda_model::footprint::placed_pads;
-use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Um};
+use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Nm};
 use eda_model::{ConstraintModel, Net, Part, Pin, PinKind};
 use eda_place::{place, PlaceOptions};
 
@@ -160,7 +160,7 @@ fn kicad_cli_drc_bottom_side_pads() {
         package: Some(package.into()),
         footprint: Some(package.into()),
         pins: (1..=pins).map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None, symbol: None, datasheet: None,
+        body_nm: None, symbol: None, datasheet: None,
         edge: None,
     };
     let net = |name: &str, pins: &[&str]| Net { name: name.into(), pins: pins.iter().map(|p| p.to_string()).collect() };
@@ -188,7 +188,7 @@ fn kicad_cli_drc_bottom_side_pads() {
         ],
         ..Default::default()
     };
-    let at = |id: &str, x: Um, y: Um, rot, side| FootprintInstance { id: id.into(), at: Point { x, y }, rot, side, label: Default::default() };
+    let at = |id: &str, x: Nm, y: Nm, rot, side| FootprintInstance { id: id.into(), at: Point { x, y }, rot, side, label: Default::default() };
     let footprints = vec![
         at("U1", 6_000, 6_000, 0, Side::Bottom),
         at("U2", 14_000, 6_000, 90_000, Side::Bottom),
@@ -225,7 +225,7 @@ fn kicad_cli_drc_bottom_side_pads() {
     let outline = vec![Point { x: 0, y: 0 }, Point { x: 28_000, y: 0 }, Point { x: 28_000, y: 22_000 }, Point { x: 0, y: 22_000 }];
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "bottom_side_pads".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints.clone(), modules: Vec::new() }),
@@ -290,7 +290,7 @@ fn kicad_cli_drc_shapes_and_text() {
             at: Point { x: 5_000, y: 18_000 },
             angle: 0,
             layer: "F.SilkS".into(),
-            size_um: 1_000,
+            size_nm: 1_000,
             stroke_width: 150,
             justify: eda_model::ir::TextJustify::Center,
             mirror: false,
@@ -301,7 +301,7 @@ fn kicad_cli_drc_shapes_and_text() {
 
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "shapes_text_drc".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection {
@@ -357,7 +357,7 @@ fn kicad_cli_drc_real_footprints() {
         package: None,
         footprint: Some(footprint.into()),
         pins: fp.pads.iter().map(|p| Pin { number: p.number.clone(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None, symbol: None, datasheet: None,
+        body_nm: None, symbol: None, datasheet: None,
         edge: None,
     };
     let j1 = make_part("J1", "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12", &usb_c);
@@ -397,7 +397,7 @@ fn kicad_cli_drc_real_footprints() {
     ];
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "real_footprints".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection { outline, footprints, modules: Vec::new() }),
@@ -431,7 +431,7 @@ fn kicad_cli_drc_rule_area_reports_items_not_allowed_and_exports_gerbers() {
     };
     let net = |name: &str| Net { name: name.into(), pins: vec![] };
     let model = ConstraintModel { nets: vec![net("A"), net("B")], ..Default::default() };
-    let track = |net: &str, y: Um| Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 250, pts: vec![Point { x: 2_000, y }, Point { x: 12_000, y }], arc_mid_offset: None };
+    let track = |net: &str, y: Nm| Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 250, pts: vec![Point { x: 2_000, y }, Point { x: 12_000, y }], arc_mid_offset: None };
     let mut routing = RoutingSection {
         // One track through the keepout, one well clear of it.
         tracks: vec![track("A", 5_000), track("B", 15_000)],
@@ -452,7 +452,7 @@ fn kicad_cli_drc_rule_area_reports_items_not_allowed_and_exports_gerbers() {
     routing.assign_missing_ids();
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "rule_area".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }], footprints: vec![], modules: Vec::new() }),

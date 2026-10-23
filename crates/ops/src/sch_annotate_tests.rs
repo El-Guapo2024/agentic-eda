@@ -2,7 +2,7 @@
 use super::*;
 use eda_model::ir::{Provenance, SheetInstance};
 
-pub(crate) fn p(x: Um, y: Um) -> Point {
+pub(crate) fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -31,13 +31,13 @@ fn dual() -> LibrarySymbol {
 ///
 /// A: R5 at x=30, R9 at x=10, R? at x=50.  B: R1 at x=20, C? at x=0.  C: R? at x=0.
 pub(crate) fn design() -> Design {
-    let r = |id: &str, x: Um| symbol(id, "Device:R", "10k", 1, p(x, 0));
+    let r = |id: &str, x: Nm| symbol(id, "Device:R", "10k", 1, p(x, 0));
     let mut contents = BTreeMap::new();
     contents.insert("a.kicad_sch".to_string(), section(vec![r("R5", 30), r("R9", 10), r("R?", 50)], vec![placement("sc", "C", "c.kicad_sch", "")]));
     contents.insert("b.kicad_sch".to_string(), section(vec![r("R1", 20), symbol("C?", "Device:C", "100n", 1, p(0, 0))], vec![]));
     contents.insert("c.kicad_sch".to_string(), section(vec![symbol("R?", "Device:R", "1k", 1, p(0, 0))], vec![]));
     Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(section(vec![], vec![placement("sa", "A", "a.kicad_sch", ""), placement("sb", "B", "b.kicad_sch", "")])),
         nets: None,
@@ -63,7 +63,7 @@ pub(crate) fn on(sheet: &str, cmd: Cmd) -> Cmd {
     Cmd::OnSheet { sheet: sheet.into(), cmd: Box::new(cmd) }
 }
 
-pub(crate) fn at<'a>(d: &'a Design, file: &str, x: Um) -> &'a SymbolInstance {
+pub(crate) fn at<'a>(d: &'a Design, file: &str, x: Nm) -> &'a SymbolInstance {
     d.sheet_contents.as_ref().unwrap()[file].symbols.iter().find(|s| s.at.x == x).unwrap_or_else(|| panic!("no symbol at x={x} on {file}"))
 }
 
@@ -202,7 +202,7 @@ fn what_is_keyed_by_the_reference_follows_the_new_one() {
 }
 
 fn two_chips() -> Design {
-    let u = |id: &str, unit: u32, y: Um| symbol(id, "Test:Dual", "TL072", unit, p(0, y));
+    let u = |id: &str, unit: u32, y: Nm| symbol(id, "Test:Dual", "TL072", unit, p(0, y));
     let mut d = design();
     d.symbol_library = Some(eda_model::ir::SymbolLibrarySection { symbols: vec![dual()], ..Default::default() });
     let a = d.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap();
@@ -218,7 +218,7 @@ fn the_units_of_a_multi_unit_symbol_keep_their_reference_between_them() {
     let opts = AnnotateOptions { scope: Some(AnnotateScope::CurrentSheet), ..Default::default() };
     b.apply(&on("sa", annotate(true, AnnotateOrder::YThenX, None, opts))).unwrap();
     let a = &b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"];
-    let by_y = |y: Um, unit: u32| a.symbols.iter().find(|s| s.at.y == y && s.unit == unit).unwrap().id.clone();
+    let by_y = |y: Nm, unit: u32| a.symbols.iter().find(|s| s.at.y == y && s.unit == unit).unwrap().id.clone();
     // U5's first unit comes first on the sheet and the part keeps both its units: U5 -> U1; U3 -> U2
     assert_eq!((by_y(0, 1), by_y(20, 2)), ("U1".to_string(), "U1".to_string()));
     assert_eq!((by_y(10, 2), by_y(30, 1)), ("U2".to_string(), "U2".to_string()));
@@ -232,7 +232,7 @@ fn regroup_units_numbers_the_units_by_where_they_are_placed() {
     let opts = AnnotateOptions { scope: Some(AnnotateScope::CurrentSheet), regroup_units: true, ..Default::default() };
     b.apply(&on("sa", annotate(true, AnnotateOrder::YThenX, None, opts))).unwrap();
     let a = &b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"];
-    let by_y = |y: Um| a.symbols.iter().find(|s| s.at.y == y).unwrap();
+    let by_y = |y: Nm| a.symbols.iter().find(|s| s.at.y == y).unwrap();
     // in placement order: unit 1 takes U1, the next unit (a unit 2) joins U1 where its unit is free, then both are U2's
     assert_eq!((by_y(0).id.as_str(), by_y(0).unit), ("U1", 1));
     assert_eq!((by_y(10).id.as_str(), by_y(10).unit), ("U1", 2));

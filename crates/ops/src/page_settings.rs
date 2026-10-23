@@ -9,7 +9,7 @@
 //! A change that changes nothing is an error, so no empty undo step is pushed.
 
 use eda_model::ir::{Design, TitleBlock};
-use eda_model::page::{PageSettings, MAX_PAGE_SIZE_EESCHEMA_UM, MAX_PAGE_SIZE_PCBNEW_UM};
+use eda_model::page::{PageSettings, MAX_PAGE_SIZE_EESCHEMA_NM, MAX_PAGE_SIZE_PCBNEW_NM};
 use eda_model::CheckResult;
 
 fn fail(check: &str, location: &str, hint: &str) -> Vec<CheckResult> {
@@ -29,7 +29,7 @@ fn normalized(tb: &TitleBlock) -> Option<TitleBlock> {
 /// The board's paper and title block (`BOARD::SetPageSettings` / `SetTitleBlock`). A4 landscape and an empty title block are the
 /// defaults and are not kept.
 pub fn set_board_page(design: &mut Design, page: &PageSettings, title_block: &TitleBlock) -> Result<(), Vec<CheckResult>> {
-    page.validate(MAX_PAGE_SIZE_PCBNEW_UM).map_err(|m| fail("ops_page_settings", "page", &m))?;
+    page.validate(MAX_PAGE_SIZE_PCBNEW_NM).map_err(|m| fail("ops_page_settings", "page", &m))?;
     let new_page = (!page.is_default()).then(|| page.clone());
     let new_tb = normalized(title_block);
     let current = design.drawings.as_ref();
@@ -47,7 +47,7 @@ pub fn set_board_page(design: &mut Design, page: &PageSettings, title_block: &Ti
 /// name cannot say -- portrait, a user size -- the full settings in `SchExtras::page` (see [`PageSettings::of_sheet`]). The title block
 /// passed in carries the dialog's fields; its `paper` is the page's name here, whatever it says.
 pub fn set_schematic_page(design: &mut Design, page: &PageSettings, title_block: &TitleBlock) -> Result<(), Vec<CheckResult>> {
-    page.validate(MAX_PAGE_SIZE_EESCHEMA_UM).map_err(|m| fail("ops_page_settings", "page", &m))?;
+    page.validate(MAX_PAGE_SIZE_EESCHEMA_NM).map_err(|m| fail("ops_page_settings", "page", &m))?;
     let sch = design.schematic.as_mut().ok_or_else(|| fail("ops_no_schematic", "schematic", "this board has no schematic section yet"))?;
     let (name, full) = page.sheet_parts();
     let new_tb = normalized(&TitleBlock { paper: name, ..title_block.clone() });
@@ -74,7 +74,7 @@ mod tests {
     }
 
     fn a3() -> PageSettings {
-        PageSettings { paper: "A3".into(), portrait: true, user_size_um: None }
+        PageSettings { paper: "A3".into(), portrait: true, user_size_nm: None }
     }
 
     fn tb(title: &str, comments: &[&str]) -> TitleBlock {
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn a_user_size_over_the_boards_limit_is_refused_but_a_schematic_may_have_it() {
-        let big = PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_um: Some((1_500_000, 900_000)) };
+        let big = PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: Some((1_500_000, 900_000)) };
         let mut d = design(true);
         assert!(set_board_page(&mut d, &big, &TitleBlock::default()).is_err());
         set_schematic_page(&mut d, &big, &TitleBlock::default()).unwrap();
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn a_standard_landscape_paper_is_only_its_name_on_a_sheet() {
         let mut d = design(true);
-        let a3_landscape = PageSettings { paper: "A3".into(), portrait: false, user_size_um: None };
+        let a3_landscape = PageSettings { paper: "A3".into(), portrait: false, user_size_nm: None };
         set_schematic_page(&mut d, &a3_landscape, &TitleBlock::default()).unwrap();
         let sch = d.schematic.as_ref().unwrap();
         assert_eq!(sch.extras.page, None);
@@ -133,7 +133,7 @@ mod tests {
         // The engine named the sheet's paper A3; the dialog sends A3 with the new fields: the name stays, the fields change.
         let mut d = design(true);
         d.schematic.as_mut().unwrap().title_block = Some(TitleBlock { paper: "A3".into(), ..Default::default() });
-        let a3_landscape = PageSettings { paper: "A3".into(), portrait: false, user_size_um: None };
+        let a3_landscape = PageSettings { paper: "A3".into(), portrait: false, user_size_nm: None };
         set_schematic_page(&mut d, &a3_landscape, &tb("Renamed", &[])).unwrap();
         assert_eq!(d.schematic.as_ref().unwrap().title_block, Some(TitleBlock { paper: "A3".into(), ..tb("Renamed", &[]) }));
     }

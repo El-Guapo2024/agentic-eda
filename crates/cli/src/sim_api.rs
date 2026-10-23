@@ -374,7 +374,7 @@ mod tests {
         let args: Vec<String> = ["new", intent.to_str().unwrap(), "-o", out.to_str().unwrap()].iter().map(|s| s.to_string()).collect();
         crate::board::run(&args, |model| {
             let empty = Design {
-                schema: 1,
+                schema: eda_model::ir::SCHEMA_VERSION,
                 provenance: eda_model::ir::Provenance { engine_version: "t".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
                 schematic: None,
                 nets: None,

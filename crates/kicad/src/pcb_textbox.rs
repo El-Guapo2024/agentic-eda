@@ -7,7 +7,7 @@
 use std::fmt::Write as _;
 
 use eda_model::ir::{Point, Text, TextJustify, TextVAlign};
-use eda_model::pcb_items::{legacy_text_margin_um, LineStyle, TextBox};
+use eda_model::pcb_items::{legacy_text_margin_nm, LineStyle, TextBox};
 
 use crate::sexpr::{self, Sexpr};
 use crate::{fmt_mm_f, mm, mm_to_um, sexpr_str};
@@ -17,7 +17,7 @@ const NO_STROKE: i64 = -1;
 /// The first board file version with an explicit `(border yes|no)`; before it a text box had a border when its stroke width was not negative.
 const FIRST_BORDER_FLAG: i64 = 20230825;
 /// The text size of a text with no `(size ..)` in its effects (`parseEDA_TEXT`: "force legacy default units", 60 mils).
-const LEGACY_TEXT_SIZE_UM: i64 = 1_524;
+const LEGACY_TEXT_SIZE_NM: i64 = 1_524;
 
 fn yes(item: &[Sexpr], name: &str) -> Option<bool> {
     sexpr::find(item, name).map(|l| sexpr::txt(l, 1).map_or(true, |v| v != "no"))
@@ -59,13 +59,13 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
     // `if( m_requiredVersion < 20230825 ) aTextBox->SetBorderEnabled( stroke.GetWidth() >= 0 );`
     let border = if version < FIRST_BORDER_FLAG { width >= 0 } else { yes(item, "border").unwrap_or(true) };
     // `PCB_SHAPE::GetWidth`: "negative stroke-widths are only used in EEschema".
-    let stroke_width_um = width.max(0);
+    let stroke_width_nm = width.max(0);
 
     // The looks: `parseEDA_TEXT` starts a box from centre and centre when it has `(effects ..)`; without them the box is left and centre (`PCB_TEXTBOX::PCB_TEXTBOX`).
     let has_effects = sexpr::find(item, "effects").is_some();
     let style = crate::board_text_io::read_style(item);
     let has_size = sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "size")).is_some();
-    let size_um = if has_size { style.size_um } else { LEGACY_TEXT_SIZE_UM };
+    let size_nm = if has_size { style.size_nm } else { LEGACY_TEXT_SIZE_NM };
 
     let layer = sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Dwgs.User").to_string();
     let angle = ((sexpr::find(item, "angle").and_then(|a| sexpr::num(a, 1)).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32;
@@ -77,18 +77,18 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
         end,
         pts,
         angle,
-        margin_left_um: 0,
-        margin_top_um: 0,
-        margin_right_um: 0,
-        margin_bottom_um: 0,
+        margin_left_nm: 0,
+        margin_top_nm: 0,
+        margin_right_nm: 0,
+        margin_bottom_nm: 0,
         border,
-        stroke_width_um,
+        stroke_width_nm,
         line_style,
         stroke_color,
         knockout: yes(item, "knockout").unwrap_or(false),
-        size_um,
-        width_um: style.extra.width_um.filter(|_| has_size),
-        thickness_um: if style.extra.auto_thickness { 0 } else { style.stroke_width },
+        size_nm,
+        width_nm: style.extra.width_nm.filter(|_| has_size),
+        thickness_nm: if style.extra.auto_thickness { 0 } else { style.stroke_width },
         halign: if has_effects { style.justify } else { TextJustify::Left },
         valign: if has_effects { style.extra.valign } else { TextVAlign::Center },
         mirror: style.mirror,
@@ -101,11 +101,11 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
     match sexpr::find(item, "margins") {
         Some(m) => {
             let n = |i| sexpr::num(m, i).map_or(0, mm_to_um);
-            (t.margin_left_um, t.margin_top_um, t.margin_right_um, t.margin_bottom_um) = (n(1), n(2), n(3), n(4));
+            (t.margin_left_nm, t.margin_top_nm, t.margin_right_nm, t.margin_bottom_nm) = (n(1), n(2), n(3), n(4));
         }
         None => {
-            let margin = legacy_text_margin_um(t.stroke_width_um, t.size_um);
-            (t.margin_left_um, t.margin_top_um, t.margin_right_um, t.margin_bottom_um) = (margin, margin, margin, margin);
+            let margin = legacy_text_margin_nm(t.stroke_width_nm, t.size_nm);
+            (t.margin_left_nm, t.margin_top_nm, t.margin_right_nm, t.margin_bottom_nm) = (margin, margin, margin, margin);
         }
     }
     Some(t)
@@ -134,15 +134,15 @@ fn as_text(t: &TextBox) -> (Text, eda_model::board_text::TextExtra) {
         at: t.start,
         angle: t.angle,
         layer: t.layer.clone(),
-        size_um: t.size_um,
-        stroke_width: t.effective_pen_um(),
+        size_nm: t.size_nm,
+        stroke_width: t.effective_pen_nm(),
         justify: t.halign,
         mirror: t.mirror,
     };
     let extra = eda_model::board_text::TextExtra {
         id: t.id.clone(),
-        width_um: t.width_um.filter(|w| *w != t.size_um),
-        auto_thickness: t.thickness_um == 0,
+        width_nm: t.width_nm.filter(|w| *w != t.size_nm),
+        auto_thickness: t.thickness_nm == 0,
         valign: t.valign,
         bold: t.bold,
         italic: t.italic,
@@ -169,14 +169,14 @@ pub(crate) fn write(out: &mut String, t: &TextBox, locked: bool) -> String {
         }
         write!(out, ")").unwrap();
     }
-    write!(out, " (margins {} {} {} {})", mm(t.margin_left_um), mm(t.margin_top_um), mm(t.margin_right_um), mm(t.margin_bottom_um)).unwrap();
+    write!(out, " (margins {} {} {} {})", mm(t.margin_left_nm), mm(t.margin_top_nm), mm(t.margin_right_nm), mm(t.margin_bottom_nm)).unwrap();
     if t.angle != 0 {
         write!(out, " (angle {})", fmt_mm_f(t.angle as f64 / 1000.0)).unwrap();
     }
     write!(out, " (layer {}) (uuid \"{uuid}\")", sexpr_str(&t.layer)).unwrap();
     let (text, extra) = as_text(t);
     write!(out, "\n\t\t{}", crate::board_text_io::effects(&text, Some(&extra))).unwrap();
-    write!(out, "\n\t\t(border {}) (stroke (width {}) (type {})", if t.border { "yes" } else { "no" }, mm(t.stroke_width_um), t.line_style.token()).unwrap();
+    write!(out, "\n\t\t(border {}) (stroke (width {}) (type {})", if t.border { "yes" } else { "no" }, mm(t.stroke_width_nm), t.line_style.token()).unwrap();
     if let Some(c) = &t.stroke_color {
         write!(out, " (color {c})").unwrap();
     }
@@ -208,10 +208,10 @@ mod tests {
         let b = read_one(BOX);
         assert_eq!(b.text, "Box\nof text");
         assert_eq!((b.start, b.end, b.layer.as_str()), (Point { x: 20_000, y: 20_000 }, Point { x: 30_000, y: 25_000 }, "F.SilkS"));
-        assert_eq!((b.margin_left_um, b.margin_top_um, b.margin_right_um, b.margin_bottom_um), (1_000, 1_500, 2_000, 2_500));
-        assert_eq!((b.border, b.stroke_width_um, b.line_style, b.knockout), (true, 120, LineStyle::Dot, true));
+        assert_eq!((b.margin_left_nm, b.margin_top_nm, b.margin_right_nm, b.margin_bottom_nm), (1_000, 1_500, 2_000, 2_500));
+        assert_eq!((b.border, b.stroke_width_nm, b.line_style, b.knockout), (true, 120, LineStyle::Dot, true));
         // `(size HEIGHT WIDTH)`
-        assert_eq!((b.size_um, b.width_um, b.thickness_um), (1_000, Some(1_200), 150));
+        assert_eq!((b.size_nm, b.width_nm, b.thickness_nm), (1_000, Some(1_200), 150));
         assert_eq!((b.halign, b.valign, b.mirror), (TextJustify::Left, TextVAlign::Top, false));
         assert_eq!(b.angle, 0);
     }
@@ -220,8 +220,8 @@ mod tests {
     fn a_box_with_no_margins_has_the_legacy_margin_and_one_with_no_effects_is_left_and_centre() {
         let b = read_one(r#"(kicad_pcb (version 20241229) (gr_text_box "x" (start 0 0) (end 5 5) (layer "F.SilkS") (border yes) (stroke (width 0.2) (type solid))))"#);
         // 0.2 / 2 + 1.524 * 0.75
-        assert_eq!(b.margin_left_um, 100 + 1_143);
-        assert_eq!((b.halign, b.valign, b.size_um), (TextJustify::Left, TextVAlign::Center, 1_524));
+        assert_eq!(b.margin_left_nm, 100 + 1_143);
+        assert_eq!((b.halign, b.valign, b.size_nm), (TextJustify::Left, TextVAlign::Center, 1_524));
         // The effects of a file that wrote none of the justification are centre and centre.
         let c = read_one(r#"(kicad_pcb (version 20241229) (gr_text_box "x" (start 0 0) (end 5 5) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15)))))"#);
         assert_eq!((c.halign, c.valign), (TextJustify::Center, TextVAlign::Center));
@@ -232,7 +232,7 @@ mod tests {
         let old = |w: &str| read_one(&format!(r#"(kicad_pcb (version 20230620) (gr_text_box "x" (start 0 0) (end 5 5) (layer "F.SilkS") (stroke (width {w}) (type solid)) (effects (font (size 1 1)))))"#));
         assert!(old("0.1").border);
         assert!(!old("-1").border, "a negative width was no border");
-        assert_eq!(old("-1").stroke_width_um, 0);
+        assert_eq!(old("-1").stroke_width_nm, 0);
     }
 
     #[test]
@@ -274,7 +274,7 @@ mod tests {
     fn a_stroke_colour_and_a_font_survive() {
         let mut b = read_one(BOX);
         b.stroke_color = Some("255 0 0 1".into());
-        b.thickness_um = 0;
+        b.thickness_nm = 0;
         b.bold = true;
         b.italic = true;
         b.line_spacing_permille = 1_500;

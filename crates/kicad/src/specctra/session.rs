@@ -133,8 +133,8 @@ impl Db<'_> {
                 // `fast_float::from_chars` with `skip_white_space`: the longest number at the start, 0 when there is none.
                 let t = diam_txt.trim_start();
                 let n = (1..=t.len()).rev().find(|&k| t.is_char_boundary(k) && t[..k].parse::<f64>().is_ok()).unwrap_or(0);
-                let drill_um: f64 = if n == 0 { 0.0 } else { t[..n].parse().unwrap_or(0.0) };
-                drill_diam_iu = (drill_um * (1_000_000.0 / 1000.0)) as i64;
+                let drill_nm: f64 = if n == 0 { 0.0 } else { t[..n].parse().unwrap_or(0.0) };
+                drill_diam_iu = (drill_nm * (1_000_000.0 / 1000.0)) as i64;
                 if drill_diam_iu == via_drill_default {
                     drill_diam_iu = -1; // UNDEFINED_DRILL_DIAMETER
                 }

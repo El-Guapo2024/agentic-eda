@@ -52,7 +52,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -65,7 +65,7 @@ fn empty_design() -> Design {
 fn import(text: String, fix: Option<i64>) -> (Design, ConstraintModel) {
     let model = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &model, 100, 300);
-    let req = ImportGraphics { format: GraphicsFormat::Dxf, text, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 100, group: false, fix_tolerance_um: fix, replace_outline: false };
+    let req = ImportGraphics { format: GraphicsFormat::Dxf, text, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 100, group: false, fix_tolerance_nm: fix, replace_outline: false };
     b.apply(&Cmd::ImportGraphics(req)).expect("the import applies");
     (b.design().clone(), model)
 }
@@ -181,7 +181,7 @@ fn an_svg_outline_is_a_closed_outline_to_kicad_cli_too() {
     let model = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &model, 100, 300);
     let svg = std::fs::read_to_string(format!("{}/../kicad/tests/fixtures/board_outline_rect.svg", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    let req = ImportGraphics { format: GraphicsFormat::Svg, text: svg, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 100, group: false, fix_tolerance_um: None, replace_outline: false };
+    let req = ImportGraphics { format: GraphicsFormat::Svg, text: svg, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 100, group: false, fix_tolerance_nm: None, replace_outline: false };
     b.apply(&Cmd::ImportGraphics(req)).expect("the import applies");
     let dir = scratch("svg");
     let pcb = write_board(&dir, b.design(), &model);

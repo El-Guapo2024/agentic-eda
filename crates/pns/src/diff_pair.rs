@@ -30,7 +30,7 @@ use crate::line::Line;
 use crate::node::{Node, QueryOpts};
 use crate::seg_ops::{self, rescale, Seg2};
 use eda_drc::kimath::{isqrt, Seg, Shape};
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 
 // ------------------------------------------------------------------------------------------------
@@ -105,7 +105,7 @@ pub fn offset_polyline(centerline: &[Point], offset: i64) -> Vec<Point> {
             continue; // a zero-length leg contributes no direction to offset by; skip it.
         }
         let (nx, ny) = (dy / len, -dx / len);
-        let (ox, oy) = ((nx * offset as f64).round() as Um, (ny * offset as f64).round() as Um);
+        let (ox, oy) = ((nx * offset as f64).round() as Nm, (ny * offset as f64).round() as Nm);
         offset_segs.push((Point { x: a.x + ox, y: a.y + oy }, Point { x: b.x + ox, y: b.y + oy }));
     }
     let Some(&(first_a, _)) = offset_segs.first() else { return centerline.to_vec() };
@@ -124,7 +124,7 @@ pub fn offset_polyline(centerline: &[Point], offset: i64) -> Vec<Point> {
 // ------------------------------------------------------------------------------------------------
 
 /// A `VECTOR2I`.
-pub type Vec2 = (Um, Um);
+pub type Vec2 = (Nm, Nm);
 
 /// `DIRECTION_45::AngleType` is a bit mask in KiCad (`ANG_OBTUSE | ANG_STRAIGHT`), where [`AngleType`] is one value.
 pub const ANG_OBTUSE: u32 = 0x01;
@@ -169,12 +169,12 @@ fn vneg(v: Vec2) -> Vec2 {
 }
 
 /// `VECTOR2I::EuclideanNorm`.
-pub(crate) fn vnorm(v: Vec2) -> Um {
+pub(crate) fn vnorm(v: Vec2) -> Nm {
     seg_ops::length(Point { x: 0, y: 0 }, Point { x: v.0, y: v.1 })
 }
 
 /// `VECTOR2I::Resize`.
-pub(crate) fn vresize(v: Vec2, len: Um) -> Vec2 {
+pub(crate) fn vresize(v: Vec2, len: Nm) -> Vec2 {
     crate::hull::resize(v.0, v.1, len)
 }
 
@@ -206,7 +206,7 @@ pub(crate) fn line_project(s: Seg2, p: Point) -> Point {
         return s.0;
     }
     let t = vdot(d, vsub(p, s.0));
-    Point { x: s.0.x + rescale(t, d.0 as i128, l_squared) as Um, y: s.0.y + rescale(t, d.1 as i128, l_squared) as Um }
+    Point { x: s.0.x + rescale(t, d.0 as i128, l_squared) as Nm, y: s.0.y + rescale(t, d.1 as i128, l_squared) as Nm }
 }
 
 /// `SEG::TCoef`.
@@ -215,7 +215,7 @@ fn t_coef(s: Seg2, p: Point) -> i128 {
 }
 
 /// `SEG::Distance( SEG )`.
-pub(crate) fn seg_distance(a: Seg2, b: Seg2) -> Um {
+pub(crate) fn seg_distance(a: Seg2, b: Seg2) -> Nm {
     isqrt(Seg::new(a.0, a.1).sq_distance_to_seg(&Seg::new(b.0, b.1)))
 }
 
@@ -235,7 +235,7 @@ fn mutual_distance_squared(s: Seg2, o: Seg2) -> Option<(i128, i128)> {
 }
 
 /// `SEG::ApproxParallel( aSeg, aDistanceThreshold )`.
-pub(crate) fn approx_parallel(s: Seg2, o: Seg2, threshold: Um) -> bool {
+pub(crate) fn approx_parallel(s: Seg2, o: Seg2, threshold: Nm) -> bool {
     match mutual_distance_squared(s, o) {
         None => false,
         Some((d1, d2)) => (d1 - d2).abs() <= (threshold as i128) * (threshold as i128),
@@ -307,7 +307,7 @@ pub struct PairLine<'a> {
     pub pts: &'a [Point],
     pub net: &'a Net,
     pub layer: i32,
-    pub width: Um,
+    pub width: Nm,
     pub via: Option<&'a Via>,
 }
 
@@ -325,7 +325,7 @@ impl PairLine<'_> {
     /// each other (no epsilon: `collideSimple` without a context). Lines of the same net never collide.
     pub fn hits_line(&self, other: &PairLine, rules: &BoardRules) -> bool {
         // a segment's shape and the box it can reach, for the pairs that are near enough to be worth the exact test
-        let segs = |l: &PairLine, reach: Um| {
+        let segs = |l: &PairLine, reach: Nm| {
             l.pts
                 .windows(2)
                 .map(|w| {
@@ -374,29 +374,29 @@ impl PairLine<'_> {
 /// `RANGED_NUM<int>`: a value with a tolerance either way, which `Matches` a number within it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RangedNum {
-    pub value: Um,
-    pub tolerance_plus: Um,
-    pub tolerance_minus: Um,
+    pub value: Nm,
+    pub tolerance_plus: Nm,
+    pub tolerance_minus: Nm,
 }
 
 impl RangedNum {
-    pub fn exact(value: Um) -> Self {
+    pub fn exact(value: Nm) -> Self {
         RangedNum { value, tolerance_plus: 0, tolerance_minus: 0 }
     }
 
-    pub fn matches(&self, other: Um) -> bool {
+    pub fn matches(&self, other: Nm) -> bool {
         other >= self.value - self.tolerance_minus && other <= self.value + self.tolerance_plus
     }
 }
 
 /// `DIFF_PAIR::SetGap`: `RANGED_NUM<int>( m_gap, 10000, 10000 )`, 10 um either way.
-pub const GAP_TOLERANCE_UM: Um = 10;
+pub const GAP_TOLERANCE_NM: Nm = 10;
 
 /// `checkGap`'s `SEG::Square( gap - 100 )`: 100 nm of slack, which at this IR's resolution is one micrometre.
-pub const GAP_CHECK_SLACK: Um = 1;
+pub const GAP_CHECK_SLACK: Nm = 1;
 
 /// `checkGap`: no segment of `p` is nearer to a segment of `n` than `gap` (less the slack).
-fn check_gap(p: &[Point], n: &[Point], gap: Um) -> bool {
+fn check_gap(p: &[Point], n: &[Point], gap: Nm) -> bool {
     let gap_sq = ((gap - GAP_CHECK_SLACK) as i128).pow(2);
     for sp in p.windows(2) {
         for sn in n.windows(2) {
@@ -543,15 +543,15 @@ impl DpGateway {
 #[derive(Debug, Clone)]
 pub struct DpGateways {
     /// The pair's pitch, centre line to centre line (`gap() = DiffPairGap + DiffPairWidth`).
-    gap: Um,
-    via_gap: Um,
-    via_diameter: Um,
+    gap: Nm,
+    via_gap: Nm,
+    via_diameter: Nm,
     fit_vias: bool,
     pub gateways: Vec<DpGateway>,
 }
 
 /// `makeGapVector`: the shortest vector along `dir` whose double is at least `length`.
-fn make_gap_vector(dir: Vec2, length: Um) -> Vec2 {
+fn make_gap_vector(dir: Vec2, length: Nm) -> Vec2 {
     let mut l = length / 2;
     if vnorm(dir) == 0 {
         return dir;
@@ -568,12 +568,12 @@ fn make_gap_vector(dir: Vec2, length: Um) -> Vec2 {
 
 impl DpGateways {
     /// `DP_GATEWAYS( aGap )`: as KiCad's, which fits vias until told not to.
-    pub fn new(gap: Um) -> Self {
+    pub fn new(gap: Nm) -> Self {
         DpGateways { gap, via_gap: gap, via_diameter: 0, fit_vias: true, gateways: Vec::new() }
     }
 
     /// `DP_GATEWAYS::SetFitVias`: gateways for the cursor are for two vias `via_gap` apart (edge to edge) when `enable`.
-    pub fn set_fit_vias(&mut self, enable: bool, diameter: Um, via_gap: Option<Um>) {
+    pub fn set_fit_vias(&mut self, enable: bool, diameter: Nm, via_gap: Option<Nm>) {
         self.fit_vias = enable;
         self.via_diameter = diameter;
         self.via_gap = via_gap.unwrap_or(self.gap);
@@ -645,10 +645,10 @@ impl DpGateways {
         }
         // "If we're at a "normal" angle (cardinal or 45-degree-diagonal), then add gateways that angle the anchor points by
         // 22.5-degrees for connection to tracks which are at +/- 45 degrees from the existing direction."
-        const EPSILON: Um = 1; // KiCad's 5 nm: exactly aligned at this resolution
+        const EPSILON: Nm = 1; // KiCad's 5 nm: exactly aligned at this resolution
         const SIN_22_5: f64 = 0.38268;
         const SIN_23_5: f64 = 0.39875;
-        let add_angled = |this: &mut Self, length: Um, priority: i32| {
+        let add_angled = |this: &mut Self, length: Nm, priority: i32| {
             let ux = pair.dir_p().unit();
             let entry_line_p = vec![pair.anchor_p, vadd(pair.anchor_p, vresize((ux.0, ux.1), length))];
             let mut gw_extend_p = DpGateway::new(*entry_line_p.last().unwrap(), pair.anchor_n, is_diagonal);
@@ -665,9 +665,9 @@ impl DpGateways {
         };
         let delta = vsub(pair.anchor_p, pair.anchor_n);
         if delta.0.abs() < EPSILON || delta.1.abs() < EPSILON || (delta.0 - delta.1).abs() < EPSILON {
-            add_angled(self, (self.gap as f64 * SIN_22_5).round() as Um, 20);
+            add_angled(self, (self.gap as f64 * SIN_22_5).round() as Nm, 20);
             // "fixme; sin(22.5) doesn't always work, so we also add some lower priority ones with a bit of wiggle room."
-            add_angled(self, (self.gap as f64 * SIN_23_5).round() as Um, 5);
+            add_angled(self, (self.gap as f64 * SIN_23_5).round() as Nm, 5);
         }
     }
 
@@ -675,9 +675,9 @@ impl DpGateways {
     /// the two, diagonal and straight where the lines through them meet, and the weirder mixes of the two. In `via_mode` (the
     /// points are the centres of two vias that will fit) only the first two kinds.
     pub fn build_generic(&mut self, p0_p: Point, p0_n: Point, build_entries: bool, via_mode: bool) {
-        const PAD_TO_GAP_THRESHOLD: Um = 3;
+        const PAD_TO_GAP_THRESHOLD: Nm = 3;
         let pad_dist = vnorm(vsub(p0_n, p0_p));
-        let at = |p: Point, dx: Um, dy: Um| Point { x: p.x + dx, y: p.y + dy };
+        let at = |p: Point, dx: Nm, dy: Nm| Point { x: p.x + dx, y: p.y + dy };
         let st_p: [Seg2; 2] = [(at(p0_p, -100, 0), at(p0_p, 100, 0)), (at(p0_p, 0, -100), at(p0_p, 0, 100))];
         let st_n: [Seg2; 2] = [(at(p0_n, -100, 0), at(p0_n, 100, 0)), (at(p0_n, 0, -100), at(p0_n, 0, 100))];
         let d_p: [Seg2; 2] = [(at(p0_p, -100, -100), at(p0_p, 100, 100)), (at(p0_p, 100, -100), at(p0_p, -100, 100))];
@@ -721,7 +721,7 @@ impl DpGateways {
                     let Some(m) = *ip else { continue };
                     if m != p0_p && m != p0_n {
                         let prio = if pad_dist > PAD_TO_GAP_THRESHOLD * gap { 10 } else { 20 };
-                        let reach = (gap as f64 * std::f64::consts::FRAC_1_SQRT_2).ceil() as Um;
+                        let reach = (gap as f64 * std::f64::consts::FRAC_1_SQRT_2).ceil() as Nm;
                         let g_p = vresize(vsub(p0_p, m), reach);
                         let g_n = vresize(vsub(p0_n, m), reach);
                         self.gateways.push(DpGateway::with(vadd(m, g_p), vadd(m, g_n), k == 0, ANG_OBTUSE, prio));
@@ -733,13 +733,13 @@ impl DpGateways {
                 for ip in ips2.iter() {
                     let Some(m) = *ip else { continue };
                     if !via_mode && m != p0_p && m != p0_n {
-                        let mut g_p = vresize(vsub(p0_p, m), (gap as f64 * std::f64::consts::SQRT_2).ceil() as Um);
+                        let mut g_p = vresize(vsub(p0_p, m), (gap as f64 * std::f64::consts::SQRT_2).ceil() as Nm);
                         let mut g_n = vresize(vsub(p0_n, m), gap);
                         if angle_between(g_p, g_n) != ANG_ACUTE {
                             self.gateways.push(DpGateway::new(vadd(m, g_p), vadd(m, g_n), true));
                         }
                         g_p = vresize(vsub(p0_p, m), gap);
-                        g_n = vresize(vsub(p0_n, m), (gap as f64 * std::f64::consts::SQRT_2).ceil() as Um);
+                        g_n = vresize(vsub(p0_n, m), (gap as f64 * std::f64::consts::SQRT_2).ceil() as Nm);
                         if angle_between(g_p, g_n) != ANG_ACUTE {
                             self.gateways.push(DpGateway::new(vadd(m, g_p), vadd(m, g_n), true));
                         }
@@ -815,7 +815,7 @@ impl DpGateways {
                 let dp = make_gap_vector(dir, d);
                 let dv = make_gap_vector(vsub(p0_n, p0_p), d);
                 for i in 0..2 {
-                    let sign: Um = if i != 0 { -1 } else { 1 };
+                    let sign: Nm = if i != 0 { -1 } else { 1 };
                     let fan = (sign * (dir.0 + dp.0), sign * (dir.1 + dp.1));
                     let gw_p = vadd(vadd(p0_p, fan), dv);
                     let gw_n = vadd(vadd(p0_n, fan), vneg(dv));
@@ -885,9 +885,9 @@ pub struct DiffPair {
     pub net_p: Net,
     pub net_n: Net,
     pub layer: i32,
-    pub width: Um,
+    pub width: Nm,
     /// The gap in force: edge to edge once the pair is placed, centre to centre while its gateways are being fitted.
-    pub gap: Um,
+    pub gap: Nm,
     pub gap_constraint: RangedNum,
     pub via_p: Option<Via>,
     pub via_n: Option<Via>,
@@ -895,14 +895,14 @@ pub struct DiffPair {
 
 impl DiffPair {
     /// `DIFF_PAIR( aGap )`: a gap that has to be matched exactly.
-    pub fn with_gap(gap: Um) -> Self {
+    pub fn with_gap(gap: Nm) -> Self {
         DiffPair { gap_constraint: RangedNum::exact(gap), ..DiffPair::default() }
     }
 
-    /// `DIFF_PAIR::SetGap`: the gap, matched to within [`GAP_TOLERANCE_UM`].
-    pub fn set_gap(&mut self, gap: Um) {
+    /// `DIFF_PAIR::SetGap`: the gap, matched to within [`GAP_TOLERANCE_NM`].
+    pub fn set_gap(&mut self, gap: Nm) {
         self.gap = gap;
-        self.gap_constraint = RangedNum { value: gap, tolerance_plus: GAP_TOLERANCE_UM, tolerance_minus: GAP_TOLERANCE_UM };
+        self.gap_constraint = RangedNum { value: gap, tolerance_plus: GAP_TOLERANCE_NM, tolerance_minus: GAP_TOLERANCE_NM };
     }
 
     /// `DIFF_PAIR::SetShape( aP, aN, aSwapLanes )`.
@@ -1130,7 +1130,7 @@ pub(crate) fn common_parallel_projection(p: Seg2, n: Seg2) -> Option<(Seg2, Seg2
     tv.sort_unstable(); // "fixme: awful and disgusting way of finding 2 midpoints"
     let p_len_sq = seg_sq_len(p);
     let dp = vsub(p.1, p.0);
-    let clip = |t: i128| Point { x: p.0.x + rescale(dp.0 as i128, t, p_len_sq) as Um, y: p.0.y + rescale(dp.1 as i128, t, p_len_sq) as Um };
+    let clip = |t: i128| Point { x: p.0.x + rescale(dp.0 as i128, t, p_len_sq) as Nm, y: p.0.y + rescale(dp.1 as i128, t, p_len_sq) as Nm };
     let p_clip = (clip(tv[1]), clip(tv[2]));
     let n_clip = (line_project(n, p_clip.0), line_project(n, p_clip.1));
     Some((p_clip, n_clip))
@@ -1140,7 +1140,7 @@ pub(crate) fn common_parallel_projection(p: Seg2, n: Seg2) -> Option<(Seg2, Seg2
 mod tests {
     use super::*;
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 

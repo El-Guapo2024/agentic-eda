@@ -7,7 +7,7 @@
 //! The studio carries the same algorithm client-side for the canvas
 //! (`web/studio/src/kicad-port/bezierPoly.ts`); keep the two in step.
 
-use crate::ir::{Point, Um};
+use crate::ir::{Point, Nm};
 
 type V = (f64, f64);
 
@@ -207,9 +207,9 @@ fn get_cubic_poly(c: Cubic, out: &mut Vec<V>, max_error: f64) {
 }
 
 /// `BEZIER_POLY( start, c1, c2, end ).GetPoly( out, maxError )`: the integer polyline
-/// (start first, end last) within `max_error` (board units -- micrometres here) of the
+/// (start first, end last) within `max_error` (board units -- nanometres here) of the
 /// true curve. `max_error <= 0` falls back to 10, as the C++ does.
-pub fn bezier_polyline(start: Point, c1: Point, c2: Point, end: Point, max_error: Um) -> Vec<Point> {
+pub fn bezier_polyline(start: Point, c1: Point, c2: Point, end: Point, max_error: Nm) -> Vec<Point> {
     let err = if max_error <= 0 { 10.0 } else { max_error as f64 };
     let v = |p: Point| (p.x as f64, p.y as f64);
     let mut out: Vec<V> = Vec::new();
@@ -219,7 +219,7 @@ pub fn bezier_polyline(start: Point, c1: Point, c2: Point, end: Point, max_error
 
 /// `EDA_SHAPE::getMaxError()` for the board: `BOARD_DESIGN_SETTINGS::m_MaxError`
 /// defaults to 0.005 mm (`pcbIUScale.mmToIU( 0.005 )`), i.e. 5 um.
-pub const BEZIER_MAX_ERROR_UM: Um = 5;
+pub const BEZIER_MAX_ERROR_NM: Nm = 5_000;
 
 #[cfg(test)]
 mod tests {

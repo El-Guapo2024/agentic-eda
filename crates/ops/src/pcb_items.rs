@@ -10,7 +10,7 @@
 use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
 use eda_model::barcode::{Barcode, BarcodeKind, EccLevel};
-use eda_model::ir::{DrawingsSection, Millideg, Point, Shape, Um};
+use eda_model::ir::{DrawingsSection, Millideg, Point, Shape, Nm};
 use eda_model::grid_item::GridItem;
 use eda_model::via_stitch::ViaStitch;
 use eda_model::line_ending::LineEnding;
@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM` (`include/eda_text.h`): the glyph sizes the Text Box Properties dialog accepts.
-const TEXT_MIN_SIZE_UM: Um = 1;
-const TEXT_MAX_SIZE_UM: Um = 250_000;
+const TEXT_MIN_SIZE_NM: Nm = 1;
+const TEXT_MAX_SIZE_NM: Nm = 250_000;
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
     vec![CheckResult::fail(check, what, msg.into())]
@@ -51,7 +51,7 @@ pub enum PcbItemCmd {
     /// `pcbnew.InteractiveDrawing.placePoint` (`DRAWING_TOOL::PlacePoint`): a point on the board. `point.id` is ignored.
     AddPoint { point: PcbPoint },
     /// Point Properties / the Properties panel: the point's layer, place and size, in place.
-    EditPoint { id: String, layer: String, at: Point, size_um: Um },
+    EditPoint { id: String, layer: String, at: Point, size_nm: Nm },
     /// Remove a point.
     DeletePoint { id: String },
     /// `pcbnew.InteractiveDrawing.barcode` (`DRAWING_TOOL::DrawBarcode`) after `DIALOG_BARCODE_PROPERTIES`'s OK: the barcode on the board. `barcode.id` is ignored; a Micro QR code takes
@@ -152,7 +152,7 @@ impl PcbItemCmd {
 
     /// The one-line description the CLI journal and the activity feed show.
     pub fn describe(&self) -> String {
-        let mm = |v: Um| format!("{:.3}", v as f64 / 1000.0);
+        let mm = |v: Nm| format!("{:.3}", v as f64 / 1000.0);
         match self {
             PcbItemCmd::AddTextBox { text_box: t } => format!("text-box add --layer {} --from {},{} --to {},{} --text {:?}", t.layer, mm(t.start.x), mm(t.start.y), mm(t.end.x), mm(t.end.y), t.text),
             PcbItemCmd::EditTextBox { id, text_box: t } => format!("text-box edit {id} --layer {} --text {:?}", t.layer, t.text),
@@ -161,11 +161,11 @@ impl PcbItemCmd {
             PcbItemCmd::EditRefImage { id, layer, at, scale_ppm } => format!("ref-image edit {id} --layer {layer} --at {},{} --scale {}", mm(at.x), mm(at.y), *scale_ppm as f64 / 1e6),
             PcbItemCmd::SetRefImageData { id, data } => format!("ref-image pixels {id} ({} bytes of data)", data.len() / 4 * 3),
             PcbItemCmd::DeleteRefImage { id } => format!("ref-image delete {id}"),
-            PcbItemCmd::AddPoint { point: p } => format!("point add --layer {} --at {},{} --size {}", p.layer, mm(p.at.x), mm(p.at.y), mm(p.size_um)),
-            PcbItemCmd::EditPoint { id, layer, at, size_um } => format!("point edit {id} --layer {layer} --at {},{} --size {}", mm(at.x), mm(at.y), mm(*size_um)),
+            PcbItemCmd::AddPoint { point: p } => format!("point add --layer {} --at {},{} --size {}", p.layer, mm(p.at.x), mm(p.at.y), mm(p.size_nm)),
+            PcbItemCmd::EditPoint { id, layer, at, size_nm } => format!("point edit {id} --layer {layer} --at {},{} --size {}", mm(at.x), mm(at.y), mm(*size_nm)),
             PcbItemCmd::DeletePoint { id } => format!("point delete {id}"),
-            PcbItemCmd::AddBarcode { barcode: b } => format!("barcode add --layer {} --at {},{} --size {}x{} --kind {} --text {:?}", b.layer, mm(b.at.x), mm(b.at.y), mm(b.width_um), mm(b.height_um), b.kind.file_name(), b.text),
-            PcbItemCmd::EditBarcode { id, barcode: b } => format!("barcode edit {id} --layer {} --at {},{} --size {}x{} --kind {} --text {:?}", b.layer, mm(b.at.x), mm(b.at.y), mm(b.width_um), mm(b.height_um), b.kind.file_name(), b.text),
+            PcbItemCmd::AddBarcode { barcode: b } => format!("barcode add --layer {} --at {},{} --size {}x{} --kind {} --text {:?}", b.layer, mm(b.at.x), mm(b.at.y), mm(b.width_nm), mm(b.height_nm), b.kind.file_name(), b.text),
+            PcbItemCmd::EditBarcode { id, barcode: b } => format!("barcode edit {id} --layer {} --at {},{} --size {}x{} --kind {} --text {:?}", b.layer, mm(b.at.x), mm(b.at.y), mm(b.width_nm), mm(b.height_nm), b.kind.file_name(), b.text),
             PcbItemCmd::DeleteBarcode { id } => format!("barcode delete {id}"),
             PcbItemCmd::AddGridItem { grid_item: g } => format!("grid-item add --{} --at {},{} --extent {}x{} --spacing {}x{}", g.kind.token(), mm(g.at.x), mm(g.at.y), mm(g.extent.x), mm(g.extent.y), mm(g.spacing.x), mm(g.spacing.y)),
             PcbItemCmd::EditGridItem { id, grid_item: g } => format!("grid-item edit {id} --{} --at {},{} --extent {}x{} --spacing {}x{} --angle {}", g.kind.token(), mm(g.at.x), mm(g.at.y), mm(g.extent.x), mm(g.extent.y), mm(g.spacing.x), mm(g.spacing.y), g.angle),
@@ -174,11 +174,11 @@ impl PcbItemCmd {
                 "via-stitch {} --net {} --pitch {} --layout {:?} --mode {:?} --via {}x{} ({} vias)",
                 id.as_deref().unwrap_or("add"),
                 v.net,
-                mm(v.pitch_um),
+                mm(v.pitch_nm),
                 v.layout,
                 v.mode,
-                mm(v.via.size_um),
-                mm(v.via.drill_um),
+                mm(v.via.size_nm),
+                mm(v.via.drill_nm),
                 vias.as_ref().map_or("planned".to_string(), |p| p.len().to_string())
             )
             .to_lowercase(),
@@ -186,13 +186,13 @@ impl PcbItemCmd {
             PcbItemCmd::PlaceDrillChart { layer, at } => format!("drill-chart place --layer {layer} --at {},{}", mm(at.x), mm(at.y)),
             PcbItemCmd::SetDrillChart { id, units, precision, show_totals, .. } => format!("drill-chart edit {id} --units {} --precision {precision} --totals {show_totals}", units.token()),
             PcbItemCmd::PlaceDrillMap { layer } => format!("drill-map place --layer {layer}"),
-            PcbItemCmd::EditDrillMap { id, map: m } => format!("drill-map edit {id} --layer {} --offset {},{} --size {}", m.layer, mm(m.offset.x), mm(m.offset.y), mm(m.size_um)),
+            PcbItemCmd::EditDrillMap { id, map: m } => format!("drill-map edit {id} --layer {} --offset {},{} --size {}", m.layer, mm(m.offset.x), mm(m.offset.y), mm(m.size_nm)),
             PcbItemCmd::DeleteDrillMap { id } => format!("drill-map delete {id}"),
             PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending } => {
                 let mut out = format!("shape style {} --fill {}", ids.join(","), fill.map_or("unchanged".to_string(), |f| format!("{f:?}").to_lowercase()));
                 for (flag, e) in [("start", start_ending), ("end", end_ending)] {
                     if let Some(e) = e {
-                        out.push_str(&format!(" --{flag}-shape {} --{flag}-size {}x{} --{flag}-stroke {}", e.style.token(), mm(e.length_um), mm(e.width_um), mm(e.stroke_width_um)));
+                        out.push_str(&format!(" --{flag}-shape {} --{flag}-size {}x{} --{flag}-stroke {}", e.style.token(), mm(e.length_nm), mm(e.width_nm), mm(e.stroke_width_nm)));
                     }
                 }
                 out
@@ -228,7 +228,7 @@ impl<'a> Board<'a> {
             PcbItemCmd::SetRefImageData { id, data } => self.set_ref_image_data(id, data),
             PcbItemCmd::DeleteRefImage { id } => self.delete_ref_image(id),
             PcbItemCmd::AddPoint { point } => self.add_point(point.clone()),
-            PcbItemCmd::EditPoint { id, layer, at, size_um } => self.edit_point(id, layer, *at, *size_um),
+            PcbItemCmd::EditPoint { id, layer, at, size_nm } => self.edit_point(id, layer, *at, *size_nm),
             PcbItemCmd::DeletePoint { id } => self.delete_point(id),
             PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending } => self.set_shape_style(ids, *fill, *start_ending, *end_ending),
             PcbItemCmd::AddBarcode { barcode } => self.add_barcode(barcode.clone()),
@@ -254,16 +254,16 @@ impl<'a> Board<'a> {
             return Err(fail("ops_bad_barcode", what, "a barcode needs a layer"));
         }
         self.layer_is_on(&b.layer, what)?;
-        if b.width_um <= 0 || b.height_um <= 0 {
+        if b.width_nm <= 0 || b.height_nm <= 0 {
             return Err(fail("ops_bad_barcode", what, "the size of a barcode must be greater than zero"));
         }
-        if b.text_height_um <= 0 {
+        if b.text_height_nm <= 0 {
             return Err(fail("ops_bad_barcode", what, "the text size of a barcode must be greater than zero"));
         }
         if b.angle >= 360_000 {
             return Err(fail("ops_bad_barcode", what, "the angle of a barcode is below 360 degrees"));
         }
-        if b.margin_x_um < 0 || b.margin_y_um < 0 {
+        if b.margin_x_nm < 0 || b.margin_y_nm < 0 {
             return Err(fail("ops_bad_barcode", what, "the margins of a barcode cannot be negative"));
         }
         Ok(())
@@ -350,11 +350,11 @@ impl<'a> Board<'a> {
             return Err(fail("ops_bad_text_box", what, "a text box needs a layer"));
         }
         self.layer_is_on(&t.layer, what)?;
-        let width = t.text_width_um();
-        if !(TEXT_MIN_SIZE_UM..=TEXT_MAX_SIZE_UM).contains(&t.size_um) || !(TEXT_MIN_SIZE_UM..=TEXT_MAX_SIZE_UM).contains(&width) {
+        let width = t.text_width_nm();
+        if !(TEXT_MIN_SIZE_NM..=TEXT_MAX_SIZE_NM).contains(&t.size_nm) || !(TEXT_MIN_SIZE_NM..=TEXT_MAX_SIZE_NM).contains(&width) {
             return Err(fail("ops_bad_text_box", what, "the text size must be between 0.001 mm and 250 mm"));
         }
-        if t.thickness_um < 0 || t.stroke_width_um < 0 || t.margin_left_um < 0 || t.margin_top_um < 0 || t.margin_right_um < 0 || t.margin_bottom_um < 0 {
+        if t.thickness_nm < 0 || t.stroke_width_nm < 0 || t.margin_left_nm < 0 || t.margin_top_nm < 0 || t.margin_right_nm < 0 || t.margin_bottom_nm < 0 {
             return Err(fail("ops_bad_text_box", what, "the pen, the border and the margins cannot be negative"));
         }
         if !t.pts.is_empty() && t.pts.len() != 4 {
@@ -463,19 +463,19 @@ impl<'a> Board<'a> {
 
 impl<'a> Board<'a> {
     /// What a point must be to be drawn: on a layer the board has on, and with a size that is a length (`PCB_POINT::SetSize` takes any `int`; a mark of no size is nothing to see).
-    fn check_point(&self, what: &str, layer: &str, size_um: Um) -> Result<(), Vec<CheckResult>> {
+    fn check_point(&self, what: &str, layer: &str, size_nm: Nm) -> Result<(), Vec<CheckResult>> {
         if layer.is_empty() {
             return Err(fail("ops_bad_point", what, "a point needs a layer"));
         }
         self.layer_is_on(layer, what)?;
-        if size_um <= 0 {
+        if size_nm <= 0 {
             return Err(fail("ops_bad_point", what, "the size of a point must be greater than zero"));
         }
         Ok(())
     }
 
     fn add_point(&mut self, mut point: PcbPoint) -> Result<(), Vec<CheckResult>> {
-        self.check_point("point", &point.layer, point.size_um)?;
+        self.check_point("point", &point.layer, point.size_nm)?;
         point.id = String::new();
         let dr = self.drawings_mut();
         dr.board_items.points.push(point);
@@ -483,13 +483,13 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn edit_point(&mut self, id: &str, layer: &str, at: Point, size_um: Um) -> Result<(), Vec<CheckResult>> {
-        self.check_point(id, layer, size_um)?;
+    fn edit_point(&mut self, id: &str, layer: &str, at: Point, size_nm: Nm) -> Result<(), Vec<CheckResult>> {
+        self.check_point(id, layer, size_nm)?;
         let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_point", id, "the board has no drawings yet"))?;
         let p = dr.board_items.points.iter_mut().find(|p| p.id == id).ok_or_else(|| fail("ops_unknown_point", id, "no point with this id"))?;
         p.layer = layer.to_string();
         p.at = at;
-        p.size_um = size_um;
+        p.size_nm = size_nm;
         Ok(())
     }
 

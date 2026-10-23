@@ -15,7 +15,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use eda_clipper2::Point64;
-use eda_model::ir::{Design, Point, Um};
+use eda_model::ir::{Design, Point, Nm};
 use eda_model::via_stitch::{StitchLayout, StitchMode, ViaStitch};
 use eda_model::ConstraintModel;
 use eda_shape_poly_set::basic_shapes::{circle_polygon, oval_polygon, ErrorLoc};
@@ -32,12 +32,12 @@ pub const POISSON_TILE_PITCHES: i64 = 8;
 /// `POISSON_TILE_SEED`: "This is an arbitrary value but must never be changed (it'll break the patterns used in designs)."
 pub const POISSON_TILE_SEED: u32 = 0x542c_21fc;
 
-fn nm(um: Um) -> i64 {
+fn nm(um: Nm) -> i64 {
     um * 1000
 }
 /// Nanometres to the nearest micrometre.
-fn um_of(nm: i64) -> Um {
-    (nm as f64 / 1000.0).round() as Um
+fn um_of(nm: i64) -> Nm {
+    (nm as f64 / 1000.0).round() as Nm
 }
 fn p64(p: Point) -> Point64 {
     Point64::new(nm(p.x), nm(p.y))
@@ -289,7 +289,7 @@ fn npth_without_copper(pad: &crate::board::DrcPad) -> bool {
 
 /// `PCB_TEXT::TransformShapeToPolygon` with a clearance: `buildBoundingHull` -- the glyph strokes (each `r` wide either side) turned back by the draw rotation `rot_deg`
 /// about `at`, their box grown by `margin` (nanometres; square corners), its corners turned forward again -- added to `out` when it is `near` the query.
-fn add_text_hull(out: &mut ShapePolySet, segs: &[crate::kimath::Seg], r: Um, at: Point, rot_deg: f64, margin: i64, near: &dyn Fn((i64, i64, i64, i64)) -> bool) {
+fn add_text_hull(out: &mut ShapePolySet, segs: &[crate::kimath::Seg], r: Nm, at: Point, rot_deg: f64, margin: i64, near: &dyn Fn((i64, i64, i64, i64)) -> bool) {
     if segs.is_empty() {
         return;
     }
@@ -450,8 +450,8 @@ pub struct PlanInputs<'a> {
     pub design: &'a Design,
     pub model: &'a ConstraintModel,
     pub fills: &'a ZoneFillsNm,
-    pub current_via_size_um: Um,
-    pub current_via_drill_um: Um,
+    pub current_via_size_nm: Nm,
+    pub current_via_drill_nm: Nm,
 }
 
 /// `InitializeDefaults`, then `Update` as far as the positions of the vias: the anchor taken from a dragged via, and `buildPlacementCells` less the exclusions.
@@ -459,23 +459,23 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
     use eda_model::via_stitch::{default_pitch, default_via_drill, default_via_size};
     let mut v = stitch.clone();
     // `InitializeDefaults`
-    if v.via.size_um <= 0 {
-        v.via.size_um = default_via_size(inputs.current_via_size_um);
+    if v.via.size_nm <= 0 {
+        v.via.size_nm = default_via_size(inputs.current_via_size_nm);
     }
-    if v.via.drill_um <= 0 {
-        v.via.drill_um = default_via_drill(inputs.current_via_drill_um);
+    if v.via.drill_nm <= 0 {
+        v.via.drill_nm = default_via_drill(inputs.current_via_drill_nm);
     }
-    if v.pitch_um <= 0 {
-        v.pitch_um = default_pitch(v.via.size_um);
+    if v.pitch_nm <= 0 {
+        v.pitch_nm = default_pitch(v.via.size_nm);
     }
-    let pitch = nm(v.pitch_um);
+    let pitch = nm(v.pitch_nm);
     // `childrenAreOnThisGrid = m_childGridConfig == currentConfig`: the vias were made on the layout, mode and pitch the board's stitching of this id has (the settings of
     // its last `Update`; a Properties edit has not reached the board yet). On a new grid every via is off it, and the first one is no dragged via.
-    let effective_pitch = |s: &ViaStitch| -> Um {
-        if s.pitch_um > 0 {
-            s.pitch_um
+    let effective_pitch = |s: &ViaStitch| -> Nm {
+        if s.pitch_nm > 0 {
+            s.pitch_nm
         } else {
-            let size = if s.via.size_um > 0 { s.via.size_um } else { default_via_size(inputs.current_via_size_um) };
+            let size = if s.via.size_nm > 0 { s.via.size_nm } else { default_via_size(inputs.current_via_size_nm) };
             default_pitch(size)
         }
     };
@@ -485,7 +485,7 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
         .iter()
         .flat_map(|d| d.board_items.via_stitches.iter())
         .find(|s| s.id == v.id)
-        .is_some_and(|s| (s.layout, s.mode, effective_pitch(s)) == (v.layout, v.mode, v.pitch_um));
+        .is_some_and(|s| (s.layout, s.mode, effective_pitch(s)) == (v.layout, v.mode, v.pitch_nm));
     // The anchor a moved via defines (the vias are on the grid of this layout and pitch: their cells are what the stitching's own settings make them).
     let members: Vec<(i64, i64)> = if !on_this_grid {
         Vec::new()
@@ -539,9 +539,9 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
     let mut cells = BTreeSet::new();
     let design = inputs.design;
     let rules = &inputs.model.board;
-    let pitch = nm(if v.pitch_um > 0 { v.pitch_um } else { eda_model::via_stitch::default_pitch(v.via.size_um) });
-    let via_size = nm(v.via.size_um);
-    let via_drill = nm(v.via.drill_um);
+    let pitch = nm(if v.pitch_nm > 0 { v.pitch_nm } else { eda_model::via_stitch::default_pitch(v.via.size_nm) });
+    let via_size = nm(v.via.size_nm);
+    let via_drill = nm(v.via.drill_nm);
     // `GetNetCode() == 0`: a stitching of no net, or of a net the board does not have, makes nothing.
     if v.net.is_empty() || !inputs.model.nets.iter().any(|n| n.name == v.net) {
         return cells;
@@ -621,7 +621,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
     // The rules, and the probe via they judge the obstacles against.
     let board = crate::board::build(design, inputs.model);
     let rb = crate::rule_board::RuleBoard::new(design, inputs.model, &board, crate::constraints::Units::Mm, rules.custom_rules_text.as_deref());
-    let probe = rb.probe_via(&v.net, Point { x: 0, y: 0 }, v.via.size_um, v.via.drill_um, &v.via.from_layer, &v.via.to_layer);
+    let probe = rb.probe_via(&v.net, Point { x: 0, y: 0 }, v.via.size_nm, v.via.drill_nm, &v.via.from_layer, &v.via.to_layer);
     let eval = |t: CType, other: &std::rc::Rc<crate::rule_item::RuleItem>, layer: Option<&str>| -> i64 { rb.engine().eval_rules(t, Some(&probe), Some(other), layer, None).value.min() };
     let worst = nm(crate::constraints::worst_case_clearance(rules));
     let query_box = (stitch_box.0 - worst - via_size, stitch_box.1 - worst - via_size, stitch_box.2 + worst + via_size, stitch_box.3 + worst + via_size);
@@ -724,7 +724,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             let item = rb.board_text_item_of(t);
             let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
             // Laid out as the DRC lays out a plain text (`crate::board::build`): square glyphs, vertically centred.
-            let size = (t.size_um, t.size_um);
+            let size = (t.size_nm, t.size_nm);
             let pen = crate::stroke_font::effective_pen_width(t.stroke_width, size, false);
             let halign = match t.justify {
                 eda_model::ir::TextJustify::Left => -1,

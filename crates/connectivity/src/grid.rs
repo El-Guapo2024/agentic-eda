@@ -18,7 +18,7 @@
 //! by the cells a box overlaps is guaranteed to find every other item
 //! whose box intersects it, regardless of cell size.
 
-use eda_model::ir::Um;
+use eda_model::ir::Nm;
 
 type CellKey = (i64, i64);
 
@@ -30,7 +30,7 @@ pub struct Grid {
 impl Grid {
     /// Build an index over `boxes` (one axis-aligned `(x0, y0, x1, y1)`
     /// per item, indices matching the caller's item list).
-    pub fn build(boxes: &[(Um, Um, Um, Um)]) -> Self {
+    pub fn build(boxes: &[(Nm, Nm, Nm, Nm)]) -> Self {
         let cell_size = Self::pick_cell_size(boxes);
         let mut cells: std::collections::HashMap<CellKey, Vec<usize>> = std::collections::HashMap::new();
         for (idx, &b) in boxes.iter().enumerate() {
@@ -42,7 +42,7 @@ impl Grid {
     }
 
     /// Every item index whose stored box overlaps `bbox` (deduplicated).
-    pub fn query(&self, bbox: (Um, Um, Um, Um)) -> Vec<usize> {
+    pub fn query(&self, bbox: (Nm, Nm, Nm, Nm)) -> Vec<usize> {
         let mut out: Vec<usize> = Vec::new();
         for key in Self::cells_of(bbox, self.cell_size) {
             if let Some(v) = self.cells.get(&key) {
@@ -54,7 +54,7 @@ impl Grid {
         out
     }
 
-    fn cells_of(b: (Um, Um, Um, Um), cell_size: i64) -> impl Iterator<Item = CellKey> {
+    fn cells_of(b: (Nm, Nm, Nm, Nm), cell_size: i64) -> impl Iterator<Item = CellKey> {
         let (x0, y0, x1, y1) = (b.0.div_euclid(cell_size), b.1.div_euclid(cell_size), b.2.div_euclid(cell_size), b.3.div_euclid(cell_size));
         (x0..=x1).flat_map(move |cx| (y0..=y1).map(move |cy| (cx, cy)))
     }
@@ -63,12 +63,12 @@ impl Grid {
     /// the overall bounding box's diagonal-ish scale divided by
     /// `sqrt(item count)`, clamped to a sane minimum (0.5 mm) so a board
     /// with one giant item and many tiny ones doesn't collapse to one cell.
-    fn pick_cell_size(boxes: &[(Um, Um, Um, Um)]) -> i64 {
-        const MIN_CELL_UM: i64 = 500;
+    fn pick_cell_size(boxes: &[(Nm, Nm, Nm, Nm)]) -> i64 {
+        const MIN_CELL_NM: i64 = 500;
         if boxes.is_empty() {
-            return MIN_CELL_UM;
+            return MIN_CELL_NM;
         }
-        let (mut x0, mut y0, mut x1, mut y1) = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
+        let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
         for b in boxes {
             x0 = x0.min(b.0);
             y0 = y0.min(b.1);
@@ -77,7 +77,7 @@ impl Grid {
         }
         let area = ((x1 - x0).max(1) as f64) * ((y1 - y0).max(1) as f64);
         let target = (area / boxes.len().max(1) as f64).sqrt();
-        (target as i64).max(MIN_CELL_UM)
+        (target as i64).max(MIN_CELL_NM)
     }
 }
 

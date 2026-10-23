@@ -14,7 +14,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -63,7 +63,7 @@ fn part(reference: &str, pins: &[&str]) -> Part {
         symbol: None,
         datasheet: None,
         pins: pins.iter().map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_nm: None,
         edge: None,
     }
 }

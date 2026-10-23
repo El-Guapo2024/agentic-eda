@@ -333,7 +333,7 @@ mod tests {
         let dir = temp_root(tag);
         let intent = dir.join("intent.yaml");
         std::fs::write(&intent, serde_yaml::to_string(&ConstraintModel::default()).unwrap()).unwrap();
-        std::fs::write(dir.join("board.json"), serde_json::to_string(&json!({ "intent": intent.display().to_string(), "snap_um": 100, "spacing_um": 300 })).unwrap()).unwrap();
+        std::fs::write(dir.join("board.json"), serde_json::to_string(&json!({ "intent": intent.display().to_string(), "snap_nm": 100, "spacing_nm": 300 })).unwrap()).unwrap();
         std::fs::write(dir.join("design.json"), design_json).unwrap();
         dir
     }

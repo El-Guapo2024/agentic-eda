@@ -327,7 +327,7 @@ mod tests {
             package: Some("R0603".into()),
             footprint: Some("R0603".into()),
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-            body_um: None,
+            body_nm: None,
             symbol: None,
             datasheet: None,
             edge: None,
@@ -341,7 +341,7 @@ mod tests {
             sheet_contents: None,
             bus_aliases: vec![],
             symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -354,7 +354,7 @@ mod tests {
             drawings: None,
         };
         board::save(&dir, &design).unwrap();
-        std::fs::write(dir.join("board.json"), json!({ "intent": intent.display().to_string(), "snap_um": 100, "spacing_um": 300 }).to_string()).unwrap();
+        std::fs::write(dir.join("board.json"), json!({ "intent": intent.display().to_string(), "snap_nm": 100, "spacing_nm": 300 }).to_string()).unwrap();
         dir
     }
 

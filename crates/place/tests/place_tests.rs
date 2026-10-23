@@ -11,7 +11,7 @@ fn part(reference: &str, package: &str, npins: usize) -> Part {
         package: Some(package.into()),
         footprint: None,
         pins: (1..=npins).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal }).collect(),
-        body_um: None, symbol: None, datasheet: None,
+        body_nm: None, symbol: None, datasheet: None,
         edge: None,
     }
 }
@@ -19,7 +19,7 @@ fn part(reference: &str, package: &str, npins: usize) -> Part {
 fn design() -> Design {
     Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: None,

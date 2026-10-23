@@ -74,7 +74,7 @@ mod tests {
         assert_eq!(images[0].at, Point { x: 100_000, y: 50_000 });
         assert_eq!(images[0].scale_ppm, 500_000);
         assert_eq!(images[0].data, data, "the data comes back as one text");
-        assert_eq!(images[0].size_um(), (3_000, 2_000), "60 x 40 px at 254 ppi at half scale");
+        assert_eq!(images[0].size_nm(), (3_000, 2_000), "60 x 40 px at 254 ppi at half scale");
         assert!(refs[0].locked);
         assert_eq!(refs[0].uuid.as_deref(), Some("11111111-1111-1111-1111-111111111111"));
     }

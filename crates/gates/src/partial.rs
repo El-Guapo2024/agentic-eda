@@ -126,7 +126,7 @@ mod tests {
                 eda_model::Pin { number: "1".into(), name: None, kind: eda_model::PinKind::Passive },
                 eda_model::Pin { number: "2".into(), name: None, kind: eda_model::PinKind::Passive },
             ],
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -150,7 +150,7 @@ mod tests {
     fn design_with(fps: Vec<FootprintInstance>) -> Design {
         Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             routing: None,

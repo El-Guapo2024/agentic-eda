@@ -44,7 +44,7 @@ pub struct ConvertedPolys {
 }
 
 /// `chainingEpsilon = 100` IU (nm) is a tenth of a micrometre: with integer micrometre coordinates only exact meetings chain.
-const MAX_ERROR_UM: i32 = 5;
+const MAX_ERROR_NM: i32 = 5;
 
 fn pt64(p: Point) -> Point64 {
     Point64::new(p.x, p.y)
@@ -58,7 +58,7 @@ fn norm(a: f64) -> f64 {
     a.rem_euclid(std::f64::consts::TAU)
 }
 
-/// An arc's polyline within [`MAX_ERROR_UM`] of the curve (`SHAPE_ARC::ConvertToPolyline`): the sweep through `mid`, split by
+/// An arc's polyline within [`MAX_ERROR_NM`] of the curve (`SHAPE_ARC::ConvertToPolyline`): the sweep through `mid`, split by
 /// `GetArcToSegmentCount( radius, error )` per full turn; endpoints exact. Collinear points give the chord.
 pub fn arc_points(start: Point, mid: Point, end: Point) -> Vec<Point> {
     let (sx, sy, mx, my, ex, ey) = (start.x as f64, start.y as f64, mid.x as f64, mid.y as f64, end.x as f64, end.y as f64);
@@ -75,7 +75,7 @@ pub fn arc_points(start: Point, mid: Point, end: Point) -> Vec<Point> {
     if norm(a1 - a0) > sweep {
         sweep -= std::f64::consts::TAU;
     }
-    let per_turn = get_arc_to_segment_count(r.round().clamp(1.0, i32::MAX as f64) as i32, MAX_ERROR_UM).max(4) as f64;
+    let per_turn = get_arc_to_segment_count(r.round().clamp(1.0, i32::MAX as f64) as i32, MAX_ERROR_NM).max(4) as f64;
     let n = ((sweep.abs() / std::f64::consts::TAU * per_turn).ceil() as usize).clamp(2, 4096);
     tessellate_arc(start, mid, end, n)
 }
@@ -450,7 +450,7 @@ mod tests {
             sheet_contents: None,
             bus_aliases: vec![],
             symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,

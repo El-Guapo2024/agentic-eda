@@ -248,7 +248,7 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
             // `width`/`height` are required by the schema; use the
             // footprint's courtyard when present, else the pad bounding
             // box (both in the local, unrotated frame).
-            let (width_um, height_um) = footprint.courtyard.unwrap_or_else(|| {
+            let (width_nm, height_nm) = footprint.courtyard.unwrap_or_else(|| {
                 let mut min_x = i64::MAX;
                 let mut max_x = i64::MIN;
                 let mut min_y = i64::MAX;
@@ -274,8 +274,8 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                 "center": { "x": um_to_mm(fp.at.x), "y": um_to_mm(fp.at.y) },
                 "rotation": fp.rot,
                 "layer": layer,
-                "width": um_to_mm(width_um),
-                "height": um_to_mm(height_um),
+                "width": um_to_mm(width_nm),
+                "height": um_to_mm(height_nm),
             }));
             let rad = (fp.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
             let (sin, cos) = rad.sin_cos();
@@ -432,7 +432,7 @@ mod tests {
                         Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                         Pin { number: "2".into(), name: None, kind: PinKind::Passive },
                     ],
-                    body_um: None, symbol: None, datasheet: None,
+                    body_nm: None, symbol: None, datasheet: None,
                     edge: None,
                 },
                 Part {
@@ -446,7 +446,7 @@ mod tests {
                         Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                         Pin { number: "2".into(), name: None, kind: PinKind::Passive },
                     ],
-                    body_um: None, symbol: None, datasheet: None,
+                    body_nm: None, symbol: None, datasheet: None,
                     edge: None,
                 },
             ],
@@ -458,7 +458,7 @@ mod tests {
     fn design() -> Design {
         Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
                 symbols: vec![
@@ -533,7 +533,7 @@ mod tests {
             footprint: None,
             package: None,
             pins: vec![],
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         });
         assert_eq!(ftype, "simple_chip");

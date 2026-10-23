@@ -10,24 +10,24 @@ use eda_model::rules::TextGraphicsDefaults;
 fn model_with_defaults() -> ConstraintModel {
     let mut m = model(&["F.Cu", "B.Cu"]);
     let d = &mut m.board.text_graphics;
-    d.silk.line_width_um = 120;
-    d.silk.text_height_um = 1_200;
-    d.silk.text_width_um = 1_200;
-    d.silk.text_thickness_um = 110;
-    d.copper.line_width_um = 210;
-    d.copper.text_height_um = 1_600;
-    d.copper.text_width_um = 1_600;
-    d.copper.text_thickness_um = 320;
-    d.fab.line_width_um = 90;
-    d.fab.text_height_um = 900;
-    d.fab.text_width_um = 900;
-    d.fab.text_thickness_um = 140;
-    d.others.line_width_um = 77;
-    d.others.text_height_um = 800;
-    d.others.text_width_um = 800;
-    d.others.text_thickness_um = 130;
-    d.edge_cuts_line_width_um = 55;
-    d.courtyard_line_width_um = 45;
+    d.silk.line_width_nm = 120;
+    d.silk.text_height_nm = 1_200;
+    d.silk.text_width_nm = 1_200;
+    d.silk.text_thickness_nm = 110;
+    d.copper.line_width_nm = 210;
+    d.copper.text_height_nm = 1_600;
+    d.copper.text_width_nm = 1_600;
+    d.copper.text_thickness_nm = 320;
+    d.fab.line_width_nm = 90;
+    d.fab.text_height_nm = 900;
+    d.fab.text_width_nm = 900;
+    d.fab.text_thickness_nm = 140;
+    d.others.line_width_nm = 77;
+    d.others.text_height_nm = 800;
+    d.others.text_width_nm = 800;
+    d.others.text_thickness_nm = 130;
+    d.edge_cuts_line_width_nm = 55;
+    d.courtyard_line_width_nm = 45;
     m
 }
 
@@ -35,7 +35,7 @@ fn defaults_cmd(shapes: &[&str], texts: &[&str], dims: &[&str]) -> Cmd {
     Cmd::EditTextAndGraphics { shape_ids: ids(shapes), text_ids: ids(texts), dimension_ids: ids(dims), layer_defaults: true, layer: None, line_width: None, text_size: None, text_thickness: None }
 }
 
-fn stroke(b: &Board<'_>, id: &str) -> Um {
+fn stroke(b: &Board<'_>, id: &str) -> Nm {
     drawings(b).shapes.iter().find(|s| s.id() == id).unwrap().stroke_width()
 }
 
@@ -95,7 +95,7 @@ fn layer_default_values_give_a_text_its_layers_size_and_thickness() {
     d.drawings.as_mut().unwrap().texts.extend([("t_cu", "F.Cu"), ("t_edge", "Edge.Cuts"), ("t_fab", "B.Fab")].map(|(id, layer)| text(id, layer, (1_000, 1_000), 0)));
     let mut b = Board::new(d, &m, 100, 300);
     b.apply(&defaults_cmd(&[], &["txt_a", "t_cu", "t_edge", "t_fab"], &[])).unwrap();
-    let t = |id: &str| drawings(&b).texts.iter().find(|t| t.id == id).map(|t| (t.size_um, t.stroke_width)).unwrap();
+    let t = |id: &str| drawings(&b).texts.iter().find(|t| t.id == id).map(|t| (t.size_nm, t.stroke_width)).unwrap();
     assert_eq!(t("txt_a"), (1_200, 110), "F.SilkS");
     assert_eq!(t("t_cu"), (1_600, 320), "copper");
     assert_eq!(t("t_edge"), (1_000, 150), "Edge.Cuts: the factory text");
@@ -115,7 +115,7 @@ fn layer_default_values_restyle_a_dimension_from_the_layer_and_the_boards_dimens
     .unwrap();
     b.apply(&defaults_cmd(&[], &[], &["dim_a"])).unwrap();
     let d = dim(&b, "dim_a");
-    assert_eq!((d.stroke_width, d.text_size_um, d.text_thickness_um), (77, 800, Some(130)), "Dwgs.User is in the Others class");
+    assert_eq!((d.stroke_width, d.text_size_nm, d.text_thickness_nm), (77, 800, Some(130)), "Dwgs.User is in the Others class");
     assert_eq!((d.units, d.units_format, d.precision), (DimensionUnits::Inch, DimensionUnitsFormat::BareSuffix, 3));
     assert_eq!((d.suppress_trailing_zeros, d.text_position, d.keep_text_aligned), (false, DimensionTextPosition::Inline, false));
     assert_eq!(d.layer, "Dwgs.User", "the layer is the one thing StyleFromSettings does not touch");
@@ -130,11 +130,11 @@ fn specified_values_reach_a_dimension_and_leave_what_is_not_given() {
     let d = dim(&b, "dim_a");
     assert_eq!(d.layer, "F.Fab");
     assert_eq!(d.stroke_width, 250);
-    assert_eq!(d.text_thickness_um, Some(180));
-    assert_eq!(d.text_size_um, before.text_size_um, "no text size given");
+    assert_eq!(d.text_thickness_nm, Some(180));
+    assert_eq!(d.text_size_nm, before.text_size_nm, "no text size given");
     assert_eq!((d.start, d.end, d.precision, d.units), (before.start, before.end, before.precision, before.units));
     b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec![], dimension_ids: ids(&["dim_a"]), layer_defaults: false, layer: None, line_width: None, text_size: Some(1_300), text_thickness: None }).unwrap();
-    assert_eq!(dim(&b, "dim_a").text_size_um, 1_300);
+    assert_eq!(dim(&b, "dim_a").text_size_nm, 1_300);
     assert_eq!(dim(&b, "dim_a").stroke_width, 250);
 }
 

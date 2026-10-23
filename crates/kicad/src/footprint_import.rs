@@ -307,7 +307,7 @@ fn parse_text(item: &[Sexpr], content: &str) -> Option<Text> {
         at: Point { x: mm_to_um(x), y: mm_to_um(y) },
         angle: ((sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32,
         layer: layer_of(item),
-        size_um: mm_to_um(size_mm).max(1),
+        size_nm: mm_to_um(size_mm).max(1),
         stroke_width: mm_to_um(thickness_mm),
         justify: if has("left") {
             TextJustify::Left
@@ -345,12 +345,12 @@ fn parse_pad(pad: &[Sexpr], version: i64) -> Option<LibraryPad> {
         None => (None, None),
     };
     let um = |tag: &str| sexpr::find(pad, tag).and_then(|c| sexpr::num(c, 1)).map(mm_to_um);
-    let size_um = (mm_to_um(sexpr::num(size, 1)?), mm_to_um(sexpr::num(size, 2)?));
+    let size_nm = (mm_to_um(sexpr::num(size, 1)?), mm_to_um(sexpr::num(size, 2)?));
     // The padstack (`(padstack ..)`, `(remove_unused_layers ..)`, `(keep_end_layers ..)`): a `.kicad_mod` is a footprint on the top, and the library has no board, so a custom
     // stack has every copper layer KiCad's file can name.
     let main = eda_model::padstack::PadLayerShape {
         shape: read.shape,
-        size: size_um,
+        size: size_nm,
         roundrect_ratio: read.roundrect_ratio,
         offset: read.ext.offset,
         trapezoid_delta: read.ext.trapezoid_delta,
@@ -484,7 +484,7 @@ mod tests {
             Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, pts: vec![Point { x: 0, y: 0 }, Point { x: 500, y: 0 }, Point { x: 500, y: 500 }] },
             Shape::Bezier { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: 0, y: 0 }, c1: Point { x: 100, y: 200 }, c2: Point { x: 300, y: 200 }, end: Point { x: 400, y: 0 } },
         ];
-        fp.texts = vec![Text { id: String::new(), content: "hello".into(), at: Point { x: 100, y: 3000 }, angle: 90_000, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Left, mirror: true }];
+        fp.texts = vec![Text { id: String::new(), content: "hello".into(), at: Point { x: 100, y: 3000 }, angle: 90_000, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Left, mirror: true }];
         fp.assign_missing_ids();
         fp
     }
@@ -518,7 +518,7 @@ mod tests {
         assert!(back.graphics.iter().any(|g| matches!(g, Shape::Polygon { pts, .. } if pts.len() == 3)));
         assert_eq!(back.texts.len(), 1);
         let t = &back.texts[0];
-        assert_eq!((t.content.as_str(), t.angle, t.size_um, t.stroke_width, t.justify, t.mirror), ("hello", 90_000, 1000, 150, TextJustify::Left, true));
+        assert_eq!((t.content.as_str(), t.angle, t.size_nm, t.stroke_width, t.justify, t.mirror), ("hello", 90_000, 1000, 150, TextJustify::Left, true));
         assert!(back.courtyard.is_some(), "the F.CrtYd circle gives a courtyard box");
         assert!(back.pads.iter().all(|p| !p.id.is_empty()) && back.graphics.iter().all(|g| !g.id().is_empty()));
     }

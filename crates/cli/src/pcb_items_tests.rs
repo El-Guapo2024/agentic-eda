@@ -29,8 +29,8 @@ fn notes_box() -> TextBox {
     let mut t = TextBox::new("F.SilkS", Point { x: 2_000, y: 2_000 }, Point { x: 22_000, y: 10_000 }, 1_000, 120);
     t.text = "REV A\nBuilt by the studio, wrapped to the width of its box when the line is long".into();
     t.line_style = eda_model::pcb_items::LineStyle::Dash;
-    t.margin_left_um = 900;
-    t.margin_right_um = 1_100;
+    t.margin_left_nm = 900;
+    t.margin_right_nm = 1_100;
     t
 }
 
@@ -58,7 +58,7 @@ fn a_text_box_is_one_undo_step_of_the_board_and_survives_the_project_file() {
     // The project file is design.json: a fresh load has the box with everything the dialog set.
     let design: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("design.json")).unwrap()).unwrap();
     assert_eq!(design["drawings"]["board_items"]["text_boxes"][0]["line_style"], "dash", "{design}");
-    assert_eq!((shown[0].margin_left_um, shown[0].margin_right_um), (900, 1_100));
+    assert_eq!((shown[0].margin_left_nm, shown[0].margin_right_nm), (900, 1_100));
 
     // Move, edit and delete are verbs of the same history.
     let id = shown[0].id.clone();
@@ -361,9 +361,9 @@ fn points(dir: &Path) -> Vec<PcbPoint> {
     load(dir).unwrap().1.drawings.map(|d| d.board_items.points).unwrap_or_default()
 }
 
-fn add_point(dir: &Path, layer: &str, at: Point, size_um: i64) {
+fn add_point(dir: &Path, layer: &str, at: Point, size_nm: i64) {
     let mut point = PcbPoint::new(layer, at);
-    point.size_um = size_um;
+    point.size_nm = size_nm;
     step(dir, Cmd::PcbItem(PcbItemCmd::AddPoint { point }), false, "test").unwrap();
 }
 
@@ -386,13 +386,13 @@ fn a_point_is_one_undo_step_described_by_the_state_and_written_to_the_board() {
     assert!(!text.contains("(point (at 30 20) (size 2) (layer \"F.SilkS\") (locked"), "no lock in the file form");
     let (back, _, notes) = eda_kicad::import_kicad_pcb(&text).unwrap();
     assert!(!notes.unread_items.contains_key("point"), "the importer reads it");
-    let read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_um)).collect();
+    let read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_nm)).collect();
     assert_eq!(read, vec![("F.SilkS".to_string(), Point { x: 30_000, y: 20_000 }, 2_000)]);
 
-    step(&dir, Cmd::PcbItem(PcbItemCmd::EditPoint { id: id.clone(), layer: "B.SilkS".into(), at: Point { x: 0, y: 0 }, size_um: 3_000 }), false, "test").unwrap();
-    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_um), ("B.SilkS", 3_000));
+    step(&dir, Cmd::PcbItem(PcbItemCmd::EditPoint { id: id.clone(), layer: "B.SilkS".into(), at: Point { x: 0, y: 0 }, size_nm: 3_000 }), false, "test").unwrap();
+    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_nm), ("B.SilkS", 3_000));
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_um), ("F.SilkS", 2_000), "one undo takes the edit back");
+    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_nm), ("F.SilkS", 2_000), "one undo takes the edit back");
     step(&dir, Cmd::PcbItem(PcbItemCmd::DeletePoint { id }), false, "test").unwrap();
     assert!(points(&dir).is_empty());
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
@@ -433,7 +433,7 @@ fn kicad_cli_loads_the_points_this_studio_writes_keeps_them_and_does_not_plot_th
     let upgraded = std::fs::read_to_string(&copy).unwrap();
     assert_eq!(upgraded.matches("(point").count(), 2, "kicad-cli kept both points: {upgraded}");
     let (back, _, _) = eda_kicad::import_kicad_pcb(&upgraded).unwrap();
-    let mut read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_um)).collect();
+    let mut read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_nm)).collect();
     read.sort_by_key(|p| p.1.x);
     assert_eq!(read, vec![("B.Cu".to_string(), Point { x: 5_000, y: 6_000 }, 1_000), ("F.SilkS".to_string(), Point { x: 10_000, y: 12_000 }, 2_000)], "kicad-cli read the place, size and layer as written");
     let with = body(&plot(&cli, &derived, "F.SilkS", &dir.join("with.svg")));
@@ -659,16 +659,16 @@ fn qr(layer: &str, at: Point, text: &str) -> Barcode {
         at,
         angle: 0,
         layer: layer.into(),
-        width_um: 8_000,
-        height_um: 8_000,
+        width_nm: 8_000,
+        height_nm: 8_000,
         text: text.into(),
-        text_height_um: 1_000,
+        text_height_nm: 1_000,
         kind: BarcodeKind::Qr,
         ecc: EccLevel::L,
         show_text: true,
         knockout: false,
-        margin_x_um: 0,
-        margin_y_um: 0,
+        margin_x_nm: 0,
+        margin_y_nm: 0,
     }
 }
 
@@ -730,7 +730,7 @@ fn the_barcode_shape_routes_answer_without_a_plot_for_what_has_nothing_to_plot()
     assert_eq!(serde_json::from_str::<serde_json::Value>(&empty.body).unwrap(), serde_json::json!({ "status": "ready", "paths": [] }));
     assert_eq!(crate::barcode_api::preview_route(&dir, b"not json").status, "400 Bad Request");
     assert_eq!(crate::barcode_api::preview_route(&dir, br#"{"barcode": {"layer": "F.SilkS"}}"#).status, "400 Bad Request");
-    let preview = crate::barcode_api::preview_route(&dir, br#"{"barcode": {"layer": "F.SilkS", "at": {"x": 0, "y": 0}, "width_um": 5000, "height_um": 5000, "text": "", "text_height_um": 1000}}"#);
+    let preview = crate::barcode_api::preview_route(&dir, br#"{"barcode": {"layer": "F.SilkS", "at": {"x": 0, "y": 0}, "width_nm": 5000, "height_nm": 5000, "text": "", "text_height_nm": 1000}}"#);
     assert_eq!(serde_json::from_str::<serde_json::Value>(&preview.body).unwrap(), serde_json::json!({ "status": "ready", "paths": [] }));
 }
 
@@ -752,8 +752,8 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
     let case = |layer: &str, kind: BarcodeKind, text: &str, w: i64, h: i64, mutate: &dyn Fn(&mut Barcode)| {
         let mut b = qr(layer, at, text);
         b.kind = kind;
-        b.width_um = w;
-        b.height_um = h;
+        b.width_nm = w;
+        b.height_nm = h;
         mutate(&mut b);
         b
     };
@@ -765,12 +765,12 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
         })),
         ("micro qr", case("F.SilkS", BarcodeKind::MicroQr, "MQ1", 6_000, 6_000, &|b| b.ecc = EccLevel::M)),
         ("data matrix", case("F.SilkS", BarcodeKind::DataMatrix, "DM-2026", 7_000, 7_000, &|_| {})),
-        ("code 128 with its text", case("F.SilkS", BarcodeKind::Code128, "AB-123", 14_000, 5_000, &|b| b.text_height_um = 1_200)),
+        ("code 128 with its text", case("F.SilkS", BarcodeKind::Code128, "AB-123", 14_000, 5_000, &|b| b.text_height_nm = 1_200)),
         ("qr on the back (mirrored)", case("B.SilkS", BarcodeKind::Qr, "BACK", 8_000, 8_000, &|_| {})),
         ("qr knocked out of the silkscreen", case("F.SilkS", BarcodeKind::Qr, "KO", 8_000, 8_000, &|b| {
             b.knockout = true;
-            b.margin_x_um = 1_000;
-            b.margin_y_um = 600;
+            b.margin_x_nm = 1_000;
+            b.margin_y_nm = 600;
         })),
         ("code 39 with a text it cannot take", case("F.SilkS", BarcodeKind::Code39, "h\u{e9}llo", 14_000, 5_000, &|_| {})),
     ];
@@ -820,7 +820,7 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
     let upgraded = std::fs::read_to_string(&copy).unwrap();
     assert_eq!(upgraded.matches("(barcode").count(), 2, "kicad-cli kept both barcodes: {upgraded}");
     let (back, _, _) = eda_kicad::import_kicad_pcb(&upgraded).unwrap();
-    let mut read: Vec<_> = back.drawings.unwrap().barcodes.into_iter().map(|b| (b.text, b.kind, b.ecc, b.at, b.width_um)).collect();
+    let mut read: Vec<_> = back.drawings.unwrap().barcodes.into_iter().map(|b| (b.text, b.kind, b.ecc, b.at, b.width_nm)).collect();
     read.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(read[0].0, "KEPT");
     assert_eq!((read[0].1, read[0].2, read[0].3, read[0].4), (BarcodeKind::Qr, EccLevel::Q, at, 8_000));
@@ -836,7 +836,7 @@ fn a_lines_endings_are_one_undo_step_described_by_the_state_and_written_to_the_b
     let dir = scratch("k10_endings");
     setup(&dir);
     let id = add_shape(&dir, bar("F.SilkS", 5_000, 10_000, 20_000));
-    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_um: 2_000, ..Default::default() };
+    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_nm: 2_000, ..Default::default() };
     step(&dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.clone()], fill: None, start_ending: Some(arrow), end_ending: Some(LineEnding::new(LineEndingStyle::ArrowOpen)) }), false, "test").unwrap();
     let s = shape_json(&dir, &id);
     assert_eq!(s["start_ending"], serde_json::json!({ "style": "arrow", "length": 2000, "width": 0, "stroke_width": 0 }));

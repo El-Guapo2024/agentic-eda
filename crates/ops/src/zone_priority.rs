@@ -238,10 +238,10 @@ mod tests {
     }
 
     fn board(zones: Vec<Zone>, vias: Vec<Via>) -> (Design, ConstraintModel) {
-        let part = Part { reference: "R1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), symbol: None, datasheet: None, pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, edge: None };
+        let part = Part { reference: "R1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), symbol: None, datasheet: None, pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, edge: None };
         let model = ConstraintModel { parts: vec![part], nets: vec![Net { name: "GND".into(), pins: vec![] }, Net { name: "VCC".into(), pins: vec![] }, Net { name: "AUX".into(), pins: vec![] }], board: BoardRules { layers: vec!["F.Cu".into(), "B.Cu".into()], ..Default::default() }, ..Default::default() };
         let design = Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,

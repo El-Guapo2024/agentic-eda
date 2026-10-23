@@ -231,7 +231,7 @@ pub(crate) fn carry_field_looks(old: &SchematicSection, new: &mut SchematicSecti
         for f in now.iter_mut() {
             if let Some(w) = was.iter().find(|w| w.name == f.name) {
                 f.visible = w.visible;
-                f.size_um = w.size_um;
+                f.size_nm = w.size_nm;
                 f.bold = w.bold;
                 f.italic = w.italic;
                 f.name_shown = w.name_shown;

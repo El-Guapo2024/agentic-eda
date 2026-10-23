@@ -252,7 +252,7 @@ mod tests {
     fn design(root: SchematicSection, screens: Vec<(&str, SchematicSection)>) -> Design {
         let contents: BTreeMap<String, SchematicSection> = screens.into_iter().map(|(f, s)| (f.to_string(), s)).collect();
         Design {
-            schema: 1,
+            schema: crate::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(root),
             nets: None,

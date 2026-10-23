@@ -3,19 +3,19 @@
 //! `aVia->IsLocked()`) nor dragged (`ROUTER_TOOL::performDragging`'s "The selected item is locked."), and a dragged line stops in front of one. And the
 //! redundant-segment rule of `NODE::Add` (`findRedundantSegment`): a segment the board already has is not added a second time.
 
-use eda_model::ir::{Design, DrawingsSection, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Um, Via};
+use eda_model::ir::{Design, DrawingsSection, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Nm, Via};
 use eda_model::{ConstraintModel, Net as IrNet, Part, Pin, PinKind};
 use eda_pns::arcs::ArcPts;
 use eda_pns::item::Item;
 use eda_pns::router::{RouteCommit, Router};
 use eda_pns::settings::Mode;
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
 fn part(r: &str) -> Part {
-    Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None }
+    Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None }
 }
 
 /// Two resistors far from the action (so no pad is in the way), SIG on R1.1 and R2.1, the given tracks and vias, and `locked` ids locked.
@@ -26,7 +26,7 @@ fn board(tracks: Vec<Track>, vias: Vec<Via>, locked: &[&str]) -> (Design, Constr
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,

@@ -6,7 +6,7 @@ use eda_model::footprint::{placed_pads, PlacedPad};
 use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, PlacementSection, Provenance};
 use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
-pub(super) fn p(x: Um, y: Um) -> Point {
+pub(super) fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -16,7 +16,7 @@ pub(super) fn id(s: &str) -> String {
 
 /// Three pads, none on an axis of symmetry, so a mirror image cannot be mistaken for the original.
 pub(super) fn lopsided() -> Footprint {
-    let pad = |n: &str, at: (Um, Um)| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at, size: (600, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+    let pad = |n: &str, at: (Nm, Nm)| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at, size: (600, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
     Footprint { name: "LOPSIDED".into(), pads: vec![pad("1", (-1500, -600)), pad("2", (1500, 0)), pad("3", (-1500, 700))], courtyard: Some((4000, 2400)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
 
@@ -29,7 +29,7 @@ pub(super) fn part(r: &str) -> Part {
         package: Some("LOPSIDED".into()),
         footprint: Some("LOPSIDED".into()),
         pins: ["1", "2", "3"].iter().map(|n| Pin { number: (*n).into(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_nm: None,
         symbol: None,
         datasheet: None,
         edge: None,
@@ -47,15 +47,15 @@ pub(super) fn model(layers: &[&str]) -> ConstraintModel {
     m
 }
 
-pub(super) fn track(id: &str, layer: &str, pts: &[(Um, Um)]) -> Track {
+pub(super) fn track(id: &str, layer: &str, pts: &[(Nm, Nm)]) -> Track {
     Track { id: id.into(), net: "GND".into(), pins: vec![], layer: layer.into(), width: 200, pts: pts.iter().map(|&(x, y)| p(x, y)).collect(), arc_mid_offset: None }
 }
 
-pub(super) fn via(id: &str, at: (Um, Um), from: &str, to: &str) -> Via {
+pub(super) fn via(id: &str, at: (Nm, Nm), from: &str, to: &str) -> Via {
     Via { id: id.into(), net: "GND".into(), at: p(at.0, at.1), drill: 300, diameter: 600, from_layer: from.into(), to_layer: to.into() }
 }
 
-pub(super) fn zone(id: &str, layer: &str, outline: &[(Um, Um)]) -> Zone {
+pub(super) fn zone(id: &str, layer: &str, outline: &[(Nm, Nm)]) -> Zone {
     Zone { id: id.into(), net: "GND".into(), layer: layer.into(), outline: outline.iter().map(|&(x, y)| p(x, y)).collect(), ..Default::default() }
 }
 
@@ -76,18 +76,18 @@ pub(super) fn dimension(id: &str, kind: DimensionKind, start: Point, end: Point)
         text_position: DimensionTextPosition::Outside,
         keep_text_aligned: true,
         text_angle: 0,
-        text_size_um: 1000,
+        text_size_nm: 1000,
         stroke_width: 150,
         arrow_length: 1000,
         extension_offset: 300,
         extension_height: 500,
         arrow_direction: ArrowDirection::Inward,
-        text_thickness_um: None,
+        text_thickness_nm: None,
     }
 }
 
-pub(super) fn text(id: &str, layer: &str, at: (Um, Um), angle: Millideg) -> Text {
-    Text { id: id.into(), content: "T".into(), at: p(at.0, at.1), angle, layer: layer.into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }
+pub(super) fn text(id: &str, layer: &str, at: (Nm, Nm), angle: Millideg) -> Text {
+    Text { id: id.into(), content: "T".into(), at: p(at.0, at.1), angle, layer: layer.into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }
 }
 
 /// A board with one of everything, on the given copper layers.
@@ -97,7 +97,7 @@ pub(super) fn design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,

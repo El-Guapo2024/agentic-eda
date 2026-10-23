@@ -9,7 +9,7 @@ use eda_model::{ConstraintModel, Footprint, Net, Pad};
 
 /// A four-pad footprint, the pads 2 mm apart in a row: `1 2 3 4` at x = -3, -1, 1, 3 mm.
 fn quad() -> Footprint {
-    let pad = |n: &str, x: Um| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+    let pad = |n: &str, x: Nm| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
     Footprint { name: "QUAD".into(), pads: vec![pad("1", -3_000), pad("2", -1_000), pad("3", 1_000), pad("4", 3_000)], courtyard: Some((8_000, 3_000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
 

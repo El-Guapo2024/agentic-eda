@@ -31,7 +31,7 @@ fn mcu30_board(name: &str) -> PathBuf {
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     dir
 }
@@ -316,7 +316,7 @@ fn slow_the_annotated_import_and_paste_leave_kicad_cli_with_no_reference_finding
     // fields the user placed and a look they gave, then mcu30 as module sheets: the places and looks are kept and the board is as clean as before
     let (_, flat, _) = load(&dir).unwrap();
     let r3 = flat.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R3").unwrap().at;
-    let edit: Cmd = serde_json::from_value(json!({ "op": "sch_edit", "verb": "edit_field", "id": "fld:R3:Reference", "at": { "x": r3.x - 12_700, "y": r3.y + 1_270 }, "h": "right", "size_um": 1778, "bold": true })).unwrap();
+    let edit: Cmd = serde_json::from_value(json!({ "op": "sch_edit", "verb": "edit_field", "id": "fld:R3:Reference", "at": { "x": r3.x - 12_700, "y": r3.y + 1_270 }, "h": "right", "size_nm": 1778, "bold": true })).unwrap();
     step(&dir, edit, false, "test").unwrap();
     step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
     let (_, sheets, _) = load(&dir).unwrap();
@@ -386,7 +386,7 @@ fn dual_opamp() -> (eda_model::symbol::LibSymbol, eda_model::Part) {
         alternate: None,
     };
     let pins = ["1", "2", "3", "4", "5", "6", "7", "8"].iter().map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect();
-    let part = Part { reference: "U9".into(), mpn: None, lcsc: None, value: Some("TL072".into()), package: None, footprint: None, symbol: Some("Test:Dual3".into()), datasheet: None, pins, body_um: None, edge: None };
+    let part = Part { reference: "U9".into(), mpn: None, lcsc: None, value: Some("TL072".into()), package: None, footprint: None, symbol: Some("Test:Dual3".into()), datasheet: None, pins, body_nm: None, edge: None };
     (sym, part)
 }
 
@@ -435,7 +435,7 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
         root.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
     }
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 
     step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
@@ -604,7 +604,7 @@ fn bus_board(name: &str, bus_label: &str) -> (PathBuf, String, Point) {
     design.schematic = Some(root);
     design.sheet_contents = Some([("child.kicad_sch".to_string(), child)].into_iter().collect());
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     (dir, sheet_id, hl)
 }
@@ -650,7 +650,7 @@ fn slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it() {
 // ---------------------------------------------------------------------------------------- a label's own fields
 
 fn edit_label_fields(id: &str, fields: Vec<eda_model::sch_extras::LabelField>) -> Cmd {
-    Cmd::SchEdit(eda_ops::sch_edit::SchCmd::EditLabel { id: id.into(), text: None, shape: None, spin: None, size_um: None, bold: None, italic: None, auto_rotate: None, fields: Some(fields) })
+    Cmd::SchEdit(eda_ops::sch_edit::SchCmd::EditLabel { id: id.into(), text: None, shape: None, spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: Some(fields) })
 }
 
 fn netclass(text: &str) -> eda_model::sch_extras::LabelField {
@@ -1140,7 +1140,7 @@ fn a_board_without_a_stored_schematic_is_loaded_with_the_derived_one_and_keeps_i
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 35_000, y: 0 }, Point { x: 35_000, y: 35_000 }, Point { x: 0, y: 35_000 }], footprints: vec![], modules: vec![] });
     design.drawings = Some(eda_model::ir::DrawingsSection::default());
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     let (d, _) = crate::kicad_engine::load_with_schematic(&dir).unwrap();
     assert!(d.schematic.as_ref().is_some_and(|s| !s.sheets.is_empty() || !s.symbols.is_empty()), "the derived schematic");
@@ -1201,7 +1201,7 @@ fn empty_board(name: &str) -> PathBuf {
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     dir
 }

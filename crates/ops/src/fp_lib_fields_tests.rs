@@ -6,7 +6,7 @@ use super::*;
 use eda_model::fp_edit::FieldLayout;
 use eda_model::ir::FootprintField;
 
-fn layout(x: Um, y: Um, layer: &str) -> FieldLayout {
+fn layout(x: Nm, y: Nm, layer: &str) -> FieldLayout {
     FieldLayout::new(p(x, y), layer)
 }
 

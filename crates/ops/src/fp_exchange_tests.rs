@@ -9,7 +9,7 @@ use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintEdit, FootprintKi
 use eda_model::ir::{BoardPart, FootprintExtra, FootprintZoneFacts, FootprintZoneOverrides, Group, PadConnection, PadZoneOverride, PlacementSection, Provenance};
 use eda_model::{Net, Part, Pin, PinKind};
 
-fn pad(number: &str, x: Um, y: Um) -> Pad {
+fn pad(number: &str, x: Nm, y: Nm) -> Pad {
     Pad { number: number.into(), at: (x, y), size: (900, 900), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
 }
 
@@ -39,7 +39,7 @@ fn part(r: &str, footprint: &str, pins: usize) -> Part {
         symbol: None,
         datasheet: None,
         pins: (1..=pins).map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_nm: None,
         edge: None,
     }
 }
@@ -48,7 +48,7 @@ fn net(name: &str, pins: &[&str]) -> Net {
     Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }
 }
 
-fn pose(id: &str, x: Um, rot: u32, side: Side) -> FootprintInstance {
+fn pose(id: &str, x: Nm, rot: u32, side: Side) -> FootprintInstance {
     FootprintInstance { id: id.into(), at: p(x, 20_000), rot, side, label: LabelSide::default() }
 }
 
@@ -69,7 +69,7 @@ fn fixture() -> (ConstraintModel, Design) {
     pad_edit.size = Some((1_200, 1_200));
     edit.set_pad(pad_edit);
     let design = Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(section(vec![sym, sym2], vec![])),
         nets: Some(vec![net("N1", &["R1.1", "R2.1"]), net("N2", &["R1.2", "R2.2", "R1.3"])]),

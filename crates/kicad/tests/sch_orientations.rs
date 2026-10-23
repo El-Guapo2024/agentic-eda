@@ -51,7 +51,7 @@ fn model() -> ConstraintModel {
         symbol: Some("test:GATE".into()),
         datasheet: None,
         pins: pins.clone(),
-        body_um: None,
+        body_nm: None,
         edge: None,
     };
     ConstraintModel { parts: ["U1", "U2", "U3", "U4", "U5", "U6"].map(part).to_vec(), symbols: vec![gate()], ..Default::default() }
@@ -59,7 +59,7 @@ fn model() -> ConstraintModel {
 
 fn design_with(sch: SchematicSection) -> Design {
     Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(sch),
         nets: None,

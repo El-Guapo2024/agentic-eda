@@ -14,7 +14,7 @@
 //! rounded to the IR's micrometres where it becomes points.
 use crate::arcs::ArcPts;
 use crate::kigeom::{ki_round, rotate_d, to_um, ShapeArc, V2};
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction45 {
@@ -100,7 +100,7 @@ impl Direction45 {
     /// means "-y" (up on screen) -- the label is cosmetic, only the 8-way
     /// relative geometry (used by `right`/`angle_to`/`build_initial_trace`)
     /// matters to any caller.
-    pub fn from_vector(dx: Um, dy: Um) -> Self {
+    pub fn from_vector(dx: Nm, dy: Nm) -> Self {
         if dx == 0 && dy == 0 {
             return Direction45::Undefined;
         }

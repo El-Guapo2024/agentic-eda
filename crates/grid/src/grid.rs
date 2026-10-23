@@ -6,7 +6,7 @@
 //! dwarfed the actual pathfinding cost before this was array-indexed.
 
 use eda_model::footprint::PlacedPad;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::RoutingTuning;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +29,7 @@ struct Cell {
     /// required separation from `kind` alone under-reported the copper by
     /// `track_half - grid/2` and let a foreign track sit one cell too
     /// close. Every write raises this to the widest kind seen.
-    half_um: Um,
+    half_nm: Nm,
 }
 
 const EMPTY: u32 = u32::MAX;
@@ -39,8 +39,8 @@ const MULTI: u32 = u32::MAX - 1;
 
 /// KiCad's default board-setup copper-to-edge clearance, enforced by
 /// `kicad-cli pcb drc` against Edge.Cuts.
-/// Default copper-to-edge clearance (see `RoutingTuning::edge_clearance_um`).
-pub const EDGE_CLEARANCE_UM: Um = 500;
+/// Default copper-to-edge clearance (see `RoutingTuning::edge_clearance_nm`).
+pub const EDGE_CLEARANCE_NM: Nm = 500;
 
 fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
     let (ax, ay, bx, by, px, py) = (a.x as f64, a.y as f64, b.x as f64, b.y as f64, p.x as f64, p.y as f64);
@@ -53,12 +53,12 @@ fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
 pub struct Grid {
     /// Router tuning for this board (from the intent's `board.tuning`).
     pub tuning: RoutingTuning,
-    pub grid_um: Um,
-    pub clearance_um: Um,
-    pub track_half_um: Um,
-    pub via_half_um: Um,
-    pub min_x: Um,
-    pub min_y: Um,
+    pub grid_nm: Nm,
+    pub clearance_nm: Nm,
+    pub track_half_nm: Nm,
+    pub via_half_nm: Nm,
+    pub min_x: Nm,
+    pub min_y: Nm,
     pub cells_x: i64,
     pub cells_y: i64,
     pub num_layers: usize,
@@ -69,7 +69,7 @@ pub struct Grid {
     /// the *querying* side (`half_extent`) stays at the widest class on the
     /// board, because the clearance summaries are precomputed for one
     /// querying width and must never under-state what a net owes a cell.
-    net_track_half: std::collections::HashMap<u32, Um>,
+    net_track_half: std::collections::HashMap<u32, Nm>,
     occ: Vec<Option<Cell>>,
     /// Hard blocks per (cell, layer) with no clearance dilation: gap strips
     /// between SMD pads of one footprint, and (per edge) own-net pads a
@@ -108,7 +108,7 @@ pub struct Grid {
     /// looked tempting and sealed every fine-pitch pad on L4.
     near_track: Vec<Vec<u32>>,
     /// Querying half-widths, indexed by bucket. Bucket 0 is the default.
-    track_query_halves: Vec<Um>,
+    track_query_halves: Vec<Nm>,
     /// Which bucket a net queries. Absent = bucket 0.
     net_bucket: std::collections::HashMap<u32, usize>,
     /// Same for *via* separation (a via's copper is wider, so its radius
@@ -132,20 +132,20 @@ pub struct Grid {
     inside: Vec<bool>,
     /// Precomputed distance (µm) from each cell centre to the nearest
     /// outline edge, for the copper-to-edge clearance.
-    edge_dist: Vec<Um>,
+    edge_dist: Vec<Nm>,
     /// Net name interning: index <-> name.
     net_ids: std::collections::HashMap<String, u32>,
     net_names: Vec<String>,
 }
 
 impl Grid {
-    pub fn new(outline: Vec<Point>, grid_um: Um, clearance_um: Um, num_layers: usize) -> Self {
-        Self::with_widths(outline, grid_um, clearance_um, grid_um, grid_um, num_layers)
+    pub fn new(outline: Vec<Point>, grid_nm: Nm, clearance_nm: Nm, num_layers: usize) -> Self {
+        Self::with_widths(outline, grid_nm, clearance_nm, grid_nm, grid_nm, num_layers)
     }
 
     /// Full constructor: `track_width` and `via_diameter` in µm feed the
     /// kind-aware clearance in [`Grid::passable_as`].
-    pub fn with_widths(outline: Vec<Point>, grid_um: Um, clearance_um: Um, track_width: Um, via_diameter: Um, num_layers: usize) -> Self {
+    pub fn with_widths(outline: Vec<Point>, grid_nm: Nm, clearance_nm: Nm, track_width: Nm, via_diameter: Nm, num_layers: usize) -> Self {
         // An empty outline used to fall through to a 1x1-cell board on
         // which every net trivially "routes". Callers are supposed to
         // reject that upstream; if one ever stops, this must be a crash
@@ -155,23 +155,23 @@ impl Grid {
         // layer count is the depth of every lookup. Same reasoning as the
         // outline: a caller that gets here with either at zero has already
         // skipped BoardRules::validate, and a crash is the honest outcome.
-        assert!(grid_um > 0, "Grid::with_widths needs a positive pitch, got {grid_um} um");
+        assert!(grid_nm > 0, "Grid::with_widths needs a positive pitch, got {grid_nm} um");
         assert!(num_layers > 0, "Grid::with_widths needs at least one copper layer");
         let min_x = outline.iter().map(|p| p.x).min().expect("outline non-empty");
         let min_y = outline.iter().map(|p| p.y).min().expect("outline non-empty");
         let max_x = outline.iter().map(|p| p.x).max().expect("outline non-empty");
         let max_y = outline.iter().map(|p| p.y).max().expect("outline non-empty");
-        let cells_x = ((max_x - min_x) / grid_um).max(0) + 1;
-        let cells_y = ((max_y - min_y) / grid_um).max(0) + 1;
+        let cells_x = ((max_x - min_x) / grid_nm).max(0) + 1;
+        let cells_y = ((max_y - min_y) / grid_nm).max(0) + 1;
         // Widest separation any pair can need: via-to-via.
-        let clearance_cells = ((clearance_um + via_diameter + grid_um - 1) / grid_um).max(1) - 1;
+        let clearance_cells = ((clearance_nm + via_diameter + grid_nm - 1) / grid_nm).max(1) - 1;
 
         let mut g = Grid {
             tuning: RoutingTuning::default(),
-            grid_um,
-            clearance_um,
-            track_half_um: track_width / 2,
-            via_half_um: via_diameter / 2,
+            grid_nm,
+            clearance_nm,
+            track_half_nm: track_width / 2,
+            via_half_nm: via_diameter / 2,
             min_x,
             min_y,
             cells_x,
@@ -206,7 +206,7 @@ impl Grid {
                 if point_in_polygon(p, &outline) {
                     inside[(cy * cells_x + cx) as usize] = true;
                     let d = (0..n).map(|i| seg_point_dist(outline[i], outline[(i + 1) % n], p)).fold(f64::MAX, f64::min);
-                    edge_dist[(cy * cells_x + cx) as usize] = d as Um;
+                    edge_dist[(cy * cells_x + cx) as usize] = d as Nm;
                 }
             }
         }
@@ -224,10 +224,10 @@ impl Grid {
         g
     }
 
-    /// Record copper of `net_id` with half-extent `half_um` at (cx, cy,
+    /// Record copper of `net_id` with half-extent `half_nm` at (cx, cy,
     /// layer) in the separation summaries: every cell closer than the
     /// kind-aware minimum separation learns that this net is nearby.
-    fn stamp(&mut self, cx: i64, cy: i64, layer: u8, net_id: u32, half_um: Um, kind: Occ) {
+    fn stamp(&mut self, cx: i64, cy: i64, layer: u8, net_id: u32, half_nm: Nm, kind: Occ) {
         if kind == Occ::Pad {
             let r = self.via_pad_radius_cells();
             for dx in -r..=r {
@@ -240,12 +240,12 @@ impl Grid {
             // Pad copper itself is stamped exactly from its rectangle (see
             // `pads_exact`); only an own-net track/via laid over the pad
             // cell adds cell-centred copper here.
-            if half_um == 0 {
+            if half_nm == 0 {
                 return;
             }
         }
         for b in 0..self.track_query_halves.len() {
-            let r = self.sep_cells_for(self.track_query_halves[b], half_um) - 1;
+            let r = self.sep_cells_for(self.track_query_halves[b], half_nm) - 1;
             for dx in -r..=r {
                 for dy in -r..=r {
                     if let Some(j) = self.idx(cx + dx, cy + dy, layer) {
@@ -259,7 +259,7 @@ impl Grid {
                 }
             }
         }
-        let r = self.min_sep_cells_half(Occ::Via, half_um) - 1;
+        let r = self.min_sep_cells_half(Occ::Via, half_nm) - 1;
         for dx in -r..=r {
             for dy in -r..=r {
                 if let Some(j) = self.idx(cx + dx, cy + dy, layer) {
@@ -275,10 +275,10 @@ impl Grid {
     }
 
     /// Cells of separation a querying half-width owes copper of half-width
-    /// `b_half_um`.
-    fn sep_cells_for(&self, query_half_um: Um, b_half_um: Um) -> i64 {
-        let um = self.clearance_um + query_half_um + b_half_um;
-        (um + self.grid_um - 1) / self.grid_um
+    /// `b_half_nm`.
+    fn sep_cells_for(&self, query_half_nm: Nm, b_half_nm: Nm) -> i64 {
+        let um = self.clearance_nm + query_half_nm + b_half_nm;
+        (um + self.grid_nm - 1) / self.grid_nm
     }
 
     /// Exact separation stamping for one pad's copper on `layer`: every
@@ -299,8 +299,8 @@ impl Grid {
         let vias = self.track_query_halves.len();
         for b in 0..=vias {
             let is_via = b == vias;
-            let need = self.clearance_um + if is_via { self.half_extent(Occ::Via) } else { self.track_query_halves[b] };
-            let (hw, hh) = (pad.size.0 / 2 + need + self.grid_um, pad.size.1 / 2 + need + self.grid_um);
+            let need = self.clearance_nm + if is_via { self.half_extent(Occ::Via) } else { self.track_query_halves[b] };
+            let (hw, hh) = (pad.size.0 / 2 + need + self.grid_nm, pad.size.1 / 2 + need + self.grid_nm);
             let (x0, y0) = self.to_cell(Point { x: pad.center.x - hw, y: pad.center.y - hh });
             let (x1, y1) = self.to_cell(Point { x: pad.center.x + hw, y: pad.center.y + hh });
             for cx in x0..=x1 {
@@ -337,11 +337,11 @@ impl Grid {
         if let Some(i) = self.idx(cx, cy, layer) {
             if let Some(c) = &mut self.occ[i] {
                 if c.net_id == net_id {
-                    c.half_um = c.half_um.max(half);
+                    c.half_nm = c.half_nm.max(half);
                     return;
                 }
             }
-            self.occ[i] = Some(Cell { net_id, kind: Occ::Pad, half_um: half });
+            self.occ[i] = Some(Cell { net_id, kind: Occ::Pad, half_nm: half });
             self.stamp(cx, cy, layer, net_id, half, Occ::Pad);
         }
     }
@@ -360,14 +360,14 @@ impl Grid {
         for v in self.via_near_pad.iter_mut() {
             *v = false;
         }
-        let cells: Vec<(usize, u32, Um, Occ)> =
-            self.occ.iter().enumerate().filter_map(|(i, c)| c.as_ref().map(|c| (i, c.net_id, c.half_um, c.kind))).collect();
-        for (i, net_id, half_um, kind) in cells {
+        let cells: Vec<(usize, u32, Nm, Occ)> =
+            self.occ.iter().enumerate().filter_map(|(i, c)| c.as_ref().map(|c| (i, c.net_id, c.half_nm, c.kind))).collect();
+        for (i, net_id, half_nm, kind) in cells {
             // Inverse of `idx`: cell-major, layer innermost.
             let layer = (i % self.num_layers) as u8;
             let cell = (i / self.num_layers) as i64;
             let (cx, cy) = (cell % self.cells_x, cell / self.cells_x);
-            self.stamp(cx, cy, layer, net_id, half_um, kind);
+            self.stamp(cx, cy, layer, net_id, half_nm, kind);
         }
         let pads = std::mem::take(&mut self.pads_exact);
         for (net_id, layer, pad) in &pads {
@@ -400,13 +400,13 @@ impl Grid {
 
     /// Nearest grid cell to a board-space point (may be out of bounds).
     pub fn to_cell(&self, p: Point) -> (i64, i64) {
-        let cx = (p.x - self.min_x + self.grid_um / 2).div_euclid(self.grid_um);
-        let cy = (p.y - self.min_y + self.grid_um / 2).div_euclid(self.grid_um);
+        let cx = (p.x - self.min_x + self.grid_nm / 2).div_euclid(self.grid_nm);
+        let cy = (p.y - self.min_y + self.grid_nm / 2).div_euclid(self.grid_nm);
         (cx, cy)
     }
 
     pub fn to_point(&self, cx: i64, cy: i64) -> Point {
-        Point { x: self.min_x + cx * self.grid_um, y: self.min_y + cy * self.grid_um }
+        Point { x: self.min_x + cx * self.grid_nm, y: self.min_y + cy * self.grid_nm }
     }
 
     pub fn in_bounds(&self, cx: i64, cy: i64) -> bool {
@@ -421,13 +421,13 @@ impl Grid {
         self.inside[(cy * self.cells_x + cx) as usize]
     }
 
-    /// Declare that `net` routes at `width_um`. Call once per net before
+    /// Declare that `net` routes at `width_nm`. Call once per net before
     /// routing; nets never declared use the board default.
     /// Call before any copper is stamped: it allocates a clearance summary
     /// for the new width, and summaries only grow correctly from empty.
-    pub fn set_net_width(&mut self, net: &str, width_um: Um) {
+    pub fn set_net_width(&mut self, net: &str, width_nm: Nm) {
         let id = self.net_id(net);
-        let half = width_um / 2;
+        let half = width_nm / 2;
         self.net_track_half.insert(id, half);
         let bucket = match self.track_query_halves.iter().position(|&h| h == half) {
             Some(b) => b,
@@ -464,12 +464,12 @@ impl Grid {
     }
 
     /// The single choke point through which all copper enters the grid.
-    /// Whatever `kind` survives for obstacle bookkeeping, `half_um` always
+    /// Whatever `kind` survives for obstacle bookkeeping, `half_nm` always
     /// ends up at the widest copper the cell holds, so `passable_as`
     /// cannot under-state the separation another net owes this cell.
     pub fn set(&mut self, cx: i64, cy: i64, layer: u8, net: &str, kind: Occ) {
         let net_id = self.net_id(net);
-        // `half_um` is the cell-centred copper *laid* here (track/via);
+        // `half_nm` is the cell-centred copper *laid* here (track/via);
         // pad copper is stamped exactly from its rectangle, so a pad-only
         // cell carries 0 — a rasterised pad cell may lie up to half a cell
         // outside the real copper, and a track running over it must stamp
@@ -477,7 +477,7 @@ impl Grid {
         // VOUT then laid adjacent with a 54 µm gap).
         let half = match kind {
             Occ::Pad => 0,
-            Occ::Track => self.net_track_half.get(&net_id).copied().unwrap_or(self.track_half_um),
+            Occ::Track => self.net_track_half.get(&net_id).copied().unwrap_or(self.track_half_nm),
             _ => self.half_extent(kind),
         };
         if let Some(i) = self.idx(cx, cy, layer) {
@@ -488,23 +488,23 @@ impl Grid {
             // and other nets must keep via-sized clearance from it.
             if let Some(c) = &mut self.occ[i] {
                 if c.net_id == net_id {
-                    c.half_um = c.half_um.max(half);
+                    c.half_nm = c.half_nm.max(half);
                     if !(c.kind == Occ::Pad || (c.kind == Occ::Via && kind == Occ::Track)) {
                         c.kind = kind;
                     }
-                    let (h, k) = (c.half_um, c.kind);
+                    let (h, k) = (c.half_nm, c.kind);
                     self.stamp(cx, cy, layer, net_id, h, k);
                     return;
                 }
             }
-            self.occ[i] = Some(Cell { net_id, kind, half_um: half });
+            self.occ[i] = Some(Cell { net_id, kind, half_nm: half });
             self.stamp(cx, cy, layer, net_id, half, kind);
             if kind == Occ::Pad {
                 // No real geometry given: the copper is one grid cell.
                 let pad = PlacedPad {
                     number: String::new(),
                     center: self.to_point(cx, cy),
-                    size: (self.grid_um, self.grid_um),
+                    size: (self.grid_nm, self.grid_nm),
                     through_hole: false,
                     shape: eda_model::footprint::PadShape::Rect,
                     roundrect_ratio: None,
@@ -566,7 +566,7 @@ impl Grid {
     /// cell (the pad edge lies up to half a cell past its outermost cell
     /// centre), in cells.
     pub fn via_pad_radius_cells(&self) -> i64 {
-        (self.via_half_um + self.grid_um / 2 + self.grid_um - 1) / self.grid_um
+        (self.via_half_nm + self.grid_nm / 2 + self.grid_nm - 1) / self.grid_nm
     }
 
     /// Debug: why a cell is impassable for a track of `net`: ` ` outside,
@@ -582,7 +582,7 @@ impl Grid {
         }
         let net_id = self.net_id_ro(net).unwrap_or(EMPTY);
         let own_pad = self.occ[i].as_ref().map(|c| c.kind == Occ::Pad && c.net_id == net_id).unwrap_or(false);
-        if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < self.tuning.edge_clearance_um + self.half_extent(Occ::Track) {
+        if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < self.tuning.edge_clearance_nm + self.half_extent(Occ::Track) {
             return 'E';
         }
         let near = self.near_track[0][i];
@@ -670,7 +670,7 @@ impl Grid {
                         // record, or the inflation would outlive the
                         // copper that caused it and permanently
                         // over-block the neighbourhood.
-                        cell.half_um = 0;
+                        cell.half_nm = 0;
                     } else {
                         *c = None;
                     }
@@ -684,17 +684,17 @@ impl Grid {
     /// Pads are rasterised over their area, so their edge lies at most half
     /// a cell past the outermost occupied cell centre.
     #[inline]
-    fn half_extent(&self, kind: Occ) -> Um {
+    fn half_extent(&self, kind: Occ) -> Nm {
         match kind {
-            Occ::Track => self.track_half_um,
-            Occ::Via => self.via_half_um,
-            Occ::Pad => self.grid_um / 2,
+            Occ::Track => self.track_half_nm,
+            Occ::Via => self.via_half_nm,
+            Occ::Pad => self.grid_nm / 2,
         }
     }
 
-    fn min_sep_cells_half(&self, a: Occ, b_half_um: Um) -> i64 {
-        let um = self.clearance_um + self.half_extent(a) + b_half_um;
-        (um + self.grid_um - 1) / self.grid_um
+    fn min_sep_cells_half(&self, a: Occ, b_half_nm: Nm) -> i64 {
+        let um = self.clearance_nm + self.half_extent(a) + b_half_nm;
+        (um + self.grid_nm - 1) / self.grid_nm
     }
 
     /// True if (cx,cy,layer) is usable for a track of `net`.
@@ -738,7 +738,7 @@ impl Grid {
         // the net's own pad copper: a pad legitimately placed at the
         // board edge must stay reachable.
         let own_pad = self.idx(cx, cy, layer).and_then(|i| self.occ[i].as_ref()).map(|c| c.kind == Occ::Pad && c.net_id == net_id).unwrap_or(false);
-        if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < self.tuning.edge_clearance_um + self.half_extent(me) {
+        if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < self.tuning.edge_clearance_nm + self.half_extent(me) {
             return false;
         }
         // Summary lookup (see `near_track`): equivalent to scanning the
@@ -766,9 +766,9 @@ impl Grid {
             for dy in -r..=r {
                 if let Some(i) = self.idx(cx + dx, cy + dy, layer) {
                     if let Some(c) = &self.occ[i] {
-                        if c.net_id != net_id && !(c.kind == Occ::Pad && c.half_um == 0) {
+                        if c.net_id != net_id && !(c.kind == Occ::Pad && c.half_nm == 0) {
                             let d = dx.abs().max(dy.abs());
-                            if d < self.min_sep_cells_half(me, c.half_um) {
+                            if d < self.min_sep_cells_half(me, c.half_nm) {
                                 return false;
                             }
                         }
@@ -776,7 +776,7 @@ impl Grid {
                 }
             }
         }
-        let need = (self.clearance_um + self.half_extent(me)) as f64;
+        let need = (self.clearance_nm + self.half_extent(me)) as f64;
         let p = self.to_point(cx, cy);
         for (nid, l, pad) in &self.pads_exact {
             if *l == layer && *nid != net_id && pad.rect_distance(p) < need {

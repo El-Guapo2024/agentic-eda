@@ -7,18 +7,18 @@
 
 use crate::kimath::{Seg, Shape};
 use eda_model::footprint::Pad;
-use eda_model::ir::{FootprintInstance, Point, Um};
+use eda_model::ir::{FootprintInstance, Point, Nm};
 use eda_model::pad_geom::{pad_pieces, PadFrame, PadPiece, P};
 
 fn pt(p: P) -> Point {
-    Point { x: p.0.round() as Um, y: p.1.round() as Um }
+    Point { x: p.0.round() as Nm, y: p.1.round() as Nm }
 }
 
 /// One piece, already in board space, as a DRC shape.
 fn piece_shape(piece: &PadPiece) -> Option<Shape> {
     Some(match piece {
-        PadPiece::Circle { c, r } => Shape::Circle { c: pt(*c), r: r.round() as Um },
-        PadPiece::Stadium { a, b, r } => Shape::Stadium { a: pt(*a), b: pt(*b), r: r.round() as Um },
+        PadPiece::Circle { c, r } => Shape::Circle { c: pt(*c), r: r.round() as Nm },
+        PadPiece::Stadium { a, b, r } => Shape::Stadium { a: pt(*a), b: pt(*b), r: r.round() as Nm },
         PadPiece::Polygon(pts) if pts.len() >= 3 => Shape::Polygon { pts: pts.iter().map(|&p| pt(p)).collect() },
         PadPiece::Polygon(_) => return None,
         PadPiece::Strokes { pts, r } => {
@@ -26,7 +26,7 @@ fn piece_shape(piece: &PadPiece) -> Option<Shape> {
             if segs.is_empty() {
                 return None;
             }
-            Shape::Strokes { segs, r: r.round() as Um }
+            Shape::Strokes { segs, r: r.round() as Nm }
         }
     })
 }
@@ -50,27 +50,27 @@ pub fn pad_copper(fp: &FootprintInstance, pad: &Pad, center: Point) -> Shape {
 /// The pad's copper as polygons with holes in board space: the union of the outlines of its parts (`PAD::GetEffectivePolygon`, with the
 /// error inside, the outline the studio draws and the 3D view extrudes). A custom pad with a ring has an outline and a hole. The studio's
 /// painter fills the contours with the even-odd rule.
-pub fn pad_polygons(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: Um) -> eda_shape_poly_set::ShapePolySet {
+pub fn pad_polygons(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: Nm) -> eda_shape_poly_set::ShapePolySet {
     crate::shape_poly::union_polyset(&pad_copper(fp, pad, center), max_error)
 }
 
 /// A pad's copper in its footprint's own frame (the footprint at the origin, not turned and seen from the top) as polygons: where a
 /// footprint's free graphics lie against it (`PAD::Recombine`'s `TransformShapeToPolygon( padPoly, layer, 0, maxError, ERROR_INSIDE )`).
-pub fn pad_polygons_in_footprint(pad: &Pad, max_error: Um) -> eda_shape_poly_set::ShapePolySet {
+pub fn pad_polygons_in_footprint(pad: &Pad, max_error: Nm) -> eda_shape_poly_set::ShapePolySet {
     let fp = FootprintInstance { id: String::new(), at: Point { x: 0, y: 0 }, rot: 0, side: eda_model::ir::Side::Top, label: eda_model::ir::LabelSide::Above };
     pad_polygons(&fp, pad, Point { x: pad.at.0, y: pad.at.1 }, max_error)
 }
 
 /// One graphic or basic shape as the polygons `PCB_SHAPE::TransformShapeToPolygon` makes of it at no clearance, the stroke counted
 /// (`EDA_SHAPE::makeEffectiveShapes`): a line is a stadium, an unfilled shape its outline at its width, a filled one its area.
-pub fn shape_polygons(shape: &eda_model::ir::Shape, max_error: Um) -> eda_shape_poly_set::ShapePolySet {
+pub fn shape_polygons(shape: &eda_model::ir::Shape, max_error: Nm) -> eda_shape_poly_set::ShapePolySet {
     let pieces = eda_model::pad_geom::primitive_pieces(shape, (0.0, 0.0), max_error as f64);
     let parts: Vec<Shape> = pieces.iter().filter_map(piece_shape).collect();
     crate::shape_poly::union_polyset(&Shape::Compound { parts }, max_error)
 }
 
 /// [`pad_polygons`] as the list of its contours, the outline of each polygon first and then its holes, in micrometres.
-pub fn pad_outline(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: Um) -> Vec<Vec<Point>> {
+pub fn pad_outline(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: Nm) -> Vec<Vec<Point>> {
     pad_polygons(fp, pad, center, max_error).polys.iter().flat_map(|poly| poly.iter().map(|chain| chain.iter().map(|p| Point { x: p.x, y: p.y }).collect::<Vec<_>>())).collect()
 }
 
@@ -80,11 +80,11 @@ mod tests {
     use eda_model::footprint::{PadAnchor, PadCustom, PadKind, PadPrimitive, PadShape, PadShapeExt};
     use eda_model::ir::{LabelSide, Side};
 
-    fn instance(at: (Um, Um), rot: i32, side: Side) -> FootprintInstance {
+    fn instance(at: (Nm, Nm), rot: i32, side: Side) -> FootprintInstance {
         FootprintInstance { id: "U1".into(), at: Point { x: at.0, y: at.1 }, rot: rot as u32, side, label: LabelSide::Above }
     }
 
-    fn pad(shape: PadShape, size: (Um, Um), ext: PadShapeExt) -> Pad {
+    fn pad(shape: PadShape, size: (Nm, Nm), ext: PadShapeExt) -> Pad {
         Pad { number: "1".into(), at: (0, 0), size, shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext }
     }
 

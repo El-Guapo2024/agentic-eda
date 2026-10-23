@@ -25,7 +25,7 @@
 use crate::sch_annotate::{rename_in_section, AnnotateOptions, AnnotateScope, Item, ScreenScope, SecRename, Take};
 use crate::sch_clipboard::LibMerge;
 use crate::{AnnotateOrder, Board};
-use eda_model::ir::{LibrarySymbol, Point, SchematicSection, SheetInstance, Um};
+use eda_model::ir::{LibrarySymbol, Point, SchematicSection, SheetInstance, Nm};
 use eda_model::sch_clipboard::{annotate_paste, PasteMode, PastedRef, SchFragment, UsedRef};
 use eda_model::sheet_file::SheetFile;
 use eda_model::sheet_list::str_num_cmp;
@@ -140,7 +140,7 @@ impl<'a> Board<'a> {
 
     /// Put a copy of the sheet `inc` on the screen the verbs act on: the sheet symbol (named `name`, moved by `shift`), a copy of each screen it shows under a
     /// file of its own, the library symbols its symbols need, its symbols numbered. Returns the files the copies got (the sheet's first).
-    pub(crate) fn add_sheet_tree(&mut self, inc: Incoming<'_>, shift: (Um, Um), name: &str, file_hint: Option<&str>, numbering: &Numbering) -> Result<Vec<String>, Vec<CheckResult>> {
+    pub(crate) fn add_sheet_tree(&mut self, inc: Incoming<'_>, shift: (Nm, Nm), name: &str, file_hint: Option<&str>, numbering: &Numbering) -> Result<Vec<String>, Vec<CheckResult>> {
         let own = self.design.sheet_contents.clone().unwrap_or_default();
         let screen_of = |f: &str| -> Option<SchematicSection> { inc.screens.get(f).or_else(|| own.get(f)).cloned() };
         // the files the sheet shows, parents first
@@ -187,7 +187,7 @@ impl<'a> Board<'a> {
                     let style = body_styles.get(&eda_model::ir::field_key(&s.id, s.unit)).copied().unwrap_or(1);
                     let drawn = if style > 1 && engine.has_alternate_body() { engine.in_style(style).into_owned() } else { engine.clone() };
                     let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, s.unit);
-                    let (ox, oy) = eda_model::sch_clipboard::place_offset_um(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (-x0, -y1));
+                    let (ox, oy) = eda_model::sch_clipboard::place_offset_nm(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (-x0, -y1));
                     s.at = Point { x: s.at.x - ox, y: s.at.y - oy };
                 }
                 sec.imported_from_kicad = false;
@@ -470,7 +470,7 @@ impl<'a> Board<'a> {
 
     /// The sheet part of `Cmd::PasteSch`: each sheet symbol of the fragment, named and filed anew, with a copy of the screens it shows and its symbols
     /// numbered like any pasted symbols.
-    pub(crate) fn paste_sheets(&mut self, fragment: &SchFragment, dx: Um, dy: Um, mode: PasteMode) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn paste_sheets(&mut self, fragment: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode) -> Result<(), Vec<CheckResult>> {
         let mut sheets: Vec<&SheetInstance> = fragment.section.sheets.iter().collect();
         // `sortedLoadedItems`: by name, naturally
         sheets.sort_by(|a, b| str_num_cmp(&a.name, &b.name));
@@ -522,7 +522,7 @@ impl<'a> Board<'a> {
     /// `SCH_EDITOR_CONTROL::Paste`: the sheet gets a new KIID and its pins new ones, and `updatePastedSheet` gives every symbol of the screen an instance for
     /// the new path, its reference the one the clipboard carried (the reference under the placement that was copied) -- kept by Paste Special's "Keep
     /// existing annotations", numbered by `ReannotateDuplicates` against every reference of the schematic otherwise. The power symbols keep theirs.
-    fn share_pasted_sheet(&mut self, sh: &SheetInstance, shift: (Um, Um), name: &str, mode: PasteMode) -> Result<bool, Vec<CheckResult>> {
+    fn share_pasted_sheet(&mut self, sh: &SheetInstance, shift: (Nm, Nm), name: &str, mode: PasteMode) -> Result<bool, Vec<CheckResult>> {
         // a screen pasted into itself would place itself (`TestForRecursion`): the copy does not
         if !eda_model::sheet_list::reachable_files(&self.design).contains(&sh.file) || self.focus.as_deref() == Some(sh.file.as_str()) {
             return Ok(false);
@@ -577,7 +577,7 @@ impl<'a> Board<'a> {
 
     /// `Cmd::ImportSheet`: see the module doc.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn import_sheet(&mut self, content: &SheetFile, as_sheet: bool, name: &str, file: &str, at: Point, size: (Um, Um), keep_annotations: bool, order: AnnotateOrder, options: &AnnotateOptions, how: &crate::design_blocks::Placement<'_>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn import_sheet(&mut self, content: &SheetFile, as_sheet: bool, name: &str, file: &str, at: Point, size: (Nm, Nm), keep_annotations: bool, order: AnnotateOrder, options: &AnnotateOptions, how: &crate::design_blocks::Placement<'_>) -> Result<(), Vec<CheckResult>> {
         if !how.block.is_empty() {
             if let Err(why) = eda_model::groups::check_design_block_id(how.block) {
                 return Err(vec![CheckResult::fail("ops_bad_design_block", how.block, why)]);

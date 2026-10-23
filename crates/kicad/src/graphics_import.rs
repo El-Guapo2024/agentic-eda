@@ -29,7 +29,7 @@ pub const KICAD_IU_PER_MM: f64 = 1_000_000.0;
 pub const DEFAULT_LINE_WIDTH_MM: f64 = 1.0;
 
 /// `ARC_HIGH_DEF` (0.005 mm) in micrometres: the accuracy `setupSplineOrLine` flattens a curve with to see whether it is one.
-pub const ARC_HIGH_DEF_UM: i64 = 5;
+pub const ARC_HIGH_DEF_NM: i64 = 5;
 
 // ------------------------------------------------------------------------------------------------------------------ geometry
 
@@ -551,14 +551,14 @@ fn approx_collinear(a: ((i64, i64), (i64, i64)), b: ((i64, i64), (i64, i64))) ->
 }
 
 /// `GRAPHICS_IMPORTER::setupSplineOrLine`: a curve whose control points lie on its chord, or that flattens to nothing but its two
-/// end points at [`ARC_HIGH_DEF_UM`], is a segment; a segment of no length is dropped. `units_per_um` is how many of the points'
+/// end points at [`ARC_HIGH_DEF_NM`], is a segment; a segment of no length is dropped. `units_per_um` is how many of the points'
 /// unit make a micrometre (1 for the design's integer micrometres).
 pub fn spline_or_line(start: (i64, i64), c1: (i64, i64), c2: (i64, i64), end: (i64, i64)) -> SplineOrLine {
     let s_e = (start, end);
     let mut degenerate = approx_collinear(s_e, (start, c1)) && approx_collinear(s_e, (end, c2));
     if !degenerate {
         let p = |t: (i64, i64)| eda_model::ir::Point { x: t.0, y: t.1 };
-        degenerate = eda_model::bezier::bezier_polyline(p(start), p(c1), p(c2), p(end), ARC_HIGH_DEF_UM).len() <= 2;
+        degenerate = eda_model::bezier::bezier_polyline(p(start), p(c1), p(c2), p(end), ARC_HIGH_DEF_NM).len() <= 2;
     }
     if degenerate {
         // "segment smaller than MIN_SEG_LEN_ACCEPTABLE_NM nanometers are skipped": 20 nm is less than the design's unit.

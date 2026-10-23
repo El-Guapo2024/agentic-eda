@@ -22,7 +22,7 @@ use crate::layer::LayerRange;
 use crate::line::Line;
 use crate::node::{kind_mask, Node, QueryOpts};
 use eda_drc::kimath::{Seg, Shape};
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 use std::collections::HashSet;
 
@@ -276,7 +276,7 @@ impl<'a> Walker<'a> {
         self.end_via = via;
     }
 
-    fn nearest_obstacle(&self, pts: &[Point], net: &Net, layer: i32, width: Um) -> Option<crate::node::NearestHit> {
+    fn nearest_obstacle(&self, pts: &[Point], net: &Net, layer: i32, width: Nm) -> Option<crate::node::NearestHit> {
         let line = Line::from_points(net.clone(), layer, width, pts.to_vec());
         let restricted = &self.restricted;
         let filter = |id: ItemId| restricted.contains(&id);
@@ -285,7 +285,7 @@ impl<'a> Walker<'a> {
     }
 
     /// `CheckColliding( &line )`: any leg touches anything in the world.
-    fn world_collides(&self, pts: &[Point], net: &Net, layer: i32, width: Um) -> bool {
+    fn world_collides(&self, pts: &[Point], net: &Net, layer: i32, width: Nm) -> bool {
         pts.windows(2).any(|w| {
             let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
             self.node.first_colliding(&shape, net, LayerRange::single(layer), self.rules, &self.exclude).is_some()
@@ -293,7 +293,7 @@ impl<'a> Walker<'a> {
     }
 
     /// `shortest->Collide( item, .. )`: does the path collide with this one item.
-    fn collides_item(&self, pts: &[Point], net: &Net, layer: i32, width: Um, id: ItemId) -> bool {
+    fn collides_item(&self, pts: &[Point], net: &Net, layer: i32, width: Nm, id: ItemId) -> bool {
         let Some(item) = self.node.get(id) else { return false };
         if !item.layers().overlaps_layer(layer) || crate::item::same_net(item.net(), net) {
             return false;
@@ -310,7 +310,7 @@ impl<'a> Walker<'a> {
     }
 
     /// `processCluster`: walk `pts` around every item of the cluster in turn.
-    fn process_cluster(&self, cluster: &[ItemId], pts: &mut Vec<Point>, net: &Net, layer: i32, width: Um, cw: bool) -> bool {
+    fn process_cluster(&self, cluster: &[ItemId], pts: &mut Vec<Point>, net: &Net, layer: i32, width: Nm, cw: bool) -> bool {
         for &id in cluster {
             let Some(item) = self.node.get(id) else { continue };
             let clearance = Node::clearance_to(self.rules, net, item);
@@ -329,7 +329,7 @@ impl<'a> Walker<'a> {
         true
     }
 
-    fn single_step(&mut self, out: &mut WalkOutcome, net: &Net, layer: i32, width: Um) {
+    fn single_step(&mut self, out: &mut WalkOutcome, net: &Net, layer: i32, width: Nm) {
         let mut pending: [Vec<ItemId>; 3] = [Vec::new(), Vec::new(), Vec::new()];
         for (i, cluster) in pending.iter_mut().enumerate() {
             if !self.policies[i] || out.status[i] != WalkStatus::InProgress {
@@ -400,7 +400,7 @@ impl<'a> Walker<'a> {
     }
 
     /// `WALKAROUND::Route( aInitialPath )`.
-    pub fn route(&mut self, net: &Net, layer: i32, width: Um, initial: &[Point]) -> WalkOutcome {
+    pub fn route(&mut self, net: &Net, layer: i32, width: Nm, initial: &[Point]) -> WalkOutcome {
         self.initial_length = chain_length(initial) as f64;
         self.iteration = 0;
         self.processed.clear();
@@ -510,7 +510,7 @@ fn cursor_dist_minimum(chain: &[Point], cursor: Point, length_threshold: f64, co
 }
 
 /// Does `pts`, as a track on `net` of `width`, touch anything in the node (`NODE::CheckColliding( &line )`, whatever the kind)?
-pub fn path_collides(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Um, pts: &[Point], exclude: &[ItemId]) -> bool {
+pub fn path_collides(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Nm, pts: &[Point], exclude: &[ItemId]) -> bool {
     pts.windows(2).any(|w| {
         let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
         node.first_colliding(&shape, net, LayerRange::single(layer), rules, exclude).is_some()
@@ -526,7 +526,7 @@ pub fn path_collides(node: &Node, rules: &BoardRules, net: &Net, layer: i32, wid
 /// ([`cursor_dist_minimum`]). `None` when no winding got through or no point to hug to was clear (`rhWalkBase` returns
 /// false). The cursor is the head's last point.
 #[allow(clippy::too_many_arguments)] // the node/rules/net/layer/width query context, plus the head, the kind mask, the iteration limit and the hug threshold this is specific to.
-pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Um, head: &[Point], mask: u8, iteration_limit: u32, hug_threshold: f64, exclude: &[ItemId]) -> Option<Vec<Point>> {
+pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Nm, head: &[Point], mask: u8, iteration_limit: u32, hug_threshold: f64, exclude: &[ItemId]) -> Option<Vec<Point>> {
     let line = Line::from_points(net.clone(), layer, width, head.to_vec());
     walk_base_line(node, rules, &line, mask, iteration_limit, hug_threshold, exclude, crate::direction45::CornerMode::Mitered45).map(|l| l.pts)
 }
@@ -690,15 +690,15 @@ mod tests {
         }
     }
 
-    fn walker_pad(node: &mut Node, net: &str, c: Point, r: Um) -> ItemId {
+    fn walker_pad(node: &mut Node, net: &str, c: Point, r: Nm) -> ItemId {
         node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false }))
     }
 
-    fn walker_track(node: &mut Node, net: &str, a: Point, b: Point, width: Um) -> ItemId {
+    fn walker_track(node: &mut Node, net: &str, a: Point, b: Point, width: Nm) -> ItemId {
         node.add(Item::Segment(crate::item::Segment { net: net_of(net), layer: 0, a, b, width, source_track: None, locked: false }))
     }
 
-    fn all_clear(node: &Node, pts: &[Point], width: Um, rules: &BoardRules) -> bool {
+    fn all_clear(node: &Node, pts: &[Point], width: Nm, rules: &BoardRules) -> bool {
         pts.windows(2).all(|w| node.first_colliding(&Shape::Stadium { a: w[0], b: w[1], r: width / 2 }, &net_of("SIG"), LayerRange::single(0), rules, &[]).is_none())
     }
 

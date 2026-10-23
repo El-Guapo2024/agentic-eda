@@ -19,14 +19,14 @@
 //! implementation does) is a one-line simplification that is still exactly
 //! correct: two boxes are within `clearance` of each other iff either one,
 //! inflated by `clearance`, overlaps the other's true box.
-use eda_model::ir::Um;
+use eda_model::ir::Nm;
 use std::collections::{HashMap, HashSet};
 
 type CellKey = (i64, i64);
-type BBox = (Um, Um, Um, Um);
+type BBox = (Nm, Nm, Nm, Nm);
 
 pub struct DrcRTree {
-    cell_size: Um,
+    cell_size: Nm,
     cells: HashMap<CellKey, Vec<usize>>,
     boxes: Vec<BBox>,
 }
@@ -39,11 +39,11 @@ impl DrcRTree {
     /// item into one bucket. Degenerate (<=0, e.g. a board with no
     /// clearance configured anywhere) floors at 1 so cell arithmetic never
     /// divides by zero.
-    pub fn new(cell_size: Um) -> Self {
+    pub fn new(cell_size: Nm) -> Self {
         DrcRTree { cell_size: cell_size.max(1), cells: HashMap::new(), boxes: Vec::new() }
     }
 
-    fn cell_of(&self, x: Um, y: Um) -> CellKey {
+    fn cell_of(&self, x: Nm, y: Nm) -> CellKey {
         (x.div_euclid(self.cell_size), y.div_euclid(self.cell_size))
     }
 

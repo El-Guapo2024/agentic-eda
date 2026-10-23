@@ -17,7 +17,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -27,7 +27,7 @@ fn empty_design() -> Design {
     }
 }
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -111,7 +111,7 @@ fn run(sch: SchematicSection, cmd: SchCmd) -> Result<SchematicSection, Vec<Check
     Ok(b.design().schematic.clone().unwrap())
 }
 
-fn helper(what: PinHelper, pins: &[&str], grid: Um) -> SchCmd {
+fn helper(what: PinHelper, pins: &[&str], grid: Nm) -> SchCmd {
     SchCmd::PinHelper { what, pins: pins.iter().map(|s| s.to_string()).collect(), grid }
 }
 
@@ -291,7 +291,7 @@ fn a_swapped_pin_is_labelled_where_it_sits_now_running_the_way_the_pin_it_swappe
 
 fn sheet_with_pins() -> SchematicSection {
     let at = p(100_000, 50_000);
-    let pin = |id: &str, name: &str, shape: LabelShape, x: Um, y: Um| SheetPin { id: id.into(), name: name.into(), shape, at: p(x, y) };
+    let pin = |id: &str, name: &str, shape: LabelShape, x: Nm, y: Nm| SheetPin { id: id.into(), name: name.into(), shape, at: p(x, y) };
     SchematicSection {
         imported_from_kicad: true,
         sheets: vec![SheetInstance {

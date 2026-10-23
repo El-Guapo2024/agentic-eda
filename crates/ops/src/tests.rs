@@ -14,7 +14,7 @@ fn part(r: &str, pkg: &str) -> Part {
             Pin { number: "1".into(), name: None, kind: PinKind::Passive },
             Pin { number: "2".into(), name: None, kind: PinKind::Passive },
         ],
-        body_um: None, symbol: None, datasheet: None,
+        body_nm: None, symbol: None, datasheet: None,
         edge: None,
     }
 }
@@ -35,7 +35,7 @@ fn model(parts: Vec<Part>, nets: &[(&str, &[&str])], rules: Vec<PlacementRule>) 
 fn empty_design() -> Design {
     Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         routing: None,
@@ -528,7 +528,7 @@ fn edit_tracks_and_vias_net_class_resolves_each_items_own_net() {
 
     b.apply(&Cmd::EditTracksAndVias { ids, track_width: Some(SizeSpec::NetClass), via_size: None, layer: None }).unwrap();
 
-    let widths: std::collections::BTreeMap<String, Um> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| (t.net.clone(), t.width)).collect();
+    let widths: std::collections::BTreeMap<String, Nm> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| (t.net.clone(), t.width)).collect();
     assert_eq!(widths["FAST"], 500, "FAST is in the fast net class, which overrides track width");
     assert_eq!(widths["SLOW"], m.board.track_width, "SLOW has no class, so it falls back to the board default");
 }
@@ -1051,12 +1051,12 @@ fn edit_shape_changes_layer_width_and_filled_but_not_geometry() {
 fn add_edit_move_delete_text() {
     let m = net_model();
     let mut b = board(&m);
-    let text = Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false };
+    let text = Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false };
     b.apply(&Cmd::AddText { text }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
     assert!(!id.is_empty());
 
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_um: 1200, stroke_width: 200, justify: TextJustify::Left, mirror: true }).unwrap();
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: 1200, stroke_width: 200, justify: TextJustify::Left, mirror: true }).unwrap();
     let t = &b.design().drawings.as_ref().unwrap().texts[0];
     assert_eq!(t.content, "REV B");
     assert_eq!(t.layer, "F.Fab");
@@ -1069,7 +1069,7 @@ fn add_edit_move_delete_text() {
 
     b.apply(&Cmd::DeleteText { id: id.clone() }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().texts.is_empty());
-    assert_eq!(b.apply(&Cmd::EditText { id, content: String::new(), angle: 0, layer: "F.Fab".into(), size_um: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false }).unwrap_err()[0].check, "ops_unknown_text");
+    assert_eq!(b.apply(&Cmd::EditText { id, content: String::new(), angle: 0, layer: "F.Fab".into(), size_nm: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false }).unwrap_err()[0].check, "ops_unknown_text");
 }
 
 /// What an imported board text kept beyond `Text`'s fields (`DrawingsSection::text_extras`) follows the text's verbs: it stays through an edit that leaves the size and the
@@ -1080,22 +1080,22 @@ fn a_texts_imported_looks_follow_its_edits_and_leave_with_it() {
     use eda_model::board_text::TextExtra;
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 125, justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 125, justify: TextJustify::Center, mirror: false } }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
     let mut d = b.design().clone();
-    d.drawings.as_mut().unwrap().text_extras = vec![TextExtra { id: id.clone(), width_um: Some(800), auto_thickness: true, bold: true, ..Default::default() }];
+    d.drawings.as_mut().unwrap().text_extras = vec![TextExtra { id: id.clone(), width_nm: Some(800), auto_thickness: true, bold: true, ..Default::default() }];
     let mut b = Board::new(d, &m, 100, 300);
     let extra = |b: &Board| b.design().drawings.as_ref().unwrap().text_extra(&id).cloned();
 
     // The same size and stroke width: moved, turned, restyled otherwise, and the looks stay.
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_um: 1000, stroke_width: 125, justify: TextJustify::Left, mirror: true }).unwrap();
-    assert_eq!(extra(&b).map(|x| (x.width_um, x.auto_thickness, x.bold)), Some((Some(800), true, true)));
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: 1000, stroke_width: 125, justify: TextJustify::Left, mirror: true }).unwrap();
+    assert_eq!(extra(&b).map(|x| (x.width_nm, x.auto_thickness, x.bold)), Some((Some(800), true, true)));
     // A new size is square again.
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_um: 1500, stroke_width: 125, justify: TextJustify::Left, mirror: true }).unwrap();
-    assert_eq!(extra(&b).map(|x| (x.width_um, x.auto_thickness, x.bold)), Some((None, true, true)));
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: 1500, stroke_width: 125, justify: TextJustify::Left, mirror: true }).unwrap();
+    assert_eq!(extra(&b).map(|x| (x.width_nm, x.auto_thickness, x.bold)), Some((None, true, true)));
     // A stroke width given is not the automatic one.
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_um: 1500, stroke_width: 200, justify: TextJustify::Left, mirror: true }).unwrap();
-    assert_eq!(extra(&b).map(|x| (x.width_um, x.auto_thickness, x.bold)), Some((None, false, true)));
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: 1500, stroke_width: 200, justify: TextJustify::Left, mirror: true }).unwrap();
+    assert_eq!(extra(&b).map(|x| (x.width_nm, x.auto_thickness, x.bold)), Some((None, false, true)));
 
     b.apply(&Cmd::DeleteText { id: id.clone() }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().text_extras.is_empty(), "the looks leave with the text");
@@ -1109,14 +1109,14 @@ fn the_global_text_edit_takes_the_imported_glyph_width_and_automatic_stroke_with
     let m = net_model();
     let mut b = board(&m);
     for content in ["one", "two", "three"] {
-        b.apply(&Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 125, justify: TextJustify::Center, mirror: false } }).unwrap();
+        b.apply(&Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 125, justify: TextJustify::Center, mirror: false } }).unwrap();
     }
     let ids: Vec<String> = b.design().drawings.as_ref().unwrap().texts.iter().map(|t| t.id.clone()).collect();
     let mut d = b.design().clone();
-    d.drawings.as_mut().unwrap().text_extras = ids.iter().map(|id| TextExtra { id: id.clone(), width_um: Some(800), auto_thickness: true, italic: true, ..Default::default() }).collect();
+    d.drawings.as_mut().unwrap().text_extras = ids.iter().map(|id| TextExtra { id: id.clone(), width_nm: Some(800), auto_thickness: true, italic: true, ..Default::default() }).collect();
     let mut b = Board::new(d, &m, 100, 300);
-    let edit = |ids: &[String], layer_defaults: bool, text_size: Option<Um>, text_thickness: Option<Um>| Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: ids.to_vec(), dimension_ids: vec![], layer_defaults, layer: None, line_width: None, text_size, text_thickness };
-    let looks = |b: &Board, id: &str| b.design().drawings.as_ref().unwrap().text_extra(id).map(|x| (x.width_um, x.auto_thickness, x.italic));
+    let edit = |ids: &[String], layer_defaults: bool, text_size: Option<Nm>, text_thickness: Option<Nm>| Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: ids.to_vec(), dimension_ids: vec![], layer_defaults, layer: None, line_width: None, text_size, text_thickness };
+    let looks = |b: &Board, id: &str| b.design().drawings.as_ref().unwrap().text_extra(id).map(|x| (x.width_nm, x.auto_thickness, x.italic));
 
     b.apply(&edit(&ids[..1], false, Some(1500), None)).unwrap();
     assert_eq!(looks(&b, &ids[0]), Some((None, true, true)), "a size: square again, the stroke width still automatic");
@@ -1134,7 +1134,7 @@ fn edit_text_and_graphics_touches_only_the_fields_given() {
     let m = net_model();
     let mut b = board(&m);
     b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } } }).unwrap();
-    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REF".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REF".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
     let shape_id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
     let text_id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
 
@@ -1155,7 +1155,7 @@ fn edit_text_and_graphics_touches_only_the_fields_given() {
     assert_eq!(dr.shapes[0].layer(), "F.Fab", "the shared `layer` field must still reach the shape on a mixed call");
     let t = dr.texts.iter().find(|t| t.id == text_id).unwrap();
     assert_eq!(t.layer, "F.Fab");
-    assert_eq!(t.size_um, 1200);
+    assert_eq!(t.size_nm, 1200);
     assert_eq!(t.stroke_width, 200);
     assert_eq!(t.content, "REF", "content is not one of this command's fields");
 }
@@ -1331,8 +1331,8 @@ fn only_part_edits_and_flip_clear_routing() {
         Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 0, y: 0 } } },
         Cmd::DeleteShape { id: "x".into() },
         Cmd::MoveShape { id: "x".into(), dx: 0, dy: 0 },
-        Cmd::AddText { text: Text { id: String::new(), content: String::new(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false } },
-        Cmd::EditText { id: "x".into(), content: String::new(), angle: 0, layer: "F.SilkS".into(), size_um: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false },
+        Cmd::AddText { text: Text { id: String::new(), content: String::new(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false } },
+        Cmd::EditText { id: "x".into(), content: String::new(), angle: 0, layer: "F.SilkS".into(), size_nm: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false },
         Cmd::DeleteText { id: "x".into() },
         Cmd::MoveText { id: "x".into(), x: 0, y: 0 },
         Cmd::Duplicate { ids: vec!["x".into()] },
@@ -1373,7 +1373,7 @@ fn duplicate_copies_a_track_via_zone_shape_and_text_with_fresh_ids() {
     b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 5000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
     b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } } }).unwrap();
-    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
 
     let rt = b.design().routing.as_ref().unwrap();
     let (track_id, via_id, zone_id) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.zones[0].id.clone());
@@ -1435,7 +1435,7 @@ fn paste_items_inserts_fresh_copies_and_ignores_incoming_ids() {
     let m = net_model();
     let mut b = board(&m);
     let track = Track { id: "stale-id-from-another-board".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2000, y: 2000 }, Point { x: 3000, y: 2000 }], arc_mid_offset: None };
-    let text = Text { id: "also-stale".into(), content: "PASTED".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false };
+    let text = Text { id: "also-stale".into(), content: "PASTED".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false };
 
     b.apply(&Cmd::PasteItems { tracks: vec![track], vias: vec![], zones: vec![], shapes: vec![], texts: vec![text] }).unwrap();
 
@@ -1587,7 +1587,7 @@ fn move_exact_rejects_an_empty_part_list() {
 
 // -------------------------------------------------- footprint editor (GAPS.md #8)
 
-fn fp_pad(number: &str, x: Um, y: Um) -> LibraryPad {
+fn fp_pad(number: &str, x: Nm, y: Nm) -> LibraryPad {
     LibraryPad {
         id: String::new(),
         number: number.into(),
@@ -1767,7 +1767,7 @@ fn next_pad_number_matches_what_add_pad_actually_produces() {
     for n in 1..=3 {
         let next = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().next_pad_number();
         assert_eq!(next, n.to_string());
-        b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad(&next, n as Um * 1000, 0) }).unwrap();
+        b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad(&next, n as Nm * 1000, 0) }).unwrap();
     }
 }
 
@@ -1816,7 +1816,7 @@ fn renumber_pads_orders_by_position_not_by_current_number() {
 
     b.apply(&Cmd::RenumberPads { footprint: "Test:FP".into(), start: 10, prefix: String::new(), step: 1 }).unwrap();
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
-    let at_x = |x: Um| fp.pads.iter().find(|p| p.at.x == x).unwrap().number.clone();
+    let at_x = |x: Nm| fp.pads.iter().find(|p| p.at.x == x).unwrap().number.clone();
     assert_eq!(at_x(0), "10");
     assert_eq!(at_x(2000), "11");
     assert_eq!(at_x(4000), "12");
@@ -1833,7 +1833,7 @@ fn set_footprint_anchor_translates_every_pad_graphic_and_text_so_the_click_point
         shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 1000, y: 1000 }, end: Point { x: 2000, y: 1000 } },
     })
     .unwrap();
-    b.apply(&Cmd::AddFootprintText { footprint: "Test:FP".into(), text: Text { id: String::new(), content: "REF**".into(), at: Point { x: 1000, y: 500 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } })
+    b.apply(&Cmd::AddFootprintText { footprint: "Test:FP".into(), text: Text { id: String::new(), content: "REF**".into(), at: Point { x: 1000, y: 500 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } })
         .unwrap();
 
     b.apply(&Cmd::SetFootprintAnchor { name: "Test:FP".into(), at: Point { x: 1000, y: 1000 } }).unwrap();
@@ -1974,10 +1974,10 @@ fn footprint_graphic_and_text_add_move_edit_delete_round_trip() {
     b.apply(&Cmd::DeleteFootprintGraphic { footprint: "Test:FP".into(), id: gid }).unwrap();
     assert!(b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().graphics.is_empty());
 
-    b.apply(&Cmd::AddFootprintText { footprint: "Test:FP".into(), text: Text { id: String::new(), content: "VAL**".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddFootprintText { footprint: "Test:FP".into(), text: Text { id: String::new(), content: "VAL**".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
     let tid = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().texts[0].id.clone();
     b.apply(&Cmd::MoveFootprintText { footprint: "Test:FP".into(), id: tid.clone(), x: 500, y: 500 }).unwrap();
-    b.apply(&Cmd::EditFootprintText { footprint: "Test:FP".into(), id: tid.clone(), content: "V2".into(), angle: 900, layer: "F.SilkS".into(), size_um: 800, stroke_width: 120, justify: TextJustify::Left, mirror: true }).unwrap();
+    b.apply(&Cmd::EditFootprintText { footprint: "Test:FP".into(), id: tid.clone(), content: "V2".into(), angle: 900, layer: "F.SilkS".into(), size_nm: 800, stroke_width: 120, justify: TextJustify::Left, mirror: true }).unwrap();
     {
         let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
         assert_eq!(fp.texts[0].at, Point { x: 500, y: 500 });
@@ -2000,7 +2000,7 @@ fn footprint_editor_commands_are_their_own_undo_domain() {
 
 // ------------------------------------------------------------ multi-unit symbols (GAPS.md #21)
 
-fn add_unit(b: &mut Board<'_>, id: &str, unit: u32, x: Um) {
+fn add_unit(b: &mut Board<'_>, id: &str, unit: u32, x: Nm) {
     b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: "test:DUAL".into(), at: Point { x, y: 0 }, rot_millideg: 0, value: "DUAL".into(), footprint: String::new(), unit }).unwrap();
 }
 
@@ -2090,7 +2090,7 @@ fn edit_and_rename_apply_to_every_unit_together() {
 
 // ------------------------------------------------------------ eeschema hotkey sweep: junction, lines, sheet, swap
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -2117,16 +2117,16 @@ fn a_junction_is_added_once_per_point_deleted_by_id_and_belongs_to_the_schematic
 fn a_graphic_line_needs_two_points_and_a_sane_width() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
-    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(0, 0)], width_um: 0 }).unwrap_err()[0].check, "ops_bad_line");
-    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(0, 0), p(10, 0)], width_um: -1 }).unwrap_err()[0].check, "ops_bad_line");
+    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(0, 0)], width_nm: 0 }).unwrap_err()[0].check, "ops_bad_line");
+    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(0, 0), p(10, 0)], width_nm: -1 }).unwrap_err()[0].check, "ops_bad_line");
     // a line whose points all coincide has no segment left once zero-length ones are dropped
-    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(5, 5), p(5, 5)], width_um: 0 }).unwrap_err()[0].check, "ops_bad_line");
+    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(5, 5), p(5, 5)], width_nm: 0 }).unwrap_err()[0].check, "ops_bad_line");
     // a double-click lands its last point twice: the repeat is dropped
-    b.apply(&Cmd::AddSchLine { pts: vec![p(0, 0), p(10_000, 0), p(10_000, 5_000), p(10_000, 5_000)], width_um: 254 }).unwrap();
+    b.apply(&Cmd::AddSchLine { pts: vec![p(0, 0), p(10_000, 0), p(10_000, 5_000), p(10_000, 5_000)], width_nm: 254 }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
     assert_eq!(sch.lines.len(), 1);
     assert_eq!(sch.lines[0].pts.len(), 3);
-    assert_eq!(sch.lines[0].width_um, 254);
+    assert_eq!(sch.lines[0].width_nm, 254);
     assert!(sch.lines[0].id.starts_with("sln_"), "{}", sch.lines[0].id);
     assert!(sch.wires.is_empty(), "a notes-layer line is never a wire");
     let id = sch.lines[0].id.clone();
@@ -2157,7 +2157,7 @@ fn a_new_sheet_gets_its_own_empty_screen_and_a_shared_file_is_reused() {
 fn a_sheet_is_refused_without_a_name_with_a_folder_in_its_file_with_a_taken_name_or_with_no_size() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
-    let add = |name: &str, file: &str, size: (Um, Um)| Cmd::AddSheet { name: name.into(), file: file.into(), at: p(0, 0), size };
+    let add = |name: &str, file: &str, size: (Nm, Nm)| Cmd::AddSheet { name: name.into(), file: file.into(), at: p(0, 0), size };
     assert_eq!(b.apply(&add("", "a", (1, 1))).unwrap_err()[0].check, "ops_bad_sheet");
     assert_eq!(b.apply(&add("S", "", (1, 1))).unwrap_err()[0].check, "ops_bad_sheet");
     assert_eq!(b.apply(&add("S", "sub/a.kicad_sch", (1, 1))).unwrap_err()[0].check, "ops_bad_sheet");
@@ -2195,7 +2195,7 @@ fn swap_reaches_labels_texts_and_power_symbols_and_a_chain_rotates_the_positions
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
     b.apply(&Cmd::AddLabel { net: "A".into(), at: p(1_000, 1_000), kind: LabelKind::Local }).unwrap();
-    b.apply(&Cmd::AddSchText { content: "note".into(), at: p(2_000, 2_000), angle_millideg: 0, size_um: 1_270 }).unwrap();
+    b.apply(&Cmd::AddSchText { content: "note".into(), at: p(2_000, 2_000), angle_millideg: 0, size_nm: 1_270 }).unwrap();
     b.apply(&Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: p(3_000, 3_000), rot_millideg: 0, net: "GND".into(), pin: "1".into() }).unwrap();
     // labels and texts get their ids when the design is next loaded (`board::load`'s back-fill) -- do that here
     let mut d = b.into_design();
@@ -2259,13 +2259,13 @@ fn aligned_dim(start: Point, end: Point) -> Dimension {
         text_position: DimensionTextPosition::Outside,
         keep_text_aligned: true,
         text_angle: 0,
-        text_size_um: 1000,
+        text_size_nm: 1000,
         stroke_width: 150,
         arrow_length: 1000,
         extension_offset: 200,
         extension_height: 500,
         arrow_direction: ArrowDirection::Outward,
-        text_thickness_um: None,
+        text_thickness_nm: None,
     }
 }
 
@@ -2394,7 +2394,7 @@ fn swap_layers_remaps_every_kind_but_leaves_vias_and_unmapped_layers_alone() {
     b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
     b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } } }).unwrap();
-    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Cu".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Cu".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
     b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) }).unwrap(); // aligned_dim's own layer is "Dwgs.User", not swapped by this test's mapping
     b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 5000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
 

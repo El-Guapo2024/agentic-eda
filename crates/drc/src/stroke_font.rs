@@ -37,7 +37,7 @@
 //! attempt starts from a correct decoder rather than re-porting one.
 
 use crate::kimath::Seg;
-use eda_model::ir::{Point, TextJustify, Um};
+use eda_model::ir::{Point, TextJustify, Nm};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -134,7 +134,7 @@ pub fn glyph_strokes(codepoint: u32) -> GlyphStrokes {
     GlyphStrokes { width: g.width, strokes: g.strokes }
 }
 
-/// World-space pen-stroke segments for `text`, set at `size_um` and
+/// World-space pen-stroke segments for `text`, set at `size_nm` and
 /// anchored (baseline-left, before `justify`) at `anchor` -- the same
 /// convention `web/studio`'s canvas painter uses for free board text
 /// (`drawStrokeText(ctx, t.content, t.x, t.y, ...)` with `t.x, t.y` passed
@@ -150,8 +150,8 @@ pub fn glyph_strokes(codepoint: u32) -> GlyphStrokes {
 ///
 /// Returns `None` for text with no ink at all (empty, or all spaces), so
 /// callers never have to handle a degenerate empty `Shape::Strokes`.
-pub fn layout_strokes(text: &str, anchor: Point, size_um: Um, rot_millideg: i64, mirror: bool, justify: TextJustify) -> Option<Vec<Seg>> {
-    layout_strokes_anchored(text, anchor, size_um, rot_millideg, mirror, justify, VAnchor::Baseline)
+pub fn layout_strokes(text: &str, anchor: Point, size_nm: Nm, rot_millideg: i64, mirror: bool, justify: TextJustify) -> Option<Vec<Seg>> {
+    layout_strokes_anchored(text, anchor, size_nm, rot_millideg, mirror, justify, VAnchor::Baseline)
 }
 
 /// Vertical anchor convention: where `anchor`'s y lands relative to the
@@ -178,7 +178,7 @@ pub enum VAnchor {
     Center,
 }
 
-fn layout_strokes_anchored(text: &str, anchor: Point, size_um: Um, rot_millideg: i64, mirror: bool, justify: TextJustify, vanchor: VAnchor) -> Option<Vec<Seg>> {
+fn layout_strokes_anchored(text: &str, anchor: Point, size_nm: Nm, rot_millideg: i64, mirror: bool, justify: TextJustify, vanchor: VAnchor) -> Option<Vec<Seg>> {
     if text.is_empty() {
         return None;
     }
@@ -228,14 +228,14 @@ fn layout_strokes_anchored(text: &str, anchor: Point, size_um: Um, rot_millideg:
         }
     };
 
-    let size = size_um as f64;
+    let size = size_nm as f64;
     let rad = (rot_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
     let mirror_sign = if mirror { -1.0 } else { 1.0 };
     let to_board = |local_x: f64, local_y: f64| -> Point {
         let lx = local_x * size * mirror_sign;
         let ly = (local_y - y_shift) * size;
-        Point { x: anchor.x + (lx * cos - ly * sin).round() as Um, y: anchor.y + (lx * sin + ly * cos).round() as Um }
+        Point { x: anchor.x + (lx * cos - ly * sin).round() as Nm, y: anchor.y + (lx * sin + ly * cos).round() as Nm }
     };
 
     let mut segs = Vec::new();
@@ -259,8 +259,8 @@ fn layout_strokes_anchored(text: &str, anchor: Point, size_um: Um, rot_millideg:
 /// centre rather than its baseline -- see [`VAnchor::Center`]. Used for
 /// footprint `(property ...)` fields (reference/value), never for bare
 /// board text (`Text`/`gr_text`), which is baseline-anchored.
-pub fn layout_strokes_vcenter(text: &str, anchor: Point, size_um: Um, rot_millideg: i64, mirror: bool, justify: TextJustify) -> Option<Vec<Seg>> {
-    layout_strokes_anchored(text, anchor, size_um, rot_millideg, mirror, justify, VAnchor::Center)
+pub fn layout_strokes_vcenter(text: &str, anchor: Point, size_nm: Nm, rot_millideg: i64, mirror: bool, justify: TextJustify) -> Option<Vec<Seg>> {
+    layout_strokes_anchored(text, anchor, size_nm, rot_millideg, mirror, justify, VAnchor::Center)
 }
 
 /// Inputs to [`kicad_text_segments`]: one `EDA_TEXT`'s layout attributes.
@@ -269,9 +269,9 @@ pub struct TextLayout<'a> {
     /// `GetDrawPos()`, board space.
     pub pos: Point,
     /// Glyph (width, height).
-    pub size: (Um, Um),
+    pub size: (Nm, Nm),
     /// The file's pen thickness (`TEXT_ATTRIBUTES::m_StrokeWidth`).
-    pub thickness: Um,
+    pub thickness: Nm,
     /// `GetDrawRotation()`, KiCad's sign convention (counter-clockwise
     /// positive), degrees.
     pub angle_deg: f64,
@@ -284,14 +284,14 @@ pub struct TextLayout<'a> {
 
 /// `EDA_TEXT::GetEffectiveTextPenWidth`: the pen width the glyph strokes
 /// are inflated by.
-pub fn effective_pen_width(thickness: Um, size: (Um, Um), bold: bool) -> Um {
+pub fn effective_pen_width(thickness: Nm, size: (Nm, Nm), bold: bool) -> Nm {
     let mut pen = thickness;
     if pen <= 1 {
         let w = size.0 as f64;
-        pen = if bold { (w / 5.0).round() as Um } else { (w / 8.0).round() as Um };
+        pen = if bold { (w / 5.0).round() as Nm } else { (w / 8.0).round() as Nm };
     }
     // `ClampTextPenSize`: at most a quarter of the smaller glyph dimension.
-    let max = ((size.0.abs().min(size.1.abs())) as f64 * 0.25).round() as Um;
+    let max = ((size.0.abs().min(size.1.abs())) as f64 * 0.25).round() as Nm;
     pen.min(max)
 }
 
@@ -432,7 +432,7 @@ pub fn kicad_text_segments(t: &TextLayout) -> Vec<Seg> {
     let xf = |x: f64, y: f64| -> Point {
         let x = if t.mirror { origin.0 - (x - origin.0) } else { x };
         let (dx, dy) = (x - origin.0, y - origin.1);
-        Point { x: (origin.0 + dx * cos + dy * sin).round() as Um, y: (origin.1 - dx * sin + dy * cos).round() as Um }
+        Point { x: (origin.0 + dx * cos + dy * sin).round() as Nm, y: (origin.1 - dx * sin + dy * cos).round() as Nm }
     };
     let mut segs = Vec::new();
     for (i, line) in laid.iter().enumerate() {

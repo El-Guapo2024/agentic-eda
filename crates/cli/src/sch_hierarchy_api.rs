@@ -50,7 +50,7 @@ fn annotate_report(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
         _ => AnnotateOptions::default(),
     };
     let (meta, design, model) = loaded(dir)?;
-    let b = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+    let b = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
     let report = b.annotate_report(&sheet, reset, order, ids.as_deref(), &options)?;
     Ok(json!({
         "ok": true,
@@ -126,7 +126,7 @@ fn check_sheet_file(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> 
     let keep = req.get("keep_annotations").and_then(Value::as_bool).unwrap_or(false);
     let name = req.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).unwrap_or(&stem).to_string();
     let (meta, design, model) = loaded(dir)?;
-    let board = Board::new(design.clone(), &model, meta.snap_um, meta.spacing_um);
+    let board = Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
     let mut findings: Vec<Value> = board.check_sheet_file(&content, &name, keep).iter().map(|f| json!({ "severity": f.severity, "text": f.text })).collect();
 
     // `LoadSheetFromFile`'s library check: a library the project lacks (the symbols come in from the definitions the file carries)

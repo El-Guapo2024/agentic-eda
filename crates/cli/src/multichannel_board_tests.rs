@@ -67,7 +67,7 @@ fn design(placed: &[(&str, i64, i64)]) -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -97,7 +97,7 @@ fn channels(dir: &Path) {
 /// `design` as the board folder `dir`'s design, with the intent of the three channels.
 fn write_board(dir: &Path, design: &Design) {
     save(dir, design).unwrap();
-    let meta = Meta { intent: intent_path().canonicalize().unwrap().display().to_string(), snap_um: 100, spacing_um: 600 };
+    let meta = Meta { intent: intent_path().canonicalize().unwrap().display().to_string(), snap_nm: 100, spacing_nm: 600 };
     std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 }
 
@@ -108,7 +108,7 @@ fn design_json(dir: &Path) -> Value {
 /// Generate Placement Rule Areas with every sheet ticked, as the dialog's OK sends it.
 fn generate(dir: &Path) {
     let (meta, design, model) = load(dir).unwrap();
-    let rows = Board::new(design, &model, meta.snap_um, meta.spacing_um).mc_potential_areas();
+    let rows = Board::new(design, &model, meta.snap_nm, meta.spacing_nm).mc_potential_areas();
     let areas: Vec<AreaPick> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| AreaPick { kind: r.kind, key: r.key.clone() }).collect();
     assert_eq!(areas.len(), 3, "one sheet for each amplifier: {rows:?}");
     step(dir, Cmd::Multichannel(MultichannelCmd::GenerateRuleAreas { areas, replace_existing: false, group_items: false }), false, "test").unwrap();
@@ -204,7 +204,7 @@ fn strict_refuses_neither_the_areas_nor_the_repeat_on_a_board_that_is_not_routed
     write_board(&dir, &design(&PLACE));
     assert!(design_json(&dir)["routing"].is_null(), "no routing yet");
     let (meta, d, model) = load(&dir).unwrap();
-    let rows = Board::new(d, &model, meta.snap_um, meta.spacing_um).mc_potential_areas();
+    let rows = Board::new(d, &model, meta.snap_nm, meta.spacing_nm).mc_potential_areas();
     let areas: Vec<AreaPick> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| AreaPick { kind: r.kind, key: r.key.clone() }).collect();
     step(&dir, Cmd::Multichannel(MultichannelCmd::GenerateRuleAreas { areas, replace_existing: false, group_items: false }), true, "test").expect("Strict lets the rule areas be made");
     let found = rule_areas(&dir);

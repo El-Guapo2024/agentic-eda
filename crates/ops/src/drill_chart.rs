@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use eda_model::drill_chart::{DrillChart, DrillChartColumnId, DrillChartFilter, DrillGroupKey, DrillMarkMode, DrillMarkPolicy, DrillSpan, DrillSymbolAssignment, DrillSymbolProfile, TableAlign, TableUnits, CURATED_SHAPES};
 use eda_model::footprint::{to_board, Pad, PadKind};
 use eda_model::ir::Side;
-use eda_model::ir::{Design, FootprintInstance, Point, TextJustify, Um};
+use eda_model::ir::{Design, FootprintInstance, Point, TextJustify, Nm};
 use eda_model::table::{Table, TableCell};
 use eda_model::{ConstraintModel, Stackup};
 
@@ -41,10 +41,10 @@ pub struct DrillOp {
     pub source: String,
     pub at: Point,
     /// `m_SizeXY`, µm, the source's own axes.
-    pub size: (Um, Um),
+    pub size: (Nm, Nm),
     /// `m_Orientation`, degrees, KiCad's sense.
     pub orientation_deg: f64,
-    pub diameter: Um,
+    pub diameter: Nm,
     pub is_slot: bool,
     pub top: String,
     pub bottom: String,
@@ -409,8 +409,8 @@ pub struct DrillMark {
     pub mode: DrillMarkMode,
     pub shape_index: i32,
     pub letter: String,
-    pub diameter_um: Um,
-    pub size_um: (Um, Um),
+    pub diameter_nm: Nm,
+    pub size_nm: (Nm, Nm),
     pub orientation_deg: f64,
     pub is_slot: bool,
 }
@@ -423,7 +423,7 @@ pub fn marks(design: &Design, model: &ConstraintModel) -> Vec<DrillMark> {
     for span in spans(design, model) {
         for op in operations(design, model, &span, false, true) {
             let Some(a) = resolved.get(&group_key(&profile, &op)) else { continue };
-            out.push(DrillMark { at: op.at, span: span.clone(), mode: a.mode, shape_index: a.shape_index, letter: a.letter.clone(), diameter_um: op.diameter, size_um: op.size, orientation_deg: op.orientation_deg, is_slot: op.is_slot });
+            out.push(DrillMark { at: op.at, span: span.clone(), mode: a.mode, shape_index: a.shape_index, letter: a.letter.clone(), diameter_nm: op.diameter, size_nm: op.size, orientation_deg: op.orientation_deg, is_slot: op.is_slot });
         }
     }
     out
@@ -432,7 +432,7 @@ pub fn marks(design: &Design, model: &ConstraintModel) -> Vec<DrillMark> {
 // ------------------------------------------------------------------------------------------------------------------------------------------------- the content
 
 /// `FormatGeneratedTableLength`.
-pub fn format_length(um: Um, units: TableUnits, precision: i32) -> String {
+pub fn format_length(um: Nm, units: TableUnits, precision: i32) -> String {
     let mm = um as f64 / 1000.0;
     let p = precision.max(0) as usize;
     match units {
@@ -736,8 +736,8 @@ pub fn rebuild(t: &mut Table, chart: &mut DrillChart, c: &ChartContent) {
     t.row_heights = vec![0; rows];
     crate::pcb_table_builders::autosize(t);
     for (col, def) in chart.columns.iter().enumerate() {
-        if def.width_um > t.col_widths[col] {
-            t.col_widths[col] = def.width_um;
+        if def.width_nm > t.col_widths[col] {
+            t.col_widths[col] = def.width_nm;
         }
     }
     t.at = anchor;
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn marks_are_assigned_from_the_lowest_free_shape_and_then_letters() {
-        let op = |d: Um| DrillOp { source: String::new(), at: Point { x: 0, y: 0 }, size: (d, d), orientation_deg: 0.0, diameter: d, is_slot: false, top: "F.Cu".into(), bottom: "B.Cu".into(), not_plated: false, attribute: HoleAttribute::Pad, protection: [false; 8] };
+        let op = |d: Nm| DrillOp { source: String::new(), at: Point { x: 0, y: 0 }, size: (d, d), orientation_deg: 0.0, diameter: d, is_slot: false, top: "F.Cu".into(), bottom: "B.Cu".into(), not_plated: false, attribute: HoleAttribute::Pad, protection: [false; 8] };
         let p = DrillSymbolProfile::default();
         assert_eq!(group_key(&p, &op(300)), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
         let mut profile = DrillSymbolProfile::default();

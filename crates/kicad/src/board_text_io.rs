@@ -6,15 +6,15 @@
 
 use eda_model::board_text::TextExtra;
 use eda_model::fp_edit::FieldLayout;
-use eda_model::ir::{Point, Text, TextJustify, TextVAlign, Um};
+use eda_model::ir::{Point, Text, TextJustify, TextVAlign, Nm};
 
 use crate::sexpr::{self, Sexpr};
 
 /// What a `gr_text` item says about its looks.
 pub(crate) struct ReadStyle {
-    /// The glyph height, µm (`Text::size_um`).
-    pub size_um: Um,
-    pub stroke_width: Um,
+    /// The glyph height, µm (`Text::size_nm`).
+    pub size_nm: Nm,
+    pub stroke_width: Nm,
     pub justify: TextJustify,
     pub mirror: bool,
     /// What the text has beyond those, with an empty id (the caller names the text first).
@@ -22,8 +22,8 @@ pub(crate) struct ReadStyle {
 }
 
 /// `GetPenSizeForNormal` and `GetPenSizeForBold` (`common/eda_text.cpp`): an eighth and a fifth of the glyph width.
-fn auto_pen_um(width_um: Um, bold: bool) -> Um {
-    (width_um as f64 / if bold { 5.0 } else { 8.0 }).round() as Um
+fn auto_pen_nm(width_nm: Nm, bold: bool) -> Nm {
+    (width_nm as f64 / if bold { 5.0 } else { 8.0 }).round() as Nm
 }
 
 /// The looks of the `gr_text` `item`.
@@ -33,12 +33,12 @@ pub(crate) fn read_style(item: &[Sexpr]) -> ReadStyle {
     let (width, height) = (l.size.0, l.size.1);
     let font = sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font"));
     let auto_thickness = l.thickness == 0;
-    let stroke_width = if auto_thickness { auto_pen_um(width, l.bold) } else { l.thickness };
+    let stroke_width = if auto_thickness { auto_pen_nm(width, l.bold) } else { l.thickness };
     let line_spacing_permille = font.and_then(|f| sexpr::find(f, "line_spacing")).and_then(|s| sexpr::num(s, 1)).map(|v| (v * 1000.0).round() as i64).filter(|v| *v != 1000).unwrap_or(0);
     let face = font.and_then(|f| sexpr::find(f, "face")).and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(str::to_string);
     let extra = TextExtra {
         id: String::new(),
-        width_um: (width != height).then_some(width),
+        width_nm: (width != height).then_some(width),
         auto_thickness,
         valign: match l.valign {
             -1 => TextVAlign::Top,
@@ -52,7 +52,7 @@ pub(crate) fn read_style(item: &[Sexpr]) -> ReadStyle {
         face,
     };
     ReadStyle {
-        size_um: height,
+        size_nm: height,
         stroke_width,
         justify: match l.halign {
             -1 => TextJustify::Left,
@@ -69,7 +69,7 @@ pub(crate) fn effects(text: &Text, extra: Option<&TextExtra>) -> String {
     let default = TextExtra::default();
     let extra = extra.unwrap_or(&default);
     let mut l = FieldLayout::new(Point { x: 0, y: 0 }, &text.layer);
-    l.size = (extra.width_um.unwrap_or(text.size_um), text.size_um);
+    l.size = (extra.width_nm.unwrap_or(text.size_nm), text.size_nm);
     l.thickness = if extra.auto_thickness { 0 } else { text.stroke_width };
     l.halign = match text.justify {
         TextJustify::Left => -1,

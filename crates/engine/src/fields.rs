@@ -25,7 +25,7 @@ pub struct FieldSpec {
     pub text: String,
     pub visible: bool,
     /// The text's size, micrometres; 0 is the default, 50 mil.
-    pub size_um: i64,
+    pub size_nm: i64,
     pub bold: bool,
     pub italic: bool,
     pub name_shown: bool,
@@ -35,13 +35,13 @@ pub struct FieldSpec {
 
 impl FieldSpec {
     pub fn new(name: &str, text: String, visible: bool) -> FieldSpec {
-        FieldSpec { name: name.to_string(), text, visible, size_um: 0, bold: false, italic: false, name_shown: false, can_autoplace: true }
+        FieldSpec { name: name.to_string(), text, visible, size_nm: 0, bold: false, italic: false, name_shown: false, can_autoplace: true }
     }
 
     /// The same field as a stored placement sets it: visibility, size, bold, italic, shown name and whether it may be autoplaced.
     pub fn styled_by(mut self, p: &FieldPlacement) -> FieldSpec {
         self.visible = p.visible;
-        self.size_um = p.size_um;
+        self.size_nm = p.size_nm;
         self.bold = p.bold;
         self.italic = p.italic;
         self.name_shown = p.name_shown;
@@ -71,7 +71,7 @@ pub struct PageField {
     pub v: VJustify,
     pub visible: bool,
     /// The text's size (height and width), micrometres.
-    pub size_um: f64,
+    pub size_nm: f64,
     pub bold: bool,
     pub italic: bool,
     /// `SCH_FIELD::IsNameShown`: [`shown_text`](Self::shown_text) leads with the field's name.
@@ -92,13 +92,13 @@ impl PageField {
 
     /// How the text is set: its size, the pen (a fifth of the size when bold, `GetPenSizeForBold`) and its justification.
     pub fn style(&self) -> TextStyle {
-        field_style(self.size_um, self.bold, self.h, self.v)
+        field_style(self.size_nm, self.bold, self.h, self.v)
     }
 }
 
-/// The style a text of `size_um` (bold or not) is measured in.
-pub fn field_style(size_um: f64, bold: bool, h: HJustify, v: VJustify) -> TextStyle {
-    let size_iu = kiround(size_um * 10.0);
+/// The style a text of `size_nm` (bold or not) is measured in.
+pub fn field_style(size_nm: f64, bold: bool, h: HJustify, v: VJustify) -> TextStyle {
+    let size_iu = kiround(size_nm * 10.0);
     TextStyle { size_iu, thickness_iu: if bold { kiround(size_iu as f64 / 5.0) } else { 0 }, h, v }
 }
 
@@ -211,7 +211,7 @@ pub fn page_field(at: Point, rot: u32, mirrored: bool, width: f64, p: &FieldPlac
         h: to_hj(h),
         v: to_vj(v),
         visible: p.visible,
-        size_um: p.text_size_um() as f64,
+        size_nm: p.text_size_nm() as f64,
         bold: p.bold,
         italic: p.italic,
         name_shown: p.name_shown,
@@ -405,7 +405,7 @@ struct Measured {
 }
 
 fn measure(f: &FieldSpec) -> Measured {
-    let size_iu = if f.size_um > 0 { f.size_um * 10 } else { DEFAULT_TEXT_SIZE_IU };
+    let size_iu = if f.size_nm > 0 { f.size_nm * 10 } else { DEFAULT_TEXT_SIZE_IU };
     let pen_iu = if f.bold { kiround(size_iu as f64 / 5.0) } else { default_pen_iu(size_iu) };
     Measured { text: f.shown_text(), size_iu, pen_iu }
 }
@@ -627,7 +627,7 @@ fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], ke
     let h_mirrored = (rot, mirrored) == (180_000, true);
     let placed = autoplace_page(geom, sym.at, h_mirrored, &movable, force, manual);
     let style = |mut p: FieldPlacement, spec: &FieldSpec| {
-        p.size_um = spec.size_um;
+        p.size_nm = spec.size_nm;
         p.bold = spec.bold;
         p.italic = spec.italic;
         p.name_shown = spec.name_shown;

@@ -10,7 +10,7 @@ fn design() -> Design {
     serde_json::from_str(r#"{"schema":1,"provenance":{"engine_version":"0","intent_hash":"x","seed":0,"stage_hashes":[]}}"#).unwrap()
 }
 
-fn pad(number: &str, x: Um, y: Um) -> LibraryPad {
+fn pad(number: &str, x: Nm, y: Nm) -> LibraryPad {
     LibraryPad {
         id: String::new(),
         number: number.into(),
@@ -53,7 +53,7 @@ fn fp<'b>(b: &'b Board<'_>) -> &'b LibraryFootprint {
 }
 
 /// The pads as `(number, x, y)`, sorted by position (x, then y) so a test does not depend on the order copies were pushed in.
-fn pads_of(b: &Board<'_>) -> Vec<(String, Um, Um)> {
+fn pads_of(b: &Board<'_>) -> Vec<(String, Nm, Nm)> {
     let mut v: Vec<_> = fp(b).pads.iter().map(|p| (p.number.clone(), p.at.x, p.at.y)).collect();
     v.sort_by_key(|(_, x, y)| (*x, *y));
     v
@@ -63,7 +63,7 @@ fn id_of(b: &Board<'_>, number: &str) -> String {
     fp(b).pads.iter().find(|p| p.number == number).unwrap().id.clone()
 }
 
-fn grid(nx: i64, ny: i64, dx: Um, dy: Um) -> ArrayGeometry {
+fn grid(nx: i64, ny: i64, dx: Nm, dy: Nm) -> ArrayGeometry {
     ArrayGeometry::Grid { nx, ny, dx, dy, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }
 }
 
@@ -242,7 +242,7 @@ fn graphics_and_texts_are_copied_and_moved_with_their_pads() {
     b.apply(&Cmd::AddFootprintGraphic { footprint: "Lib:Row".into(), shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: -500, y: -800 }, end: Point { x: 500, y: -800 } } }).unwrap();
     b.apply(&Cmd::AddFootprintText {
         footprint: "Lib:Row".into(),
-        text: Text { id: String::new(), content: "T".into(), at: Point { x: 0, y: 1500 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false },
+        text: Text { id: String::new(), content: "T".into(), at: Point { x: 0, y: 1500 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false },
     })
     .unwrap();
     let ids: Vec<String> = {
@@ -252,10 +252,10 @@ fn graphics_and_texts_are_copied_and_moved_with_their_pads() {
     b.apply(&array(ids, grid(3, 1, 2540, 0), Some(from_start(NumberingType::Numeric, "1")))).unwrap();
     let f = fp(&b);
     assert_eq!((f.pads.len(), f.graphics.len(), f.texts.len()), (3, 3, 3));
-    let mut starts: Vec<Um> = f.graphics.iter().map(|g| g.points()[0].x).collect();
+    let mut starts: Vec<Nm> = f.graphics.iter().map(|g| g.points()[0].x).collect();
     starts.sort();
     assert_eq!(starts, vec![-500, 2040, 4580], "the silkscreen line moved with each pad");
-    let mut xs: Vec<Um> = f.texts.iter().map(|t| t.at.x).collect();
+    let mut xs: Vec<Nm> = f.texts.iter().map(|t| t.at.x).collect();
     xs.sort();
     assert_eq!(xs, vec![0, 2540, 5080]);
     let mut all: Vec<String> = f.graphics.iter().map(|g| g.id().to_string()).chain(f.texts.iter().map(|t| t.id.clone())).chain(f.pads.iter().map(|p| p.id.clone())).collect();

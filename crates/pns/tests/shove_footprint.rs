@@ -4,7 +4,7 @@
 //! the shove give up and the placer fall back to walking around everything.
 
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Um};
+use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Nm};
 use eda_model::{ConstraintModel, Net as IrNet, Part, Pin, PinKind};
 use eda_pns::from_ir::build_node;
 use eda_pns::item::net_of;
@@ -13,7 +13,7 @@ use eda_pns::settings::{Mode, RoutingSettings};
 
 /// U1 (SOIC-8, left pad column at x -3450..-1500, rows 600 high at y = +-635 and +-1905) and a
 /// GND track on its left, parallel to the pad column, 450 from the pads' edge.
-fn board(track_x: Um) -> (Design, ConstraintModel) {
+fn board(track_x: Nm) -> (Design, ConstraintModel) {
     let model = ConstraintModel {
         parts: vec![Part {
             reference: "U1".into(),
@@ -23,7 +23,7 @@ fn board(track_x: Um) -> (Design, ConstraintModel) {
             package: Some("SOIC-8".into()),
             footprint: Some("SOIC-8".into()),
             pins: (1..=8).map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
-            body_um: None,
+            body_nm: None,
             symbol: None,
             datasheet: None,
             edge: None,
@@ -36,7 +36,7 @@ fn board(track_x: Um) -> (Design, ConstraintModel) {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -55,7 +55,7 @@ fn board(track_x: Um) -> (Design, ConstraintModel) {
     (design, model)
 }
 
-fn preview_head_at(track_x: Um, head_x: Um) -> (eda_pns::line_placer::Preview, ConstraintModel, Design) {
+fn preview_head_at(track_x: Nm, head_x: Nm) -> (eda_pns::line_placer::Preview, ConstraintModel, Design) {
     let (design, model) = board(track_x);
     let (node, layers) = build_node(&design, &model);
     let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
@@ -105,7 +105,7 @@ fn pads_that_stop_the_track_push_the_head_back_in_turn() {
     assert!(moved.pts.iter().any(|p| p.x > -3_700 && p.x < -3_500) && moved.pts.iter().any(|p| p.x <= -3_750), "the track follows the pads' edge: {:?}", moved.pts);
 
     let drc = eda_drc::board::build(&design, &model);
-    let clear = |a: Point, b: Point, w: Um, other: &Shape| Shape::Stadium { a, b, r: w / 2 }.collides(other, 200 - 1).is_none();
+    let clear = |a: Point, b: Point, w: Nm, other: &Shape| Shape::Stadium { a, b, r: w / 2 }.collides(other, 200 - 1).is_none();
     for (a, b) in pv.head.segs().map(|s| (s.0, s.1)).chain(moved.segs()) {
         for pad in &drc.pads {
             assert!(clear(a, b, 200, &pad.copper), "leg {a:?}-{b:?} touches pad {}", pad.id);

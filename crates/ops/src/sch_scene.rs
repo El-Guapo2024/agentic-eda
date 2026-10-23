@@ -8,7 +8,7 @@
 //!
 //! Nothing here knows about verbs or commits: `sch_move.rs` and `sch_drag.rs` drive it.
 
-use eda_model::ir::{Junction, Millideg, Point, SchematicSection, SymbolInstance, Um, Wire};
+use eda_model::ir::{Junction, Millideg, Point, SchematicSection, SymbolInstance, Nm, Wire};
 use eda_model::sch_extras::{LabelSpin, SchGraphic, SchGraphicKind};
 use eda_model::symbol::{LibSymbol, SymbolGraphic};
 use eda_model::ConstraintModel;
@@ -161,7 +161,7 @@ pub(crate) fn rotate_vec(v: Point, ccw: bool) -> Point {
 }
 
 /// `MIRROR( a, axis )`.
-pub(crate) fn mirror_coord(a: Um, axis: Um) -> Um {
+pub(crate) fn mirror_coord(a: Nm, axis: Nm) -> Nm {
     2 * axis - a
 }
 
@@ -484,7 +484,7 @@ impl<'m> Scene<'m> {
     /// The bounding box of an item, for the centre of a selection (`SELECTION::GetCenter` leaves out text and labels).
     pub(crate) fn item_box(&self, it: Item) -> Option<(Point, Point)> {
         let pt = |p: Point| Some((p, p));
-        let around = |p: Point, r: Um| Some((Point { x: p.x - r, y: p.y - r }, Point { x: p.x + r, y: p.y + r }));
+        let around = |p: Point, r: Nm| Some((Point { x: p.x - r, y: p.y - r }, Point { x: p.x + r, y: p.y + r }));
         match it {
             Item::Seg(i) => Some((Point { x: self.segs[i].a.x.min(self.segs[i].b.x), y: self.segs[i].a.y.min(self.segs[i].b.y) }, Point { x: self.segs[i].a.x.max(self.segs[i].b.x), y: self.segs[i].a.y.max(self.segs[i].b.y) })),
             Item::NoteLine(i) => points_box(&self.sch.lines[i].pts),
@@ -984,14 +984,14 @@ pub(crate) fn graphic_bounds_for_test(g: &SchGraphic) -> Option<(Point, Point)> 
 fn graphic_box(g: &SchGraphic) -> Option<(Point, Point)> {
     match &g.shape {
         SchGraphicKind::Rectangle { start, end, .. } | SchGraphicKind::TextBox { start, end, .. } => points_box(&[*start, *end]),
-        SchGraphicKind::Circle { center, radius_um } => Some((Point { x: center.x - radius_um, y: center.y - radius_um }, Point { x: center.x + radius_um, y: center.y + radius_um })),
+        SchGraphicKind::Circle { center, radius_nm } => Some((Point { x: center.x - radius_nm, y: center.y - radius_nm }, Point { x: center.x + radius_nm, y: center.y + radius_nm })),
         SchGraphicKind::Arc { start, mid, end } => points_box(&[*start, *mid, *end]),
         SchGraphicKind::Bezier { start, c1, c2, end } => points_box(&[*start, *c1, *c2, *end]),
         SchGraphicKind::Polygon { pts } | SchGraphicKind::RuleArea { pts, .. } => points_box(pts),
         SchGraphicKind::Directive { at, .. } => Some((*at, *at)),
         // `REFERENCE_IMAGE::GetBoundingBox`: `BOX2I::ByCenter( m_pos, size )`
         SchGraphicKind::Image { at, scale_ppm, data } => {
-            let (w, h) = eda_model::image_info::header_of_base64(data).map_or((0, 0), |hd| eda_model::image_info::size_um(&hd, *scale_ppm));
+            let (w, h) = eda_model::image_info::header_of_base64(data).map_or((0, 0), |hd| eda_model::image_info::size_nm(&hd, *scale_ppm));
             Some((Point { x: at.x - w / 2, y: at.y - h / 2 }, Point { x: at.x - w / 2 + w, y: at.y - h / 2 + h }))
         }
     }

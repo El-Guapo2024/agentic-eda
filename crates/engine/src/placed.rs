@@ -221,7 +221,7 @@ mod tests {
         Pin { number: number.into(), name: Some(name.into()), kind }
     }
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some("v".into()), package: None, footprint: None, symbol: None, datasheet: None, pins, body_um: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some("v".into()), package: None, footprint: None, symbol: None, datasheet: None, pins, body_nm: None, edge: None }
     }
     fn instance(reference: &str, lib_id: &str, at: Point, rot: u32) -> SymbolInstance {
         SymbolInstance { id: reference.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }

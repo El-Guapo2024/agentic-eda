@@ -41,7 +41,7 @@
 //!   test here, not a simplification of a fuzzier upstream rule.
 
 use eda_model::footprint::placed_pads;
-use eda_model::ir::{Design, Point, TeardropSettings, Um, Zone};
+use eda_model::ir::{Design, Point, TeardropSettings, Nm, Zone};
 use eda_model::{ConstraintModel, PadKind, PadShape};
 use std::collections::HashMap;
 
@@ -67,7 +67,7 @@ fn reach_includes(reach: &Reach, layer: &str, board_layers: &[String]) -> bool {
 
 struct Anchor {
     center: Point,
-    radius: Um,
+    radius: Nm,
     net: String,
     reach: Reach,
 }
@@ -152,7 +152,7 @@ fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &Teardrop
 /// connected endpoint); `far` is that same track's other endpoint.
 /// Returns `None` when the track is too short, too wide, or the anchor
 /// has no usable radius to build a tangent from -- a skip, not an error.
-fn teardrop_polygon(center: Point, radius: Um, near: Point, far: Point, track_width: Um, settings: &TeardropSettings) -> Option<Vec<Point>> {
+fn teardrop_polygon(center: Point, radius: Nm, near: Point, far: Point, track_width: Nm, settings: &TeardropSettings) -> Option<Vec<Point>> {
     let r = radius as f64;
     let hw = track_width as f64 / 2.0;
     if r <= 0.0 || hw <= 0.0 || near != center {
@@ -175,8 +175,8 @@ fn teardrop_polygon(center: Point, radius: Um, near: Point, far: Point, track_wi
     }
 
     let mut target_len = anchor_diameter * settings.best_length_ratio;
-    if settings.max_len_um > 0 {
-        target_len = target_len.min(settings.max_len_um as f64);
+    if settings.max_len_nm > 0 {
+        target_len = target_len.min(settings.max_len_nm as f64);
     }
     // Never reach past the track's own far end -- the single-segment
     // scope this port has (see module doc); leave a hairline margin so
@@ -187,12 +187,12 @@ fn teardrop_polygon(center: Point, radius: Um, near: Point, far: Point, track_wi
     }
 
     let mut half_width_pad_side = r * settings.best_width_ratio.clamp(0.0, 1.0);
-    if settings.max_width_um > 0 {
-        half_width_pad_side = half_width_pad_side.min(settings.max_width_um as f64 / 2.0);
+    if settings.max_width_nm > 0 {
+        half_width_pad_side = half_width_pad_side.min(settings.max_width_nm as f64 / 2.0);
     }
     half_width_pad_side = half_width_pad_side.min(r);
 
-    let round = |x: f64| x.round() as Um;
+    let round = |x: f64| x.round() as Nm;
     let pt = |bx: f64, by: f64, ox: f64, oy: f64| Point { x: round(bx + ox), y: round(by + oy) };
 
     let (px, py) = (near.x as f64 + dir_x * target_len, near.y as f64 + dir_y * target_len);

@@ -12,7 +12,7 @@
 
 use eda_drc::constraints::{string_from_value, Units};
 use eda_drc::stroke_font::{effective_pen_width, kicad_text_segments, TextLayout};
-use eda_model::ir::{Point, TextJustify, Um};
+use eda_model::ir::{Point, TextJustify, Nm};
 use eda_model::rules::default_stackup;
 use eda_model::{Stackup, StackupLayer};
 use eda_model::table::{Table, TableCell};
@@ -102,14 +102,14 @@ pub fn initial_caps(s: &str) -> String {
 // ------------------------------------------------------------------------------------------------------------------------------------------------ Autosize
 
 /// `ARC_LOW_DEF` (0.02 mm), the error `PCB_TABLE::Autosize` allows the polygon of a stroke.
-const ARC_LOW_DEF_UM: f64 = 20.0;
+const ARC_LOW_DEF_NM: f64 = 20.0;
 
 /// The bounding box of `TransformOvalToPolygon( a, b, pen, ARC_LOW_DEF, ERROR_INSIDE )`: the stroke from `a` to `b` as the capsule KiCad polygonises, whose rounded ends
 /// are cut into a multiple of eight sides (so a flat lies across the axis of the stroke, half a side from it) and lie inside the true outline.
-fn oval_extents(a: (f64, f64), b: (f64, f64), pen_um: f64) -> (f64, f64, f64, f64) {
-    let radius = (pen_um * 1000.0 / 2.0).floor() / 1000.0;
+fn oval_extents(a: (f64, f64), b: (f64, f64), pen_nm: f64) -> (f64, f64, f64, f64) {
+    let radius = (pen_nm * 1000.0 / 2.0).floor() / 1000.0;
     // `GetArcToSegmentCount( radius, aError, FULL_CIRCLE )`, with its floor of eight sides to the circle, then "round up to 8".
-    let rel_error = ARC_LOW_DEF_UM / radius.max(0.001);
+    let rel_error = ARC_LOW_DEF_NM / radius.max(0.001);
     let increment = (180.0 / std::f64::consts::PI * (1.0 - rel_error).acos() * 2.0).min(45.0);
     let increment = if increment.is_finite() { increment } else { 45.0 };
     let count = ((360.0 / increment).round() as i64).max(2);
@@ -156,7 +156,7 @@ fn oval_extents(a: (f64, f64), b: (f64, f64), pen_um: f64) -> (f64, f64, f64, f6
 ///
 /// The glyphs are laid out in nanometres, as KiCad lays them out (each glyph's advance is rounded to the nanometre, not to the micrometre the IR holds a size in): a line
 /// of fifteen glyphs laid out in micrometres comes out a few micrometres wider than KiCad's.
-fn ink_size(text: &str, size: (Um, Um), thickness: Um, bold: bool) -> (f64, f64) {
+fn ink_size(text: &str, size: (Nm, Nm), thickness: Nm, bold: bool) -> (f64, f64) {
     let size_nm = (size.0 * 1000, size.1 * 1000);
     let thickness_nm = thickness * 1000;
     let pen = effective_pen_width(thickness_nm, size_nm, bold) as f64 / 1000.0;
@@ -186,7 +186,7 @@ pub fn autosize(t: &mut Table) {
         for col in 0..cols {
             let cell = &t.cells[row * cols + col];
             let st = &cell.style;
-            line.push(ink_size(&cell.text, (st.width_um, st.height_um), st.thickness_um, st.bold));
+            line.push(ink_size(&cell.text, (st.width_nm, st.height_nm), st.thickness_nm, st.bold));
         }
         extents.push(line);
     }
@@ -199,7 +199,7 @@ pub fn autosize(t: &mut Table) {
             // `std::max<int>( colWidth, width + margins * 1.5 )`: the sum is cut to an integer, in nanometres.
             width = width.max((extents[row][col].0 * 1000.0 + margins_nm * 1.5).trunc() as i64);
         }
-        t.col_widths[col] = ((width as f64) / 1000.0).round() as Um;
+        t.col_widths[col] = ((width as f64) / 1000.0).round() as Nm;
     }
     for row in 0..rows {
         let mut height: i64 = 0;
@@ -208,7 +208,7 @@ pub fn autosize(t: &mut Table) {
             let margins_nm = cell.margin_nm(0) + cell.margin_nm(2);
             height = height.max(((extents[row][col].1) * 1000.0).trunc() as i64 + margins_nm);
         }
-        t.row_heights[row] = ((height as f64) / 1000.0).round() as Um;
+        t.row_heights[row] = ((height as f64) / 1000.0).round() as Nm;
     }
 }
 
@@ -218,10 +218,10 @@ pub fn autosize(t: &mut Table) {
 /// `SetLayer` does not turn the text over), then `SetTextSize`, `SetTextThickness` and the justification.
 fn cell(text: &str, size_mm: f64, thickness_mm: f64, right: bool) -> TableCell {
     let mut c = TableCell::pcb_new(false);
-    let size = (size_mm * 1000.0).round() as Um;
-    c.style.width_um = size;
-    c.style.height_um = size;
-    c.style.thickness_um = (thickness_mm * 1000.0).round() as Um;
+    let size = (size_mm * 1000.0).round() as Nm;
+    c.style.width_nm = size;
+    c.style.height_nm = size;
+    c.style.thickness_nm = (thickness_mm * 1000.0).round() as Nm;
     if right {
         c.style.h_align = TextJustify::Right;
     }
@@ -404,8 +404,8 @@ pub fn characteristics_table(layer: &str, copper_layers: usize, stackup: &Stacku
 
 /// The stackup the board has: the one Board Setup holds (`stackup`, with its copper layer count) or, for a board that has none, KiCad's default for its copper layers
 /// and thickness (`BOARD_STACKUP::SynchronizeWithBoard` builds it).
-pub fn effective_stackup(settings: Option<(usize, Stackup)>, copper_layers: usize, thickness_um: Um) -> (usize, Stackup) {
-    settings.unwrap_or_else(|| (copper_layers, default_stackup(copper_layers, thickness_um)))
+pub fn effective_stackup(settings: Option<(usize, Stackup)>, copper_layers: usize, thickness_nm: Nm) -> (usize, Stackup) {
+    settings.unwrap_or_else(|| (copper_layers, default_stackup(copper_layers, thickness_nm)))
 }
 
 #[cfg(test)]
@@ -472,8 +472,8 @@ mod tests {
         assert_eq!(text(5, 0), "Dielectric 1");
         assert_eq!((1..7).map(|c| text(5, c)).collect::<Vec<_>>(), ["Core", "FR4", "0.48 mm", "Not specified", "4.5", "0.02"].map(String::from).to_vec());
         // The sizes of the text and its justification.
-        assert_eq!(t.cell(0, 0).unwrap().style.thickness_um, 300);
-        assert_eq!(t.cell(1, 0).unwrap().style.thickness_um, 200);
+        assert_eq!(t.cell(0, 0).unwrap().style.thickness_nm, 300);
+        assert_eq!(t.cell(1, 0).unwrap().style.thickness_nm, 200);
         assert_eq!(t.cell(1, 3).unwrap().style.h_align, TextJustify::Right);
         assert_eq!(t.cell(1, 0).unwrap().style.h_align, TextJustify::Left);
         // Autosize: every column is as wide as its widest text and the margins ask, every row as high; the corner is the origin.
@@ -484,7 +484,7 @@ mod tests {
         assert!(t.row_heights.iter().all(|h| *h > 2_006), "{:?}", t.row_heights);
         assert_eq!(t.layer, "F.SilkS");
         assert!(t.border.external && t.border.header && t.separators.rows && t.separators.cols);
-        assert_eq!(t.border.stroke.width_um, 100);
+        assert_eq!(t.border.stroke.width_nm, 100);
     }
 
     #[test]
@@ -531,8 +531,8 @@ mod tests {
         assert_eq!(row(6), ["Plated board edge: ", "No", "Edge card connectors: ", "Yes, Bevelled"]);
         // No lines at all, 2 mm / 0.4 mm title, 1.5 mm / 0.2 mm data.
         assert!(!t.border.external && !t.border.header && !t.separators.rows && !t.separators.cols);
-        assert_eq!((t.cell(0, 0).unwrap().style.height_um, t.cell(0, 0).unwrap().style.thickness_um), (2_000, 400));
-        assert_eq!((t.cell(1, 0).unwrap().style.height_um, t.cell(1, 0).unwrap().style.thickness_um), (1_500, 200));
+        assert_eq!((t.cell(0, 0).unwrap().style.height_nm, t.cell(0, 0).unwrap().style.thickness_nm), (2_000, 400));
+        assert_eq!((t.cell(1, 0).unwrap().style.height_nm, t.cell(1, 0).unwrap().style.thickness_nm), (1_500, 200));
         // Autosize looks at the title's ink for the first column, as KiCad does (it does not know the title spans four).
         assert!(t.col_widths[0] > ink_size("BOARD CHARACTERISTICS", (2000, 2000), 400, false).0 as i64);
     }

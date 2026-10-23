@@ -18,7 +18,7 @@ use super::Board;
 use eda_model::component_classes::{ClassAssignment, ComponentClassSettings, ConditionKind};
 use eda_model::footprint::{placed_pads, to_board, Model3d};
 use eda_model::fp_edit::{self, FieldLayout, UserField};
-use eda_model::ir::{Design, FootprintExtra, FootprintInstance, Point, Side, Um};
+use eda_model::ir::{Design, FootprintExtra, FootprintInstance, Point, Side, Nm};
 use eda_model::multichannel::Box4;
 use eda_model::{ConstraintModel, Footprint, Part};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -204,13 +204,13 @@ fn norm360(a: i64) -> i64 {
 }
 
 /// The box of a point list.
-fn grow(b: Box4, p: (Um, Um)) -> Box4 {
+fn grow(b: Box4, p: (Nm, Nm)) -> Box4 {
     (b.0.min(p.0), b.1.min(p.1), b.2.max(p.0), b.3.max(p.1))
 }
 
 /// The stroke width of the courtyard graphics a footprint of a board file carries (`(width ..)` of its `fp_*` lines), half of it: the box of a courtyard is the box of its
 /// stroke. 0.05 mm, the width of KiCad's libraries, when the file says none.
-fn courtyard_half_stroke(extra: Option<&FootprintExtra>) -> Um {
+fn courtyard_half_stroke(extra: Option<&FootprintExtra>) -> Nm {
     let widest = extra
         .into_iter()
         .flat_map(|e| e.courtyard_items.iter())
@@ -220,8 +220,8 @@ fn courtyard_half_stroke(extra: Option<&FootprintExtra>) -> Um {
             item[at..at + end].trim().parse::<f64>().ok()
         })
         .fold(0.0_f64, f64::max);
-    let width_um = if widest > 0.0 { (widest * 1000.0).round() as Um } else { 50 };
-    width_um / 2
+    let width_nm = if widest > 0.0 { (widest * 1000.0).round() as Nm } else { 50 };
+    width_nm / 2
 }
 
 impl Board<'_> {
@@ -348,7 +348,7 @@ impl Board<'_> {
         // the courtyard, with the stroke it is drawn with
         if !extra.is_some_and(|e| e.no_courtyard) {
             let half = courtyard_half_stroke(extra);
-            let outlines: Vec<Vec<(Um, Um)>> = if !footprint.courtyard_outlines.is_empty() {
+            let outlines: Vec<Vec<(Nm, Nm)>> = if !footprint.courtyard_outlines.is_empty() {
                 footprint.courtyard_outlines.clone()
             } else if let Some((hw, hh)) = footprint.courtyard {
                 vec![vec![(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]]

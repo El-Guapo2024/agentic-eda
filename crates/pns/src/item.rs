@@ -17,7 +17,7 @@ use crate::arcs::{self, ArcPts};
 use crate::hull;
 use crate::layer::LayerRange;
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use std::rc::Rc;
 
 /// `PNS::NET_HANDLE` (an opaque per-board net identifier). KiCad hides the
@@ -93,7 +93,7 @@ pub struct Segment {
     pub layer: i32,
     pub a: Point,
     pub b: Point,
-    pub width: Um,
+    pub width: Nm,
     /// The committed `Track::id` this segment belongs to, and its index
     /// within that track's `pts` -- `None` for a segment that only exists
     /// in an uncommitted preview line. Used to turn a NODE-level edit (the
@@ -120,7 +120,7 @@ impl Segment {
 pub struct Arc {
     pub net: Net,
     pub layer: i32,
-    pub width: Um,
+    pub width: Nm,
     pub arc: ArcPts,
     /// The committed `Track::id` of the IR arc track this came from -- `None` for an arc that only exists in an uncommitted preview line.
     pub source_track: Option<String>,
@@ -129,7 +129,7 @@ pub struct Arc {
 }
 
 impl Arc {
-    pub fn new(net: Net, layer: i32, width: Um, arc: ArcPts, source_track: Option<String>, locked: bool) -> Arc {
+    pub fn new(net: Net, layer: i32, width: Nm, arc: ArcPts, source_track: Option<String>, locked: bool) -> Arc {
         let poly = Rc::new(arc.polyline());
         Arc { net, layer, width, arc, source_track, locked, poly }
     }
@@ -165,8 +165,8 @@ pub struct Via {
     pub net: Net,
     pub layers: LayerRange,
     pub pos: Point,
-    pub diameter: Um,
-    pub drill: Um,
+    pub diameter: Nm,
+    pub drill: Nm,
     pub source_via: Option<String>,
     pub locked: bool,
     /// `ITEM::m_isVirtual` (`VVIA`, `NODE::FixupVirtualVias`): a via the router puts where tracks meet with no pad or via -- three or more segments,
@@ -286,7 +286,7 @@ impl Item {
     /// `ITEM::Hull(clearance, walkaroundThickness, layer)` -- see
     /// `crate::hull` for the construction. Used only by WALKAROUND/
     /// OPTIMIZER (path shaping), never by the exact collision test.
-    pub fn hull(&self, clearance: Um, walkaround_width: Um, layer: i32) -> Vec<Point> {
+    pub fn hull(&self, clearance: Nm, walkaround_width: Nm, layer: i32) -> Vec<Point> {
         let clearance = clearance + hull::HULL_ROUNDING_GUARD;
         match self {
             // `SEGMENT::Hull` -> `SegmentHull`, `VIA::Hull`, `SOLID::Hull`.
@@ -310,7 +310,7 @@ impl Item {
         }
     }
 
-    pub fn width(&self) -> Um {
+    pub fn width(&self) -> Nm {
         match self {
             Item::Solid(_) => 0,
             Item::Segment(s) => s.width,

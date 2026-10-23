@@ -13,7 +13,7 @@
 //! * The anchors a paste is carried by ([`top_left_anchor`], [`closest_anchor`]) and the small geometry the conversions between KiCad's frame
 //!   and a derived sheet's need.
 
-use crate::ir::{LibrarySymbol, Point, SchematicSection, Um};
+use crate::ir::{LibrarySymbol, Point, SchematicSection, Nm};
 use crate::sch_extras::SchGraphicKind;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -148,7 +148,7 @@ pub struct PastedRef {
     pub lib_id: String,
     pub value: String,
     /// Where it sits (the annotation order: by reference prefix, then left to right, then top to bottom).
-    pub at: (Um, Um),
+    pub at: (Nm, Nm),
     /// A power symbol (always numbered afresh).
     pub power: bool,
 }
@@ -310,19 +310,19 @@ pub fn place_offset_mm(angle_deg: f64, mirrored: bool, mirror_y: bool, local: (f
     (rx, ry)
 }
 
-/// The same, in micrometres.
-pub fn place_offset_um(angle_deg: f64, mirrored: bool, mirror_y: bool, local_mm: (f64, f64)) -> (Um, Um) {
+/// The same, in nanometres.
+pub fn place_offset_nm(angle_deg: f64, mirrored: bool, mirror_y: bool, local_mm: (f64, f64)) -> (Nm, Nm) {
     let (x, y) = place_offset_mm(angle_deg, mirrored, mirror_y, local_mm);
-    ((x * 1000.0).round() as Um, (y * 1000.0).round() as Um)
+    (crate::units::sch_from_mm(x), crate::units::sch_from_mm(y))
 }
 
-fn shift(p: &mut Point, dx: Um, dy: Um) {
+fn shift(p: &mut Point, dx: Nm, dy: Nm) {
     p.x += dx;
     p.y += dy;
 }
 
 /// Move one drawn graphic by `(dx, dy)`.
-pub fn translate_graphic(shape: &mut SchGraphicKind, dx: Um, dy: Um) {
+pub fn translate_graphic(shape: &mut SchGraphicKind, dx: Nm, dy: Nm) {
     match shape {
         SchGraphicKind::Rectangle { start, end, .. } | SchGraphicKind::TextBox { start, end, .. } => {
             shift(start, dx, dy);
@@ -346,7 +346,7 @@ pub fn translate_graphic(shape: &mut SchGraphicKind, dx: Um, dy: Um) {
 }
 
 /// Move every item of `section` by `(dx, dy)`.
-pub fn translate_section(section: &mut SchematicSection, dx: Um, dy: Um) {
+pub fn translate_section(section: &mut SchematicSection, dx: Nm, dy: Nm) {
     for s in &mut section.symbols {
         shift(&mut s.at, dx, dy);
     }
@@ -473,7 +473,7 @@ mod tests {
     fn used(reference: &str, unit: u32, lib: &str, value: &str) -> UsedRef {
         UsedRef { reference: reference.into(), unit, lib_id: lib.into(), value: value.into() }
     }
-    fn pasted(reference: &str, x: Um) -> PastedRef {
+    fn pasted(reference: &str, x: Nm) -> PastedRef {
         PastedRef { reference: reference.into(), unit: 1, unit_count: 1, lib_id: "Device:R".into(), value: "10k".into(), at: (x, 0), power: false }
     }
 
@@ -515,7 +515,7 @@ mod tests {
     fn the_numbers_go_out_left_to_right_within_a_prefix() {
         let used = vec![used("R1", 1, "Device:R", "10k")];
         // Both are R1 (taken). The one on the left is numbered first.
-        let out = annotate_paste(&used, &[pasted("R1", 900), pasted("R1", 100)], PasteMode::Unique);
+        let out = annotate_paste(&used, &[pasted("R1", 900_000), pasted("R1", 100_000)], PasteMode::Unique);
         assert_eq!(out, vec!["R3", "R2"]);
     }
 
@@ -544,10 +544,10 @@ mod tests {
 
     #[test]
     fn the_units_of_one_part_pasted_together_keep_one_number() {
-        let unit = |u: u32, x: Um| PastedRef { reference: "U1".into(), unit: u, unit_count: 4, lib_id: "Amp:Quad".into(), value: "LM324".into(), at: (x, 0), power: false };
+        let unit = |u: u32, x: Nm| PastedRef { reference: "U1".into(), unit: u, unit_count: 4, lib_id: "Amp:Quad".into(), value: "LM324".into(), at: (x, 0), power: false };
         let used = vec![used("U1", 1, "Amp:Quad", "LM324"), used("U1", 2, "Amp:Quad", "LM324")];
         // Units 1 and 2 of U1 are taken: pasting them again numbers both as U2.
-        let out = annotate_paste(&used, &[unit(1, 0), unit(2, 10)], PasteMode::Unique);
+        let out = annotate_paste(&used, &[unit(1, 0), unit(2, 10_000)], PasteMode::Unique);
         assert_eq!(out, vec!["U2", "U2"]);
         // A unit the part does not have yet joins it.
         let out = annotate_paste(&used, &[unit(3, 0)], PasteMode::Unique);
@@ -575,23 +575,23 @@ mod tests {
         // `(mirror y)` negates x, `(mirror x)` negates y -- after the turn.
         assert_eq!(place_offset_mm(0.0, true, false, (1.0, 2.0)), (-1.0, -2.0));
         assert_eq!(place_offset_mm(0.0, false, true, (1.0, 2.0)), (1.0, 2.0));
-        assert_eq!(place_offset_um(0.0, false, false, (1.27, 0.0)), (1270, 0));
+        assert_eq!(place_offset_nm(0.0, false, false, (1.27, 0.0)), (1_270_000, 0));
     }
 
     #[test]
     fn the_anchor_is_the_leftmost_then_topmost_connectable_item() {
         use crate::ir::{NetLabel, SchematicText, Wire};
         let mut s = SchematicSection::default();
-        s.texts.push(SchematicText { id: String::new(), content: "far left".into(), at: Point { x: -9_000, y: 0 }, angle: 0, size_um: 1270 });
-        s.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 5_000, y: 7_000 }, Point { x: 9_000, y: 7_000 }], bus: false });
-        s.labels.push(NetLabel { id: String::new(), net: "A".into(), at: Point { x: 5_000, y: 2_000 }, kind: Default::default() });
+        s.texts.push(SchematicText { id: String::new(), content: "far left".into(), at: Point { x: -9_000_000, y: 0 }, angle: 0, size_nm: 1_270_000 });
+        s.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 5_000_000, y: 7_000_000 }, Point { x: 9_000_000, y: 7_000_000 }], bus: false });
+        s.labels.push(NetLabel { id: String::new(), net: "A".into(), at: Point { x: 5_000_000, y: 2_000_000 }, kind: Default::default() });
         // The text is further left but not connectable: the label is the topmost of the two at x = 5000.
-        assert_eq!(top_left_anchor(&s), Some(Point { x: 5_000, y: 2_000 }));
+        assert_eq!(top_left_anchor(&s), Some(Point { x: 5_000_000, y: 2_000_000 }));
         let only_text = SchematicSection { texts: s.texts.clone(), ..Default::default() };
-        assert_eq!(top_left_anchor(&only_text), Some(Point { x: -9_000, y: 0 }));
+        assert_eq!(top_left_anchor(&only_text), Some(Point { x: -9_000_000, y: 0 }));
         assert_eq!(top_left_anchor(&SchematicSection::default()), None);
         // The nearest connection point to a cursor: the label, not the far wire end.
-        assert_eq!(closest_anchor(&s, &[], Point { x: 5_100, y: 2_100 }), Some(Point { x: 5_000, y: 2_000 }));
+        assert_eq!(closest_anchor(&s, &[], Point { x: 5_100_000, y: 2_100_000 }), Some(Point { x: 5_000_000, y: 2_000_000 }));
     }
 
     /// Duplicate carries a sheet by the pin nearest the cursor (`SCH_SHEET::GetConnectionPoints` is its pins), not by its corner; a sheet with no pins by
@@ -599,11 +599,11 @@ mod tests {
     #[test]
     fn a_duplicated_sheet_is_carried_by_its_nearest_pin() {
         use crate::ir::{SheetInstance, SheetPin};
-        let pin = SheetPin { id: String::new(), name: "IN".into(), shape: Default::default(), at: Point { x: 50_000, y: 10_000 } };
-        let sheet = SheetInstance { id: String::new(), name: "A".into(), file: "a.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (50_000, 30_000), pins: vec![pin], page: String::new() };
+        let pin = SheetPin { id: String::new(), name: "IN".into(), shape: Default::default(), at: Point { x: 50_000_000, y: 10_000_000 } };
+        let sheet = SheetInstance { id: String::new(), name: "A".into(), file: "a.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (50_000_000, 30_000_000), pins: vec![pin], page: String::new() };
         let s = SchematicSection { sheets: vec![sheet.clone()], ..Default::default() };
-        assert_eq!(closest_anchor(&s, &[], Point { x: 5_000, y: 5_000 }), Some(Point { x: 50_000, y: 10_000 }));
+        assert_eq!(closest_anchor(&s, &[], Point { x: 5_000_000, y: 5_000_000 }), Some(Point { x: 50_000_000, y: 10_000_000 }));
         let bare = SchematicSection { sheets: vec![SheetInstance { pins: vec![], ..sheet }], ..Default::default() };
-        assert_eq!(closest_anchor(&bare, &[], Point { x: 5_000, y: 5_000 }), Some(Point { x: 0, y: 0 }));
+        assert_eq!(closest_anchor(&bare, &[], Point { x: 5_000_000, y: 5_000_000 }), Some(Point { x: 0, y: 0 }));
     }
 }

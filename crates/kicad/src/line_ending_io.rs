@@ -16,9 +16,9 @@ pub(crate) fn read_one(form: &[Sexpr]) -> LineEnding {
     let stroke = sexpr::find(form, "stroke");
     LineEnding {
         style,
-        length_um: um("length"),
-        width_um: um("width"),
-        stroke_width_um: stroke.and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0),
+        length_nm: um("length"),
+        width_nm: um("width"),
+        stroke_width_nm: stroke.and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0),
         stroke_style: stroke.and_then(|s| sexpr::find(s, "type")).and_then(|t| sexpr::txt(t, 1)).map(LineStyle::from_token).unwrap_or_default(),
     }
 }
@@ -46,7 +46,7 @@ mod tests {
     fn an_ending_reads_as_parse_line_ending_reads_it() {
         let item = sexpr::parse(r#"(gr_line (start 0 0) (end 1 0) (stroke (width 0.6) (type default)) (start_shape arrow_open (length 3) (width 2.5) (stroke (width 0.6) (type dash))) (end_shape circle) (layer "F.SilkS"))"#).unwrap();
         let e = read(item.as_list().unwrap());
-        assert_eq!(e.start, LineEnding { style: LineEndingStyle::ArrowOpen, length_um: 3000, width_um: 2500, stroke_width_um: 600, stroke_style: LineStyle::Dash });
+        assert_eq!(e.start, LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: 3000, width_nm: 2500, stroke_width_nm: 600, stroke_style: LineStyle::Dash });
         assert_eq!(e.end, LineEnding::new(LineEndingStyle::Circle));
         assert_eq!(words(&e, false), " (start_shape arrow_open (length 3) (width 2.5) (stroke (width 0.6) (type dash))) (end_shape circle)");
         assert_eq!(words(&e, true), "", "a closed shape writes none");
@@ -63,7 +63,7 @@ mod tests {
         let (design, model, _) = crate::import::import_kicad_pcb(board).unwrap();
         let dr = design.drawings.as_ref().unwrap();
         let line = dr.shapes.iter().find(|s| matches!(s, eda_model::ir::Shape::Segment { .. })).unwrap();
-        assert_eq!(dr.board_items.endings_of(line.id()).start, LineEnding { style: LineEndingStyle::Arrow, length_um: 3000, width_um: 3000, ..Default::default() });
+        assert_eq!(dr.board_items.endings_of(line.id()).start, LineEnding { style: LineEndingStyle::Arrow, length_nm: 3000, width_nm: 3000, ..Default::default() });
         assert_eq!(dr.board_items.net_of(line.id()), Some("SIG"));
         let out = crate::export_kicad_pcb(&design, &model, &crate::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
         let written = out.lines().find(|l| l.contains("(gr_line (start 0 0)")).unwrap();

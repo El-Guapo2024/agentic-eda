@@ -1027,7 +1027,7 @@ mod tests {
             symbol: sym.map(String::from),
             datasheet: None,
             pins: (1..=pins).map(|n| eda_model::Pin { number: n.to_string(), name: None, kind: eda_model::PinKind::Passive }).collect(),
-            body_um: None,
+            body_nm: None,
             edge: None,
         };
         let mut model = ConstraintModel { parts: vec![part("R1", None, 2), part("U9", None, 20)], ..Default::default() };

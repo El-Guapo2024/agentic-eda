@@ -11,7 +11,7 @@ use eda_model::ir::{BusEntry, Junction, LabelKind, LabelShape, NetLabel, NoConne
 use eda_model::sch_extras::{LabelSpin, SchGraphic, SchGraphicKind};
 use std::collections::BTreeMap;
 
-const G: Um = 1_270;
+const G: Nm = 1_270;
 
 fn empty_design() -> Design {
     Design {
@@ -19,7 +19,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -29,7 +29,7 @@ fn empty_design() -> Design {
     }
 }
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -70,11 +70,11 @@ fn ids(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| s.to_string()).collect()
 }
 
-fn mv(v: &[&str], dx: Um, dy: Um) -> SchMoveCmd {
+fn mv(v: &[&str], dx: Nm, dy: Nm) -> SchMoveCmd {
     SchMoveCmd::Move { ids: ids(v), dx, dy, turns: Vec::new(), about: None }
 }
 
-fn drag(v: &[&str], dx: Um, dy: Um) -> SchMoveCmd {
+fn drag(v: &[&str], dx: Nm, dy: Nm) -> SchMoveCmd {
     SchMoveCmd::Drag { ids: ids(v), vertices: BTreeMap::new(), dx, dy, ortho: true, grid: 0, turns: Vec::new(), about: None }
 }
 
@@ -101,13 +101,13 @@ fn every_kind() -> eda_model::ir::SchematicSection {
     s.labels.push(label("lbl_global", "B", p(76_200, 38_100), LabelKind::Global { shape: LabelShape::Input }));
     s.labels.push(label("lbl_hier", "C", p(76_200, 50_800), LabelKind::Hierarchical { shape: LabelShape::Output }));
     s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(101_600, 25_400), rot: 0, net: "GND".into(), pin: String::new() });
-    s.texts.push(SchematicText { id: "txt_a".into(), content: "hello".into(), at: p(101_600, 38_100), angle: 0, size_um: 1_270 });
+    s.texts.push(SchematicText { id: "txt_a".into(), content: "hello".into(), at: p(101_600, 38_100), angle: 0, size_nm: 1_270 });
     s.no_connects.push(NoConnect { id: "nc_a".into(), at: p(101_600, 50_800), pin: String::new() });
     s.bus_entries.push(BusEntry { id: "bent_a".into(), at: p(127_000, 25_400), size: p(2_540, 2_540) });
     s.junctions.push(Junction { id: "jct_a".into(), at: p(127_000, 38_100) });
-    s.lines.push(SchLine { id: "sln_a".into(), pts: vec![p(127_000, 50_800), p(139_700, 50_800)], width_um: 0 });
-    s.extras.graphics.push(SchGraphic::new(SchGraphicKind::Rectangle { start: p(152_400, 12_700), end: p(165_100, 25_400), corner_radius_um: 0 }));
-    s.extras.graphics.push(SchGraphic::new(SchGraphicKind::TextBox { start: p(152_400, 38_100), end: p(177_800, 50_800), text: "note".into(), angle: 0, size_um: 1_270, bold: false, italic: false, h_align: eda_model::sch_extras::SchHAlign::Left, v_align: eda_model::sch_extras::SchVAlign::Top, margin_um: 0 }));
+    s.lines.push(SchLine { id: "sln_a".into(), pts: vec![p(127_000, 50_800), p(139_700, 50_800)], width_nm: 0 });
+    s.extras.graphics.push(SchGraphic::new(SchGraphicKind::Rectangle { start: p(152_400, 12_700), end: p(165_100, 25_400), corner_radius_nm: 0 }));
+    s.extras.graphics.push(SchGraphic::new(SchGraphicKind::TextBox { start: p(152_400, 38_100), end: p(177_800, 50_800), text: "note".into(), angle: 0, size_nm: 1_270, bold: false, italic: false, h_align: eda_model::sch_extras::SchHAlign::Left, v_align: eda_model::sch_extras::SchVAlign::Top, margin_nm: 0 }));
     s.sheets.push(SheetInstance {
         id: "sheet_a".into(),
         name: "Sub".into(),
@@ -554,8 +554,8 @@ fn a_label_wired_from_the_left_starts_as_right_and_turns_from_there() {
 #[test]
 fn text_turns_in_place_and_a_group_turns_around_its_centre() {
     let mut s = section();
-    s.texts.push(SchematicText { id: "txt_a".into(), content: "a".into(), at: p(0, 0), angle: 0, size_um: 1_270 });
-    s.texts.push(SchematicText { id: "txt_b".into(), content: "b".into(), at: p(25_400, 0), angle: 0, size_um: 1_270 });
+    s.texts.push(SchematicText { id: "txt_a".into(), content: "a".into(), at: p(0, 0), angle: 0, size_nm: 1_270 });
+    s.texts.push(SchematicText { id: "txt_b".into(), content: "b".into(), at: p(25_400, 0), angle: 0, size_nm: 1_270 });
     let one = run_on(s.clone(), rotate(&["txt_a"], true));
     assert_eq!((one.texts[0].at, one.texts[0].angle), (p(0, 0), 90_000));
     // two texts: the mean of their places is the centre
@@ -580,7 +580,7 @@ fn a_junction_a_no_connect_and_a_bus_entry_turn_about_their_own_anchor_or_the_se
 
 fn half_grid_of(q: Point) -> Point {
     let h = G as f64 / 2.0;
-    p(((q.x as f64 / h).round() * h) as Um, ((q.y as f64 / h).round() * h) as Um)
+    p(((q.x as f64 / h).round() * h) as Nm, ((q.y as f64 / h).round() * h) as Nm)
 }
 
 #[test]
@@ -981,7 +981,7 @@ fn a_wire_drawn_to_the_middle_of_another_gets_a_junction_there() {
 #[test]
 fn the_editor_s_pins_of_a_turned_symbol_are_the_writer_s_in_every_orientation() {
     use eda_model::{Part, Pin, PinKind};
-    let part = |r: &str, n: usize| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("x".into()), package: None, footprint: None, symbol: None, datasheet: None, pins: (1..=n).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(), body_um: None, edge: None };
+    let part = |r: &str, n: usize| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("x".into()), package: None, footprint: None, symbol: None, datasheet: None, pins: (1..=n).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(), body_nm: None, edge: None };
     let mut m = ConstraintModel { parts: vec![part("R1", 2), part("U1", 6)], ..Default::default() };
     m.parts[0].symbol = Some("Device:R".into());
     let mut bad = Vec::new();

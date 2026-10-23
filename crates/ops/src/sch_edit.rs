@@ -7,7 +7,7 @@
 //! cites the KiCad function it ports (eeschema at 8303b2ad).
 
 use crate::{Board, Cmd};
-use eda_model::ir::{LabelKind, LabelShape, Millideg, Point, SchematicSection, SheetInstance, SheetPin, TextJustify, TextVAlign, Um};
+use eda_model::ir::{LabelKind, LabelShape, Millideg, Point, SchematicSection, SheetInstance, SheetPin, TextJustify, TextVAlign, Nm};
 use eda_model::sch_extras::{LabelSpin, SchColor, SchGraphic, SchGraphicKind, SchLineStyle};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,7 @@ pub enum SchCmd {
     /// Delete one sheet pin (`SCH_EDIT_TOOL::DoDelete` on a pin; what `CleanupSheetPins` and the sync dialog send).
     DeleteSheetPin { id: String },
     /// Rename, reshape or move one sheet pin (`SCH_SHEET_PIN` properties and the sync dialog's "update"); a field left
-    /// out is unchanged. The new position must still be on the border. `size_um` (0.01 to 1000 mm), `bold` and `italic` are how the pin's text is set
+    /// out is unchanged. The new position must still be on the border. `size_nm` (0.01 to 1000 mm), `bold` and `italic` are how the pin's text is set
     /// (`DIALOG_SHEET_PIN_PROPERTIES`: `SCH_SHEET_PIN` is an `EDA_TEXT`).
     EditSheetPin {
         id: String,
@@ -54,7 +54,7 @@ pub enum SchCmd {
         #[serde(default)]
         at: Option<Point>,
         #[serde(default)]
-        size_um: Option<Um>,
+        size_nm: Option<Nm>,
         #[serde(default)]
         bold: Option<bool>,
         #[serde(default)]
@@ -84,7 +84,7 @@ pub enum SchCmd {
     /// unchanged. `text` is the net name (refused when empty: "Label can not be empty."), `shape` the flag of a global or hierarchical label
     /// (a local label has none), `spin` which way the text runs from the anchor (`SetSpinStyle`).
     ///
-    /// `size_um` (0.01 to 1000 mm, as the dialog validates it), `bold` and `italic` set how the text is drawn (`SetTextSize`, `SetBold`, `SetItalic`); an
+    /// `size_nm` (0.01 to 1000 mm, as the dialog validates it), `bold` and `italic` set how the text is drawn (`SetTextSize`, `SetBold`, `SetItalic`); an
     /// item that has them all at their defaults keeps no entry (`SchExtras::label_looks`).
     ///
     /// `auto_rotate` is the "Auto" check of a global or hierarchical label (`SetAutoRotateOnPlacement`, then `AutoRotateItem`): while it is on the label takes
@@ -104,7 +104,7 @@ pub enum SchCmd {
         #[serde(default)]
         spin: Option<LabelSpin>,
         #[serde(default)]
-        size_um: Option<Um>,
+        size_nm: Option<Nm>,
         #[serde(default)]
         bold: Option<bool>,
         #[serde(default)]
@@ -116,7 +116,7 @@ pub enum SchCmd {
     },
     /// Place Label, Global Label and Hierarchical Label (`SCH_DRAWING_TOOLS::TwoClickPlace` after `createNewLabel`): a label named `net` of `kind` at `at`, with the
     /// properties the dialog gave it, as one step. `spin` is which way the text runs from the anchor (the usual label with none given reads off the wire it ends
-    /// at), `size_um` (0.01 to 1000 mm), `bold` and `italic` set the text, and `auto_rotate` is the dialog's "Auto" check of a global or hierarchical label
+    /// at), `size_nm` (0.01 to 1000 mm), `bold` and `italic` set the text, and `auto_rotate` is the dialog's "Auto" check of a global or hierarchical label
     /// (`SCH_LABEL_BASE::SetAutoRotateOnPlacement`): the label then takes the spin of what it is placed on (`AutoRotateItem`) and `spin` is ignored. Refused for
     /// an empty name, and for "Auto" on a local label.
     PlaceLabel {
@@ -126,7 +126,7 @@ pub enum SchCmd {
         #[serde(default)]
         spin: Option<LabelSpin>,
         #[serde(default)]
-        size_um: Option<Um>,
+        size_nm: Option<Nm>,
         #[serde(default)]
         bold: Option<bool>,
         #[serde(default)]
@@ -141,7 +141,7 @@ pub enum SchCmd {
         at: Point,
         #[serde(default)]
         angle: Millideg,
-        size_um: Um,
+        size_nm: Nm,
         #[serde(default)]
         h: Option<TextJustify>,
         #[serde(default)]
@@ -161,7 +161,7 @@ pub enum SchCmd {
     /// Field Properties on one field of a symbol, a power symbol or a sheet (`DIALOG_FIELD_PROPERTIES::UpdateField`, `SCH_EDIT_TOOL::editFieldText`): `id` is
     /// the field's (`fld:<owner>:<name>`, `eda_engine::fields_edit::field_id`). A member left out is unchanged. `text` renames a symbol (Reference), sets its
     /// Value, Footprint or Datasheet, the net a power symbol asserts, or a sheet's name or file; `at` is where the text's anchor goes on the sheet,
-    /// `vertical` whether it runs up the sheet and `h`, `v` how it is justified as it reads there; `size_um` is 0.01 to 1000 mm; `visible` shows or hides it,
+    /// `vertical` whether it runs up the sheet and `h`, `v` how it is justified as it reads there; `size_nm` is 0.01 to 1000 mm; `visible` shows or hides it,
     /// `name_shown` writes `Name: value`, `allow_autoplace` lets Autoplace Fields move it. Changing where it is takes the item out of the autoplaced ones
     /// (`SetFieldsAutoplaced( AUTOPLACE_NONE )`); an item whose fields are still autoplaced has them placed again for the new text, size or visibility.
     EditField {
@@ -177,7 +177,7 @@ pub enum SchCmd {
         #[serde(default)]
         v: Option<eda_model::ir::TextVAlign>,
         #[serde(default)]
-        size_um: Option<Um>,
+        size_nm: Option<Nm>,
         #[serde(default)]
         bold: Option<bool>,
         #[serde(default)]
@@ -200,7 +200,7 @@ pub enum SchCmd {
         what: crate::sch_pin_helpers::PinHelper,
         pins: Vec<String>,
         #[serde(default)]
-        grid: Um,
+        grid: Nm,
     },
     /// Add a user-defined field to a symbol (`DIALOG_SYMBOL_PROPERTIES::OnAddField`): `id` is the symbol's reference (every placed unit has the field), `name` the
     /// field's name (not one of the four standard fields and not one the symbol has, whatever the case) and `text` what it shows. It starts hidden, like a field
@@ -222,7 +222,7 @@ pub enum SchCmd {
         #[serde(default)]
         text: Option<String>,
         #[serde(default)]
-        size_um: Option<Um>,
+        size_nm: Option<Nm>,
         #[serde(default)]
         angle: Option<Millideg>,
         #[serde(default)]
@@ -241,19 +241,19 @@ pub enum SchCmd {
         file: Option<String>,
     },
     /// Wire/Bus, Line and Junction Properties (`DIALOG_WIRE_BUS_PROPERTIES::TransferDataFromWindow`, `DIALOG_LINE_PROPERTIES`, `DIALOG_JUNCTION_PROPS`):
-    /// the stroke of every listed wire, bus, bus entry and graphic line (`width_um` 0 is the default width, `style`, `color`) and the diameter and colour
-    /// of every listed junction (`diameter_um` 0 is the default). A colour with every channel 0 is `COLOR4D::UNSPECIFIED`, the layer's own colour. A
+    /// the stroke of every listed wire, bus, bus entry and graphic line (`width_nm` 0 is the default width, `style`, `color`) and the diameter and colour
+    /// of every listed junction (`diameter_nm` 0 is the default). A colour with every channel 0 is `COLOR4D::UNSPECIFIED`, the layer's own colour. A
     /// field left out is unchanged; one that does not apply to an item (a width on a junction, a diameter on a wire) is skipped for that item, as in KiCad.
     SetStroke {
         ids: Vec<String>,
         #[serde(default)]
-        width_um: Option<Um>,
+        width_nm: Option<Nm>,
         #[serde(default)]
         style: Option<SchLineStyle>,
         #[serde(default)]
         color: Option<SchColor>,
         #[serde(default)]
-        diameter_um: Option<Um>,
+        diameter_nm: Option<Nm>,
     },
     /// Group Items (Ctrl+G, `SCH_GROUP_TOOL::Group`): a new group over `ids` -- symbols, wires, labels, texts, shapes, sheets, ... and other groups, which nest. The
     /// items must be on the sheet and groupable (a pin, a field and a sheet pin go along with the item that has them); at least two. Each id leaves the group it was
@@ -394,18 +394,18 @@ impl<'a> Board<'a> {
             }
             SchCmd::AddSheetPin { sheet, name, shape, at } => add_sheet_pin(self.schematic_mut()?, sheet, name, *shape, *at),
             SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id),
-            SchCmd::EditSheetPin { id, name, shape, at, size_um, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_um: *size_um, bold: *bold, italic: *italic }),
+            SchCmd::EditSheetPin { id, name, shape, at, size_nm, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_nm: *size_nm, bold: *bold, italic: *italic }),
             SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
             SchCmd::SetBodyStyle { ids, style } => self.set_body_style(ids, *style),
-            SchCmd::EditLabel { id, text, shape, spin, size_um, bold, italic, auto_rotate, fields } => {
-                self.edit_sch_label(id, text.as_deref(), *shape, *spin, crate::sch_props::LabelLookEdit { size_um: *size_um, bold: *bold, italic: *italic, auto_rotate: *auto_rotate, fields: fields.clone() })
+            SchCmd::EditLabel { id, text, shape, spin, size_nm, bold, italic, auto_rotate, fields } => {
+                self.edit_sch_label(id, text.as_deref(), *shape, *spin, crate::sch_props::LabelLookEdit { size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate, fields: fields.clone() })
             }
-            SchCmd::PlaceLabel { net, at, kind, spin, size_um, bold, italic, auto_rotate } => {
-                self.place_label(net, *at, kind, &crate::sch_labels::PlacedLabel { spin: *spin, size_um: *size_um, bold: *bold, italic: *italic, auto_rotate: *auto_rotate })
+            SchCmd::PlaceLabel { net, at, kind, spin, size_nm, bold, italic, auto_rotate } => {
+                self.place_label(net, *at, kind, &crate::sch_labels::PlacedLabel { spin: *spin, size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate })
             }
-            SchCmd::PlaceText { content, at, angle, size_um, h, v } => self.place_text(content, *at, *angle, *size_um, *h, *v),
-            SchCmd::EditField { id, text, at, vertical, h, v, size_um, bold, italic, visible, name_shown, allow_autoplace } => self.edit_sch_field(
+            SchCmd::PlaceText { content, at, angle, size_nm, h, v } => self.place_text(content, *at, *angle, *size_nm, *h, *v),
+            SchCmd::EditField { id, text, at, vertical, h, v, size_nm, bold, italic, visible, name_shown, allow_autoplace } => self.edit_sch_field(
                 id,
                 &crate::sch_fields::FieldEdit {
                     text: text.clone(),
@@ -413,7 +413,7 @@ impl<'a> Board<'a> {
                     vertical: *vertical,
                     h: *h,
                     v: *v,
-                    size_um: *size_um,
+                    size_nm: *size_nm,
                     bold: *bold,
                     italic: *italic,
                     visible: *visible,
@@ -425,9 +425,9 @@ impl<'a> Board<'a> {
             SchCmd::PinHelper { what, pins, grid } => self.pin_helper(*what, pins, *grid),
             SchCmd::AddUserField { id, name, text } => self.add_user_field(id, name, text),
             SchCmd::RemoveUserField { id, name } => self.remove_user_field(id, name),
-            SchCmd::EditText { id, text, size_um, angle, h, v } => self.edit_sch_text(id, text.as_deref(), *size_um, *angle, *h, *v),
+            SchCmd::EditText { id, text, size_nm, angle, h, v } => self.edit_sch_text(id, text.as_deref(), *size_nm, *angle, *h, *v),
             SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
-            SchCmd::SetStroke { ids, width_um, style, color, diameter_um } => self.set_sch_stroke(ids, *width_um, *style, *color, *diameter_um),
+            SchCmd::SetStroke { ids, width_nm, style, color, diameter_nm } => self.set_sch_stroke(ids, *width_nm, *style, *color, *diameter_nm),
             SchCmd::SwapPins { pins } => self.swap_pins(pins),
             SchCmd::SwapPinLabels { pins } => self.swap_pin_labels(pins),
             SchCmd::SwapUnitLabels { ids } => self.swap_unit_labels(ids),
@@ -556,20 +556,20 @@ fn non_collinear(a: Point, b: Point, c: Point) -> bool {
 /// Refuse a graphic that could never be drawn: the shape-specific sanity `EndEdit` implies.
 fn check_graphic(g: &SchGraphic) -> Result<(), Vec<CheckResult>> {
     let bad = |what: &str| Err(vec![CheckResult::fail("ops_bad_graphic", graphic_kind_name(&g.shape), what.to_string())]);
-    if g.width_um < 0 {
+    if g.width_nm < 0 {
         return bad("a stroke width cannot be negative");
     }
     match &g.shape {
-        SchGraphicKind::Rectangle { start, end, corner_radius_um } => {
+        SchGraphicKind::Rectangle { start, end, corner_radius_nm } => {
             if start.x == end.x || start.y == end.y {
                 return bad("a rectangle needs two corners that differ in both x and y");
             }
-            if *corner_radius_um < 0 {
+            if *corner_radius_nm < 0 {
                 return bad("a corner radius cannot be negative");
             }
         }
-        SchGraphicKind::Circle { radius_um, .. } => {
-            if *radius_um <= 0 {
+        SchGraphicKind::Circle { radius_nm, .. } => {
+            if *radius_nm <= 0 {
                 return bad("a circle needs a positive radius");
             }
         }
@@ -591,16 +591,16 @@ fn check_graphic(g: &SchGraphic) -> Result<(), Vec<CheckResult>> {
                 return bad("a polygon needs at least three different points");
             }
         }
-        SchGraphicKind::TextBox { start, end, size_um, .. } => {
+        SchGraphicKind::TextBox { start, end, size_nm, .. } => {
             if start.x == end.x || start.y == end.y {
                 return bad("a text box needs a width and a height");
             }
-            if *size_um <= 0 {
+            if *size_nm <= 0 {
                 return bad("a text box needs a positive text size");
             }
         }
-        SchGraphicKind::Directive { pin_length_um, .. } => {
-            if *pin_length_um < 0 {
+        SchGraphicKind::Directive { pin_length_nm, .. } => {
+            if *pin_length_nm < 0 {
                 return bad("a directive label's pole cannot have a negative length");
             }
         }
@@ -719,7 +719,7 @@ fn delete_sheet_pin(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<Chec
 /// What Sheet Pin Properties sets of a pin's text (`EDA_TEXT`); a member left out is unchanged.
 #[derive(Debug, Clone, Copy, Default)]
 struct SheetPinLookEdit {
-    size_um: Option<Um>,
+    size_nm: Option<Nm>,
     bold: Option<bool>,
     italic: Option<bool>,
 }
@@ -730,7 +730,7 @@ fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shap
     }
     // `DIALOG_SHEET_PIN_PROPERTIES::TransferDataFromWindow` validates no size: `EDA_TEXT::SetTextSize` clamps it to `TEXT_MIN_SIZE_MM` .. `TEXT_MAX_SIZE_MM`
     // (0.001 .. 250 mm)
-    let look = SheetPinLookEdit { size_um: look.size_um.map(|size| size.clamp(1, 250_000)), ..look };
+    let look = SheetPinLookEdit { size_nm: look.size_nm.map(|size| size.clamp(1, 250_000)), ..look };
     let (s, i) = find_sheet_pin(sch, id)?;
     if let Some(p) = at {
         if !on_sheet_border(s, p) {
@@ -752,8 +752,8 @@ fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shap
     // the look: the default one (50 mil, regular, upright) is no entry
     let was = sch.extras.sheet_pin_looks.get(id).copied().unwrap_or_default();
     let mut now = was;
-    if let Some(size) = look.size_um {
-        now.size_um = if size == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { size };
+    if let Some(size) = look.size_nm {
+        now.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { 0 } else { size };
     }
     if let Some(b) = look.bold {
         now.bold = b;
@@ -831,7 +831,7 @@ mod tests {
 
     pub(super) fn design_with_schematic(sch: SchematicSection) -> Design {
         Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(sch),
             nets: None,
@@ -857,7 +857,7 @@ mod tests {
     fn lock_unlock_round_trips_and_refuses_no_ops() {
         let mut sch = empty_sheet();
         sch.wires.push(Wire { id: "wire_a".into(), net: "N".into(), pins: vec![], pts: vec![p(0, 0), p(1000, 0)], bus: false });
-        sch.texts.push(SchematicText { id: "txt_a".into(), content: "hi".into(), at: p(0, 0), angle: 0, size_um: 1270 });
+        sch.texts.push(SchematicText { id: "txt_a".into(), content: "hi".into(), at: p(0, 0), angle: 0, size_nm: 1270 });
         let model = ConstraintModel::default();
         let mut b = Board::new(design_with_schematic(sch), &model, 100, 300);
         assert_eq!(Cmd::sch(SchCmd::SetLocked { ids: vec!["wire_a".into()], locked: true }).domain(), crate::Domain::Schematic);
@@ -882,7 +882,7 @@ mod tests {
     }
 
     fn rectangle(x0: i64, y0: i64, x1: i64, y1: i64) -> SchGraphic {
-        SchGraphic::new(SchGraphicKind::Rectangle { start: p(x0, y0), end: p(x1, y1), corner_radius_um: 0 })
+        SchGraphic::new(SchGraphicKind::Rectangle { start: p(x0, y0), end: p(x1, y1), corner_radius_nm: 0 })
     }
 
     #[test]
@@ -890,7 +890,7 @@ mod tests {
         let model = ConstraintModel::default();
         let mut b = Board::new(design_with_schematic(empty_sheet()), &model, 100, 300);
         b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: rectangle(0, 0, 10_000, 5_000) })).unwrap();
-        b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: SchGraphic::new(SchGraphicKind::Circle { center: p(1, 1), radius_um: 3_000 }) })).unwrap();
+        b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: SchGraphic::new(SchGraphicKind::Circle { center: p(1, 1), radius_nm: 3_000 }) })).unwrap();
         let ids: Vec<String> = b.design().schematic.as_ref().unwrap().extras.graphics.iter().map(|g| g.id.clone()).collect();
         assert_eq!(ids.len(), 2);
         assert!(ids[0].starts_with("shp_") && ids[0] != ids[1]);
@@ -958,12 +958,12 @@ mod tests {
         let mut b = Board::new(design_with_schematic(empty_sheet()), &model, 100, 300);
         let refuse = |b: &mut Board, g: SchGraphic| assert_eq!(b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: g })).unwrap_err()[0].check, "ops_bad_graphic");
         refuse(&mut b, rectangle(0, 0, 0, 5_000));
-        refuse(&mut b, SchGraphic::new(SchGraphicKind::Circle { center: p(0, 0), radius_um: 0 }));
+        refuse(&mut b, SchGraphic::new(SchGraphicKind::Circle { center: p(0, 0), radius_nm: 0 }));
         refuse(&mut b, SchGraphic::new(SchGraphicKind::Arc { start: p(0, 0), mid: p(1, 1), end: p(2, 2) }));
         refuse(&mut b, SchGraphic::new(SchGraphicKind::Polygon { pts: vec![p(0, 0), p(1, 0), p(1, 0)] }));
         refuse(&mut b, SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 0), p(1, 0)], exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: false }));
         let mut negative = rectangle(0, 0, 1, 1);
-        negative.width_um = -5;
+        negative.width_nm = -5;
         refuse(&mut b, negative);
         assert!(b.design().schematic.as_ref().unwrap().extras.graphics.is_empty());
     }
@@ -1008,15 +1008,15 @@ mod tests {
         assert_eq!(add(&mut b, "nope", "X", p(10_000, 12_000)), "ops_unknown_sheet");
 
         // Renaming and reshaping, then a move along the edge; a no-op is refused.
-        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: vin.id.clone(), name: Some("VBUS".into()), shape: Some(LabelShape::Bidirectional), at: None, size_um: None, bold: None, italic: None })).unwrap();
+        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: vin.id.clone(), name: Some("VBUS".into()), shape: Some(LabelShape::Bidirectional), at: None, size_nm: None, bold: None, italic: None })).unwrap();
         let renamed = b.design().schematic.as_ref().unwrap().sheets[0].pins.iter().find(|pin| pin.name == "VBUS").unwrap().clone();
         assert_eq!(renamed.shape, LabelShape::Bidirectional);
         assert_eq!(renamed.id, vin.id, "the pin keeps its id, so it is still the selected item after its Properties");
-        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: renamed.id.clone(), name: None, shape: None, at: Some(p(10_000, 18_000)), size_um: None, bold: None, italic: None })).unwrap();
+        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: renamed.id.clone(), name: None, shape: None, at: Some(p(10_000, 18_000)), size_nm: None, bold: None, italic: None })).unwrap();
         let moved = b.design().schematic.as_ref().unwrap().sheets[0].pins.iter().find(|pin| pin.name == "VBUS").unwrap().clone();
         assert_eq!(moved.at, p(10_000, 18_000));
-        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: Some("VBUS".into()), shape: None, at: None, size_um: None, bold: None, italic: None })).unwrap_err()[0].check, "ops_sheet_pin_unchanged");
-        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: None, shape: None, at: Some(p(12_000, 12_000)), size_um: None, bold: None, italic: None })).unwrap_err()[0].check, "ops_sheet_pin_off_border");
+        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: Some("VBUS".into()), shape: None, at: None, size_nm: None, bold: None, italic: None })).unwrap_err()[0].check, "ops_sheet_pin_unchanged");
+        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: None, shape: None, at: Some(p(12_000, 12_000)), size_nm: None, bold: None, italic: None })).unwrap_err()[0].check, "ops_sheet_pin_off_border");
 
         b.apply(&Cmd::sch(SchCmd::DeleteSheetPin { id: moved.id.clone() })).unwrap();
         assert_eq!(b.design().schematic.as_ref().unwrap().sheets[0].pins.len(), 1);

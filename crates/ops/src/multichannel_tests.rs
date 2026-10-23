@@ -8,11 +8,11 @@ use eda_model::ir::{DrawingsSection, FootprintExtra, PlacementSection, Provenanc
 use eda_model::multichannel::{PlacementArea, PlacementSourceType};
 use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
-fn pad(n: &str, at: (Um, Um)) -> Pad {
+fn pad(n: &str, at: (Nm, Nm)) -> Pad {
     Pad { opposite_side: false, ext: Default::default(), number: n.into(), at, size: (600, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
 }
 
@@ -33,7 +33,7 @@ fn part(reference: &str, footprint: &str, pins: usize) -> Part {
         package: Some(footprint.into()),
         footprint: Some(footprint.into()),
         pins: (1..=pins).map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_nm: None,
         symbol: None,
         datasheet: None,
         edge: None,
@@ -66,11 +66,11 @@ pub(super) fn model(channels: usize) -> ConstraintModel {
     m
 }
 
-fn track(id: &str, net: &str, layer: &str, pts: &[(Um, Um)]) -> Track {
+fn track(id: &str, net: &str, layer: &str, pts: &[(Nm, Nm)]) -> Track {
     Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: 200, pts: pts.iter().map(|&(x, y)| p(x, y)).collect(), arc_mid_offset: None }
 }
 
-fn pose(id: &str, at: (Um, Um), rot: u32) -> FootprintInstance {
+fn pose(id: &str, at: (Nm, Nm), rot: u32) -> FootprintInstance {
     FootprintInstance { id: id.into(), at: p(at.0, at.1), rot, side: Side::Top, label: LabelSide::Above }
 }
 
@@ -81,14 +81,14 @@ pub(super) fn design(channels: usize) -> Design {
     let mut extras: Vec<FootprintExtra> = Vec::new();
     for c in 0..channels {
         let (u, r, cap) = names(c);
-        let oy = 20_000 + 30_000 * c as Um;
+        let oy = 20_000 + 30_000 * c as Nm;
         if c == 0 {
             footprints_.push(pose(&u, (30_000, oy), 0));
             footprints_.push(pose(&r, (22_000, oy), 90_000));
             footprints_.push(pose(&cap, (38_000, oy), 0));
         } else {
             // scattered: other places, other turns, one on the back
-            footprints_.push(pose(&u, (31_000 + 700 * c as Um, oy + 900), 180_000));
+            footprints_.push(pose(&u, (31_000 + 700 * c as Nm, oy + 900), 180_000));
             footprints_.push(pose(&r, (21_000, oy - 1_500), 0));
             let mut f = pose(&cap, (40_000, oy + 1_000), 270_000);
             f.side = Side::Top;
@@ -116,7 +116,7 @@ pub(super) fn design(channels: usize) -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -127,7 +127,7 @@ pub(super) fn design(channels: usize) -> Design {
                 Shape::Segment { id: "shp_mark0".into(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: p(24_000, 18_500), end: p(26_000, 18_500) },
                 Shape::Segment { id: "shp_cu0".into(), layer: "F.Cu".into(), stroke_width: 200, filled: false, start: p(33_000, 22_000), end: p(35_000, 22_000) },
             ],
-            texts: vec![Text { id: "txt_ch0".into(), content: "CH1".into(), at: p(30_000, 19_500), angle: 0, layer: "F.SilkS".into(), size_um: 800, stroke_width: 120, justify: eda_model::ir::TextJustify::Center, mirror: false }],
+            texts: vec![Text { id: "txt_ch0".into(), content: "CH1".into(), at: p(30_000, 19_500), angle: 0, layer: "F.SilkS".into(), size_nm: 800, stroke_width: 120, justify: eda_model::ir::TextJustify::Center, mirror: false }],
             footprint_extras: extras,
             ..Default::default()
         }),
@@ -836,9 +836,9 @@ fn a_board_with_no_stored_schematic_is_on_the_module_sheets_the_studio_derives()
 /// A schematic whose root places the one sheet file twice, `ch1` and `ch2`, the symbols of the file being U1/R1 on the first and U2/R2 on the second (`instance_overrides`).
 fn schematic_with_a_sheet_placed_twice(d: &mut Design) {
     use eda_model::ir::{SchematicSection, SheetInstance, SymbolInstance, SymbolPathOverride};
-    let symbol = |id: &str, x: Um| -> SymbolInstance { serde_json::from_value(serde_json::json!({ "id": id, "at": { "x": x, "y": 10_000 }, "rot": 0 })).unwrap() };
+    let symbol = |id: &str, x: Nm| -> SymbolInstance { serde_json::from_value(serde_json::json!({ "id": id, "at": { "x": x, "y": 10_000 }, "rot": 0 })).unwrap() };
     let sheet = |id: &str, name: &str| SheetInstance { id: id.into(), name: name.into(), file: "channel.kicad_sch".into(), at: p(0, 0), size: (10_000, 10_000), pins: vec![], page: String::new() };
-    let over = |parent: &str, x: Um, reference: &str| SymbolPathOverride { at: p(x, 10_000), parent_sheet_instance_id: parent.into(), reference: reference.into(), unit: 1 };
+    let over = |parent: &str, x: Nm, reference: &str| SymbolPathOverride { at: p(x, 10_000), parent_sheet_instance_id: parent.into(), reference: reference.into(), unit: 1 };
     d.schematic = Some(SchematicSection { sheets: vec![sheet("sh_a", "ch1"), sheet("sh_b", "ch2")], ..Default::default() });
     let screen = SchematicSection {
         symbols: vec![symbol("U1", 10_000), symbol("R1", 20_000), symbol("C1", 30_000)],

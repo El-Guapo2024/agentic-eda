@@ -5,7 +5,7 @@
 //! primitives, `SquaredDistance`, and a point-in-polygon containment test
 //! for the "one shape swallows the other" case).
 //!
-//! Units are integer micrometers throughout (`eda_model::ir::Um`), the same
+//! Units are integer micrometers throughout (`eda_model::ir::Nm`), the same
 //! as the rest of this workspace -- KiCad itself works in integer nanometers
 //! internally for exactly the same reason (float coordinates in DRC are a
 //! source of nondeterminism).
@@ -22,7 +22,7 @@
 //!   rasterizer. We compute exact closed-form distances (no arc
 //!   rasterization), so there is nothing to absorb and epsilon is 0.
 
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 
 pub type EPoint = (i64, i64);
 
@@ -103,7 +103,7 @@ impl Seg {
         }
         let xp = (t * d.0) / l_sq;
         let yp = (t * d.1) / l_sq;
-        Point { x: self.a.x + xp as Um, y: self.a.y + yp as Um }
+        Point { x: self.a.x + xp as Nm, y: self.a.y + yp as Nm }
     }
 
     /// Squared distance to another segment -- ported from `SEG::SquaredDistance(const SEG&)`:
@@ -183,7 +183,7 @@ impl Seg {
         };
         let px = cx + rescale(param1, dir2x, det);
         let py = cy + rescale(param1, dir2y, det);
-        Some(Point { x: px as Um, y: py as Um })
+        Some(Point { x: px as Nm, y: py as Nm })
     }
 }
 
@@ -268,19 +268,19 @@ impl Core {
 #[derive(Debug, Clone)]
 pub enum Shape {
     /// A circular pad, via, or round drilled hole.
-    Circle { c: Point, r: Um },
+    Circle { c: Point, r: Nm },
     /// A "stadium": KiCad's `SHAPE_SEGMENT` -- a track segment, an oval pad
     /// (focus points along its long axis), or a slotted hole.
-    Stadium { a: Point, b: Point, r: Um },
+    Stadium { a: Point, b: Point, r: Nm },
     /// An axis-aligned rectangular pad or courtyard.
-    Rect { x0: Um, y0: Um, x1: Um, y1: Um },
+    Rect { x0: Nm, y0: Nm, x1: Nm, y1: Nm },
     /// An axis-aligned rounded-rectangle pad: the rectangle inset by `r` on
     /// every side, Minkowski-summed with a disk of radius `r` -- exactly
     /// KiCad's own construction, and exactly what
     /// `eda_model::footprint::PlacedPad::signed_distance` already computes
     /// for a single point; here it is expressed as a boundary (inset-rect
     /// core + radius `r`) so it composes with every other shape generically.
-    RoundRect { x0: Um, y0: Um, x1: Um, y1: Um, r: Um },
+    RoundRect { x0: Nm, y0: Nm, x1: Nm, y1: Nm, r: Nm },
     /// A closed simple polygon: a zone outline, a courtyard, or a
     /// hand-drawn graphic polygon.
     Polygon { pts: Vec<Point> },
@@ -289,7 +289,7 @@ pub enum Shape {
     /// pen-down segments for a whole string, inflated by half the stroke
     /// thickness -- see `crate::stroke_font`. Never empty (an empty/
     /// all-space string produces no `SilkItem` at all; see `board.rs`).
-    Strokes { segs: Vec<Seg>, r: Um },
+    Strokes { segs: Vec<Seg>, r: Nm },
     /// `SHAPE_COMPOUND`: the shapes that together make one item's copper -- a custom pad's anchor and each of its primitives
     /// (`PAD::GetEffectiveShape`). Every distance and collision is the nearest of its parts. Never nested, never empty.
     Compound { parts: Vec<Shape> },
@@ -342,7 +342,7 @@ impl Shape {
         self.core().boundary_segs()
     }
 
-    pub fn radius(&self) -> Um {
+    pub fn radius(&self) -> Nm {
         match self {
             Shape::Circle { r, .. } | Shape::Stadium { r, .. } | Shape::RoundRect { r, .. } | Shape::Strokes { r, .. } => *r,
             Shape::Rect { .. } | Shape::Polygon { .. } => 0,
@@ -353,8 +353,8 @@ impl Shape {
 
     /// Axis-aligned bounding box `(x0, y0, x1, y1)`, inflated by `clearance`
     /// -- used to cheaply reject far-apart pairs before the exact test.
-    pub fn bbox(&self, clearance: Um) -> (Um, Um, Um, Um) {
-        let (mut x0, mut y0, mut x1, mut y1) = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
+    pub fn bbox(&self, clearance: Nm) -> (Nm, Nm, Nm, Nm) {
+        let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
         let mut widen = |p: Point| {
             x0 = x0.min(p.x);
             y0 = y0.min(p.y);
@@ -407,7 +407,7 @@ impl Shape {
     /// definition, so the first point is as good as any other) -- so one
     /// probe point per side plus the boundary-segment scan is a complete
     /// test, the same one `SHAPE_POLY_SET::Collide` reduces to internally.
-    pub fn clearance_to(&self, other: &Shape) -> (Um, Point) {
+    pub fn clearance_to(&self, other: &Shape) -> (Nm, Point) {
         if self.is_compound() || other.is_compound() {
             return pairwise(self, other).map(|(a, b)| a.clearance_to(b)).min_by_key(|(d, _)| *d).expect("a compound has parts");
         }
@@ -434,7 +434,7 @@ impl Shape {
     /// `true` when `self` and `other` are closer than `clearance` (KiCad's
     /// `SHAPE::Collide`): touching/overlapping is always a collision, and
     /// so is any positive gap smaller than `clearance`.
-    pub fn collides(&self, other: &Shape, clearance: Um) -> Option<(Um, Point)> {
+    pub fn collides(&self, other: &Shape, clearance: Nm) -> Option<(Nm, Point)> {
         if self.is_compound() || other.is_compound() {
             return pairwise(self, other).filter_map(|(a, b)| a.collides(b, clearance)).min_by_key(|(d, _)| *d);
         }
@@ -492,7 +492,7 @@ fn pairwise<'a>(a: &'a Shape, b: &'a Shape) -> impl Iterator<Item = (&'a Shape, 
 /// [`Shape::Polygon`]'s area semantics in [`Shape::clearance_to`]). Used by
 /// the edge/silk-to-edge clearance provider, where "inside the board
 /// outline" must not be mistaken for "touching the edge".
-pub fn distance_to_open_segments(shape: &Shape, edges: &[Seg]) -> (Um, Point) {
+pub fn distance_to_open_segments(shape: &Shape, edges: &[Seg]) -> (Nm, Point) {
     if let Shape::Compound { parts } = shape {
         return parts.iter().map(|p| distance_to_open_segments(p, edges)).min_by_key(|(d, _)| *d).expect("a compound has parts");
     }
@@ -514,15 +514,15 @@ pub fn distance_to_open_segments(shape: &Shape, edges: &[Seg]) -> (Um, Point) {
 /// Euclidean distance between two points, rounded to the nearest micron --
 /// used where KiCad reports `(a - b).EuclideanNorm()` directly (hole-to-hole
 /// centre distance, annular width).
-pub fn dist(a: Point, b: Point) -> Um {
-    isqrt(sq(a.x - b.x) + sq(b.y - a.y).max(sq(a.y - b.y))) as Um
+pub fn dist(a: Point, b: Point) -> Nm {
+    isqrt(sq(a.x - b.x) + sq(b.y - a.y).max(sq(a.y - b.y))) as Nm
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 
@@ -652,7 +652,7 @@ mod tests {
 mod compound_tests {
     use super::*;
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 

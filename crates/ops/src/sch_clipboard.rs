@@ -11,8 +11,8 @@
 //! The translation `(dx, dy)` is what the cursor carried the items by (the move that follows the paste in KiCad), applied last.
 
 use super::Board;
-use eda_model::ir::{LibrarySymbol, NetLabel, NoConnect, Point, PowerSymbol, SchLine, SchematicSection, SchematicText, SymbolInstance, Um, Wire};
-use eda_model::sch_clipboard::{annotate_paste, place_offset_um, translate_graphic, PastedRef, PasteMode, SchFragment, UsedRef};
+use eda_model::ir::{LibrarySymbol, NetLabel, NoConnect, Point, PowerSymbol, SchLine, SchematicSection, SchematicText, SymbolInstance, Nm, Wire};
+use eda_model::sch_clipboard::{annotate_paste, place_offset_nm, translate_graphic, PastedRef, PasteMode, SchFragment, UsedRef};
 use eda_model::symbol::{is_synthetic_lib_id, LibSymbol};
 use eda_model::CheckResult;
 use std::collections::BTreeMap;
@@ -122,7 +122,7 @@ impl<'a> Board<'a> {
 
     /// `Cmd::PasteSch` -- see the module doc. Returns what the paste put on the sheet at its top: the ids of the new items that are in no new group and of the new groups that
     /// are in no other (what `SCH_SELECTION` then holds, and what Place as group groups).
-    pub(crate) fn paste_sch(&mut self, fragment: &SchFragment, dx: Um, dy: Um, mode: PasteMode) -> Result<Vec<String>, Vec<CheckResult>> {
+    pub(crate) fn paste_sch(&mut self, fragment: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode) -> Result<Vec<String>, Vec<CheckResult>> {
         if fragment.is_empty() {
             return Err(vec![CheckResult::fail("ops_empty_paste", "paste", "there is nothing to paste")]);
         }
@@ -164,7 +164,7 @@ impl<'a> Board<'a> {
                     // the box of the body style the symbol was copied in
                     let drawn = if src.body_style_of(s) > 1 && engine.has_alternate_body() { engine.in_style(src.body_style_of(s)).into_owned() } else { engine.clone() };
                     let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, s.unit);
-                    let (ox, oy) = place_offset_um(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (-x0, -y1));
+                    let (ox, oy) = place_offset_nm(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (-x0, -y1));
                     Point { x: origin.x - ox, y: origin.y - oy }
                 }
                 _ => origin,
@@ -181,10 +181,10 @@ impl<'a> Board<'a> {
         let wire_olds: Vec<String> = src.wires.iter().filter(|w| w.pts.len() >= 2).map(|w| w.id.clone()).collect();
         let new_wires: Vec<Wire> = src.wires.iter().filter(|w| w.pts.len() >= 2).map(|w| Wire { id: String::new(), net: String::new(), pins: Vec::new(), pts: w.pts.iter().map(shift).collect(), bus: w.bus }).collect();
         let new_labels: Vec<NetLabel> = src.labels.iter().map(|l| NetLabel { id: String::new(), net: l.net.clone(), at: shift(&l.at), kind: l.kind.clone() }).collect();
-        let new_texts: Vec<SchematicText> = src.texts.iter().map(|t| SchematicText { id: String::new(), content: t.content.clone(), at: shift(&t.at), angle: t.angle, size_um: t.size_um }).collect();
+        let new_texts: Vec<SchematicText> = src.texts.iter().map(|t| SchematicText { id: String::new(), content: t.content.clone(), at: shift(&t.at), angle: t.angle, size_nm: t.size_nm }).collect();
         let new_ncs: Vec<NoConnect> = src.no_connects.iter().map(|n| NoConnect { id: String::new(), at: shift(&n.at), pin: String::new() }).collect();
         let new_entries: Vec<eda_model::ir::BusEntry> = src.bus_entries.iter().map(|b| eda_model::ir::BusEntry { id: String::new(), at: shift(&b.at), size: b.size }).collect();
-        let new_lines: Vec<SchLine> = src.lines.iter().map(|l| SchLine { id: String::new(), pts: l.pts.iter().map(shift).collect(), width_um: l.width_um }).collect();
+        let new_lines: Vec<SchLine> = src.lines.iter().map(|l| SchLine { id: String::new(), pts: l.pts.iter().map(shift).collect(), width_nm: l.width_nm }).collect();
         // A junction the pasted wires already imply (a dot at a T) is not stored: the sheet draws it from the wires.
         let implied: Vec<Point> = eda_engine::geometry::wire_junction_points(&new_wires).into_iter().map(|(_, p)| p).collect();
         let new_junctions: Vec<eda_model::ir::Junction> = src.junctions.iter().map(|j| shift(&j.at)).filter(|at| !implied.contains(at)).map(|at| eda_model::ir::Junction { id: String::new(), at }).collect();

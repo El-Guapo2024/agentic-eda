@@ -425,7 +425,7 @@ mod tests {
             package: Some("HDR".into()),
             footprint: Some("HDR".into()),
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-            body_um: None,
+            body_nm: None,
             symbol: None,
             datasheet: None,
             edge: None,
@@ -440,7 +440,7 @@ mod tests {
             sheet_contents: None,
             bus_aliases: vec![],
             symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -449,7 +449,7 @@ mod tests {
             drawings: None,
         };
         crate::board::save(&dir, &design).unwrap();
-        std::fs::write(dir.join("board.json"), serde_json::json!({ "intent": intent.display().to_string(), "snap_um": 100, "spacing_um": 300 }).to_string()).unwrap();
+        std::fs::write(dir.join("board.json"), serde_json::json!({ "intent": intent.display().to_string(), "snap_nm": 100, "spacing_nm": 300 }).to_string()).unwrap();
         dir
     }
 
@@ -507,13 +507,13 @@ mod tests {
 
         crate::board::step(&dir, import(None), false, "test").unwrap();
         let (_, _, plain) = crate::board::load(&dir).unwrap();
-        assert!(plain.board.net_classes.iter().all(|c| c.name != "highpower") && plain.board.min_clearance_um != 203, "the board file alone says nothing of them");
+        assert!(plain.board.net_classes.iter().all(|c| c.name != "highpower") && plain.board.min_clearance_nm != 203, "the board file alone says nothing of them");
 
         crate::board::step(&dir, import(Some(pro)), false, "test").unwrap();
         let (_, design, model) = crate::board::load(&dir).unwrap();
         let class = model.board.net_classes.iter().find(|c| c.name == "highpower").expect("the importer's net class");
         assert_eq!((class.nets.clone(), class.track_width), (vec!["VCC".to_string()], Some(305)));
-        assert_eq!(model.board.min_clearance_um, 203, "and its design rules");
+        assert_eq!(model.board.min_clearance_nm, 203, "and its design rules");
         assert!(model.board.constraints_explicit, "stated by the project: kept as stated");
         assert_eq!(model.parts.iter().map(|p| p.reference.as_str()).collect::<Vec<_>>(), vec!["R1"], "the same board");
         let file = design.drawings.as_ref().unwrap().intent_file.clone().unwrap();
@@ -525,7 +525,7 @@ mod tests {
         assert!(back.board.net_classes.iter().all(|c| c.name != "highpower"), "the import without the project is the step before");
         crate::board::redo(&dir, "test", Some(Domain::Pcb)).unwrap();
         let (_, _, again) = crate::board::load(&dir).unwrap();
-        assert_eq!(again.board.min_clearance_um, 203, "a redo finds the file the first run left");
+        assert_eq!(again.board.min_clearance_nm, 203, "a redo finds the file the first run left");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

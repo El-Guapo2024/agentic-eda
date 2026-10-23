@@ -21,7 +21,7 @@
 //! PRECISION`'s four unit-dependent "V_VVV" levels (`Dimension::precision`
 //! is a flat decimal count instead).
 
-use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Millideg, Point, Um};
+use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Millideg, Point, Nm};
 
 /// `CHAR_WIDTH_FACTOR` in `crates/engine/src/geometry.rs` -- same
 /// approximation, reused rather than re-derived (see this module's own
@@ -47,7 +47,7 @@ pub struct DimensionGeometry {
     pub lines: Vec<(Point, Point)>,
     pub text_at: Point,
     pub text_angle: Millideg,
-    pub measured_value_um: Um,
+    pub measured_value_nm: Nm,
     pub text: String,
 }
 
@@ -75,13 +75,13 @@ fn norm(p: Point) -> f64 {
 /// `v` rescaled to length `len` (sign of `len` flips the direction),
 /// preserving direction otherwise. The zero vector has no direction, so
 /// it stays zero -- same degenerate case `VECTOR2I::Resize` has.
-fn resize(v: Point, len: Um) -> Point {
+fn resize(v: Point, len: Nm) -> Point {
     let n = norm(v);
     if n < 1.0 {
         return Point { x: 0, y: 0 };
     }
     let scale = len as f64 / n;
-    Point { x: (v.x as f64 * scale).round() as Um, y: (v.y as f64 * scale).round() as Um }
+    Point { x: (v.x as f64 * scale).round() as Nm, y: (v.y as f64 * scale).round() as Nm }
 }
 /// The perpendicular of `v`, rotated 90 degrees clockwise (this crate's
 /// own Y-down convention -- see this module's header).
@@ -96,7 +96,7 @@ fn angle_of(v: Point) -> i64 {
 fn rotate(p: Point, angle_millideg: i64) -> Point {
     let rad = (angle_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    Point { x: (p.x as f64 * cos - p.y as f64 * sin).round() as Um, y: (p.x as f64 * sin + p.y as f64 * cos).round() as Um }
+    Point { x: (p.x as f64 * cos - p.y as f64 * sin).round() as Nm, y: (p.x as f64 * sin + p.y as f64 * cos).round() as Nm }
 }
 fn rotate_about(p: Point, pivot: Point, angle_millideg: i64) -> Point {
     add(rotate(sub(p, pivot), angle_millideg), pivot)
@@ -108,7 +108,7 @@ fn rotate_about(p: Point, pivot: Point, angle_millideg: i64) -> Point {
 /// arrowhead pointing that way. An optional `tail` of the given length
 /// extends `tip` further in the *opposite* direction (source's inward-
 /// style visible stub, `drawAnArrow`'s own `aLength` tail argument).
-fn arrowhead(tip: Point, toward_angle_millideg: i64, length: Um, tail: Um) -> Vec<(Point, Point)> {
+fn arrowhead(tip: Point, toward_angle_millideg: i64, length: Nm, tail: Nm) -> Vec<(Point, Point)> {
     let mut lines = Vec::with_capacity(3);
     if tail != 0 {
         let t = rotate(Point { x: tail, y: 0 }, toward_angle_millideg + 180_000);
@@ -123,7 +123,7 @@ fn arrowhead(tip: Point, toward_angle_millideg: i64, length: Um, tail: Um) -> Ve
 }
 
 /// Resolve `Automatic` to millimetres -- this model's own board-wide
-/// convention elsewhere (`crates/model/src/ir.rs` `pub type Um`'s own
+/// convention elsewhere (`crates/model/src/ir.rs` `pub type Nm`'s own
 /// doc) -- since unlike source, nothing server-side tracks which display
 /// unit the UI currently shows (`state.units` is frontend-only, see
 /// `web/studio/src/state/units.ts`'s own header). Source's own
@@ -139,7 +139,7 @@ fn resolve_units(units: DimensionUnits) -> DimensionUnits {
 
 /// `PCB_DIMENSION_BASE::GetValueText` plus the prefix/suffix/units-suffix
 /// wrapping `updateText()` adds around it.
-fn format_value(dim: &Dimension, measured_value_um: Um) -> String {
+fn format_value(dim: &Dimension, measured_value_nm: Nm) -> String {
     if let Some(text) = &dim.override_text {
         let mut s = dim.prefix.clone();
         s.push_str(text);
@@ -149,9 +149,9 @@ fn format_value(dim: &Dimension, measured_value_um: Um) -> String {
 
     let units = resolve_units(dim.units);
     let (value, unit_suffix) = match units {
-        DimensionUnits::Mm => (measured_value_um as f64 / 1000.0, "mm"),
-        DimensionUnits::Mil => (measured_value_um as f64 / 25.4, "mil"),
-        DimensionUnits::Inch => (measured_value_um as f64 / 25_400.0, "in"),
+        DimensionUnits::Mm => (measured_value_nm as f64 / 1000.0, "mm"),
+        DimensionUnits::Mil => (measured_value_nm as f64 / 25.4, "mil"),
+        DimensionUnits::Inch => (measured_value_nm as f64 / 25_400.0, "in"),
         DimensionUnits::Automatic => unreachable!("resolved above"),
     };
 
@@ -186,10 +186,10 @@ fn format_value(dim: &Dimension, measured_value_um: Um) -> String {
     text
 }
 
-/// Estimated half-width (um) of `text` set at `size_um` -- see this
+/// Estimated half-width (um) of `text` set at `size_nm` -- see this
 /// module's own header on why this, and not real font metrics.
-fn half_width(text: &str, size_um: Um) -> Um {
-    ((text.chars().count() as f64 * CHAR_WIDTH_FACTOR * size_um as f64) / 2.0).round() as Um
+fn half_width(text: &str, size_nm: Nm) -> Nm {
+    ((text.chars().count() as f64 * CHAR_WIDTH_FACTOR * size_nm as f64) / 2.0).round() as Nm
 }
 
 /// Split `seg` (a crossbar or leader-to-text line) around `text_at`,
@@ -199,28 +199,28 @@ fn half_width(text: &str, size_um: Um) -> Um {
 /// is returned whole, same as source's own `CollectKnockedOutSegments`
 /// never splitting a crossbar that an outside-positioned text box
 /// doesn't actually collide with.
-fn knockout(a: Point, b: Point, text_at: Point, text: &str, text_size_um: Um) -> Vec<(Point, Point)> {
+fn knockout(a: Point, b: Point, text_at: Point, text: &str, text_size_nm: Nm) -> Vec<(Point, Point)> {
     let dir = sub(b, a);
     let len = norm(dir);
     if len < 1.0 || text.is_empty() {
         return vec![(a, b)];
     }
     let t = ((text_at.x - a.x) as f64 * dir.x as f64 + (text_at.y - a.y) as f64 * dir.y as f64) / (len * len);
-    let proj = Point { x: a.x + (dir.x as f64 * t).round() as Um, y: a.y + (dir.y as f64 * t).round() as Um };
+    let proj = Point { x: a.x + (dir.x as f64 * t).round() as Nm, y: a.y + (dir.y as f64 * t).round() as Nm };
     // Perpendicular distance from text_at to the line -- only knock out
     // a gap when the text is genuinely sitting close to the line, not
     // merely somewhere near its extent (an outside-positioned text's
     // perpendicular offset is a full text height or more away).
     let perp_dist = norm(sub(text_at, proj));
-    if perp_dist > text_size_um as f64 {
+    if perp_dist > text_size_nm as f64 {
         return vec![(a, b)];
     }
-    let hw = half_width(text, text_size_um).max(1);
-    let gap_start = (t * len).round() as Um - hw;
-    let gap_end = (t * len).round() as Um + hw;
-    if gap_start <= 0 || gap_end >= len.round() as Um {
+    let hw = half_width(text, text_size_nm).max(1);
+    let gap_start = (t * len).round() as Nm - hw;
+    let gap_end = (t * len).round() as Nm + hw;
+    if gap_start <= 0 || gap_end >= len.round() as Nm {
         // The gap swallows (or nearly swallows) the whole segment -- draw nothing.
-        if gap_start <= 0 && gap_end >= len.round() as Um {
+        if gap_start <= 0 && gap_end >= len.round() as Nm {
             return vec![];
         }
     }
@@ -228,7 +228,7 @@ fn knockout(a: Point, b: Point, text_at: Point, text: &str, text_size_um: Um) ->
     if gap_start > 0 {
         out.push((a, add(a, resize(dir, gap_start))));
     }
-    if gap_end < len.round() as Um {
+    if gap_end < len.round() as Nm {
         out.push((add(a, resize(dir, gap_end)), b));
     }
     out
@@ -236,7 +236,7 @@ fn knockout(a: Point, b: Point, text_at: Point, text: &str, text_size_um: Um) ->
 
 // --------------------------------------------------------------- aligned
 
-fn aligned_text_position(crossbar_start: Point, crossbar_end: Point, text_position: DimensionTextPosition, keep_aligned: bool, text_size_um: Um, stroke_width: Um) -> (Point, i64) {
+fn aligned_text_position(crossbar_start: Point, crossbar_end: Point, text_position: DimensionTextPosition, keep_aligned: bool, text_size_nm: Nm, stroke_width: Nm) -> (Point, i64) {
     let center = Point { x: (crossbar_start.x + crossbar_end.x) / 2, y: (crossbar_start.y + crossbar_end.y) / 2 };
     let rel_center = sub(crossbar_end, crossbar_start);
     let half = Point { x: rel_center.x / 2, y: rel_center.y / 2 };
@@ -244,7 +244,7 @@ fn aligned_text_position(crossbar_start: Point, crossbar_end: Point, text_positi
     let text_at = match text_position {
         DimensionTextPosition::Inline => center,
         DimensionTextPosition::Outside => {
-            let offset_distance = stroke_width + text_size_um;
+            let offset_distance = stroke_width + text_size_nm;
             let rotation = if half.x == 0 {
                 if half.y > 0 {
                     -90_000
@@ -274,9 +274,9 @@ fn aligned_text_position(crossbar_start: Point, crossbar_end: Point, text_positi
     (text_at, text_angle)
 }
 
-fn aligned(dim: &Dimension, height: Um) -> DimensionGeometry {
+fn aligned(dim: &Dimension, height: Nm) -> DimensionGeometry {
     let dimension = sub(dim.end, dim.start);
-    let measured_value_um = norm(dimension).round() as Um;
+    let measured_value_nm = norm(dimension).round() as Nm;
 
     let extension = if height > 0 { perp(dimension) } else { Point { x: dimension.y, y: -dimension.x } };
 
@@ -290,12 +290,12 @@ fn aligned(dim: &Dimension, height: Um) -> DimensionGeometry {
     let crossbar_start = add(dim.start, cross_offset);
     let crossbar_end = add(dim.end, cross_offset);
 
-    let (text_at, text_angle) = aligned_text_position(crossbar_start, crossbar_end, dim.text_position, dim.keep_text_aligned, dim.text_size_um, dim.stroke_width);
+    let (text_at, text_angle) = aligned_text_position(crossbar_start, crossbar_end, dim.text_position, dim.keep_text_aligned, dim.text_size_nm, dim.stroke_width);
     let text_angle = (if dim.keep_text_aligned { text_angle } else { dim.text_angle as i64 }).rem_euclid(360_000) as Millideg;
-    let text = format_value(dim, measured_value_um);
+    let text = format_value(dim, measured_value_nm);
 
     let mut lines = vec![(ext1_start, ext1_end), (ext2_start, ext2_end)];
-    lines.extend(knockout(crossbar_start, crossbar_end, text_at, &text, dim.text_size_um));
+    lines.extend(knockout(crossbar_start, crossbar_end, text_at, &text, dim.text_size_nm));
 
     let dim_angle = angle_of(dimension);
     match dim.arrow_direction {
@@ -309,14 +309,14 @@ fn aligned(dim: &Dimension, height: Um) -> DimensionGeometry {
         }
     }
 
-    DimensionGeometry { lines, text_at, text_angle, measured_value_um, text }
+    DimensionGeometry { lines, text_at, text_angle, measured_value_nm, text }
 }
 
 // ------------------------------------------------------------ orthogonal
 
-fn orthogonal(dim: &Dimension, height: Um, horizontal: bool) -> DimensionGeometry {
+fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometry {
     let measurement = if horizontal { dim.end.x - dim.start.x } else { dim.end.y - dim.start.y };
-    let measured_value_um = measurement.abs();
+    let measured_value_nm = measurement.abs();
 
     let extension = if horizontal { Point { x: 0, y: height } } else { Point { x: height, y: 0 } };
     let ext1_len = height.abs() - dim.extension_offset + dim.extension_height;
@@ -328,7 +328,7 @@ fn orthogonal(dim: &Dimension, height: Um, horizontal: bool) -> DimensionGeometr
     let crossbar_end = if horizontal { Point { x: dim.end.x, y: crossbar_start.y } } else { Point { x: crossbar_start.x, y: dim.end.y } };
 
     let extension2 = if horizontal { Point { x: 0, y: dim.end.y - crossbar_end.y } } else { Point { x: dim.end.x - crossbar_end.x, y: 0 } };
-    let ext2_len = norm(extension2).round() as Um - dim.extension_offset + dim.extension_height;
+    let ext2_len = norm(extension2).round() as Nm - dim.extension_offset + dim.extension_height;
     let ext2_start = sub(crossbar_end, resize(extension2, dim.extension_height));
     let ext2_end = add(ext2_start, resize(extension2, ext2_len));
 
@@ -337,7 +337,7 @@ fn orthogonal(dim: &Dimension, height: Um, horizontal: bool) -> DimensionGeometr
     let text_at = match dim.text_position {
         DimensionTextPosition::Inline => crossbar_center,
         DimensionTextPosition::Outside => {
-            let offset_distance = dim.stroke_width + dim.text_size_um;
+            let offset_distance = dim.stroke_width + dim.text_size_nm;
             let offset = if horizontal { Point { x: 0, y: -offset_distance } } else { Point { x: -offset_distance, y: 0 } };
             add(crossbar_start, add(half, offset))
         }
@@ -353,9 +353,9 @@ fn orthogonal(dim: &Dimension, height: Um, horizontal: bool) -> DimensionGeometr
     })
     .rem_euclid(360_000) as Millideg;
 
-    let text = format_value(dim, measured_value_um);
+    let text = format_value(dim, measured_value_nm);
     let mut lines = vec![(ext1_start, ext1_end), (ext2_start, ext2_end)];
-    lines.extend(knockout(crossbar_start, crossbar_end, text_at, &text, dim.text_size_um));
+    lines.extend(knockout(crossbar_start, crossbar_end, text_at, &text, dim.text_size_nm));
 
     let crossbar_angle = angle_of(sub(crossbar_end, crossbar_start));
     match dim.arrow_direction {
@@ -369,15 +369,15 @@ fn orthogonal(dim: &Dimension, height: Um, horizontal: bool) -> DimensionGeometr
         }
     }
 
-    DimensionGeometry { lines, text_at, text_angle, measured_value_um, text }
+    DimensionGeometry { lines, text_at, text_angle, measured_value_nm, text }
 }
 
 // ---------------------------------------------------------------- radial
 
-fn radial(dim: &Dimension, leader_length: Um) -> DimensionGeometry {
+fn radial(dim: &Dimension, leader_length: Nm) -> DimensionGeometry {
     let center = dim.start;
     let radius_vec = sub(dim.end, center);
-    let measured_value_um = norm(radius_vec).round() as Um;
+    let measured_value_nm = norm(radius_vec).round() as Nm;
 
     // The small `+` mark at the centre -- fixed size (arrow_length), not
     // `end - start`, see PCB_DIM_RADIAL::updateGeometry's own
@@ -388,7 +388,7 @@ fn radial(dim: &Dimension, leader_length: Um) -> DimensionGeometry {
     lines.push((sub(center, arm2), add(center, arm2)));
 
     let knee = add(dim.end, resize(radius_vec, leader_length));
-    let text_at = add(knee, resize(radius_vec, dim.text_size_um.max(1)));
+    let text_at = add(knee, resize(radius_vec, dim.text_size_nm.max(1)));
     let text_angle = (if dim.keep_text_aligned {
         let mut a = (-angle_of(sub(text_at, knee))).rem_euclid(360_000);
         if a > 90_000 && a <= 270_000 {
@@ -400,39 +400,39 @@ fn radial(dim: &Dimension, leader_length: Um) -> DimensionGeometry {
     })
     .rem_euclid(360_000) as Millideg;
 
-    let text = format_value(dim, measured_value_um);
-    lines.extend(knockout(dim.end, knee, text_at, &text, dim.text_size_um));
-    lines.extend(knockout(knee, text_at, text_at, &text, dim.text_size_um));
+    let text = format_value(dim, measured_value_nm);
+    lines.extend(knockout(dim.end, knee, text_at, &text, dim.text_size_nm));
+    lines.extend(knockout(knee, text_at, text_at, &text, dim.text_size_nm));
 
     let radial_angle = angle_of(radius_vec);
     lines.extend(arrowhead(dim.end, radial_angle, dim.arrow_length, 0));
 
-    DimensionGeometry { lines, text_at, text_angle, measured_value_um, text }
+    DimensionGeometry { lines, text_at, text_angle, measured_value_nm, text }
 }
 
 // ---------------------------------------------------------------- leader
 
 fn leader(dim: &Dimension) -> DimensionGeometry {
     let first_line = sub(dim.end, dim.start);
-    let measured_value_um = norm(first_line).round() as Um;
+    let measured_value_nm = norm(first_line).round() as Nm;
     let start = add(dim.start, resize(first_line, dim.extension_offset));
 
-    let text = format_value(dim, measured_value_um);
+    let text = format_value(dim, measured_value_nm);
     // Text sits a fixed offset off the knee, continuing the arrow's own
     // direction -- source lets the user drag it freely (`GetTextPos()`
     // is independently settable); this port places it automatically,
     // same "no manual sub-element dragging" scope PARITY-pcb.md already
     // notes elsewhere.
-    let text_at = add(dim.end, resize(first_line, dim.text_size_um.max(1) * 2));
+    let text_at = add(dim.end, resize(first_line, dim.text_size_nm.max(1) * 2));
     let text_angle = (if dim.keep_text_aligned { 0 } else { dim.text_angle as i64 }).rem_euclid(360_000) as Millideg;
 
-    let mut lines = knockout(start, dim.end, text_at, &text, dim.text_size_um);
+    let mut lines = knockout(start, dim.end, text_at, &text, dim.text_size_nm);
     lines.extend(arrowhead(start, angle_of(first_line), dim.arrow_length, 0));
     if !text.is_empty() {
-        lines.extend(knockout(dim.end, text_at, text_at, &text, dim.text_size_um));
+        lines.extend(knockout(dim.end, text_at, text_at, &text, dim.text_size_nm));
     }
 
-    DimensionGeometry { lines, text_at, text_angle, measured_value_um, text }
+    DimensionGeometry { lines, text_at, text_angle, measured_value_nm, text }
 }
 
 // ---------------------------------------------------------------- center
@@ -442,7 +442,7 @@ fn center(dim: &Dimension) -> DimensionGeometry {
     let arm = sub(dim.end, dim.start);
     let lines = vec![(sub(center_pt, arm), add(center_pt, arm)), (sub(center_pt, rotate(arm, -90_000)), add(center_pt, rotate(arm, -90_000)))];
 
-    DimensionGeometry { lines, text_at: center_pt, text_angle: 0, measured_value_um: 0, text: String::new() }
+    DimensionGeometry { lines, text_at: center_pt, text_angle: 0, measured_value_nm: 0, text: String::new() }
 }
 
 fn rotate_point_set(pts: &mut [Point], pivot: Point, angle_millideg: i64) {
@@ -454,7 +454,7 @@ fn rotate_point_set(pts: &mut [Point], pivot: Point, angle_millideg: i64) {
 /// Translate a dimension's own feature points by `(dx, dy)` -- what
 /// dragging it does (`PCB_DIMENSION_BASE::Move`). Text position/angle are
 /// always recomputed from `start`/`end`, never carried along separately.
-pub fn translate_dimension(dim: &mut Dimension, dx: Um, dy: Um) {
+pub fn translate_dimension(dim: &mut Dimension, dx: Nm, dy: Nm) {
     dim.start.x += dx;
     dim.start.y += dy;
     dim.end.x += dx;
@@ -493,13 +493,13 @@ mod tests {
             text_position: DimensionTextPosition::Outside,
             keep_text_aligned: true,
             text_angle: 0,
-            text_size_um: 1000,
+            text_size_nm: 1000,
             stroke_width: 150,
             arrow_length: 1000,
             extension_offset: 200,
             extension_height: 500,
             arrow_direction: ArrowDirection::Outward,
-            text_thickness_um: None,
+            text_thickness_nm: None,
         }
     }
 
@@ -507,7 +507,7 @@ mod tests {
     fn aligned_measures_the_euclidean_distance() {
         let dim = base_dim(DimensionKind::Aligned { height: 2000 }, Point { x: 0, y: 0 }, Point { x: 3000, y: 4000 });
         let g = compute_dimension_geometry(&dim);
-        assert_eq!(g.measured_value_um, 5000); // 3-4-5 triangle
+        assert_eq!(g.measured_value_nm, 5000); // 3-4-5 triangle
         assert_eq!(g.text, "5");
     }
 
@@ -538,21 +538,21 @@ mod tests {
     fn orthogonal_horizontal_ignores_the_y_delta_in_its_measurement() {
         let dim = base_dim(DimensionKind::Orthogonal { height: 1000, horizontal: true }, Point { x: 0, y: 0 }, Point { x: 5000, y: 9999 });
         let g = compute_dimension_geometry(&dim);
-        assert_eq!(g.measured_value_um, 5000);
+        assert_eq!(g.measured_value_nm, 5000);
     }
 
     #[test]
     fn orthogonal_vertical_ignores_the_x_delta() {
         let dim = base_dim(DimensionKind::Orthogonal { height: 1000, horizontal: false }, Point { x: 0, y: 0 }, Point { x: 9999, y: 7000 });
         let g = compute_dimension_geometry(&dim);
-        assert_eq!(g.measured_value_um, 7000);
+        assert_eq!(g.measured_value_nm, 7000);
     }
 
     #[test]
     fn radial_measures_the_radius_and_draws_a_center_cross() {
         let dim = base_dim(DimensionKind::Radial { leader_length: 500 }, Point { x: 0, y: 0 }, Point { x: 2000, y: 0 });
         let g = compute_dimension_geometry(&dim);
-        assert_eq!(g.measured_value_um, 2000);
+        assert_eq!(g.measured_value_nm, 2000);
         // The centre cross is the two segments straddling (0,0) with the
         // fixed arrow_length arm -- both must be present regardless of
         // the radius.

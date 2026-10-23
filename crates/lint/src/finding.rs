@@ -8,7 +8,7 @@
 //! used (`placement_proximity`, ..., `routing_track_width`); callers filter
 //! on them, so they do not change.
 
-use eda_model::ir::Um;
+use eda_model::ir::Nm;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -76,7 +76,7 @@ impl Check {
 pub struct Item {
     pub description: String,
     /// Board-space µm, this workspace's convention throughout.
-    pub pos: (Um, Um),
+    pub pos: (Nm, Nm),
     /// Our own id for the item (`REF`, `REF.PIN`, a net name, `track#seg`),
     /// so the UI can highlight it without re-matching on position.
     pub id: String,
@@ -91,7 +91,7 @@ pub struct FixHint {
     /// edge", or similar.
     pub toward: String,
     /// How much closer, µm, `mover` needs to get to `toward` to clear this.
-    pub distance_to_close_um: Um,
+    pub distance_to_close_nm: Nm,
     /// Human-readable next step.
     pub suggested_command: String,
 }

@@ -16,7 +16,7 @@ use std::path::Path;
 fn with_board(dir: &Path, f: impl FnOnce(&Board<'_>) -> Value) -> Value {
     match board::load(dir) {
         Ok((meta, design, model)) => {
-            let b = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+            let b = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
             f(&b)
         }
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),

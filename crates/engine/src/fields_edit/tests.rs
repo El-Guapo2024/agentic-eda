@@ -12,7 +12,7 @@ fn part(reference: &str) -> Part {
         symbol: None,
         datasheet: None,
         pins: (1..=2).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_nm: None,
         edge: None,
     }
 }

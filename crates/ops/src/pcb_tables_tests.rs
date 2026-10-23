@@ -119,14 +119,14 @@ fn the_dialogs_edit_the_cells_the_border_the_layer_and_the_lock() {
     // Table Properties: layer, lock, the grid and the borders in one step
     let patch = TablePatch {
         texts: Some(vec![vec!["a".into(), "b".into()], vec!["c".into(), "d".into()]]),
-        border: Some(eda_model::table_edit::BorderEdit { external: false, header: true, width_um: 200, style: eda_model::table::TableLineStyle::Dash }),
+        border: Some(eda_model::table_edit::BorderEdit { external: false, header: true, width_nm: 200, style: eda_model::table::TableLineStyle::Dash }),
         ..TablePatch::default()
     };
     b.apply(&Cmd::Table(TableCmd::Set { id: t.clone(), layer: Some("F.Fab".into()), locked: Some(true), patch })).unwrap();
     let g = get(&b, &t);
     assert_eq!(g.layer, "F.Fab");
     assert_eq!(g.texts(), vec![vec!["a", "b"], vec!["c", "d"]]);
-    assert!(!g.border.external && g.border.header && g.border.stroke.width_um == 200);
+    assert!(!g.border.external && g.border.header && g.border.stroke.width_nm == 200);
     assert!(b.design().drawings.as_ref().unwrap().locked_ids.contains(&t), "locked");
     b.apply(&Cmd::Table(TableCmd::Set { id: t.clone(), layer: None, locked: Some(false), patch: TablePatch::default() })).unwrap();
     assert!(!b.design().drawings.as_ref().unwrap().locked_ids.contains(&t), "unlocked");
@@ -176,22 +176,22 @@ fn draw_table_makes_a_grid_with_kicads_cell_defaults_and_what_its_dialog_set() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     let patch = TablePatch { texts: Some(vec![vec!["a".into(), "b".into(), "c".into()], vec!["d".into(), "e".into(), "f".into()]]), ..TablePatch::default() };
-    b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(5_000, 6_000), cols: 3, rows: 2, cell_w_um: 12_000, cell_h_um: 4_000, line_width_um: 150, locked: true, patch })).unwrap();
+    b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(5_000, 6_000), cols: 3, rows: 2, cell_w_nm: 12_000, cell_h_nm: 4_000, line_width_nm: 150, locked: true, patch })).unwrap();
     let t = b.design().drawings.as_ref().unwrap().tables[0].clone();
     assert_eq!((t.col_count(), t.row_count(), t.at), (3, 2, p(5_000, 6_000)));
     assert_eq!(t.col_widths, vec![12_000; 3]);
     assert_eq!(t.texts()[1], vec!["d", "e", "f"]);
     // the cells are `new PCB_TABLECELL`: 50 mil text, automatic thickness, left and centred, a margin of the legacy formula, not mirrored on a front layer
     let c = t.cell(0, 0).unwrap();
-    assert_eq!((c.style.height_um, c.style.thickness_um, c.margins, c.style.mirror), (1_270, 0, [1_003; 4], false));
-    assert_eq!((t.border.stroke.width_um, t.separators.stroke.width_um), (150, 150));
+    assert_eq!((c.style.height_nm, c.style.thickness_nm, c.margins, c.style.mirror), (1_270, 0, [1_003; 4], false));
+    assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (150, 150));
     assert!(b.design().drawings.as_ref().unwrap().locked_ids.contains(&t.id));
     // on a back layer the cells are mirrored
-    b.apply(&Cmd::Table(TableCmd::Draw { layer: "B.SilkS".into(), at: p(0, 0), cols: 1, rows: 1, cell_w_um: 5_000, cell_h_um: 5_000, line_width_um: 100, locked: false, patch: TablePatch::default() })).unwrap();
+    b.apply(&Cmd::Table(TableCmd::Draw { layer: "B.SilkS".into(), at: p(0, 0), cols: 1, rows: 1, cell_w_nm: 5_000, cell_h_nm: 5_000, line_width_nm: 100, locked: false, patch: TablePatch::default() })).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().tables.iter().any(|t| t.layer == "B.SilkS" && t.cells[0].style.mirror));
     // refused: no size, no columns
-    assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(0, 0), cols: 0, rows: 1, cell_w_um: 5_000, cell_h_um: 5_000, line_width_um: 100, locked: false, patch: TablePatch::default() })).is_err());
-    assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(0, 0), cols: 1, rows: 1, cell_w_um: 0, cell_h_um: 5_000, line_width_um: 100, locked: false, patch: TablePatch::default() })).is_err());
+    assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(0, 0), cols: 0, rows: 1, cell_w_nm: 5_000, cell_h_nm: 5_000, line_width_nm: 100, locked: false, patch: TablePatch::default() })).is_err());
+    assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(0, 0), cols: 1, rows: 1, cell_w_nm: 0, cell_h_nm: 5_000, line_width_nm: 100, locked: false, patch: TablePatch::default() })).is_err());
 }
 
 fn numbers() -> crate::pcb_table_builders::BoardNumbers {

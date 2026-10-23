@@ -228,7 +228,7 @@ pub struct HeadSet<'a> {
     pub pts: &'a [Point],
     pub net: &'a Net,
     pub layer: i32,
-    pub width: eda_model::ir::Um,
+    pub width: eda_model::ir::Nm,
     pub via: Option<&'a Via>,
 }
 
@@ -329,7 +329,7 @@ impl Springback {
 mod tests {
     use super::*;
     use crate::item::{net_of, Segment};
-    use eda_model::ir::Um;
+    use eda_model::ir::Nm;
 
     fn rules() -> BoardRules {
         serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap()
@@ -341,7 +341,7 @@ mod tests {
         n
     }
 
-    fn line(y: Um) -> Line {
+    fn line(y: Nm) -> Line {
         Line::from_points(net_of("B"), 0, 250, vec![Point { x: 0, y }, Point { x: 10_000, y }])
     }
 
@@ -349,7 +349,7 @@ mod tests {
         HeadSet { pts, net, layer: 0, width: 250, via: None }
     }
 
-    fn moved(y: Um) -> World {
+    fn moved(y: Nm) -> World {
         let mut w = World::default();
         w.merge_shove(&[DisplacedLine { source_track: Some("t1".into()), line: line(y) }], &[]);
         w

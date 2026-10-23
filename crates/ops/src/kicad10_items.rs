@@ -82,7 +82,7 @@ impl<'a> Board<'a> {
         if stitch.outline.len() < 3 {
             return Err(fail("ops_bad_via_stitch", what, "a via stitching needs an outline of three corners or more"));
         }
-        if stitch.via.size_um <= 0 || stitch.via.drill_um <= 0 || stitch.via.drill_um >= stitch.via.size_um {
+        if stitch.via.size_nm <= 0 || stitch.via.drill_nm <= 0 || stitch.via.drill_nm >= stitch.via.size_nm {
             return Err(fail("ops_bad_via_stitch", what, "Via hole size must be smaller than via diameter"));
         }
         self.known_layer(&stitch.via.from_layer)?;
@@ -94,7 +94,7 @@ impl<'a> Board<'a> {
             }
             None => Vec::new(),
         };
-        let pitch = stitch.pitch_um * 1000;
+        let pitch = stitch.pitch_nm * 1000;
         let desired: BTreeMap<(i64, i64), Point> = vias.iter().map(|p| (p.cell, p.at)).collect();
         // "Determine existing vias we can keep"
         let existing: Vec<Via> = self.design.routing.iter().flat_map(|rt| rt.vias.iter().filter(|v| members.contains(&v.id)).cloned()).collect();
@@ -111,7 +111,7 @@ impl<'a> Board<'a> {
         // `matchesRef`: the template's size, drill, layers and net (the position aside). A new stitch net is no mismatch: `PCB_VIA_STITCH::SetNetCode` gave every member the
         // net before `Update` (the dialog's `SetNetCode( newNetCode )`), so a kept via keeps its id and takes the net.
         let t = &stitch.via;
-        let matches = |v: &Via| v.diameter == t.size_um && v.drill == t.drill_um && v.from_layer == t.from_layer && v.to_layer == t.to_layer;
+        let matches = |v: &Via| v.diameter == t.size_nm && v.drill == t.drill_nm && v.from_layer == t.from_layer && v.to_layer == t.to_layer;
         let mut keep_ids: Vec<String> = Vec::new();
         let mut moves: Vec<(String, Point)> = Vec::new();
         let mut adds: Vec<Point> = Vec::new();
@@ -144,7 +144,7 @@ impl<'a> Board<'a> {
         }
         let before: std::collections::BTreeSet<String> = rt.vias.iter().map(|v| v.id.clone()).collect();
         for at in &adds {
-            rt.vias.push(Via { id: String::new(), net: stitch.net.clone(), at: *at, drill: t.drill_um, diameter: t.size_um, from_layer: t.from_layer.clone(), to_layer: t.to_layer.clone() });
+            rt.vias.push(Via { id: String::new(), net: stitch.net.clone(), at: *at, drill: t.drill_nm, diameter: t.size_nm, from_layer: t.from_layer.clone(), to_layer: t.to_layer.clone() });
         }
         rt.assign_missing_ids();
         let new_ids: Vec<String> = rt.vias.iter().filter(|v| !before.contains(&v.id)).map(|v| v.id.clone()).collect();
@@ -203,7 +203,7 @@ impl<'a> Board<'a> {
         if !is_documentation_layer(layer) {
             return Err(fail("ops_bad_drill_map", layer, "Every documentation layer already has a drill map."));
         }
-        let size = crate::drill_chart::profile_of(&self.design).size_um;
+        let size = crate::drill_chart::profile_of(&self.design).size_nm;
         let dr = self.drawings_mut();
         if dr.board_items.drill_maps.iter().any(|m| m.layer == layer) {
             return Err(fail("ops_bad_drill_map", layer, "Every documentation layer already has a drill map."));
@@ -220,7 +220,7 @@ impl<'a> Board<'a> {
         let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_drill_map", id, "the board has no drawings yet"))?;
         let slot = dr.board_items.drill_maps.iter_mut().find(|x| x.id == id).ok_or_else(|| fail("ops_unknown_drill_map", id, "no drill map with this id"))?;
         // `SetSymbolSize`: at least one.
-        *slot = DrillMap { id: id.to_string(), size_um: m.size_um.max(1), ..m };
+        *slot = DrillMap { id: id.to_string(), size_nm: m.size_nm.max(1), ..m };
         Ok(())
     }
 

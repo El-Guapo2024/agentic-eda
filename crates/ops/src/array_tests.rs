@@ -5,7 +5,7 @@ use super::pcb_transform_tests::{board, design, drawings, ids, model, p, pose, r
 use super::*;
 use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintKind, PadEdit};
 
-fn grid(nx: i64, ny: i64, dx: Um, dy: Um) -> ArrayGeometry {
+fn grid(nx: i64, ny: i64, dx: Nm, dy: Nm) -> ArrayGeometry {
     ArrayGeometry::Grid { nx, ny, dx, dy, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }
 }
 
@@ -16,18 +16,18 @@ fn circle(count: i64, angle_deg: i64, rotate_items: bool) -> ArrayGeometry {
 
 /// Small edits of a geometry (an enum variant cannot be updated field by field).
 trait Tweak: Sized {
-    fn offsets(self, ox: Um, oy: Um) -> Self;
+    fn offsets(self, ox: Nm, oy: Nm) -> Self;
     fn centred(self) -> Self;
     fn staggered(self, n: i64, rows: bool) -> Self;
     fn column_first(self) -> Self;
     fn serpentine(self) -> Self;
-    fn spacing_x(self, dx: Um) -> Self;
+    fn spacing_x(self, dx: Nm) -> Self;
     fn counter_clockwise_from(self, offset_deg: i64) -> Self;
     fn turning(self) -> Self;
 }
 
 impl Tweak for ArrayGeometry {
-    fn offsets(mut self, ox: Um, oy: Um) -> Self {
+    fn offsets(mut self, ox: Nm, oy: Nm) -> Self {
         if let ArrayGeometry::Grid { offset_x, offset_y, .. } = &mut self {
             (*offset_x, *offset_y) = (ox, oy);
         }
@@ -57,7 +57,7 @@ impl Tweak for ArrayGeometry {
         }
         self
     }
-    fn spacing_x(mut self, new_dx: Um) -> Self {
+    fn spacing_x(mut self, new_dx: Nm) -> Self {
         if let ArrayGeometry::Grid { dx, .. } = &mut self {
             *dx = new_dx;
         }
@@ -85,7 +85,7 @@ fn arrange(ids: &[&str], geometry: ArrayGeometry) -> Cmd {
     Cmd::CreateArray { ids: ids.iter().map(|s| s.to_string()).collect(), geometry, arrange: true, reannotate: true }
 }
 
-fn add_via(b: &mut Board<'_>, x: Um, y: Um) -> String {
+fn add_via(b: &mut Board<'_>, x: Nm, y: Nm) -> String {
     b.apply(&Cmd::AddVia { net: "GND".into(), x, y, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
     routing(b).vias.iter().find(|v| v.at == p(x, y)).unwrap().id.clone()
 }
@@ -95,7 +95,7 @@ fn vias(b: &Board<'_>) -> Vec<Via> {
     routing(b).vias.iter().filter(|v| v.id != "via_a").cloned().collect()
 }
 
-fn via_positions(b: &Board<'_>) -> BTreeSet<(Um, Um)> {
+fn via_positions(b: &Board<'_>) -> BTreeSet<(Nm, Nm)> {
     vias(b).iter().map(|v| (v.at.x, v.at.y)).collect()
 }
 
@@ -235,7 +235,7 @@ fn a_circular_array_that_turns_its_items_turns_every_kind_about_its_own_position
     d.drawings.as_mut().unwrap().texts.clear();
     d.drawings.as_mut().unwrap().shapes.clear();
     let mut b = Board::new(d, &m, 100, 300);
-    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "1".into(), at: p(1_000, 0), angle: 0, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "1".into(), at: p(1_000, 0), angle: 0, layer: "F.SilkS".into(), size_nm: 1_000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
     b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: p(1_000, 0), end: p(1_100, 0) } }).unwrap();
     let (text, shape) = (drawings(&b).texts[0].id.clone(), drawings(&b).shapes[0].id().to_string());
     b.apply(&array(&[&text, &shape], circle(4, 90, true))).unwrap();

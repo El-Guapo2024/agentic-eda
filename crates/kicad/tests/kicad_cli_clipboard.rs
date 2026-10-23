@@ -47,7 +47,7 @@ fn kicad_cli_reads_a_copy_as_a_board_and_finds_the_items_where_the_copy_put_them
         eprintln!("kicad-cli not found; skipping");
         return;
     };
-    let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("100n".into()), package: Some("0603".into()), footprint: Some("0603".into()), pins: ["1", "2"].iter().map(|n| Pin { number: (*n).into(), name: None, kind: PinKind::Passive }).collect(), body_um: None, symbol: None, datasheet: None, edge: None };
+    let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("100n".into()), package: Some("0603".into()), footprint: Some("0603".into()), pins: ["1", "2"].iter().map(|n| Pin { number: (*n).into(), name: None, kind: PinKind::Passive }).collect(), body_nm: None, symbol: None, datasheet: None, edge: None };
     let model = ConstraintModel {
         parts: vec![part("C1")],
         nets: vec![Net { name: "VIN".into(), pins: vec!["C1.1".into()] }, Net { name: "GND".into(), pins: vec!["C1.2".into()] }],
@@ -59,7 +59,7 @@ fn kicad_cli_reads_a_copy_as_a_board_and_finds_the_items_where_the_copy_put_them
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -119,7 +119,7 @@ fn what_kicad_itself_writes_for_those_items_reads_back_the_same() {
         eprintln!("kicad-cli not found; skipping");
         return;
     };
-    let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("100n".into()), package: Some("0603".into()), footprint: Some("0603".into()), pins: ["1", "2"].iter().map(|n| Pin { number: (*n).into(), name: None, kind: PinKind::Passive }).collect(), body_um: None, symbol: None, datasheet: None, edge: None };
+    let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("100n".into()), package: Some("0603".into()), footprint: Some("0603".into()), pins: ["1", "2"].iter().map(|n| Pin { number: (*n).into(), name: None, kind: PinKind::Passive }).collect(), body_nm: None, symbol: None, datasheet: None, edge: None };
     let model = ConstraintModel {
         parts: vec![part("C1")],
         nets: vec![Net { name: "VIN".into(), pins: vec!["C1.1".into()] }, Net { name: "GND".into(), pins: vec!["C1.2".into()] }],
@@ -130,7 +130,7 @@ fn what_kicad_itself_writes_for_those_items_reads_back_the_same() {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,

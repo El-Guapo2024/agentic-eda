@@ -28,7 +28,7 @@ fn duplicate_u1() -> Cmd {
 }
 
 fn add_text(dir: &Path) {
-    let text = eda_model::ir::Text { id: String::new(), content: "T".into(), at: Point { x: 1_000, y: 1_000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: eda_model::ir::TextJustify::Center, mirror: false };
+    let text = eda_model::ir::Text { id: String::new(), content: "T".into(), at: Point { x: 1_000, y: 1_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000, stroke_width: 150, justify: eda_model::ir::TextJustify::Center, mirror: false };
     step(dir, Cmd::AddText { text }, false, "test").unwrap();
 }
 

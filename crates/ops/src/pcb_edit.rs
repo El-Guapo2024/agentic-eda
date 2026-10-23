@@ -44,7 +44,7 @@ impl BooleanOp {
 
 /// `SHAPE_ARC::DefaultAccuracyForPCB() / 5` (`getArcPolygonizationMaxError`,
 /// `ARC_HIGH_DEF` = 5 um): the sag a polygonised circle may have, in um.
-const CIRCLE_POLY_MAX_ERROR_UM: i32 = 1;
+const CIRCLE_POLY_MAX_ERROR_NM: i32 = 1;
 
 fn pt64(p: Point) -> Point64 {
     Point64::new(p.x, p.y)
@@ -56,7 +56,7 @@ fn pt64(p: Point) -> Point64 {
 /// circle widened by half the effective error, so the chord stays inside the
 /// error band.
 fn circle_polyline(center: Point, radius: i64) -> Vec<Point64> {
-    let n = get_arc_to_segment_count(radius.clamp(1, i32::MAX as i64) as i32, CIRCLE_POLY_MAX_ERROR_UM).max(2) as usize;
+    let n = get_arc_to_segment_count(radius.clamp(1, i32::MAX as i64) as i32, CIRCLE_POLY_MAX_ERROR_NM).max(2) as usize;
     let n_for_error = n.max(3) as f64;
     let alpha = std::f64::consts::PI / n_for_error;
     let effective_error = (radius as f64 * (1.0 / alpha.cos() - 1.0)).round();

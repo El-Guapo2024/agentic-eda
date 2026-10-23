@@ -13,12 +13,12 @@
 
 use crate::finding::{Check, Finding, FixHint, Item};
 use eda_model::footprint::{edge_connector_gap, is_edge_connector};
-use eda_model::ir::{Design, Point, Um};
+use eda_model::ir::{Design, Point, Nm};
 use eda_model::{is_free_two_pin, ConstraintModel, PlacementRule};
 use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, Copy)]
-struct Rect(Um, Um, Um, Um);
+struct Rect(Nm, Nm, Nm, Nm);
 
 impl Rect {
     fn gap(&self, o: &Rect) -> f64 {
@@ -40,7 +40,7 @@ fn orient(a: Point, b: Point, c: Point) -> i128 {
 /// Max gap, µm, between an edge connector's courtyard and the nearest
 /// board edge. The placer keeps a 600 µm routing margin around every
 /// courtyard, so a connector it pushes flush sits ~600 µm in.
-pub const EDGE_CONNECTOR_MAX_GAP_UM: i64 = 1500;
+pub const EDGE_CONNECTOR_MAX_GAP_NM: i64 = 1500;
 /// Board-use limits: the union of all courtyards must be centred to
 /// within this fraction of the board dimension (|left − right| ≤ f·W) …
 pub const BOARD_USE_MAX_IMBALANCE: f64 = 0.15;
@@ -55,14 +55,14 @@ pub const BOARD_USE_MIN_SPAN: f64 = 0.5;
 /// fit. A board whose outline is fixed by an enclosure sets
 /// `fit_board_utilization: 0` and is exempt.
 pub const BOARD_USE_MIN_DENSITY_FRACTION: f64 = 0.5;
-/// See [`eda_model::DECOUPLING_MAX_GAP_UM`].
-pub const DECOUPLING_MAX_GAP_UM: i64 = eda_model::DECOUPLING_MAX_GAP_UM;
+/// See [`eda_model::DECOUPLING_MAX_GAP_NM`].
+pub const DECOUPLING_MAX_GAP_NM: i64 = eda_model::DECOUPLING_MAX_GAP_NM;
 /// A net's pad bounding-box half-perimeter may not exceed this multiple of
 /// its lower bound, `2·sqrt(Σ member courtyard areas)` — roughly the HPWL
 /// the net would have with its members packed touching.
 pub const NET_COMPACTNESS_MAX_RATIO: f64 = 1.6;
 /// Nets whose HPWL is below this, µm, are never called spread out.
-pub const NET_COMPACTNESS_FLOOR_UM: i64 = 6000;
+pub const NET_COMPACTNESS_FLOOR_NM: i64 = 6000;
 /// Nets with more members than this (GND, rails) are plane/fill nets that
 /// legitimately span the board; compactness is not judged on them. Nor is
 /// it judged on nets touching an edge connector: where those run is set
@@ -135,7 +135,7 @@ fn proximity(model: &ConstraintModel, courtyards: &BTreeMap<String, (Rect, eda_m
             };
             let reason_suffix = reason.as_deref().map(|r| format!("; {r}")).unwrap_or_default();
             let v = Finding::new(Check::PlacementProximity, format!("{d:.2} mm apart, rule allows {max_mm} mm{reason_suffix}"), vec![item(a, center(ra), a.clone()), item(b, center(rb), b.clone())]);
-            out.push(v.with_fix(FixHint { mover: b.clone(), toward: a.clone(), distance_to_close_um: (over * 1000.0).round() as Um, suggested_command: suggest.into() }));
+            out.push(v.with_fix(FixHint { mover: b.clone(), toward: a.clone(), distance_to_close_nm: (over * 1000.0).round() as Nm, suggested_command: suggest.into() }));
         }
     }
 }
@@ -161,30 +161,30 @@ fn refdes_clear(model: &ConstraintModel, pl: &eda_model::ir::PlacementSection, c
     }
 }
 
-fn edge_connector(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), out: &mut Vec<Finding>) {
+fn edge_connector(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, bb: (Nm, Nm, Nm, Nm), out: &mut Vec<Finding>) {
     for part in &model.parts {
         if !is_edge_connector(part) {
             continue;
         }
         let Some(r) = courtyards.get(&part.reference) else { continue };
         let gap = edge_connector_gap((r.0, r.1, r.2, r.3), bb);
-        if gap > EDGE_CONNECTOR_MAX_GAP_UM {
+        if gap > EDGE_CONNECTOR_MAX_GAP_NM {
             let v = Finding::new(
                 Check::PlacementEdgeConnector,
-                format!("connector courtyard is {gap} \u{b5}m from the nearest board edge (max {EDGE_CONNECTOR_MAX_GAP_UM} \u{b5}m)"),
+                format!("connector courtyard is {gap} \u{b5}m from the nearest board edge (max {EDGE_CONNECTOR_MAX_GAP_NM} \u{b5}m)"),
                 vec![item(&part.reference, center(r), part.reference.clone())],
             );
             out.push(v.with_fix(FixHint {
                 mover: part.reference.clone(),
                 toward: "nearest board edge".into(),
-                distance_to_close_um: gap - EDGE_CONNECTOR_MAX_GAP_UM,
+                distance_to_close_nm: gap - EDGE_CONNECTOR_MAX_GAP_NM,
                 suggested_command: "move the connector to the board edge it faces".into(),
             }));
         }
     }
 }
 
-fn board_use(courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), fit_target: f64, out: &mut Vec<Finding>) {
+fn board_use(courtyards: &BTreeMap<String, Rect>, bb: (Nm, Nm, Nm, Nm), fit_target: f64, out: &mut Vec<Finding>) {
     if courtyards.len() < 2 {
         return;
     }
@@ -245,14 +245,14 @@ fn decoupling(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, out:
             }
         }
         if let Some((d, u)) = best {
-            if d > DECOUPLING_MAX_GAP_UM as f64 {
+            if d > DECOUPLING_MAX_GAP_NM as f64 {
                 let ru = courtyards[u];
                 let v = Finding::new(
                     Check::PlacementDecoupling,
-                    format!("decoupling capacitor is {d:.0} \u{b5}m from the IC it decouples (max {DECOUPLING_MAX_GAP_UM} \u{b5}m)"),
+                    format!("decoupling capacitor is {d:.0} \u{b5}m from the IC it decouples (max {DECOUPLING_MAX_GAP_NM} \u{b5}m)"),
                     vec![item(c, center(rc), c.to_string()), item(u, center(&ru), u.to_string())],
                 );
-                out.push(v.with_fix(FixHint { mover: c.to_string(), toward: u.to_string(), distance_to_close_um: (d - DECOUPLING_MAX_GAP_UM as f64).round() as Um, suggested_command: format!("move {c} next to {u}") }));
+                out.push(v.with_fix(FixHint { mover: c.to_string(), toward: u.to_string(), distance_to_close_nm: (d - DECOUPLING_MAX_GAP_NM as f64).round() as Nm, suggested_command: format!("move {c} next to {u}") }));
             }
         }
     }
@@ -295,7 +295,7 @@ fn net_compactness(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel
         let area: f64 = members.iter().filter_map(|m| courtyards.get(*m)).map(|r| ((r.2 - r.0) as f64) * ((r.3 - r.1) as f64)).sum();
         let bound = 2.0 * area.sqrt();
         let ratio = hpwl as f64 / bound.max(1.0);
-        if hpwl > NET_COMPACTNESS_FLOOR_UM && ratio > NET_COMPACTNESS_MAX_RATIO {
+        if hpwl > NET_COMPACTNESS_FLOOR_NM && ratio > NET_COMPACTNESS_MAX_RATIO {
             let anchor = pts[0];
             out.push(Finding::new(
                 Check::PlacementNetCompactness,
@@ -361,17 +361,17 @@ mod tests {
     use eda_model::{Part, Pin, PinKind};
 
     fn part(r: &str) -> Part {
-        Part { reference: r.into(), mpn: None, lcsc: None, datasheet: None, symbol: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, edge: None }
+        Part { reference: r.into(), mpn: None, lcsc: None, datasheet: None, symbol: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, edge: None }
     }
 
-    fn fp(id: &str, x: Um, y: Um) -> FootprintInstance {
+    fn fp(id: &str, x: Nm, y: Nm) -> FootprintInstance {
         FootprintInstance { id: id.into(), at: Point { x, y }, rot: 0, side: Side::Top, label: Default::default() }
     }
 
     fn design(footprints: Vec<FootprintInstance>) -> Design {
         Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 50_000, y: 0 }, Point { x: 50_000, y: 50_000 }, Point { x: 0, y: 50_000 }], footprints, modules: vec![] }),
@@ -393,7 +393,7 @@ mod tests {
         let fix = hit.fix.as_ref().expect("fix hint");
         assert_eq!(fix.mover, "C1");
         assert_eq!(fix.toward, "U1");
-        assert!(fix.distance_to_close_um > 0);
+        assert!(fix.distance_to_close_nm > 0);
     }
 
     #[test]

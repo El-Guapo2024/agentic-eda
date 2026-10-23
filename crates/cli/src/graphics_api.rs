@@ -5,8 +5,8 @@
 //! shows after the import), how big the picture is, and whether it fits (`GRAPHICS_IMPORTER_BUFFER::ImportTo`'s size check). Nothing on the
 //! board changes; the import itself is `Cmd::ImportGraphics`.
 //!
-//! Request: the command's own fields (`format`, `text`, and optionally `dxf_units`, `scale`, `line_width_um`, ...). Reply:
-//! `{ "ok": true, "items": n, "counts": { "line": n, ... }, "messages": [{ "text", "count" }], "bbox_um": [x0, y0, x1, y1] | null,
+//! Request: the command's own fields (`format`, `text`, and optionally `dxf_units`, `scale`, `line_width_nm`, ...). Reply:
+//! `{ "ok": true, "items": n, "counts": { "line": n, ... }, "messages": [{ "text", "count" }], "bbox_nm": [x0, y0, x1, y1] | null,
 //! "width_mm", "height_mm", "unit": "mm" }` or `{ "ok": false, "message": "..." }`.
 
 use eda_kicad::graphics_import::ImportedShape;
@@ -81,7 +81,7 @@ pub fn read(body: &[u8]) -> Value {
         "items": count,
         "counts": counts,
         "messages": messages.iter().map(|(t, n)| json!({ "text": t, "count": n })).collect::<Vec<_>>(),
-        "bbox_um": bbox,
+        "bbox_nm": bbox,
         "width_mm": imported.width_mm(),
         "height_mm": imported.height_mm(),
         "fits": !items.messages.iter().any(|m| m.starts_with("Imported graphic is too large")),
@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(r["counts"]["circle"], 1);
         assert_eq!(r["messages"][0]["text"], "DXF hatches not currently supported.");
         // Scaled by 2, the circle at (5, -5) with radius 2 reaches x 6..14 mm and y -14..-6 mm; the line is x 0..20.
-        assert_eq!(r["bbox_um"], json!([0, -14_000, 20_000, 0]));
+        assert_eq!(r["bbox_nm"], json!([0, -14_000, 20_000, 0]));
         assert_eq!(r["fits"], true);
     }
 

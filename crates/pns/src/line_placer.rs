@@ -73,21 +73,21 @@ use crate::shove::{DisplacedLine, DisplacedVia};
 use crate::springback::{HeadSet, Springback, World};
 use crate::{optimizer, walkaround};
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
-/// `ANCHOR_SNAP_UM`-equivalent: how close the cursor must be to a same-net
+/// `ANCHOR_SNAP_NM`-equivalent: how close the cursor must be to a same-net
 /// pad/via/track-end to snap onto it and offer to finish the route there.
 /// Matches the existing single-segment router's own snap radius
 /// (`web/studio/src/components/canvas/routing.ts`'s `findRouteAnchor`
 /// caller), so the two tools feel consistent.
-pub const SNAP_UM: Um = 500;
+pub const SNAP_NM: Nm = 500;
 
 /// How far off a point may be and still be the point: the studio's own snapping (`PcbSnap.routePoint`) has put the cursor exactly on a
 /// pad, a via, a track end or a track's centre line, and the rounding to whole micrometres moves it at most this much.
-pub const EXACT_UM: Um = 2;
+pub const EXACT_NM: Nm = 2;
 
 #[derive(Debug, Clone)]
 pub struct Preview {
@@ -102,7 +102,7 @@ pub struct Preview {
     /// collisions are reported rather than resolved.
     pub colliding: bool,
     /// A via pending at the head's end, if `placing_via` is set.
-    pub via: Option<(Point, Um, Um)>,
+    pub via: Option<(Point, Nm, Nm)>,
     /// A same-net anchor near the cursor the route would snap onto and
     /// finish at, if committed now (`Move()`'s end-item snapping).
     pub snapped_end: Option<Point>,
@@ -160,7 +160,7 @@ pub enum FixOutcome {
 
 pub struct LinePlacer {
     pub net: Net,
-    pub width: Um,
+    pub width: Nm,
     pub origin: Point,
     pub direction: Direction45,
     /// The posture the session started with (`m_initial_direction`): what
@@ -175,8 +175,8 @@ pub struct LinePlacer {
     /// The direction of the first segment of the head last shown (`m_currentTrace.CSegment( 0 )`), which `/` flips from.
     last_head_dir: Cell<Direction45>,
     pub placing_via: bool,
-    pub via_diameter: Um,
-    pub via_drill: Um,
+    pub via_diameter: Nm,
+    pub via_drill: Nm,
     /// The layer the route goes on to after the pending via (`m_sizes.GetLayerBottom()`, what `makeVia` spans to): the via collides on
     /// every layer between the current one and this. `None`: the via is taken as being on the current layer alone.
     pub via_to_layer: Option<i32>,
@@ -214,7 +214,7 @@ impl LinePlacer {
     /// (`DIRECTION_45(that segment, oriented away from aP)`); anything
     /// else (a pad, free space) leaves the generic default `N` KiCad's own
     /// `InitialDirection()` falls back to when "start diagonal" is off.
-    pub fn start(node: &Node, p: Point, start_item: Option<ItemId>, net: Net, layer: i32, width: Um) -> Self {
+    pub fn start(node: &Node, p: Point, start_item: Option<ItemId>, net: Net, layer: i32, width: Nm) -> Self {
         let direction = match start_item.and_then(|id| node.get(id)) {
             Some(Item::Segment(s)) if s.a == p => Direction45::from_seg(s.b, s.a),
             Some(Item::Segment(s)) if s.b == p => Direction45::from_seg(s.a, s.b),
@@ -402,7 +402,7 @@ impl LinePlacer {
         let start = self.fixed_start();
         let lead = (at.x - start.x, at.y - start.y);
         match crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
-            Some(force) => Point { x: at.x + force.0 as Um, y: at.y + force.1 as Um },
+            Some(force) => Point { x: at.x + force.0 as Nm, y: at.y + force.1 as Nm },
             None => at,
         }
     }
@@ -468,11 +468,11 @@ impl LinePlacer {
     /// track the route started in the middle of is not an end. `(the point, the track when it is in the middle of one)`.
     fn snap_end(&self, node: &Node, settings: &RoutingSettings, p: Point) -> (Option<Point>, Option<ItemId>) {
         let layers = LayerRange::single(self.current_layer);
-        if let Some((_, a)) = node.nearest_anchor(p, layers, EXACT_UM, Some(&self.net)) {
+        if let Some((_, a)) = node.nearest_anchor(p, layers, EXACT_NM, Some(&self.net)) {
             return (Some(a), None);
         }
         if settings.snap_to_tracks {
-            if let Some(id) = node.segment_at(p, self.current_layer, Some(&self.net), Some(EXACT_UM), &self.exclude_end) {
+            if let Some(id) = node.segment_at(p, self.current_layer, Some(&self.net), Some(EXACT_NM), &self.exclude_end) {
                 match node.get(id) {
                     Some(Item::Segment(s)) => {
                         let seg = eda_drc::kimath::Seg::new(s.a, s.b);
@@ -488,7 +488,7 @@ impl LinePlacer {
                 }
             }
         }
-        match node.nearest_anchor(p, layers, SNAP_UM, Some(&self.net)) {
+        match node.nearest_anchor(p, layers, SNAP_NM, Some(&self.net)) {
             Some((_, a)) => (Some(a), None),
             None => (None, None),
         }
@@ -580,7 +580,7 @@ impl LinePlacer {
     /// current head ending in a via, then continue routing from the via's
     /// position on `new_layer`.
     #[allow(clippy::too_many_arguments)] // the query context (node/rules/settings/p) plus the via's own (layer, diameter, drill) -- splitting either group into its own type would just move the count, not reduce it.
-    pub fn switch_layer(&mut self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point, new_layer: i32, diameter: Um, drill: Um) {
+    pub fn switch_layer(&mut self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point, new_layer: i32, diameter: Nm, drill: Nm) {
         self.via_to_layer = Some(new_layer);
         self.begin_move(p);
         let head_result = self.build_head(node, rules, settings, p);
@@ -668,7 +668,7 @@ impl LinePlacer {
         *self.last_move.borrow_mut() = None;
     }
 
-    pub fn toggle_via(&mut self, enabled: bool, diameter: Um, drill: Um) {
+    pub fn toggle_via(&mut self, enabled: bool, diameter: Nm, drill: Nm) {
         self.placing_via = enabled;
         self.via_diameter = diameter;
         self.via_drill = drill;

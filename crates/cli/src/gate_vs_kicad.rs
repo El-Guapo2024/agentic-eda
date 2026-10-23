@@ -110,7 +110,7 @@ mod tests {
             .filter(|c| c.check == "routing_clearance" && c.status == CheckStatus::Fail)
             .map(|c| {
                 let d = c.detail.expect("a routing_clearance failure names its items");
-                (d["items"][0].as_str().unwrap().to_string(), d["items"][1].as_str().unwrap().to_string(), d["gap_um"].as_f64().unwrap())
+                (d["items"][0].as_str().unwrap().to_string(), d["items"][1].as_str().unwrap().to_string(), d["gap_nm"].as_f64().unwrap())
             })
             .collect();
         let violations = kicad_violations(design, model, work);
@@ -841,7 +841,7 @@ mod tests {
             sheet_contents: None,
             bus_aliases: vec![],
             symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -850,7 +850,7 @@ mod tests {
             drawings: None,
         };
         board::save(&dir, &design).unwrap();
-        let meta = board::Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
         let body = |v: serde_json::Value| v.to_string().into_bytes();
         // (from, layer, the via's type, its span, the layer the route goes on on, its size, the far stub)

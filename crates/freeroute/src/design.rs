@@ -48,10 +48,10 @@ const OUTLINE_HALF_WIDTH: i64 = 100;
 /// Added to every clearance, µm: routes go back to the design rounded to
 /// the µm, which moves a corner up to half a µm each way, and the routing
 /// gates allow nothing under their rule.
-const ROUNDING_MARGIN_UM: i64 = 2;
+const ROUNDING_MARGIN_NM: i64 = 2;
 
 /// The copper-to-edge clearance the routing gate holds a board to, µm.
-const EDGE_CLEARANCE_UM: i64 = 500;
+const EDGE_CLEARANCE_NM: i64 = 500;
 
 /// Passes of rescue for what FreeRouting's own passes leave, each search
 /// keeping [`RESCUE_MARGIN`] more room round the trace than it needs.
@@ -76,7 +76,7 @@ const POUR_NET_OFF_LAYER_FACTOR: f64 = 4.0;
 /// degenerate, and the pad's own net cannot get out; a foreign trace fits
 /// no better through the sliver left, which lies within the pad's
 /// clearance.
-const STRIP_INSET_UM: i64 = 5;
+const STRIP_INSET_NM: i64 = 5;
 
 /// A pad's copper about its centre, in board units, as a DSN padstack
 /// writes it and FreeRouting keeps it.
@@ -209,7 +209,7 @@ struct PlanKeepout {
 /// footprint, µm: under the part's body, a
 /// track threading between its pads is what the gates send back. Pairs
 /// with a third pad between them, or further apart than `max_gap`, have
-/// none; through-hole rows are left open. Each stops [`STRIP_INSET_UM`]
+/// none; through-hole rows are left open. Each stops [`STRIP_INSET_NM`]
 /// short of the pads.
 fn pad_gap_strips(pads: &[PlacedPad], max_gap: i64) -> Vec<(i64, i64, i64, i64)> {
     let rects: Vec<(i64, i64, i64, i64)> =
@@ -221,7 +221,7 @@ fn pad_gap_strips(pads: &[PlacedPad], max_gap: i64) -> Vec<(i64, i64, i64, i64)>
             let (ox0, ox1) = (ra.0.max(rb.0), ra.2.min(rb.2));
             let (oy0, oy1) = (ra.1.max(rb.1), ra.3.min(rb.3));
             // Between the facing edges, as wide as the pads share.
-            let d = STRIP_INSET_UM;
+            let d = STRIP_INSET_NM;
             let (strip, inset) = if oy1 > oy0 && (ra.2 <= rb.0 || rb.2 <= ra.0) {
                 let (gx0, gx1) = if ra.2 <= rb.0 { (ra.2, rb.0) } else { (rb.2, ra.0) };
                 if gx1 - gx0 > max_gap {
@@ -325,7 +325,7 @@ impl Plan {
             let part = model.part(&fp.id).ok_or_else(|| format!("placed footprint {} has no part in the model", fp.id))?;
             let pads = placed_pads(model, part, fp).ok_or_else(|| format!("no footprint geometry for {}", fp.id))?;
             let side_layer = if fp.side == Side::Top { 0 } else { layer_count - 1 };
-            for strip in pad_gap_strips(&pads, rules.tuning.between_pads_max_gap_um) {
+            for strip in pad_gap_strips(&pads, rules.tuning.between_pads_max_gap_nm) {
                 keep_out(side_layer, strip);
             }
             if let Some(label) = placed_refdes_box(model, &placement.outline, part, fp) {
@@ -386,7 +386,7 @@ impl Plan {
                 continue;
             }
             class_no[c] = classes.len();
-            let (name, width, clearance_um) = match c {
+            let (name, width, clearance_nm) = match c {
                 0 => ("kicad_default".to_string(), rules.track_width, rules.clearance),
                 _ => {
                     let nc = &rules.net_classes[c - 1];
@@ -396,10 +396,10 @@ impl Plan {
             if width <= 0 {
                 return Err(format!("net class {name} has track width {width} um"));
             }
-            if clearance_um < 0 {
-                return Err(format!("net class {name} has clearance {clearance_um} um"));
+            if clearance_nm < 0 {
+                return Err(format!("net class {name} has clearance {clearance_nm} um"));
             }
-            classes.push(PlanClass { name, half_width: width * UNITS_PER_UM / 2, clearance: clearance_um * UNITS_PER_UM + ROUNDING_MARGIN_UM * UNITS_PER_UM });
+            classes.push(PlanClass { name, half_width: width * UNITS_PER_UM / 2, clearance: clearance_nm * UNITS_PER_UM + ROUNDING_MARGIN_NM * UNITS_PER_UM });
         }
         // Nets by number: FreeRouting makes a plane's net as it reads the
         // plane, before the netlist, so poured nets come first.
@@ -438,7 +438,7 @@ impl Plan {
                 pins: pins.into_iter().map(|(pin, key)| PlanPin { padstack: stack_no[key.as_str()], net: pin.net.map(|n| net_no[n]), ..pin }).collect(),
             })
             .collect();
-        let margin = ROUNDING_MARGIN_UM * UNITS_PER_UM;
+        let margin = ROUNDING_MARGIN_NM * UNITS_PER_UM;
         Ok(Plan {
             layers: rules.layers.clone(),
             outline,
@@ -452,7 +452,7 @@ impl Plan {
             clearance: rules.clearance * UNITS_PER_UM + margin,
             // The outline is copper `OUTLINE_HALF_WIDTH` wide either side
             // of the edge.
-            edge_clearance: rules.tuning.edge_clearance_um.max(EDGE_CLEARANCE_UM) * UNITS_PER_UM - OUTLINE_HALF_WIDTH + margin,
+            edge_clearance: rules.tuning.edge_clearance_nm.max(EDGE_CLEARANCE_NM) * UNITS_PER_UM - OUTLINE_HALF_WIDTH + margin,
             keepout_clearance: margin,
         })
     }
@@ -1464,7 +1464,7 @@ mod tests {
             symbol: None,
             datasheet: None,
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Signal }],
-            body_um: None,
+            body_nm: None,
             edge: None,
         };
         let model = ConstraintModel {
@@ -1493,7 +1493,7 @@ mod tests {
         };
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(placement),
@@ -1518,10 +1518,10 @@ mod tests {
 
         let layer = 0;
         // Both raw values carry `Plan`'s own rounding margin (see
-        // `ROUNDING_MARGIN_UM`), the same way `plan.clearance` itself does.
-        let escape_um = |raw: i64| raw / UNITS_PER_UM - ROUNDING_MARGIN_UM;
-        assert_eq!(escape_um(board.rules.clearance.get(escape_trace_class, escape_trace_class, layer)), 150, "the escape class's clearance to its own copper");
-        assert_eq!(escape_um(board.rules.clearance.get(escape_trace_class, default_trace_class, layer)), 150, "and to the default class's copper -- this is what lets it actually escape past a neighbour on the default class");
-        assert_eq!(escape_um(board.rules.clearance.get(default_trace_class, default_trace_class, layer)), 200, "the default class keeps the board's own clearance, untouched by the escape class existing");
+        // `ROUNDING_MARGIN_NM`), the same way `plan.clearance` itself does.
+        let escape_nm = |raw: i64| raw / UNITS_PER_UM - ROUNDING_MARGIN_NM;
+        assert_eq!(escape_nm(board.rules.clearance.get(escape_trace_class, escape_trace_class, layer)), 150, "the escape class's clearance to its own copper");
+        assert_eq!(escape_nm(board.rules.clearance.get(escape_trace_class, default_trace_class, layer)), 150, "and to the default class's copper -- this is what lets it actually escape past a neighbour on the default class");
+        assert_eq!(escape_nm(board.rules.clearance.get(default_trace_class, default_trace_class, layer)), 200, "the default class keeps the board's own clearance, untouched by the escape class existing");
     }
 }

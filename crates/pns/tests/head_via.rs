@@ -2,7 +2,7 @@
 //! then `m_shove->AddHeads( newHead )`; `SHOVE::Run` adds the head's via to the node with the head's rank): what the via sits on -- on every layer it spans --
 //! is pushed aside, as what the track meets is, and the committed route is clean. A pair's heads were shoved with their vias already (`Shove::run_heads`).
 
-use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Um};
+use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Nm};
 use eda_model::{ConstraintModel, Net as IrNet, Part, Pin, PinKind};
 use eda_pns::from_ir::build_node;
 use eda_pns::item::ItemId;
@@ -10,12 +10,12 @@ use eda_pns::router::{RouteCommit, Router};
 use eda_pns::settings::Mode;
 use std::collections::HashSet;
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
 fn part(r: &str) -> Part {
-    Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None }
+    Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None }
 }
 
 fn track(id: &str, net: &str, layer: &str, pts: &[Point]) -> Track {
@@ -32,7 +32,7 @@ fn board(tracks: Vec<Track>) -> (Design, ConstraintModel) {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,

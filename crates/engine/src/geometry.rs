@@ -274,10 +274,10 @@ fn side_from_pin_angle(angle_deg: f64) -> Side {
 pub fn node_size(part: &Part, resolved: Option<&eda_model::symbol::LibSymbol>, unit: u32) -> (i64, i64) {
     if let Some(sym) = resolved {
         let (x0, y0, x1, y1) = real_symbol_bbox(sym, unit);
-        let width_um = ((x1 - x0).max(0.0) * 1000.0).round() as i64;
-        let height_um = ((y1 - y0).max(0.0) * 1000.0).round() as i64;
-        let width = ((width_um.max(1) + GRID - 1) / GRID) * GRID;
-        let height = ((height_um.max(1) + GRID - 1) / GRID) * GRID;
+        let width_nm = ((x1 - x0).max(0.0) * 1000.0).round() as i64;
+        let height_nm = ((y1 - y0).max(0.0) * 1000.0).round() as i64;
+        let width = ((width_nm.max(1) + GRID - 1) / GRID) * GRID;
+        let height = ((height_nm.max(1) + GRID - 1) / GRID) * GRID;
         // NOT floored to the old synthetic minimum, deliberately: a real
         // symbol's box edges on a side with a real pin are load-bearing
         // for `Node::stub_tip` (its Bottom/Right ports measure from
@@ -343,8 +343,8 @@ pub fn node_size(part: &Part, resolved: Option<&eda_model::symbol::LibSymbol>, u
     let width_from_reach = if west_names.is_empty() || east_names.is_empty() { 0.0 } else { west_reach + east_reach + PIN_FONT_MM };
 
     let width_mm = (BASE_WIDTH as f64 / 1000.0).max(width_from_rows).max(width_from_reach);
-    let width_um = (width_mm * 1000.0).ceil() as i64;
-    let width = ((width_um + GRID - 1) / GRID) * GRID;
+    let width_nm = (width_mm * 1000.0).ceil() as i64;
+    let width = ((width_nm + GRID - 1) / GRID) * GRID;
 
     (width, height)
 }
@@ -597,8 +597,8 @@ fn is_vertical_two_pin(resolved: Option<&eda_model::symbol::LibSymbol>) -> bool 
 /// for this case clears both -- confirmed against `Device:C`'s own 5.08mm
 /// box, whose Top-pin text starts 0.92mm down, well clear of a `-0.3`-baseline
 /// ref label's own bottom edge at 0.02mm.
-pub fn ref_slot_local(part: &Part, height_um: i64, resolved: Option<&eda_model::symbol::LibSymbol>) -> (f64, f64) {
-    let h = height_um as f64 / 1000.0;
+pub fn ref_slot_local(part: &Part, height_nm: i64, resolved: Option<&eda_model::symbol::LibSymbol>) -> (f64, f64) {
+    let h = height_nm as f64 / 1000.0;
     let h_for_text = h.max(BASE_HEIGHT as f64 / 1000.0);
     let y = if is_two_pin_passive(part) && !is_vertical_two_pin(resolved) { h_for_text / 2.0 - 1.0 } else { -0.3 };
     (0.0, y)
@@ -613,8 +613,8 @@ pub fn ref_slot_local(part: &Part, height_um: i64, resolved: Option<&eda_model::
 /// which put the text squarely in the inter-layer routing channel; that
 /// single offset accounted for 14/14 of l3's and 29/30 of l4's
 /// `schematic_label_over_wire` failures.
-pub fn value_slot_local(_part: &Part, height_um: i64) -> (f64, f64) {
-    let h = height_um as f64 / 1000.0;
+pub fn value_slot_local(_part: &Part, height_nm: i64) -> (f64, f64) {
+    let h = height_nm as f64 / 1000.0;
     // Clear of, in order: the box, the south pin-stub band (`STUB`), and a
     // south net-label glyph's text (a GND flag's baseline sits 1.8mm below
     // the pin, so its box bottom is 2.08mm below it) — otherwise the value
@@ -631,17 +631,17 @@ pub fn value_slot_local(_part: &Part, height_um: i64) -> (f64, f64) {
 /// at the nominal size would poke sideways out of the slot and straight
 /// into the inter-layer routing channel. Shrinking rather than truncating
 /// keeps the value readable and loses no information.
-pub fn value_font_mm(text: &str, width_um: i64) -> f64 {
+pub fn value_font_mm(text: &str, width_nm: i64) -> f64 {
     let n = text.chars().count().max(1) as f64;
-    let avail = width_um as f64 / 1000.0;
+    let avail = width_nm as f64 / 1000.0;
     (avail / (CHAR_WIDTH_FACTOR * n)).min(VALUE_FONT_MM).max(0.7)
 }
 
 /// Height (um) reserved above the box for the refdes slot.
-pub const SLOT_ABOVE_UM: i64 = 2 * GRID; // 2.54mm
+pub const SLOT_ABOVE_NM: i64 = 2 * GRID; // 2.54mm
 /// Height (um) reserved below the box for the value slot: enough to cover
 /// the value baseline (`h + STUB + 1.6`) plus its descender (0.2 * font).
-pub const SLOT_BELOW_UM: i64 = 3 * GRID; // 3.81mm
+pub const SLOT_BELOW_NM: i64 = 3 * GRID; // 3.81mm
 
 /// Horizontal-anchor convention, matching SVG `text-anchor`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -864,8 +864,8 @@ pub fn resolve_text_y_obs(
 /// permanent warning. Returns `(jog_x, bend_y, baseline_y)`, all absolute mm;
 /// the leader line runs pin -> (pin_x, bend_y) -> (jog_x, bend_y) when
 /// `jog_x != pin_x`, and the glyph/text are drawn at `jog_x`.
-pub fn resolve_label_pos(pin_x_um: i64, pin_y_um: i64, bend_dy: f64, ty_dy: f64, text: &str, font_mm: f64, obstacles: &[TextBox]) -> (f64, f64, f64) {
-    resolve_label_pos_obs(pin_x_um, pin_y_um, bend_dy, ty_dy, text, font_mm, obstacles, &[], &[])
+pub fn resolve_label_pos(pin_x_nm: i64, pin_y_nm: i64, bend_dy: f64, ty_dy: f64, text: &str, font_mm: f64, obstacles: &[TextBox]) -> (f64, f64, f64) {
+    resolve_label_pos_obs(pin_x_nm, pin_y_nm, bend_dy, ty_dy, text, font_mm, obstacles, &[], &[])
 }
 
 /// Like [`resolve_label_pos`] but also steers clear of `wires` — a label
@@ -916,8 +916,8 @@ pub fn label_obstacle(b: TextBox) -> TextBox {
 }
 
 pub fn resolve_label_pos_obs(
-    pin_x_um: i64,
-    pin_y_um: i64,
+    pin_x_nm: i64,
+    pin_y_nm: i64,
     bend_dy: f64,
     ty_dy: f64,
     text: &str,
@@ -926,7 +926,7 @@ pub fn resolve_label_pos_obs(
     boxes: &[TextBox],
     wires: &[Wire],
 ) -> (f64, f64, f64) {
-    resolve_label_pos_obs_padded(pin_x_um, pin_y_um, bend_dy, ty_dy, text, font_mm, 0.0, 0.0, obstacles, boxes, wires)
+    resolve_label_pos_obs_padded(pin_x_nm, pin_y_nm, bend_dy, ty_dy, text, font_mm, 0.0, 0.0, obstacles, boxes, wires)
 }
 
 /// Like [`resolve_label_pos_obs`], but every clearance test inflates the
@@ -937,8 +937,8 @@ pub fn resolve_label_pos_obs(
 /// `pad_x`/`pad_y` of 0.0 recovers exactly [`resolve_label_pos_obs`]'s
 /// behavior (used by Ground/Power, which draw a plain symbol with no nose).
 pub fn resolve_label_pos_obs_padded(
-    pin_x_um: i64,
-    pin_y_um: i64,
+    pin_x_nm: i64,
+    pin_y_nm: i64,
     bend_dy: f64,
     ty_dy: f64,
     text: &str,
@@ -949,8 +949,8 @@ pub fn resolve_label_pos_obs_padded(
     boxes: &[TextBox],
     wires: &[Wire],
 ) -> (f64, f64, f64) {
-    let x = pin_x_um as f64 / 1000.0;
-    let y = pin_y_um as f64 / 1000.0;
+    let x = pin_x_nm as f64 / 1000.0;
+    let y = pin_y_nm as f64 / 1000.0;
     let bend_y = y + bend_dy;
     let base_ty = y + ty_dy;
     let step = 1.8;
@@ -1045,12 +1045,12 @@ pub fn resolve_label_pos_obs_padded(
 }
 
 /// Axis-aligned box rectangle (mm) for a symbol whose top-left sits at
-/// `(sym_x_mm, sym_y_mm)` and whose size (um) is `(width_um, height_um)` —
+/// `(sym_x_mm, sym_y_mm)` and whose size (um) is `(width_nm, height_nm)` —
 /// the same box `eda-render` draws and `eda-gates`' `schematic_symbol_overlap`
 /// already checks, reused here as a hard placement obstacle so a net-label
 /// tag can never land on top of *any* symbol's body, not just its own.
-pub fn symbol_box_mm(sym_x_mm: f64, sym_y_mm: f64, width_um: i64, height_um: i64) -> TextBox {
-    TextBox { x0: sym_x_mm, y0: sym_y_mm, x1: sym_x_mm + width_um as f64 / 1000.0, y1: sym_y_mm + height_um as f64 / 1000.0 }
+pub fn symbol_box_mm(sym_x_mm: f64, sym_y_mm: f64, width_nm: i64, height_nm: i64) -> TextBox {
+    TextBox { x0: sym_x_mm, y0: sym_y_mm, x1: sym_x_mm + width_nm as f64 / 1000.0, y1: sym_y_mm + height_nm as f64 / 1000.0 }
 }
 
 /// Recovers which side of one of `boxes` a net-label's pin-anchor point
@@ -1108,8 +1108,8 @@ pub fn side_of_boundary_point(boxes: &[TextBox], x: f64, y: f64, eps: f64) -> Op
 /// Returns `(bend_x, bend_y, text_x, text_y)`, all absolute mm.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_label_pos_side(
-    pin_x_um: i64,
-    pin_y_um: i64,
+    pin_x_nm: i64,
+    pin_y_nm: i64,
     side: Side,
     bend_dist: f64,
     text_dist: f64,
@@ -1121,8 +1121,8 @@ pub fn resolve_label_pos_side(
     boxes: &[TextBox],
     wires: &[Wire],
 ) -> (f64, f64, f64, f64) {
-    let x = pin_x_um as f64 / 1000.0;
-    let y = pin_y_um as f64 / 1000.0;
+    let x = pin_x_nm as f64 / 1000.0;
+    let y = pin_y_nm as f64 / 1000.0;
     let (out_ax, out_ay) = match side {
         Side::Top => (0.0, -1.0),
         Side::Bottom => (0.0, 1.0),
@@ -1254,25 +1254,25 @@ pub enum ResolvedNetLabel {
 /// this logic always have, so a later label in the same sheet still repels
 /// this one by the same margin.
 pub fn resolve_net_label(
-    pin_x_um: i64,
-    pin_y_um: i64,
+    pin_x_nm: i64,
+    pin_y_nm: i64,
     net: &str,
     font_mm: f64,
     obstacles: &mut Vec<TextBox>,
     boxes: &[TextBox],
     wires: &[Wire],
 ) -> (ResolvedNetLabel, TextBox) {
-    let x = pin_x_um as f64 / 1000.0;
-    let y = pin_y_um as f64 / 1000.0;
+    let x = pin_x_nm as f64 / 1000.0;
+    let y = pin_y_nm as f64 / 1000.0;
     match net_label_kind(net) {
         NetLabelKind::Ground => {
-            let (jog_x, drop, ty) = resolve_label_pos_obs(pin_x_um, pin_y_um, 0.5, 0.5 + 0.5 + 0.8, net, font_mm, obstacles, boxes, wires);
+            let (jog_x, drop, ty) = resolve_label_pos_obs(pin_x_nm, pin_y_nm, 0.5, 0.5 + 0.5 + 0.8, net, font_mm, obstacles, boxes, wires);
             let ink = text_bbox(jog_x, ty, net, font_mm, HAnchor::Middle);
             obstacles.push(label_obstacle(ink));
             (ResolvedNetLabel::Ground { x, y, drop, jog_x, ty }, ink)
         }
         NetLabelKind::Power => {
-            let (jog_x, stem_top, ty) = resolve_label_pos_obs(pin_x_um, pin_y_um, -1.6, -1.6 - 0.4, net, font_mm, obstacles, boxes, wires);
+            let (jog_x, stem_top, ty) = resolve_label_pos_obs(pin_x_nm, pin_y_nm, -1.6, -1.6 - 0.4, net, font_mm, obstacles, boxes, wires);
             let ink = text_bbox(jog_x, ty, net, font_mm, HAnchor::Middle);
             obstacles.push(label_obstacle(ink));
             (ResolvedNetLabel::Power { x, y, stem_top, jog_x, ty }, ink)
@@ -1280,7 +1280,7 @@ pub fn resolve_net_label(
         NetLabelKind::Flag => {
             let side = side_of_boundary_point(boxes, x, y, 1e-3).unwrap_or(Side::Bottom);
             let (bend_x, bend_y, jog_x, ty) =
-                resolve_label_pos_side(pin_x_um, pin_y_um, side, 1.5, 1.8, net, font_mm, TAG_PAD_MM + TAG_NOSE_MM, TAG_PAD_MM, obstacles, boxes, wires);
+                resolve_label_pos_side(pin_x_nm, pin_y_nm, side, 1.5, 1.8, net, font_mm, TAG_PAD_MM + TAG_NOSE_MM, TAG_PAD_MM, obstacles, boxes, wires);
             let anchor = match side {
                 Side::Top | Side::Bottom => HAnchor::Middle,
                 Side::Left => HAnchor::End,

@@ -13,7 +13,7 @@
 use crate::board;
 use eda_model::ir::{Design, Point, SchematicSection, SchematicText};
 use std::collections::BTreeMap;
-use eda_model::sch_clipboard::{closest_anchor, place_offset_um, top_left_anchor, PasteMode, SchFragment};
+use eda_model::sch_clipboard::{closest_anchor, place_offset_nm, top_left_anchor, PasteMode, SchFragment};
 use eda_model::ConstraintModel;
 use eda_ops::{Board, Cmd};
 use serde_json::{json, Value};
@@ -103,7 +103,7 @@ pub fn copy(dir: &Path, body: &[u8]) -> Value {
 fn text_fragment(text: &str) -> SchFragment {
     let content = text.lines().map(str::trim_end).collect::<Vec<_>>().join(" ");
     let mut f = SchFragment::default();
-    f.section.texts.push(SchematicText { id: String::new(), content, at: Point { x: 0, y: 0 }, angle: 0, size_um: 1_270 });
+    f.section.texts.push(SchematicText { id: String::new(), content, at: Point { x: 0, y: 0 }, angle: 0, size_nm: 1_270 });
     f
 }
 
@@ -119,7 +119,7 @@ fn pin_points(f: &SchFragment) -> Vec<Point> {
     for s in &f.section.symbols {
         let Some(lib) = f.lib_symbol(&s.lib_id) else { continue };
         for pin in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == s.unit) {
-            let (dx, dy) = place_offset_um(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (pin.at.x, pin.at.y));
+            let (dx, dy) = place_offset_nm(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (pin.at.x, pin.at.y));
             out.push(Point { x: s.at.x + dx, y: s.at.y + dy });
         }
     }
@@ -156,7 +156,7 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
     let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: 0, dy: 0, mode };
     let cmd = if sheet.is_empty() { paste } else { Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(paste) } };
     let drawn_before = design.clone();
-    let mut tried = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+    let mut tried = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
     if let Err(e) = tried.apply(&cmd) {
         return err(board::reasons(&e));
     }
@@ -229,7 +229,7 @@ mod tests {
             package: None,
             footprint: Some("Foo:Bar".into()),
             pins,
-            body_um: None,
+            body_nm: None,
             symbol: symbol.map(String::from),
             datasheet: None,
             edge: None,
@@ -249,7 +249,7 @@ mod tests {
         // A board always has a placement section; this one has no part on the PCB yet.
         design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }], footprints: vec![], modules: vec![] });
         board::save(dir, &design).unwrap();
-        let meta = board::Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+        let meta = board::Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 

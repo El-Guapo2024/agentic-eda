@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use eda_model::ir::{ArrowDirection, Design, Dimension, DimensionKind, DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Group, Point, Um};
+use eda_model::ir::{ArrowDirection, Design, Dimension, DimensionKind, DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Group, Point, Nm};
 
 use crate::sexpr::{self, Sexpr};
 
@@ -243,7 +243,7 @@ fn xy(list: &[Sexpr]) -> Option<Point> {
     Some(Point { x: crate::mm_to_um(x), y: crate::mm_to_um(y) })
 }
 
-fn um_of(item: &[Sexpr], key: &str) -> Option<Um> {
+fn um_of(item: &[Sexpr], key: &str) -> Option<Nm> {
     sexpr::find(item, key).and_then(|v| sexpr::num(v, 1)).map(crate::mm_to_um)
 }
 
@@ -321,8 +321,8 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
         // The text: its size and pen, and (when the label is not kept aligned) its angle.
         let text = sexpr::find(d, "gr_text");
         let font = text.and_then(|t| sexpr::find(t, "effects")).and_then(|e| sexpr::find(e, "font"));
-        let text_size_um = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::mm_to_um).unwrap_or(defaults.text_size_um);
-        let text_thickness_um = font.and_then(|f| um_of(f, "thickness"));
+        let text_size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::mm_to_um).unwrap_or(defaults.text_size_nm);
+        let text_thickness_nm = font.and_then(|f| um_of(f, "thickness"));
         let text_angle = text
             .and_then(|t| sexpr::find(t, "at"))
             .and_then(|a| sexpr::num(a, 3))
@@ -346,13 +346,13 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
             text_position,
             keep_text_aligned,
             text_angle,
-            text_size_um,
+            text_size_nm,
             stroke_width: st("thickness").unwrap_or(defaults.stroke_width),
             arrow_length: st("arrow_length").unwrap_or(defaults.arrow_length),
             extension_offset: st("extension_offset").unwrap_or(defaults.extension_offset),
             extension_height: st("extension_height").unwrap_or(defaults.extension_height),
             arrow_direction,
-            text_thickness_um,
+            text_thickness_nm,
         });
     }
     out

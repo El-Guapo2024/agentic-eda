@@ -22,10 +22,10 @@ fn board_with_library(name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// `Alt:WIDE` on disk with pads of `size_um` square, at +-2 mm.
-fn write_wide(dir: &Path, size_um: i64) {
+/// `Alt:WIDE` on disk with pads of `size_nm` square, at +-2 mm.
+fn write_wide(dir: &Path, size_nm: i64) {
     std::fs::create_dir_all(dir.join("libs").join("Alt.pretty")).unwrap();
-    let size = size_um as f64 / 1000.0;
+    let size = size_nm as f64 / 1000.0;
     std::fs::write(
         dir.join("libs").join("Alt.pretty").join("WIDE.kicad_mod"),
         format!(

@@ -108,18 +108,18 @@ pub fn installed_footprint(id: &str) -> Option<Arc<InstalledFootprint>> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fit {
     pub rot_deg: f64,
-    pub dx_um: f64,
-    pub dy_um: f64,
+    pub dx_nm: f64,
+    pub dy_nm: f64,
 }
 
 /// The largest root-mean-square distance (µm) between the library's pad centres and the part's, after the fit, for the fit to count. A built-in 0603 and
 /// KiCad's `R_0603_1608Metric` differ by tenths of a millimetre; a different package that happens to share pad numbers differs by millimetres.
-const FIT_TOLERANCE_UM: f64 = 600.0;
+const FIT_TOLERANCE_NM: f64 = 600.0;
 
 /// Where the library footprint's pads would have to move, by a turn and a shift, to sit on the part's: pads are matched by number (the mean centre when
 /// several pads share one), the turn is the least-squares one (snapped to a quarter turn when it is within 5 degrees of one) and the shift puts the centroids
 /// together. `None` when no pad number is common to both, when the fit is the identity already, or when it leaves the pads further apart than
-/// [`FIT_TOLERANCE_UM`] -- then the two are not the same footprint and the model keeps its own placement.
+/// [`FIT_TOLERANCE_NM`] -- then the two are not the same footprint and the model keeps its own placement.
 pub fn fit_pads(lib: &[(String, (f64, f64))], part: &[(String, (f64, f64))]) -> Option<Fit> {
     fn centres(pads: &[(String, (f64, f64))]) -> std::collections::BTreeMap<&str, (f64, f64)> {
         let mut sums: std::collections::BTreeMap<&str, (f64, f64, f64)> = Default::default();
@@ -163,12 +163,12 @@ pub fn fit_pads(lib: &[(String, (f64, f64))], part: &[(String, (f64, f64))]) -> 
             (x - p.0).powi(2) + (y - p.1).powi(2)
         })
         .sum();
-    if (squares / count).sqrt() > FIT_TOLERANCE_UM {
+    if (squares / count).sqrt() > FIT_TOLERANCE_NM {
         return None;
     }
-    let fit = Fit { rot_deg: rot, dx_um: dx, dy_um: dy };
+    let fit = Fit { rot_deg: rot, dx_nm: dx, dy_nm: dy };
     // Less than a hundredth of a degree and of a millimetre is the identity.
-    (fit.rot_deg.abs() > 0.01 || fit.dx_um.abs() > 10.0 || fit.dy_um.abs() > 10.0).then_some(fit)
+    (fit.rot_deg.abs() > 0.01 || fit.dx_nm.abs() > 10.0 || fit.dy_nm.abs() > 10.0).then_some(fit)
 }
 
 fn round6(v: f64) -> f64 {
@@ -187,7 +187,7 @@ impl Fit {
     pub fn apply(&self, m: &Model3d) -> Model3d {
         let (sin, cos) = self.rot_deg.to_radians().sin_cos();
         let [ox, oy, oz] = m.offset;
-        let offset = [round6(self.dx_um / 1000.0 + ox * cos + oy * sin), round6(-self.dy_um / 1000.0 - ox * sin + oy * cos), oz];
+        let offset = [round6(self.dx_nm / 1000.0 + ox * cos + oy * sin), round6(-self.dy_nm / 1000.0 - ox * sin + oy * cos), oz];
         let mut z = (m.rotate[2] + self.rot_deg).rem_euclid(360.0);
         if z > 180.0 {
             z -= 360.0;
@@ -284,7 +284,7 @@ mod tests {
         let part = pads(&[("1", -3810.0, 0.0), ("2", -1270.0, 0.0), ("3", 1270.0, 0.0), ("4", 3810.0, 0.0)]);
         let fit = fit_pads(&lib, &part).expect("the same footprint, turned");
         assert_eq!(fit.rot_deg, -90.0);
-        assert!((fit.dx_um + 3810.0).abs() < 1e-6 && fit.dy_um.abs() < 1e-6, "{fit:?}");
+        assert!((fit.dx_nm + 3810.0).abs() < 1e-6 && fit.dy_nm.abs() < 1e-6, "{fit:?}");
         // The model's pin k, 2.54 k below pin 1 on the footprint (y up in the model: -2.54 k), lands on the part's pad x = -3.81 + 2.54 k.
         let m = fit.apply(&Model3d { offset: [0.0, -5.08, 0.0], ..Model3d::identity("x.step") });
         assert!((m.offset[0] - 1.27).abs() < 1e-9 && m.offset[1].abs() < 1e-9, "pin 3 of the model sits on pad 3: {:?}", m.offset);
@@ -299,7 +299,7 @@ mod tests {
         let moved = pads(&[("1", -250.0, 0.0), ("2", 1250.0, 0.0)]);
         let fit = fit_pads(&lib, &moved).expect("the same pair, shifted half a millimetre");
         assert_eq!(fit.rot_deg, 0.0);
-        assert!((fit.dx_um - 500.0).abs() < 1e-6 && fit.dy_um.abs() < 1e-6, "{fit:?}");
+        assert!((fit.dx_nm - 500.0).abs() < 1e-6 && fit.dy_nm.abs() < 1e-6, "{fit:?}");
         let far = pads(&[("1", -9000.0, 0.0), ("2", 9000.0, 0.0)]);
         assert_eq!(fit_pads(&lib, &far), None, "pads 16 mm further apart are not the same footprint");
         assert_eq!(fit_pads(&lib, &pads(&[("A", 0.0, 0.0)])), None, "no pad number in common");
@@ -311,7 +311,7 @@ mod tests {
         let part = pads(&[("1", 100.0, 0.0), ("2", 1100.0, 1000.0)]);
         let fit = fit_pads(&lib, &part).expect("mean of the two pads numbered 2 is (1000, 1000)");
         assert_eq!(fit.rot_deg, 0.0);
-        assert!((fit.dx_um - 100.0).abs() < 1e-6 && (fit.dy_um - 0.0).abs() < 1e-6, "{fit:?}");
+        assert!((fit.dx_nm - 100.0).abs() < 1e-6 && (fit.dy_nm - 0.0).abs() < 1e-6, "{fit:?}");
     }
 
     #[test]
@@ -332,7 +332,7 @@ mod tests {
         if !root.is_dir() {
             return;
         }
-        let part = |r: &str, pkg: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some(pkg.into()), footprint: Some(pkg.into()), pins: vec![], body_um: None, symbol: None, datasheet: None, edge: None };
+        let part = |r: &str, pkg: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some(pkg.into()), footprint: Some(pkg.into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
         let model = ConstraintModel::default();
         let resolve = |p: &Part| {
             let fp = ConstraintModel { parts: vec![p.clone()], ..Default::default() }.footprint_of(p).expect("a built-in footprint");
@@ -356,7 +356,7 @@ mod tests {
             footprints: vec![Footprint { name: "stones:C_1206_Flat".into(), pads: vec![], courtyard: None, model: Some("${KICAD9_3DMODEL_DIR}/C.step".into()), courtyard_outlines: vec![], models3d: vec![Model3d { rotate: [90.0, 0.0, 0.0], ..Model3d::identity("${KICAD9_3DMODEL_DIR}/C.step") }], art: Default::default() }],
             ..Default::default()
         };
-        let part = Part { reference: "C1".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some("stones:C_1206_Flat".into()), pins: vec![], body_um: None, symbol: None, datasheet: None, edge: None };
+        let part = Part { reference: "C1".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some("stones:C_1206_Flat".into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
         let fp = model.footprint_of(&part).unwrap();
         let got = part_models_in(std::path::Path::new("/nonexistent"), &model, &part, &fp).unwrap();
         assert_eq!(got.models.len(), 1);
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn a_list_the_board_set_is_the_footprints_whole_list_even_when_it_is_empty() {
         let nowhere = std::path::Path::new("/nonexistent");
-        let part = Part { reference: "R1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![], body_um: None, symbol: None, datasheet: None, edge: None };
+        let part = Part { reference: "R1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
         let mut model = ConstraintModel { parts: vec![part.clone()], ..Default::default() };
         let plain = model.footprint_of(&part).expect("a built-in footprint");
         // nothing set: the package's generic model, as the table names it

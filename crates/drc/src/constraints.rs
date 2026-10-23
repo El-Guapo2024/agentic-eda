@@ -19,7 +19,7 @@
 //!   KiCad's report text (what the Clearance and Constraints Resolution reports
 //!   show). It inspects the rules; DRC stays kicad-cli's.
 
-use eda_model::ir::Um;
+use eda_model::ir::Nm;
 use eda_model::BoardRules;
 
 /// Clearance required between two items on nets `a`/`b` (`None` = no net --
@@ -29,7 +29,7 @@ use eda_model::BoardRules;
 /// net. Same-net items are never clearance-checked at all (skipped by every
 /// provider before calling this, exactly as `testSingleLayerItemAgainstItem`
 /// zeroes `testClearance` when `itemNet == otherNet`).
-pub fn clearance(rules: &BoardRules, a: Option<&str>, b: Option<&str>) -> Um {
+pub fn clearance(rules: &BoardRules, a: Option<&str>, b: Option<&str>) -> Nm {
     // A netless item (net 0, or a non-connected copper graphic) is still
     // in the Default netclass: its implicit clearance rule applies.
     let ca = a.map(|n| rules.clearance_of(n)).unwrap_or(rules.clearance);
@@ -39,7 +39,7 @@ pub fn clearance(rules: &BoardRules, a: Option<&str>, b: Option<&str>) -> Um {
     // special case ("Board minimum clearance"), applied whenever the
     // winning rule (if any) was implicit. A board with the factory-default
     // `min_clearance` of 0 sees no change here.
-    ca.max(cb).max(rules.min_clearance_um)
+    ca.max(cb).max(rules.min_clearance_nm)
 }
 
 /// The largest clearance value *any* pair on this board could possibly
@@ -50,9 +50,9 @@ pub fn clearance(rules: &BoardRules, a: Option<&str>, b: Option<&str>) -> Um {
 /// Board default and hole clearance are always candidates; so is every
 /// netclass's own clearance override (the only per-net source this port
 /// resolves -- see [`clearance`]'s own doc comment on what's out of scope).
-pub fn worst_case_clearance(rules: &BoardRules) -> Um {
-    let base = rules.clearance.max(rules.hole_clearance_um).max(rules.min_clearance_um);
-    rules.net_classes.iter().filter_map(|c| c.clearance).fold(base, Um::max)
+pub fn worst_case_clearance(rules: &BoardRules) -> Nm {
+    let base = rules.clearance.max(rules.hole_clearance_nm).max(rules.min_clearance_nm);
+    rules.net_classes.iter().filter_map(|c| c.clearance).fold(base, Nm::max)
 }
 
 /// `bds.m_TrackMinWidth`: the absolute track-width floor, independent of
@@ -60,18 +60,18 @@ pub fn worst_case_clearance(rules: &BoardRules) -> Um {
 /// value KiCad's router aims for -- see `loadImplicitRules`'s
 /// `constraint.Value().SetMin(bds.m_TrackMinWidth); constraint.Value().
 /// SetOpt(nc->GetTrackWidth())`, min always the global setting). See
-/// [`BoardRules::track_width_min_um`]'s own doc comment for the GAPS.md
+/// [`BoardRules::track_width_min_nm`]'s own doc comment for the GAPS.md
 /// #10 bug this used to have (reading the net-class nominal width here
 /// instead of the real board floor).
-pub fn track_width_min(rules: &BoardRules) -> Um {
-    rules.track_width_min_um
+pub fn track_width_min(rules: &BoardRules) -> Nm {
+    rules.track_width_min_nm
 }
 
 /// `bds.m_ViasMinSize` -- see [`track_width_min`]'s doc comment for why
 /// this is a dedicated field now rather than the net class's own nominal
 /// [`BoardRules::via_diameter`].
-pub fn via_diameter_min(rules: &BoardRules) -> Um {
-    rules.via_diameter_min_um
+pub fn via_diameter_min(rules: &BoardRules) -> Nm {
+    rules.via_diameter_min_nm
 }
 
 /// `bds.m_MinThroughDrill` (round-hole pads and standard vias; this port
@@ -79,50 +79,50 @@ pub fn via_diameter_min(rules: &BoardRules) -> Um {
 /// applies) -- see [`track_width_min`]'s doc comment for why this reads a
 /// dedicated field rather than the net class's own nominal
 /// [`BoardRules::via_drill`].
-pub fn hole_size_min(rules: &BoardRules) -> Um {
-    rules.via_drill_min_um
+pub fn hole_size_min(rules: &BoardRules) -> Nm {
+    rules.via_drill_min_nm
 }
 
 /// `bds.m_ViasMinAnnularWidth`.
-pub fn annular_width_min(rules: &BoardRules) -> Um {
-    rules.annular_width_min_um
+pub fn annular_width_min(rules: &BoardRules) -> Nm {
+    rules.annular_width_min_nm
 }
 
 /// `bds.m_HoleToHoleMin` -- mechanical, applies between any two round
 /// drilled holes regardless of net (see `drc_test_provider_hole_to_hole.cpp`:
 /// no net check anywhere in it).
-pub fn hole_to_hole_min(rules: &BoardRules) -> Um {
-    rules.hole_to_hole_min_um
+pub fn hole_to_hole_min(rules: &BoardRules) -> Nm {
+    rules.hole_to_hole_min_nm
 }
 
 /// `bds.m_HoleClearance` -- copper-to-(another item's)-hole, regardless of
 /// net (a hole has to clear foreign copper even where nets would otherwise
 /// allow touching, since something physically has to be drilled there).
-pub fn hole_clearance_min(rules: &BoardRules) -> Um {
-    rules.hole_clearance_um
+pub fn hole_clearance_min(rules: &BoardRules) -> Nm {
+    rules.hole_clearance_nm
 }
 
 /// `bds.m_CopperEdgeClearance`; already resolved by the existing
 /// `RoutingTuning::copper_edge_clearance` (this board's tuning, floored at
 /// KiCad's own 0.5 mm default).
-pub fn edge_clearance_min(rules: &BoardRules) -> Um {
-    rules.copper_edge_clearance_um.unwrap_or(eda_model::KICAD_EDGE_CLEARANCE_UM)
+pub fn edge_clearance_min(rules: &BoardRules) -> Nm {
+    rules.copper_edge_clearance_nm.unwrap_or(eda_model::KICAD_EDGE_CLEARANCE_NM)
 }
 
 /// `bds.m_SilkClearance` -- silk-to-silk, and (via the `silk_clearance.rs`
 /// provider) silk-to-exposed-copper and silk-to-edge.
-pub fn silk_clearance_min(rules: &BoardRules) -> Um {
-    rules.silk_clearance_um
+pub fn silk_clearance_min(rules: &BoardRules) -> Nm {
+    rules.silk_clearance_nm
 }
 
 /// `bds.m_MinSilkTextHeight` (implicit rule scoped to `F.SilkS`/`B.SilkS`).
-pub fn min_silk_text_height(rules: &BoardRules) -> Um {
-    rules.min_silk_text_height_um
+pub fn min_silk_text_height(rules: &BoardRules) -> Nm {
+    rules.min_silk_text_height_nm
 }
 
 /// `bds.m_MinSilkTextThickness` (implicit rule scoped to `F.SilkS`/`B.SilkS`).
-pub fn min_silk_text_thickness(rules: &BoardRules) -> Um {
-    rules.min_silk_text_thickness_um
+pub fn min_silk_text_thickness(rules: &BoardRules) -> Nm {
+    rules.min_silk_text_thickness_nm
 }
 
 
@@ -146,7 +146,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
 /// The studio's micrometres as KiCad's nanometres.
-pub fn nm(um: Um) -> i64 {
+pub fn nm(um: Nm) -> i64 {
     um * 1000
 }
 
@@ -598,23 +598,23 @@ impl Settings {
         let mut enabled: BTreeSet<String> = r.layers.iter().cloned().collect();
         enabled.extend(r.layer_setup.enabled.iter().cloned());
         Settings {
-            track_min_width: nm(r.track_width_min_um),
-            min_conn: nm(r.min_connection_um),
-            min_through_drill: nm(r.via_drill_min_um),
-            via_min_annular_width: nm(r.annular_width_min_um),
-            via_min_size: nm(r.via_diameter_min_um),
-            hole_to_hole_min: nm(r.hole_to_hole_min_um),
+            track_min_width: nm(r.track_width_min_nm),
+            min_conn: nm(r.min_connection_nm),
+            min_through_drill: nm(r.via_drill_min_nm),
+            via_min_annular_width: nm(r.annular_width_min_nm),
+            via_min_size: nm(r.via_diameter_min_nm),
+            hole_to_hole_min: nm(r.hole_to_hole_min_nm),
             min_resolved_spokes: r.min_resolved_spokes as i64,
-            silk_clearance: nm(r.silk_clearance_um),
-            min_silk_text_height: nm(r.min_silk_text_height_um),
-            min_silk_text_thickness: nm(r.min_silk_text_thickness_um),
-            hole_clearance: nm(r.hole_clearance_um),
+            silk_clearance: nm(r.silk_clearance_nm),
+            min_silk_text_height: nm(r.min_silk_text_height_nm),
+            min_silk_text_thickness: nm(r.min_silk_text_thickness_nm),
+            hole_clearance: nm(r.hole_clearance_nm),
             copper_edge_clearance: nm(edge_clearance_min(r)),
-            micro_vias_min_drill: nm(r.microvia_drill_min_um),
-            micro_vias_min_size: nm(r.microvia_diameter_min_um),
-            min_clearance: nm(r.min_clearance_um),
-            solder_mask_expansion: nm(r.solder_mask.expansion_um),
-            solder_paste_margin: nm(r.solder_mask.paste_margin_um),
+            micro_vias_min_drill: nm(r.microvia_drill_min_nm),
+            micro_vias_min_size: nm(r.microvia_diameter_min_nm),
+            min_clearance: nm(r.min_clearance_nm),
+            solder_mask_expansion: nm(r.solder_mask.expansion_nm),
+            solder_paste_margin: nm(r.solder_mask.paste_margin_nm),
             solder_paste_margin_ratio: r.solder_mask.paste_margin_ratio,
             enabled_layers: enabled,
         }
@@ -1781,22 +1781,22 @@ mod tests {
     /// minimum against a `0.1524mm` "Default" net class nominal width.
     #[test]
     fn track_width_min_ignores_the_netclass_nominal_width() {
-        let r = BoardRules { track_width: 1524, track_width_min_um: 1016, ..BoardRules::default() };
+        let r = BoardRules { track_width: 1524, track_width_min_nm: 1016, ..BoardRules::default() };
         assert_eq!(track_width_min(&r), 1016, "the board's real floor, not the net class's much larger nominal width");
     }
 
     #[test]
     fn via_and_hole_minimums_ignore_the_netclass_nominal_values() {
-        let r = BoardRules { via_diameter: 9999, via_diameter_min_um: 450, via_drill: 9999, via_drill_min_um: 200, ..BoardRules::default() };
+        let r = BoardRules { via_diameter: 9999, via_diameter_min_nm: 450, via_drill: 9999, via_drill_min_nm: 200, ..BoardRules::default() };
         assert_eq!(via_diameter_min(&r), 450);
         assert_eq!(hole_size_min(&r), 200);
     }
 
     #[test]
     fn board_minimum_clearance_floors_the_netclass_value() {
-        let r = BoardRules { clearance: 100, min_clearance_um: 150, ..BoardRules::default() };
+        let r = BoardRules { clearance: 100, min_clearance_nm: 150, ..BoardRules::default() };
         assert_eq!(clearance(&r, Some("A"), Some("B")), 150, "board floor beats a smaller netclass/default value");
-        let r2 = BoardRules { clearance: 300, min_clearance_um: 150, ..BoardRules::default() };
+        let r2 = BoardRules { clearance: 300, min_clearance_nm: 150, ..BoardRules::default() };
         assert_eq!(clearance(&r2, Some("A"), Some("B")), 300, "netclass value already clears the floor");
     }
 
@@ -1940,7 +1940,7 @@ mod tests {
         assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(150_000), "pad".to_string()));
         assert!(report.lines.join("\n").contains("Local override on Pad 1 [GND] of J1 on F.Cu; clearance: 0.1500 mm."));
         // the board's minimum clearance still has the last word
-        rules.min_clearance_um = 300;
+        rules.min_clearance_nm = 300;
         let (eng, _) = engine(&rules, &["VBUS", "GND"], None, &[]);
         let c = eng.eval_rules(CType::Clearance, Some(&p), Some(&other), Some("F.Cu"), None);
         assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(300_000), "board minimum".to_string()));
@@ -1994,7 +1994,7 @@ mod tests {
     #[test]
     fn track_width_has_the_board_floor_and_the_class_optimum() {
         let mut rules = rules_hv();
-        rules.track_width_min_um = 150;
+        rules.track_width_min_nm = 150;
         rules.net_classes[0].track_width = Some(400);
         let (eng, _) = engine(&rules, &["VBUS", "GND"], None, &[]);
         let t = track("VBUS", "F.Cu", 400_000);

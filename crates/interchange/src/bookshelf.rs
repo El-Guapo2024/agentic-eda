@@ -8,7 +8,7 @@
 //! own gates and HPWL — exactly like `eda-place`.
 //!
 //! Conventions (matching NVlabs' own `pcb-util/bookshelf_converter.py`):
-//! * integer units; we use `unit_um` micrometres per unit (default 100),
+//! * integer units; we use `unit_nm` micrometres per unit (default 100),
 //! * node size = courtyard, pin offsets relative to the node centre,
 //! * every node movable (NumTerminals 0), orientation `N`,
 //! * `.scl` rows of height 1 tiling the outline bounding box, so any
@@ -75,26 +75,26 @@ pub const DEFAULT_PROXIMITY_WEIGHT: f64 = 50.0;
 /// Same as [`to_bookshelf_weighted`] with [`DEFAULT_PROXIMITY_WEIGHT`].
 /// Kept so existing callers (e.g. `eda export`, which has no proximity
 /// tuning knob) don't need to change.
-pub fn to_bookshelf(design: &Design, model: &ConstraintModel, name: &str, unit_um: i64) -> Result<Bookshelf, Vec<CheckResult>> {
-    to_bookshelf_weighted(design, model, name, unit_um, DEFAULT_PROXIMITY_WEIGHT)
+pub fn to_bookshelf(design: &Design, model: &ConstraintModel, name: &str, unit_nm: i64) -> Result<Bookshelf, Vec<CheckResult>> {
+    to_bookshelf_weighted(design, model, name, unit_nm, DEFAULT_PROXIMITY_WEIGHT)
 }
 
 /// Export the design's parts as a Bookshelf problem. Uses the existing
 /// placement (or the model's outline / an auto square) for the board
 /// extent and initial positions; parts without a placement start at the
 /// board centre.
-pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &str, unit_um: i64, proximity_weight: f64) -> Result<Bookshelf, Vec<CheckResult>> {
-    to_bookshelf_fixed(design, model, name, unit_um, proximity_weight, &BTreeSet::new())
+pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &str, unit_nm: i64, proximity_weight: f64) -> Result<Bookshelf, Vec<CheckResult>> {
+    to_bookshelf_fixed(design, model, name, unit_nm, proximity_weight, &BTreeSet::new())
 }
 
-pub use eda_model::board::EDGE_PIN_GAP_UM;
+pub use eda_model::board::EDGE_PIN_GAP_NM;
 
 /// [`to_bookshelf_weighted`] with a set of parts written as Bookshelf
 /// *terminals*: `fixed` parts keep their placed position, rotation and
 /// label side (`.nodes` ` terminal`, `.pl` `/FIXED`), and Cypress places
 /// everything else around them. A fixed part must already be placed.
-pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, unit_um: i64, proximity_weight: f64, fixed: &BTreeSet<String>) -> Result<Bookshelf, Vec<CheckResult>> {
-    let unit = unit_um.max(1);
+pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, unit_nm: i64, proximity_weight: f64, fixed: &BTreeSet<String>) -> Result<Bookshelf, Vec<CheckResult>> {
+    let unit = unit_nm.max(1);
     // Board extent.
     let outline: Vec<Point> = match design.placement.as_ref().map(|p| p.outline.clone()).or_else(|| model.board.outline.clone()) {
         Some(o) if o.len() >= 3 => o,
@@ -300,14 +300,14 @@ pub fn is_bookshelf_keyword(name: &str) -> bool {
     KW.contains(&l.as_str())
 }
 
-pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, unit_um: i64) -> Result<Design, Vec<CheckResult>> {
-    from_bookshelf_pl_fixed(pl, design, model, unit_um, &BTreeSet::new())
+pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, unit_nm: i64) -> Result<Design, Vec<CheckResult>> {
+    from_bookshelf_pl_fixed(pl, design, model, unit_nm, &BTreeSet::new())
 }
 
 /// [`from_bookshelf_pl`] for a problem written by [`to_bookshelf_fixed`]:
 /// `fixed` parts take their label side from `design`'s placement.
-pub fn from_bookshelf_pl_fixed(pl: &str, design: &Design, model: &ConstraintModel, unit_um: i64, fixed: &BTreeSet<String>) -> Result<Design, Vec<CheckResult>> {
-    let unit = unit_um.max(1);
+pub fn from_bookshelf_pl_fixed(pl: &str, design: &Design, model: &ConstraintModel, unit_nm: i64, fixed: &BTreeSet<String>) -> Result<Design, Vec<CheckResult>> {
+    let unit = unit_nm.max(1);
     let prior: BTreeMap<&str, &FootprintInstance> =
         design.placement.as_ref().map(|p| p.footprints.iter().map(|f| (f.id.as_str(), f)).collect()).unwrap_or_default();
     let outline: Vec<Point> = match design.placement.as_ref().map(|p| p.outline.clone()).or_else(|| model.board.outline.clone()) {
@@ -389,7 +389,7 @@ mod tests {
             package: Some(pkg.into()),
             footprint: None,
             pins: (1..=n).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal }).collect(),
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -406,7 +406,7 @@ mod tests {
         let outline = vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 15_000 }, Point { x: 0, y: 15_000 }];
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "h".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection {

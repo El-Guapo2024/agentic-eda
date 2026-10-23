@@ -11,7 +11,7 @@ fn fixture(name: &str) -> String {
 }
 
 fn req(text: String, layer: &str) -> ImportGraphics {
-    ImportGraphics { format: GraphicsFormat::Dxf, text, layer: layer.into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 200, group: false, fix_tolerance_um: None, replace_outline: false }
+    ImportGraphics { format: GraphicsFormat::Dxf, text, layer: layer.into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 200, group: false, fix_tolerance_nm: None, replace_outline: false }
 }
 
 /// The shapes an import added to the fixture board (it has three of its own).
@@ -37,8 +37,8 @@ fn a_dxf_outline_becomes_segments_and_arcs_on_the_layer_the_dialog_chose() {
     assert_eq!(new.iter().filter(|s| matches!(s, Shape::Segment { .. })).count(), 4);
     assert_eq!(new.iter().filter(|s| matches!(s, Shape::Arc { .. })).count(), 4);
     // The DXF has its Y axis up and the board's points down: the 40 x 30 board hangs above the origin, x 0 to 40 mm, y -30 to 0 mm.
-    let xs: Vec<Um> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
-    let ys: Vec<Um> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.y)).collect();
+    let xs: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
+    let ys: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.y)).collect();
     assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(0), Some(40_000)));
     assert_eq!((ys.iter().min().copied(), ys.iter().max().copied()), (Some(-30_000), Some(0)));
     // An arc's middle is on its circle: the corner at the origin side, radius 3 mm.
@@ -70,7 +70,7 @@ fn the_import_scale_multiplies_the_coordinates_and_the_default_line_width() {
     let new = added(&b);
     assert_eq!(new.len(), 4);
     // The 2 x 1 rectangle, doubled, with its lines doubled (0.2 mm default width -> 0.4 mm).
-    let xs: Vec<Um> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
+    let xs: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
     assert_eq!(xs.iter().max().copied(), Some(4_000));
     assert!(new.iter().all(|s| s.stroke_width() == 400 && s.layer() == "Dwgs.User"), "{new:?}");
 }
@@ -86,8 +86,8 @@ fn the_origin_moves_the_whole_picture_after_the_scale() {
     r.offset_y_nm = -5_000_000;
     b.apply(&Cmd::ImportGraphics(req_copy(&r))).unwrap();
     let new = added(&b);
-    let xs: Vec<Um> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
-    let ys: Vec<Um> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.y)).collect();
+    let xs: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
+    let ys: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.y)).collect();
     assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(10_000), Some(14_000)));
     // The picture's y runs 0 to -1 mm in the board's frame; scaled 0 to -2 mm, then 5 mm up.
     assert_eq!((ys.iter().min().copied(), ys.iter().max().copied()), (Some(-7_000), Some(-5_000)));
@@ -99,13 +99,13 @@ fn req_copy(r: &ImportGraphics) -> ImportGraphics {
 
 #[test]
 fn the_units_of_the_file_win_over_the_dialogs_and_a_file_with_none_takes_the_dialogs() {
-    let width = |name: &str, units: &str| -> Um {
+    let width = |name: &str, units: &str| -> Nm {
         let m = model(&["F.Cu", "B.Cu"]);
         let mut b = board(&m);
         let mut r = req(fixture(name), "Dwgs.User");
         r.dxf_units = units.into();
         b.apply(&Cmd::ImportGraphics(r)).unwrap();
-        let xs: Vec<Um> = added(&b).iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
+        let xs: Vec<Nm> = added(&b).iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
         xs.iter().max().unwrap() - xs.iter().min().unwrap()
     };
     assert_eq!(width("inches.dxf", "mm"), 50_800, "$INSUNITS 1");
@@ -174,7 +174,7 @@ fn a_gap_in_the_outline_is_closed_when_fix_discontinuities_has_the_tolerance() {
     // With it (the dialog's default tolerance is 1 mm) the four corners meet.
     let mut b = board(&m);
     let mut r = req(dxf, "Edge.Cuts");
-    r.fix_tolerance_um = Some(1_000);
+    r.fix_tolerance_nm = Some(1_000);
     b.apply(&Cmd::ImportGraphics(r)).unwrap();
     let new = added(&b);
     let outline = eda_drc::outline::board_outline_of(&new, false);
@@ -227,7 +227,7 @@ fn text_becomes_a_board_text_on_the_layer() {
     let dxf = "0\nSECTION\n2\nENTITIES\n0\nTEXT\n10\n5\n20\n5\n40\n2\n1\nREV A\n50\n90\n0\nENDSEC\n0\nEOF\n".to_string();
     b.apply(&Cmd::ImportGraphics(req(dxf, "F.SilkS"))).unwrap();
     let t = drawings(&b).texts.iter().find(|t| t.content == "REV A").unwrap();
-    assert_eq!((t.layer.as_str(), t.size_um, t.angle, t.justify), ("F.SilkS", 2_000, 90_000, TextJustify::Left));
+    assert_eq!((t.layer.as_str(), t.size_nm, t.angle, t.justify), ("F.SilkS", 2_000, 90_000, TextJustify::Left));
     // Baseline justified (bottom): the board's text is centred, so the anchor moved up half a height along the text's own up (here to the left).
     assert_eq!((t.at.x, t.at.y), (4_000, -5_000), "{t:?}");
 }
@@ -334,7 +334,7 @@ fn the_command_reads_from_and_writes_to_the_json_the_studio_sends() {
     // Everything but the format, the text and the layer defaults.
     let minimal = serde_json::json!({ "op": "import_graphics", "format": "svg", "text": "<svg/>", "layer": "F.SilkS" });
     let Cmd::ImportGraphics(r) = serde_json::from_value::<Cmd>(minimal).unwrap() else { panic!() };
-    assert_eq!((r.format, r.scale, r.offset_x_nm, r.line_width_um, r.group, r.fix_tolerance_um, r.replace_outline), (GraphicsFormat::Svg, 1.0, 0, 200, false, None, false));
+    assert_eq!((r.format, r.scale, r.offset_x_nm, r.line_width_nm, r.group, r.fix_tolerance_nm, r.replace_outline), (GraphicsFormat::Svg, 1.0, 0, 200, false, None, false));
     assert_eq!(GraphicsFormat::from_extension("a/b/Board.DXF"), Some(GraphicsFormat::Dxf));
     assert_eq!(GraphicsFormat::from_extension("logo.svg"), Some(GraphicsFormat::Svg));
     assert_eq!(GraphicsFormat::from_extension("board.kicad_pcb"), None);

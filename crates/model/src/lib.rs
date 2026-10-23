@@ -54,6 +54,7 @@ pub mod table_edit;
 pub mod table_text;
 pub mod text_vars;
 pub mod topo_match;
+pub mod units;
 pub mod via_extra;
 pub mod via_stitch;
 pub mod drill_chart;
@@ -65,9 +66,20 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+/// The version of the intent this code writes: 2, every length in nanometres, as the design file's ([`ir::SCHEMA_VERSION`]). An intent without `schema`
+/// -- every intent written by hand, `examples/*.yaml` -- is version 1, whose lengths (`board.grid: 254`, `track_width: 200`, an `outline`'s points) are
+/// micrometres, and is read with every length x1000, every time it is read: the intent is an input, never rewritten by the code that reads it.
+pub const INTENT_SCHEMA_VERSION: u32 = 2;
+
+// `remote = "Self"`: the derived reader and writer are inherent functions, wrapped by the trait impls below (the reader to read a version 1 intent's
+// micrometres).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 #[serde(deny_unknown_fields)]
 pub struct ConstraintModel {
+    /// The intent's version ([`INTENT_SCHEMA_VERSION`]), which says what unit its lengths are in. Always written as the current one; absent is 1.
+    #[serde(default, serialize_with = "write_intent_schema")]
+    pub schema: u32,
     #[serde(default)]
     pub parts: Vec<Part>,
     #[serde(default)]
@@ -128,6 +140,35 @@ pub struct ConstraintModel {
     pub solver: SolverSettings,
 }
 
+fn write_intent_schema<S: serde::Serializer>(_: &u32, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_u32(INTENT_SCHEMA_VERSION)
+}
+
+impl Serialize for ConstraintModel {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        ConstraintModel::serialize(self, s)
+    }
+}
+
+/// Reads an intent of either version: a version 1 one (no `schema`) has every length x1000 as it is read (`crate::units::read_versioned`), as
+/// `ir::Design`'s reader does for a design file.
+impl<'de> crate::units::Versioned<'de> for ConstraintModel {
+    fn derived<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        ConstraintModel::deserialize(d)
+    }
+}
+
+impl<'de> Deserialize<'de> for ConstraintModel {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let (mut model, stated): (ConstraintModel, _) = crate::units::read_versioned(d, INTENT_SCHEMA_VERSION, false)?;
+        if stated.is_none() && model.schema >= INTENT_SCHEMA_VERSION {
+            return Err(serde::de::Error::custom("`schema` has to be the first key of an intent: what came before it was read as micrometres"));
+        }
+        model.schema = INTENT_SCHEMA_VERSION;
+        Ok(model)
+    }
+}
+
 /// Design-rule latitude granted to the solver. Every field is an upper or
 /// lower bound the user is willing to accept; the solver walks the
 /// cheapest-first ladder of variants inside these bounds and takes the
@@ -138,33 +179,40 @@ pub struct Allowances {
     /// Most copper layers the solver may go to (2 or 4). None = as written.
     #[serde(default)]
     pub max_layers: Option<usize>,
-    /// Narrowest track the solver may fall back to, µm. None = as written.
+    /// Narrowest track the solver may fall back to, nm. None = as written.
     #[serde(default)]
-    pub min_track: Option<ir::Um>,
-    /// Smallest clearance the solver may fall back to, µm. None = as written.
+    #[serde(deserialize_with = "crate::units::de")]
+    pub min_track: Option<ir::Nm>,
+    /// Smallest clearance the solver may fall back to, nm. None = as written.
     #[serde(default)]
-    pub min_clearance: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub min_clearance: Option<ir::Nm>,
     /// Placers the solver may try, in preference order (`anneal`, `cypress`).
     /// Empty = only the one given on the command line.
     #[serde(default)]
     pub placers: Vec<String>,
 }
 
-/// Physical design rules. Integer µm throughout.
+/// Physical design rules. Integer nanometres throughout.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoardRules {
     /// Routing grid pitch.
     #[serde(default = "d_grid")]
-    pub grid: ir::Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub grid: ir::Nm,
     #[serde(default = "d_track")]
-    pub track_width: ir::Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub track_width: ir::Nm,
     #[serde(default = "d_clearance")]
-    pub clearance: ir::Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub clearance: ir::Nm,
     #[serde(default = "d_via_drill")]
-    pub via_drill: ir::Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub via_drill: ir::Nm,
     #[serde(default = "d_via_dia")]
-    pub via_diameter: ir::Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub via_diameter: ir::Nm,
     /// Copper layer names, outer first: `["F.Cu", "B.Cu"]`.
     #[serde(default = "d_layers")]
     pub layers: Vec<String>,
@@ -174,15 +222,16 @@ pub struct BoardRules {
     /// wants it before the signals have taken the channels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub net_classes: Vec<NetClass>,
-    /// Board outline override, µm. When absent the placer sizes a rectangle.
+    /// Board outline override, nm. When absent the placer sizes a rectangle.
     #[serde(default)]
     pub outline: Option<Vec<ir::Point>>,
-    /// Refdes silkscreen font size override, µm. None = 1/40 of the shorter
-    /// board side, clamped to 600..=1000 (KiCad's default text is 1 mm; on
+    /// Refdes silkscreen font size override, nm. None = 1/40 of the shorter
+    /// board side, clamped to 0.6..=1 mm (KiCad's default text is 1 mm; on
     /// a 100 mm board the unclamped rule gave 2.5 mm labels that dwarfed
     /// every passive and sealed their pads).
     #[serde(default)]
-    pub refdes_font_um: Option<ir::Um>,
+    #[serde(alias = "refdes_font_um", deserialize_with = "crate::units::de")]
+    pub refdes_font_nm: Option<ir::Nm>,
     /// Copper pours. A poured net is not track-routed at all: its pads
     /// reach each other through the plane, which is how every real board
     /// carries GND. Declaring one is a claim the gates then have to check
@@ -193,41 +242,48 @@ pub struct BoardRules {
     #[serde(default)]
     pub tuning: RoutingTuning,
     /// Minimum edge-to-edge gap between two drilled holes (KiCad's
-    /// `hole_to_hole_min`, default 250 µm) — mechanical, not electrical:
+    /// `hole_to_hole_min`, default 0.25 mm) — mechanical, not electrical:
     /// applies between any two round-drilled pads/vias regardless of net.
     #[serde(default = "d_hole_to_hole_min")]
-    pub hole_to_hole_min_um: ir::Um,
+    #[serde(alias = "hole_to_hole_min_um", deserialize_with = "crate::units::de")]
+    pub hole_to_hole_min_nm: ir::Nm,
     /// Minimum clearance from a drilled hole's edge to other copper (KiCad's
-    /// `hole_clearance`, default 250 µm).
+    /// `hole_clearance`, default 0.25 mm).
     #[serde(default = "d_hole_clearance")]
-    pub hole_clearance_um: ir::Um,
+    #[serde(alias = "hole_clearance_um", deserialize_with = "crate::units::de")]
+    pub hole_clearance_nm: ir::Nm,
     /// `BOARD_DESIGN_SETTINGS::m_CopperEdgeClearance` as DRC checks it
     /// (`rules.min_copper_edge_clearance` in the `.kicad_pro`, or a legacy
     /// board's `(setup (edge_clearance ..))`); `None` = KiCad's 0.5 mm
-    /// default. Separate from `tuning.edge_clearance_um`, which is the
+    /// default. Separate from `tuning.edge_clearance_nm`, which is the
     /// placer/router's own keep-back and stays floored at 0.5 mm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub copper_edge_clearance_um: Option<ir::Um>,
+    #[serde(alias = "copper_edge_clearance_um", deserialize_with = "crate::units::de")]
+    pub copper_edge_clearance_nm: Option<ir::Nm>,
     /// Minimum silkscreen-to-silkscreen (and silk-to-exposed-copper)
     /// clearance (KiCad's `silk_clearance`, default 0).
     #[serde(default = "d_silk_clearance")]
-    pub silk_clearance_um: ir::Um,
+    #[serde(alias = "silk_clearance_um", deserialize_with = "crate::units::de")]
+    pub silk_clearance_nm: ir::Nm,
     /// Minimum copper annular ring width on a via or plated through-hole pad
     /// (KiCad's `via_min_annular_width`; factory default derives from
     /// `(via_diameter - via_drill) / 2`, i.e. exactly the via's own nominal
     /// ring, so a via routed at the board's own default via size never
     /// trips it).
     #[serde(default = "d_annular_width_min")]
-    pub annular_width_min_um: ir::Um,
+    #[serde(alias = "annular_width_min_um", deserialize_with = "crate::units::de")]
+    pub annular_width_min_nm: ir::Nm,
     /// Minimum silkscreen text height (KiCad's `min_silk_text_height`,
     /// factory default 0.8 mm = 80% of the 1 mm default silk text size).
     #[serde(default = "d_min_silk_text_height")]
-    pub min_silk_text_height_um: ir::Um,
+    #[serde(alias = "min_silk_text_height_um", deserialize_with = "crate::units::de")]
+    pub min_silk_text_height_nm: ir::Nm,
     /// Minimum silkscreen text stroke thickness (KiCad's
     /// `min_silk_text_thickness`, factory default 0.08 mm = 80% of the
     /// 0.1 mm default silk text width).
     #[serde(default = "d_min_silk_text_thickness")]
-    pub min_silk_text_thickness_um: ir::Um,
+    #[serde(alias = "min_silk_text_thickness_um", deserialize_with = "crate::units::de")]
+    pub min_silk_text_thickness_nm: ir::Nm,
     /// `bds.m_TrackMinWidth`: the board-wide absolute track-width floor
     /// (KiCad's `rules.min_track_width` in a `.kicad_pro`, or the legacy
     /// `(setup (trace_min ...))` token in a bare `.kicad_pcb`), factory
@@ -244,7 +300,8 @@ pub struct BoardRules {
     /// #10, responsible for ~2900 false positives on a single QA board
     /// (`issue11814`) alone; see `eda_drc::constraints::track_width_min`.
     #[serde(default = "d_track_width_min")]
-    pub track_width_min_um: ir::Um,
+    #[serde(alias = "track_width_min_um", deserialize_with = "crate::units::de")]
+    pub track_width_min_nm: ir::Nm,
     /// `bds.m_MinClearance`: an absolute board-wide copper clearance floor
     /// that applies on top of every net-class clearance value (KiCad's
     /// `rules.min_clearance`; factory default 0, a no-op on most boards,
@@ -253,20 +310,23 @@ pub struct BoardRules {
     /// fallback value (itself a real `CLEARANCE_CONSTRAINT`, not merely
     /// advisory, unlike track width) -- see `eda_drc::constraints::clearance`.
     #[serde(default)]
-    pub min_clearance_um: ir::Um,
+    #[serde(alias = "min_clearance_um", deserialize_with = "crate::units::de")]
+    pub min_clearance_nm: ir::Nm,
     /// `bds.m_ViasMinSize`: the absolute via-diameter floor (KiCad's
     /// `rules.min_via_diameter`), independent of any net class's own
     /// nominal via size ([`via_diameter`](Self::via_diameter)/
     /// `NetClass::via_diameter`) -- same nominal-vs-minimum distinction as
-    /// [`track_width_min_um`](Self::track_width_min_um).
+    /// [`track_width_min_nm`](Self::track_width_min_nm).
     #[serde(default = "d_via_diameter_min")]
-    pub via_diameter_min_um: ir::Um,
+    #[serde(alias = "via_diameter_min_um", deserialize_with = "crate::units::de")]
+    pub via_diameter_min_nm: ir::Nm,
     /// `bds.m_MinThroughDrill`: the absolute through-hole/via-drill floor
     /// (KiCad's `rules.min_through_hole_diameter`), independent of any net
     /// class's own nominal drill ([`via_drill`](Self::via_drill)/
     /// `NetClass::via_drill`).
     #[serde(default = "d_via_drill_min")]
-    pub via_drill_min_um: ir::Um,
+    #[serde(alias = "via_drill_min_um", deserialize_with = "crate::units::de")]
+    pub via_drill_min_nm: ir::Nm,
     /// Per-DRC-type severity overrides, imported from a `.kicad_pro`'s
     /// `board.design_settings.rule_severities` (KiCad 7+ JSON project
     /// settings -- `BOARD_DESIGN_SETTINGS`'s `rule_severities` `PARAM_LAMBDA`,
@@ -331,39 +391,45 @@ pub struct BoardRules {
 
     // ---- the rest of Board Setup (`rules::RulesOverlay` edits these; the defaults are KiCad's own) ----
     /// `rules.min_connection`: the narrowest copper neck a connection may have. KiCad's default is 0.
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub min_connection_um: ir::Um,
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(alias = "min_connection_um", deserialize_with = "crate::units::de")]
+    pub min_connection_nm: ir::Nm,
     /// `rules.min_microvia_diameter`.
     #[serde(default = "d_microvia_diameter_min")]
-    pub microvia_diameter_min_um: ir::Um,
+    #[serde(alias = "microvia_diameter_min_um", deserialize_with = "crate::units::de")]
+    pub microvia_diameter_min_nm: ir::Nm,
     /// `rules.min_microvia_drill`.
     #[serde(default = "d_microvia_drill_min")]
-    pub microvia_drill_min_um: ir::Um,
+    #[serde(alias = "microvia_drill_min_um", deserialize_with = "crate::units::de")]
+    pub microvia_drill_min_nm: ir::Nm,
     /// `rules.min_groove_width`.
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub min_groove_width_um: ir::Um,
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(alias = "min_groove_width_um", deserialize_with = "crate::units::de")]
+    pub min_groove_width_nm: ir::Nm,
     /// `rules.min_resolved_spokes`: fewer connected thermal spokes than this is a starved thermal.
     #[serde(default = "d_min_resolved_spokes")]
     pub min_resolved_spokes: u32,
     /// `rules.max_error`: how closely arcs are approximated by segments (`ARC_HIGH_DEF`, 5 um).
     #[serde(default = "d_max_error")]
-    pub max_error_um: ir::Um,
+    #[serde(alias = "max_error_um", deserialize_with = "crate::units::de")]
+    pub max_error_nm: ir::Nm,
     /// `rules.use_height_for_length_calcs`.
     #[serde(default = "d_true")]
     pub use_height_for_length_calcs: bool,
     /// `zones_allow_external_fillets`.
     #[serde(default)]
     pub zones_allow_external_fillets: bool,
-    /// Whether the `*_min_um` constraints above were stated -- by a `.kicad_pro` the board came with or by Board
+    /// Whether the `*_min_nm` constraints above were stated -- by a `.kicad_pro` the board came with or by Board
     /// Setup -- rather than left at KiCad's factory values. A board built from an intent never states them, and
     /// its derived `.kicad_pro` lowers them to the narrowest class it uses (an escape class routed under the
     /// default 0.2 mm is not a violation of rules nobody wrote); a stated floor is written exactly.
     #[serde(default, skip_serializing_if = "is_false")]
     pub constraints_explicit: bool,
-    /// `BOARD_DESIGN_SETTINGS::GetBoardThickness()`, um: the board's thickness in the `.kicad_pcb`'s
+    /// `BOARD_DESIGN_SETTINGS::GetBoardThickness()`, nm: the board's thickness in the `.kicad_pcb`'s
     /// `(general (thickness ..))` and the 3D export. KiCad's default is 1.6 mm.
     #[serde(default = "d_board_thickness")]
-    pub board_thickness_um: ir::Um,
+    #[serde(alias = "board_thickness_um", deserialize_with = "crate::units::de")]
+    pub board_thickness_nm: ir::Nm,
     /// Text & Graphics > Defaults: the line widths and text the layer classes start from.
     #[serde(default, skip_serializing_if = "rules::TextGraphicsDefaults::is_default")]
     pub text_graphics: rules::TextGraphicsDefaults,
@@ -394,7 +460,7 @@ pub struct BoardRules {
     pub component_classes: component_classes::ComponentClassSettings,
 }
 
-fn is_zero_um(v: &ir::Um) -> bool {
+fn is_zero_nm(v: &ir::Nm) -> bool {
     *v == 0
 }
 
@@ -410,15 +476,18 @@ fn is_false(v: &bool) -> bool {
 pub struct SolderMaskRules {
     /// `m_SolderMaskExpansion`: `(setup (pad_to_mask_clearance ..))`.
     #[serde(default)]
-    pub expansion_um: ir::Um,
+    #[serde(alias = "expansion_um", deserialize_with = "crate::units::de")]
+    pub expansion_nm: ir::Nm,
     /// `m_SolderMaskMinWidth`: `(setup (solder_mask_min_width ..))` -- the
     /// "web width" the bridge test and whole-board-mask silk test use.
     #[serde(default)]
-    pub min_width_um: ir::Um,
+    #[serde(alias = "min_width_um", deserialize_with = "crate::units::de")]
+    pub min_width_nm: ir::Nm,
     /// `m_SolderMaskToCopperClearance`: `.kicad_pro`
     /// `rules.solder_mask_to_copper_clearance`.
     #[serde(default)]
-    pub to_copper_clearance_um: ir::Um,
+    #[serde(alias = "to_copper_clearance_um", deserialize_with = "crate::units::de")]
+    pub to_copper_clearance_nm: ir::Nm,
     /// `m_AllowSoldermaskBridgesInFPs`.
     #[serde(default)]
     pub allow_bridges_in_footprints: bool,
@@ -427,9 +496,10 @@ pub struct SolderMaskRules {
     pub tent_vias_front: bool,
     #[serde(default = "d_true")]
     pub tent_vias_back: bool,
-    /// `m_SolderPasteMargin`: `(setup (pad_to_paste_clearance ..))`, the absolute paste margin, um.
+    /// `m_SolderPasteMargin`: `(setup (pad_to_paste_clearance ..))`, the absolute paste margin, nm.
     #[serde(default)]
-    pub paste_margin_um: ir::Um,
+    #[serde(alias = "paste_margin_um", deserialize_with = "crate::units::de")]
+    pub paste_margin_nm: ir::Nm,
     /// `m_SolderPasteMarginRatio`: `(setup (pad_to_paste_clearance_ratio ..))`, the margin as a fraction of the pad.
     #[serde(default)]
     pub paste_margin_ratio: f64,
@@ -441,7 +511,7 @@ fn d_true() -> bool {
 
 impl Default for SolderMaskRules {
     fn default() -> Self {
-        SolderMaskRules { expansion_um: 0, min_width_um: 0, to_copper_clearance_um: 0, allow_bridges_in_footprints: false, tent_vias_front: true, tent_vias_back: true, paste_margin_um: 0, paste_margin_ratio: 0.0 }
+        SolderMaskRules { expansion_nm: 0, min_width_nm: 0, to_copper_clearance_nm: 0, allow_bridges_in_footprints: false, tent_vias_front: true, tent_vias_back: true, paste_margin_nm: 0, paste_margin_ratio: 0.0 }
     }
 }
 
@@ -473,11 +543,14 @@ pub struct CustomRule {
     /// `eda_drc::custom_rules`'s doc comment for exactly which do).
     pub constraint_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub min: Option<ir::Nm>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub max: Option<ir::Nm>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub opt: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub opt: Option<ir::Nm>,
     /// `(layer "...")`, when the rule restricts itself to one layer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
@@ -505,7 +578,7 @@ impl BoardRules {
     /// somewhere downstream. A zero grid divides by zero; an empty stackup
     /// leaves the outer layers undefined; a via whose drill is wider than
     /// its pad has no annular ring to solder to. The readers used to cope
-    /// -- `grid_um.max(1)`, `layers.first().unwrap_or("F.Cu")` -- and
+    /// -- `grid_nm.max(1)`, `layers.first().unwrap_or("F.Cu")` -- and
     /// coping means inventing a number nobody wrote down, then measuring
     /// the board against it and reporting the result as fact.
     ///
@@ -519,13 +592,13 @@ impl BoardRules {
             out.push(CheckResult::fail("board_rules", format!("board.{what}"), why));
         };
         if self.grid <= 0 {
-            bad("grid", format!("routing grid is {} µm; it is the divisor for every cell index on the board", self.grid));
+            bad("grid", format!("routing grid is {} nm; it is the divisor for every cell index on the board", self.grid));
         }
         if self.track_width <= 0 {
-            bad("track_width", format!("track width is {} µm; copper with no width has no clearance either", self.track_width));
+            bad("track_width", format!("track width is {} nm; copper with no width has no clearance either", self.track_width));
         }
         if self.clearance < 0 {
-            bad("clearance", format!("clearance is {} µm; a negative gap is copper overlapping on purpose", self.clearance));
+            bad("clearance", format!("clearance is {} nm; a negative gap is copper overlapping on purpose", self.clearance));
         }
         if self.layers.is_empty() {
             bad("layers", "board declares no copper layers; there is no such thing as a default stackup".into());
@@ -539,12 +612,12 @@ impl BoardRules {
             }
         }
         if self.via_diameter <= 0 || self.via_drill <= 0 {
-            bad("via", format!("via is {} µm across a {} µm drill; both have to be positive", self.via_diameter, self.via_drill));
+            bad("via", format!("via is {} nm across a {} nm drill; both have to be positive", self.via_diameter, self.via_drill));
         } else if self.via_drill >= self.via_diameter {
             bad(
                 "via_drill",
                 format!(
-                    "via drill {} µm is not smaller than the {} µm pad, so the via has no annular ring: \
+                    "via drill {} nm is not smaller than the {} nm pad, so the via has no annular ring: \
                      nothing for the plating to land on",
                     self.via_drill, self.via_diameter
                 ),
@@ -558,12 +631,12 @@ impl BoardRules {
         for c in &self.net_classes {
             if let Some(w) = c.track_width {
                 if w <= 0 {
-                    bad("net_classes", format!("net class {:?} sets a track width of {w} µm", c.name));
+                    bad("net_classes", format!("net class {:?} sets a track width of {w} nm", c.name));
                 }
             }
             if let Some(cl) = c.clearance {
                 if cl < 0 {
-                    bad("net_classes", format!("net class {:?} sets a clearance of {cl} µm", c.name));
+                    bad("net_classes", format!("net class {:?} sets a clearance of {cl} nm", c.name));
                 }
             }
         }
@@ -580,12 +653,12 @@ impl BoardRules {
     }
 
     /// Refdes font for this board: the override, else 1/40 of the shorter
-    /// rendered side (outline bbox + 2 mm margin), clamped to 600..=1000 µm.
-    pub fn refdes_font(&self, outline: &[ir::Point]) -> ir::Um {
-        if let Some(f) = self.refdes_font_um {
+    /// rendered side (outline bbox + 2 mm margin), clamped to 0.6..=1 mm.
+    pub fn refdes_font(&self, outline: &[ir::Point]) -> ir::Nm {
+        if let Some(f) = self.refdes_font_nm {
             return f;
         }
-        let (mut x0, mut y0, mut x1, mut y1) = (ir::Um::MAX, ir::Um::MAX, ir::Um::MIN, ir::Um::MIN);
+        let (mut x0, mut y0, mut x1, mut y1) = (ir::Nm::MAX, ir::Nm::MAX, ir::Nm::MIN, ir::Nm::MIN);
         for p in outline {
             x0 = x0.min(p.x);
             y0 = y0.min(p.y);
@@ -593,24 +666,26 @@ impl BoardRules {
             y1 = y1.max(p.y);
         }
         if outline.is_empty() {
-            return 600;
+            return 600_000;
         }
-        let m = 2000;
+        let m = 2_000_000;
         let (vw, vh) = (x1 - x0 + 2 * m, y1 - y0 + 2 * m);
-        (vw.min(vh) / 40).clamp(600, 1000)
+        (vw.min(vh) / 40).clamp(600_000, 1_000_000)
     }
 }
 
-/// The routing rules' tunable distances, with defaults. µm, and cells of
+/// The routing rules' tunable distances, with defaults. nm, and cells of
 /// the board's routing grid for the placement preflight.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RoutingTuning {
     /// Copper-to-board-edge clearance (KiCad's default 0.5 mm).
-    pub edge_clearance_um: ir::Um,
+    #[serde(alias = "edge_clearance_um", deserialize_with = "crate::units::de")]
+    pub edge_clearance_nm: ir::Nm,
     /// Same-footprint SMD pad gaps narrower than this are kept clear of
     /// tracks.
-    pub between_pads_max_gap_um: ir::Um,
+    #[serde(alias = "between_pads_max_gap_um", deserialize_with = "crate::units::de")]
+    pub between_pads_max_gap_nm: ir::Nm,
     /// Cells a pad's free pocket must reach (or a via site / own pad) to
     /// pass the placement preflight.
     pub preflight_reach_cells: usize,
@@ -622,13 +697,13 @@ pub struct RoutingTuning {
 
 /// KiCad's default board-setup copper-to-edge clearance, which
 /// `kicad-cli pcb drc` holds every pad, track and via to against Edge.Cuts.
-pub const KICAD_EDGE_CLEARANCE_UM: ir::Um = 500;
+pub const KICAD_EDGE_CLEARANCE_NM: ir::Nm = 500_000;
 
 impl RoutingTuning {
     /// How far copper keeps from the board edge: the tuning's clearance,
     /// never under KiCad's own.
-    pub fn copper_edge_clearance(&self) -> ir::Um {
-        self.edge_clearance_um.max(KICAD_EDGE_CLEARANCE_UM)
+    pub fn copper_edge_clearance(&self) -> ir::Nm {
+        self.edge_clearance_nm.max(KICAD_EDGE_CLEARANCE_NM)
     }
 
     /// Reject a tuning that cannot describe a board: a zero here is a loop
@@ -642,7 +717,7 @@ impl RoutingTuning {
 }
 impl Default for RoutingTuning {
     fn default() -> Self {
-        RoutingTuning { edge_clearance_um: 500, between_pads_max_gap_um: 2000, preflight_reach_cells: 2000, optimizer_passes: 10 }
+        RoutingTuning { edge_clearance_nm: 500_000, between_pads_max_gap_nm: 2_000_000, preflight_reach_cells: 2000, optimizer_passes: 10 }
     }
 }
 
@@ -663,10 +738,12 @@ pub struct SolverSettings {
     /// of us instead of behind a placer that happens to pass.
     pub placer: String,
     /// Anneal placer: keep-apart margin around courtyards (routing channel
-    /// space), moves per part, placement snap grid, all µm / counts.
-    pub place_spacing_um: ir::Um,
+    /// space), moves per part, placement snap grid, all nm / counts.
+    #[serde(alias = "place_spacing_um", deserialize_with = "crate::units::de")]
+    pub place_spacing_nm: ir::Nm,
     pub place_moves_per_part: usize,
-    pub place_snap_um: ir::Um,
+    #[serde(alias = "place_snap_um", deserialize_with = "crate::units::de")]
+    pub place_snap_nm: ir::Nm,
     /// Cypress: weight of the synthetic proximity-rule nets.
     pub cypress_proximity_weight: f64,
     /// Cypress: shrink a rectangular `board.outline` (treated as the
@@ -690,14 +767,14 @@ pub struct SolverSettings {
 }
 impl Default for SolverSettings {
     fn default() -> Self {
-        SolverSettings { placer: "build".into(), place_spacing_um: 600, place_moves_per_part: 4000, place_snap_um: 100, cypress_proximity_weight: 50.0, fit_board_utilization: 0.25, place_attempts: 3, floorplan: false }
+        SolverSettings { placer: "build".into(), place_spacing_nm: 600_000, place_moves_per_part: 4000, place_snap_nm: 100_000, cypress_proximity_weight: 50.0, fit_board_utilization: 0.25, place_attempts: 3, floorplan: false }
     }
 }
 
-/// Max courtyard gap, µm, from a decoupling capacitor to the IC it
+/// Max courtyard gap, nm, from a decoupling capacitor to the IC it
 /// decouples (shares both of its nets with). The placement gate judges it;
 /// the placers pull toward it.
-pub const DECOUPLING_MAX_GAP_UM: ir::Um = 3000;
+pub const DECOUPLING_MAX_GAP_NM: ir::Nm = 3_000_000;
 
 /// A part the placer can freely move or swap to uncross a stub: two pins,
 /// not a connector or an IC.
@@ -745,26 +822,26 @@ pub fn decoupling_pairs(model: &ConstraintModel) -> Vec<(String, String)> {
     }
     pairs
 }
-fn d_grid() -> ir::Um { 254 }
-fn d_track() -> ir::Um { 200 }
-fn d_clearance() -> ir::Um { 200 }
-fn d_via_drill() -> ir::Um { 300 }
-fn d_via_dia() -> ir::Um { 600 }
+fn d_grid() -> ir::Nm { 254_000 }
+fn d_track() -> ir::Nm { 200_000 }
+fn d_clearance() -> ir::Nm { 200_000 }
+fn d_via_drill() -> ir::Nm { 300_000 }
+fn d_via_dia() -> ir::Nm { 600_000 }
 fn d_layers() -> Vec<String> { vec!["F.Cu".into(), "B.Cu".into()] }
-fn d_hole_to_hole_min() -> ir::Um { 250 }
-fn d_hole_clearance() -> ir::Um { 250 }
-fn d_silk_clearance() -> ir::Um { 0 }
-fn d_annular_width_min() -> ir::Um { 100 }
-fn d_min_silk_text_height() -> ir::Um { 800 }
-fn d_min_silk_text_thickness() -> ir::Um { 80 }
-fn d_track_width_min() -> ir::Um { 200 }
-fn d_via_diameter_min() -> ir::Um { 500 }
-fn d_via_drill_min() -> ir::Um { 300 }
-fn d_microvia_diameter_min() -> ir::Um { 200 }
-fn d_microvia_drill_min() -> ir::Um { 100 }
+fn d_hole_to_hole_min() -> ir::Nm { 250_000 }
+fn d_hole_clearance() -> ir::Nm { 250_000 }
+fn d_silk_clearance() -> ir::Nm { 0 }
+fn d_annular_width_min() -> ir::Nm { 100_000 }
+fn d_min_silk_text_height() -> ir::Nm { 800_000 }
+fn d_min_silk_text_thickness() -> ir::Nm { 80_000 }
+fn d_track_width_min() -> ir::Nm { 200_000 }
+fn d_via_diameter_min() -> ir::Nm { 500_000 }
+fn d_via_drill_min() -> ir::Nm { 300_000 }
+fn d_microvia_diameter_min() -> ir::Nm { 200_000 }
+fn d_microvia_drill_min() -> ir::Nm { 100_000 }
 fn d_min_resolved_spokes() -> u32 { 2 }
-fn d_max_error() -> ir::Um { 5 }
-fn d_board_thickness() -> ir::Um { 1600 }
+fn d_max_error() -> ir::Nm { 5_000 }
+fn d_board_thickness() -> ir::Nm { 1_600_000 }
 impl BoardRules {
     /// Every class whose pattern matches `net`, the one that takes precedence first. A class's place in the list is its priority (`panel_setup_netclasses.cpp` gives each class its row
     /// as `SetPriority( row )`, the Default class the lowest), and `NET_SETTINGS::makeEffectiveNetclass` sorts the matching ones by it.
@@ -815,25 +892,25 @@ impl BoardRules {
     }
 
     /// Track width `net` must be routed at.
-    pub fn width_of(&self, net: &str) -> ir::Um {
+    pub fn width_of(&self, net: &str) -> ir::Nm {
         self.class_setting(net, |c| c.track_width).unwrap_or(self.track_width)
     }
 
     /// Clearance `net`'s own copper keeps, to itself and to everything
     /// else. Absent from the net's class (or no class) = the board default.
-    pub fn clearance_of(&self, net: &str) -> ir::Um {
+    pub fn clearance_of(&self, net: &str) -> ir::Nm {
         self.class_setting(net, |c| c.clearance).unwrap_or(self.clearance)
     }
 
     /// Via copper diameter `net`'s vias should use. Absent from the net's
     /// class (or no class) = the board default.
-    pub fn via_diameter_of(&self, net: &str) -> ir::Um {
+    pub fn via_diameter_of(&self, net: &str) -> ir::Nm {
         self.class_setting(net, |c| c.via_diameter).unwrap_or(self.via_diameter)
     }
 
     /// Via drill diameter `net`'s vias should use. Absent from the net's
     /// class (or no class) = the board default.
-    pub fn via_drill_of(&self, net: &str) -> ir::Um {
+    pub fn via_drill_of(&self, net: &str) -> ir::Nm {
         self.class_setting(net, |c| c.via_drill).unwrap_or(self.via_drill)
     }
 
@@ -845,16 +922,16 @@ impl BoardRules {
     /// included), this falls back to
     /// `SIZES_SETTINGS`'s own hardcoded upstream default
     /// (`pns_sizes_settings.h`'s constructor: `m_diffPairWidth(125000)`,
-    /// nanometers in KiCad's own internal unit -- 125um here).
-    pub fn diff_pair_width_of(&self, net: &str) -> ir::Um {
-        self.class_setting(net, |c| c.diff_pair_width).unwrap_or(125)
+    /// nanometers in KiCad's own internal unit -- the same here).
+    pub fn diff_pair_width_of(&self, net: &str) -> ir::Nm {
+        self.class_setting(net, |c| c.diff_pair_width).unwrap_or(125_000)
     }
 
     /// Differential-pair gap for `net`'s class -- see
     /// `diff_pair_width_of`'s own doc comment; upstream's matching default
-    /// is `m_diffPairGap(180000)` (180um).
-    pub fn diff_pair_gap_of(&self, net: &str) -> ir::Um {
-        self.class_setting(net, |c| c.diff_pair_gap).unwrap_or(180)
+    /// is `m_diffPairGap(180000)` (180 µm).
+    pub fn diff_pair_gap_of(&self, net: &str) -> ir::Nm {
+        self.class_setting(net, |c| c.diff_pair_gap).unwrap_or(180_000)
     }
 
     /// Differential-pair via-to-via gap for `net`'s class -- upstream's
@@ -862,15 +939,15 @@ impl BoardRules {
     /// gap" (`m_diffPairViaGapSameAsTraceGap(true)`), so this falls back to
     /// [`Self::diff_pair_gap_of`] rather than its own separate 180um
     /// literal when the class doesn't set one either.
-    pub fn diff_pair_via_gap_of(&self, net: &str) -> ir::Um {
+    pub fn diff_pair_via_gap_of(&self, net: &str) -> ir::Nm {
         self.class_setting(net, |c| c.diff_pair_via_gap).unwrap_or_else(|| self.diff_pair_gap_of(net))
     }
 
     /// Widest track any net on this board can take. The router's clearance
     /// summaries are precomputed for one querying width, so they are built
     /// at this one: conservative for narrow nets, correct for every net.
-    pub fn widest_track(&self) -> ir::Um {
-        self.net_classes.iter().filter_map(|c| c.track_width).fold(self.track_width, ir::Um::max)
+    pub fn widest_track(&self) -> ir::Nm {
+        self.net_classes.iter().filter_map(|c| c.track_width).fold(self.track_width, ir::Nm::max)
     }
 
     /// Routing order key: higher priority first. Power before signals.
@@ -883,15 +960,15 @@ impl Default for BoardRules {
     fn default() -> Self {
         BoardRules {
             grid: d_grid(), track_width: d_track(), clearance: d_clearance(), via_drill: d_via_drill(), via_diameter: d_via_dia(), layers: d_layers(),
-            net_classes: Vec::new(), outline: None, refdes_font_um: None, pours: Vec::new(), tuning: RoutingTuning::default(),
-            hole_to_hole_min_um: d_hole_to_hole_min(), hole_clearance_um: d_hole_clearance(), silk_clearance_um: d_silk_clearance(),
-            annular_width_min_um: d_annular_width_min(), min_silk_text_height_um: d_min_silk_text_height(), min_silk_text_thickness_um: d_min_silk_text_thickness(),
-            track_width_min_um: d_track_width_min(), min_clearance_um: 0, via_diameter_min_um: d_via_diameter_min(), via_drill_min_um: d_via_drill_min(),
+            net_classes: Vec::new(), outline: None, refdes_font_nm: None, pours: Vec::new(), tuning: RoutingTuning::default(),
+            hole_to_hole_min_nm: d_hole_to_hole_min(), hole_clearance_nm: d_hole_clearance(), silk_clearance_nm: d_silk_clearance(),
+            annular_width_min_nm: d_annular_width_min(), min_silk_text_height_nm: d_min_silk_text_height(), min_silk_text_thickness_nm: d_min_silk_text_thickness(),
+            track_width_min_nm: d_track_width_min(), min_clearance_nm: 0, via_diameter_min_nm: d_via_diameter_min(), via_drill_min_nm: d_via_drill_min(),
             rule_severities: BTreeMap::new(), custom_rules_text: None, custom_rules: Vec::new(), outline_closed: None,
-            copper_edge_clearance_um: None, solder_mask: SolderMaskRules::default(),
-            min_connection_um: 0, microvia_diameter_min_um: d_microvia_diameter_min(), microvia_drill_min_um: d_microvia_drill_min(), min_groove_width_um: 0,
-            min_resolved_spokes: d_min_resolved_spokes(), max_error_um: d_max_error(), use_height_for_length_calcs: true, zones_allow_external_fillets: false,
-            constraints_explicit: false, board_thickness_um: d_board_thickness(), text_graphics: rules::TextGraphicsDefaults::default(), default_class: None,
+            copper_edge_clearance_nm: None, solder_mask: SolderMaskRules::default(),
+            min_connection_nm: 0, microvia_diameter_min_nm: d_microvia_diameter_min(), microvia_drill_min_nm: d_microvia_drill_min(), min_groove_width_nm: 0,
+            min_resolved_spokes: d_min_resolved_spokes(), max_error_nm: d_max_error(), use_height_for_length_calcs: true, zones_allow_external_fillets: false,
+            constraints_explicit: false, board_thickness_nm: d_board_thickness(), text_graphics: rules::TextGraphicsDefaults::default(), default_class: None,
             layer_setup: layers::LayerSetup::default(),
             formatting: setup_pages::FormattingSettings::default(), hatch_offsets: Default::default(), tuning_patterns: setup_pages::TuningPatterns::default(), tuning_profiles: Default::default(),
             component_classes: Default::default(),
@@ -934,13 +1011,14 @@ pub struct Part {
     pub datasheet: Option<String>,
     #[serde(default)]
     pub pins: Vec<Pin>,
-    /// Physical body size (width, height) in µm, as the distributor
+    /// Physical body size (width, height) in nm, as the distributor
     /// reports it for this exact MPN -- not the package name's nominal
     /// size. Set when the part is sourced; it is the only thing that
     /// lets a gate check the land pattern against the part rather than
     /// against a string. See `source_footprint_body_mismatch`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub body_um: Option<(ir::Um, ir::Um)>,
+    #[serde(alias = "body_um", deserialize_with = "crate::units::de")]
+    pub body_nm: Option<(ir::Nm, ir::Nm)>,
     /// Cable comes in from outside: the part must sit on a board edge
     /// (`placement_edge_connector`). Unset = decided from the value/mpn
     /// (USB, jack, terminal block, receptacle…); a bare `J` header is
@@ -1096,7 +1174,8 @@ pub struct NetClass {
     pub nets: Vec<String>,
     /// Track width for this class. Absent = the board default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub track_width: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub track_width: Option<ir::Nm>,
     /// Clearance this class's copper keeps -- to itself and to every other
     /// class's copper alike, not only to its own nets. Absent = the board
     /// default. An "escape" class asking for less room than the rest of
@@ -1111,39 +1190,47 @@ pub struct NetClass {
     /// *larger* of their two nets' resolved class clearance -- the same
     /// rule KiCad's own `DRC_ENGINE::EvalRules` netclass fast path uses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clearance: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub clearance: Option<ir::Nm>,
     /// Via *copper* diameter for this class (KiCad `net_settings.classes[].
     /// via_diameter`). Absent = the board default (`BoardRules::
     /// via_diameter`). Additive field: every existing `NetClass` literal
     /// predates this and compiles unchanged as `None` (serde default too,
     /// for a `.kicad_pro`/older intent file with no such key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub via_diameter: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub via_diameter: Option<ir::Nm>,
     /// Via drill diameter for this class. Absent = the board default
     /// (`BoardRules::via_drill`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub via_drill: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub via_drill: Option<ir::Nm>,
     /// Microvia copper diameter for this class. This workspace's router and
     /// DRC don't model microvias as a distinct item (see `crates/drc`'s own
     /// fidelity notes), so this is carried for round-tripping a `.kicad_pro`
     /// faithfully but not yet read by any constraint resolution here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub microvia_diameter: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub microvia_diameter: Option<ir::Nm>,
     /// Microvia drill diameter for this class (see `microvia_diameter`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub microvia_drill: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub microvia_drill: Option<ir::Nm>,
     /// Differential-pair trace width for this class. Not yet read by any
     /// provider (this workspace has no diff-pair concept in routing/DRC
     /// yet -- `docs/parity/GAPS.md` #22), carried additively so a
     /// `.kicad_pro` import doesn't silently drop it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diff_pair_width: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub diff_pair_width: Option<ir::Nm>,
     /// Differential-pair gap for this class (see `diff_pair_width`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diff_pair_gap: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub diff_pair_gap: Option<ir::Nm>,
     /// Differential-pair via gap for this class (see `diff_pair_width`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diff_pair_via_gap: Option<ir::Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub diff_pair_via_gap: Option<ir::Nm>,
     /// Routed before lower numbers. Power belongs first: it needs copper,
     /// it sets the return paths, and it is the hardest thing to squeeze in
     /// once signal nets have taken the channels. Default 0; signals sit at
@@ -1398,15 +1485,15 @@ mod tests {
 
     #[test]
     fn net_class_clearance_overrides_the_board_default_only_for_its_own_nets() {
-        let mut rules = BoardRules { clearance: 200, ..BoardRules::default() };
-        rules.net_classes.push(NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150), clearance: Some(150), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
-        assert_eq!(rules.clearance_of("CC1"), 150);
-        assert_eq!(rules.clearance_of("CC2"), 150);
-        assert_eq!(rules.clearance_of("GND"), 200, "a net outside the class keeps the board default");
+        let mut rules = BoardRules { clearance: 200_000, ..BoardRules::default() };
+        rules.net_classes.push(NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150_000), clearance: Some(150_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        assert_eq!(rules.clearance_of("CC1"), 150_000);
+        assert_eq!(rules.clearance_of("CC2"), 150_000);
+        assert_eq!(rules.clearance_of("GND"), 200_000, "a net outside the class keeps the board default");
         assert!(rules.validate().is_empty(), "{:?}", rules.validate());
     }
 
-    fn class_with(name: &str, nets: &[&str], clearance: Option<ir::Um>, track: Option<ir::Um>) -> NetClass {
+    fn class_with(name: &str, nets: &[&str], clearance: Option<ir::Nm>, track: Option<ir::Nm>) -> NetClass {
         NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: track, clearance, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }
     }
 
@@ -1414,25 +1501,25 @@ mod tests {
     /// class gives the rest and joins the name. Patterns are wildcard patterns or regular expressions.
     #[test]
     fn a_net_in_several_classes_has_the_settings_of_all_of_them_by_precedence() {
-        let mut rules = BoardRules { clearance: 200, track_width: 250, via_diameter: 600, via_drill: 300, ..BoardRules::default() };
+        let mut rules = BoardRules { clearance: 200_000, track_width: 250_000, via_diameter: 600_000, via_drill: 300_000, ..BoardRules::default() };
         rules.net_classes = vec![
-            class_with("power", &["VBUS", "V[0-9]+"], Some(400), None),
-            class_with("fast", &["USB_*", "VBUS"], Some(100), Some(500)),
-            class_with("misc", &["MISO"], Some(300), Some(150)),
+            class_with("power", &["VBUS", "V[0-9]+"], Some(400_000), None),
+            class_with("fast", &["USB_*", "VBUS"], Some(100_000), Some(500_000)),
+            class_with("misc", &["MISO"], Some(300_000), Some(150_000)),
         ];
         // VBUS is in power (first, so it takes precedence) and fast
         assert_eq!(rules.matching_classes("VBUS").iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["power", "fast"]);
         assert_eq!(rules.class_of("VBUS").unwrap().name, "power", "the class it is listed under is the one that takes precedence");
-        assert_eq!((rules.clearance_of("VBUS"), rules.width_of("VBUS")), (400, 500), "the clearance of power, which sets it first; the track width of fast, since power sets none");
-        assert_eq!(rules.via_diameter_of("VBUS"), 600, "nobody sets it: the Default class's");
+        assert_eq!((rules.clearance_of("VBUS"), rules.width_of("VBUS")), (400_000, 500_000), "the clearance of power, which sets it first; the track width of fast, since power sets none");
+        assert_eq!(rules.via_diameter_of("VBUS"), 600_000, "nobody sets it: the Default class's");
         // a regex pattern
         assert_eq!(rules.class_of("V12").unwrap().name, "power");
-        assert_eq!(rules.clearance_of("V12"), 400);
+        assert_eq!(rules.clearance_of("V12"), 400_000);
         // one class alone
-        assert_eq!((rules.clearance_of("MISO"), rules.width_of("MISO")), (300, 150));
+        assert_eq!((rules.clearance_of("MISO"), rules.width_of("MISO")), (300_000, 150_000));
         assert_eq!(rules.matching_classes("MISO").len(), 1);
         // none: the Default class
-        assert_eq!((rules.clearance_of("GND"), rules.width_of("GND")), (200, 250));
+        assert_eq!((rules.clearance_of("GND"), rules.width_of("GND")), (200_000, 250_000));
         assert!(rules.matching_classes("GND").is_empty() && rules.class_of("GND").is_none());
         // the names KiCad gives them
         assert_eq!(rules.effective_class("VBUS").name, "power,fast,Default");
@@ -1440,13 +1527,13 @@ mod tests {
         assert_eq!(rules.effective_class("GND").name, "Default");
         assert!(rules.effective_class("VBUS").is_composite() && !rules.effective_class("GND").is_composite());
         // a class that sets everything stands alone
-        let mut full = class_with("full", &["FULL"], Some(1), Some(2));
-        full.via_diameter = Some(3);
-        full.via_drill = Some(1);
-        full.microvia_diameter = Some(2);
-        full.microvia_drill = Some(1);
-        full.diff_pair_width = Some(2);
-        full.diff_pair_gap = Some(2);
+        let mut full = class_with("full", &["FULL"], Some(1000), Some(2000));
+        full.via_diameter = Some(3000);
+        full.via_drill = Some(1000);
+        full.microvia_diameter = Some(2000);
+        full.microvia_drill = Some(1000);
+        full.diff_pair_width = Some(2000);
+        full.diff_pair_gap = Some(2000);
         rules.net_classes.push(full);
         assert_eq!(rules.effective_class("FULL").name, "full");
         assert!(!rules.effective_class("FULL").is_composite());
@@ -1456,11 +1543,11 @@ mod tests {
     #[test]
     fn the_default_class_gives_a_net_the_settings_no_class_of_its_own_gives() {
         let mut rules = BoardRules::default();
-        rules.default_class = Some(NetClass { diff_pair_width: Some(200), diff_pair_gap: Some(220), ..class_with("Default", &[], None, None) });
-        assert_eq!((rules.diff_pair_width_of("ANY"), rules.diff_pair_gap_of("ANY"), rules.diff_pair_via_gap_of("ANY")), (200, 220, 220));
-        rules.net_classes.push(NetClass { diff_pair_gap: Some(150), ..class_with("tight", &["T*"], None, None) });
-        assert_eq!((rules.diff_pair_width_of("T1"), rules.diff_pair_gap_of("T1")), (200, 150), "the gap from the class, the width from Default");
-        assert_eq!(BoardRules::default().diff_pair_width_of("X"), 125, "with no Default class either: upstream's sizes");
+        rules.default_class = Some(NetClass { diff_pair_width: Some(200_000), diff_pair_gap: Some(220_000), ..class_with("Default", &[], None, None) });
+        assert_eq!((rules.diff_pair_width_of("ANY"), rules.diff_pair_gap_of("ANY"), rules.diff_pair_via_gap_of("ANY")), (200_000, 220_000, 220_000));
+        rules.net_classes.push(NetClass { diff_pair_gap: Some(150_000), ..class_with("tight", &["T*"], None, None) });
+        assert_eq!((rules.diff_pair_width_of("T1"), rules.diff_pair_gap_of("T1")), (200_000, 150_000), "the gap from the class, the width from Default");
+        assert_eq!(BoardRules::default().diff_pair_width_of("X"), 125_000, "with no Default class either: upstream's sizes");
     }
 
     #[test]
@@ -1469,28 +1556,28 @@ mod tests {
         // No net class at all -- SIZES_SETTINGS's own hardcoded constructor
         // defaults (pns_sizes_settings.h): 125um width, 180um gap, via gap
         // same as trace gap.
-        assert_eq!(rules.diff_pair_width_of("USB_DP"), 125);
-        assert_eq!(rules.diff_pair_gap_of("USB_DP"), 180);
-        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 180);
+        assert_eq!(rules.diff_pair_width_of("USB_DP"), 125_000);
+        assert_eq!(rules.diff_pair_gap_of("USB_DP"), 180_000);
+        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 180_000);
     }
 
     #[test]
     fn a_net_classs_own_diff_pair_fields_override_the_defaults() {
         let mut rules = BoardRules::default();
-        rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(200), diff_pair_gap: Some(150), diff_pair_via_gap: Some(300), priority: 0 });
-        assert_eq!(rules.diff_pair_width_of("USB_DP"), 200);
-        assert_eq!(rules.diff_pair_gap_of("USB_DP"), 150);
-        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 300);
+        rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(200_000), diff_pair_gap: Some(150_000), diff_pair_via_gap: Some(300_000), priority: 0 });
+        assert_eq!(rules.diff_pair_width_of("USB_DP"), 200_000);
+        assert_eq!(rules.diff_pair_gap_of("USB_DP"), 150_000);
+        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 300_000);
         // A net outside the class keeps the upstream defaults, same as
         // every other per-class resolver.
-        assert_eq!(rules.diff_pair_width_of("GND"), 125);
+        assert_eq!(rules.diff_pair_width_of("GND"), 125_000);
     }
 
     #[test]
     fn diff_pair_via_gap_falls_back_to_the_classs_own_trace_gap_not_the_180um_literal() {
         let mut rules = BoardRules::default();
-        rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: Some(150), diff_pair_via_gap: None, priority: 0 });
-        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 150, "SIZES_SETTINGS::DiffPairViaGap()'s own \"same as trace gap\" default");
+        rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: Some(150_000), diff_pair_via_gap: None, priority: 0 });
+        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 150_000, "SIZES_SETTINGS::DiffPairViaGap()'s own \"same as trace gap\" default");
     }
 
     #[test]

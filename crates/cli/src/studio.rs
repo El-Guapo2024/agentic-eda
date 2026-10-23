@@ -1121,7 +1121,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     let (meta, design, model) = board::load(dir)?;
     // What `${NAME}` stands for in the board's texts and fields (`crate::text_vars_json`); each of them carries `shown` where it differs from the stored text.
     let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, clock));
-    let b = eda_ops::Board::new(design.clone(), &model, meta.snap_um, meta.spacing_um);
+    let b = eda_ops::Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
     let view = eda_ops::view::view(&b, &model)?;
     // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
     let flashed = eda_connectivity::flashed_layers(&design, &model);
@@ -1315,8 +1315,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "target_smd_pads": r.teardrop_settings.target_smd_pads,
                 "best_length_ratio": r.teardrop_settings.best_length_ratio,
                 "best_width_ratio": r.teardrop_settings.best_width_ratio,
-                "max_len_um": r.teardrop_settings.max_len_um,
-                "max_width_um": r.teardrop_settings.max_width_um,
+                "max_len_nm": r.teardrop_settings.max_len_nm,
+                "max_width_nm": r.teardrop_settings.max_width_nm,
                 "width_to_size_filter_ratio": r.teardrop_settings.width_to_size_filter_ratio,
             }),
         })
@@ -1326,7 +1326,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             "shapes": d.shapes.iter().map(shape_json).collect::<Vec<_>>(),
             "texts": d.texts.iter().map(|t| tv.text_json(json!({
                 "id": t.id, "content": t.content, "x": t.at.x, "y": t.at.y, "angle": t.angle,
-                "layer": t.layer, "size": t.size_um, "stroke_width": t.stroke_width,
+                "layer": t.layer, "size": t.size_nm, "stroke_width": t.stroke_width,
                 "justify": match t.justify {
                     eda_model::ir::TextJustify::Left => "left",
                     eda_model::ir::TextJustify::Center => "center",
@@ -1364,7 +1364,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         "outline_is_shapes": eda_model::outline::outline_is_shapes(&design),
         "outline_errors": outline_errors_json(&design),
         "layers": model.board.layers,
-        "snap": meta.snap_um,
+        "snap": meta.snap_nm,
         "parts": parts,
         "rules": model.placement_rules,
         // Read-only board-wide defaults for the auxiliary toolbar's
@@ -1386,13 +1386,13 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // below that Board Setup does not edit stay as the intent says.
             // See GAPS.md #3 and PARITY-pcb.md's Board Setup section.
             "net_classes": model.board.net_classes,
-            "hole_to_hole_min_um": model.board.hole_to_hole_min_um,
-            "hole_clearance_um": model.board.hole_clearance_um,
-            "silk_clearance_um": model.board.silk_clearance_um,
-            "annular_width_min_um": model.board.annular_width_min_um,
-            "min_silk_text_height_um": model.board.min_silk_text_height_um,
-            "min_silk_text_thickness_um": model.board.min_silk_text_thickness_um,
-            "refdes_font_um": model.board.refdes_font_um,
+            "hole_to_hole_min_nm": model.board.hole_to_hole_min_nm,
+            "hole_clearance_nm": model.board.hole_clearance_nm,
+            "silk_clearance_nm": model.board.silk_clearance_nm,
+            "annular_width_min_nm": model.board.annular_width_min_nm,
+            "min_silk_text_height_nm": model.board.min_silk_text_height_nm,
+            "min_silk_text_thickness_nm": model.board.min_silk_text_thickness_nm,
+            "refdes_font_nm": model.board.refdes_font_nm,
             "stackup": model.stackup,
             // Board Setup's pages (`eda_model::rules`), as the board is judged by them right now: the intent's or the
             // imported project's values with any edit laid over them (`board::load`). `overlay` names the pages an edit has
@@ -1402,7 +1402,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             "constraints_explicit": model.board.constraints_explicit,
             "mask_paste": model.board.solder_mask,
             "text_graphics": model.board.text_graphics,
-            "board_thickness_um": model.board.board_thickness_um,
+            "board_thickness_nm": model.board.board_thickness_nm,
             "copper_layers": model.board.layers.len(),
             "layer_names": model.board.layers,
             // Board Editor Layers (`eda_model::layers`): the non-copper layers the board has in KiCad's order, the names the user gave its layers and the types that are not the default's.
@@ -1508,7 +1508,7 @@ fn outline_errors_json(design: &eda_model::ir::Design) -> Value {
 /// API already exposes (`justify` above). `height`/`horizontal`/
 /// `leader_length` are present only for the kind that actually has them
 /// (`null` otherwise) -- `eda_model::ir::DimensionKind`'s own fields.
-/// `lines`/`text_at`/`computed_text_angle`/`measured_value_um`/`text` are
+/// `lines`/`text_at`/`computed_text_angle`/`measured_value_nm`/`text` are
 /// the one and only place this geometry is computed
 /// (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
 /// renderer never re-derives it.
@@ -1563,9 +1563,9 @@ fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         "text_position": text_position,
         "keep_text_aligned": d.keep_text_aligned,
         "text_angle": d.text_angle,
-        "text_size_um": d.text_size_um,
+        "text_size_nm": d.text_size_nm,
         // `EDA_TEXT::GetTextThickness()` of the label; null = 15 % of the size (the Properties panel's "Thickness").
-        "text_thickness_um": d.text_thickness_um,
+        "text_thickness_nm": d.text_thickness_nm,
         "stroke_width": d.stroke_width,
         "arrow_length": d.arrow_length,
         "extension_offset": d.extension_offset,
@@ -1574,7 +1574,7 @@ fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         "lines": geom.lines.iter().map(|(a, b)| json!([[a.x, a.y], [b.x, b.y]])).collect::<Vec<_>>(),
         "text_at": [geom.text_at.x, geom.text_at.y],
         "computed_text_angle": geom.text_angle,
-        "measured_value_um": geom.measured_value_um,
+        "measured_value_nm": geom.measured_value_nm,
         "text": geom.text,
     })
 }
@@ -1605,7 +1605,7 @@ fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {
         "suppress_trailing_zeros": s.suppress_trailing_zeros,
         "text_position": text_position,
         "keep_text_aligned": s.keep_text_aligned,
-        "text_size_um": s.text_size_um,
+        "text_size_nm": s.text_size_nm,
         "stroke_width": s.stroke_width,
         "arrow_length": s.arrow_length,
         "extension_offset": s.extension_offset,
@@ -1816,7 +1816,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .collect();
     // Explicit junctions (`J`) and graphic lines on the notes layer (`I`) -- see `eda_model::ir::Junction`/`SchLine`.
     let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y], "look": sch.extras.junction_looks.get(&j.id) })).collect();
-    let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_um": l.width_um, "stroke": sch.extras.strokes.get(&l.id) })).collect();
+    let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_nm": l.width_nm, "stroke": sch.extras.strokes.get(&l.id) })).collect();
     // Drawn shapes, text boxes, rule areas, directive labels and images (`SchGraphic`, serialized as stored; an image is described, its pixels are `GET /api/sch_image`) and the ids of locked items.
     let graphics: Value = crate::image_api::sch_graphics_json(&sch.extras.graphics);
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
@@ -1863,10 +1863,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                         eda_model::kicad_font::HJustify::Right => "right",
                         eda_model::kicad_font::HJustify::Center => "center",
                     };
-                    json!({ "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "size_um": 1270 })
+                    json!({ "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "size_nm": 1270 })
                 })
                 .collect();
-            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_um": look.text_size_um(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields })
+            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields })
         })
         .collect();
     let texts: Vec<Value> = sch
@@ -1948,8 +1948,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "pins": s.pins.iter().map(|p| {
                     let mut pin = json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] });
                     if let Some(look) = sch.extras.sheet_pin_looks.get(&p.id) {
-                        if look.size_um > 0 {
-                            pin["size_um"] = json!(look.size_um);
+                        if look.size_nm > 0 {
+                            pin["size_nm"] = json!(look.size_nm);
                         }
                         if look.bold {
                             pin["bold"] = json!(true);
@@ -1967,11 +1967,11 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // The paper this sheet is drawn on: its full Page Settings when it has them (portrait, a user size), else the name its title block carries
     // (the layout engine writes it per sheet); A4 landscape when neither.
     let page = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or(""));
-    let (paper_w, paper_h) = page.size_um().unwrap_or((297_000, 210_000));
+    let (paper_w, paper_h) = page.size_nm().unwrap_or((297_000, 210_000));
     let file = viewed_file(design, &breadcrumb);
 
     json!({
-        "paper": { "name": page.paper, "width_um": paper_w, "height_um": paper_h },
+        "paper": { "name": page.paper, "width_nm": paper_w, "height_nm": paper_h },
         "file": file,
         "symbols": symbols,
         "wires": wires,
@@ -2185,7 +2185,7 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
     let j = sch.extras.text_justify_of(&t.id);
     let vertical = eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0);
     json!({
-        "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_um": t.size_um, "vertical": vertical,
+        "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_nm": t.size_nm, "vertical": vertical,
         "h": match j.h { TextJustify::Left => "left", TextJustify::Center => "center", TextJustify::Right => "right" },
         "v": match j.v { TextVAlign::Top => "top", TextVAlign::Center => "center", TextVAlign::Bottom => "bottom" },
     })
@@ -2208,7 +2208,7 @@ pub(crate) fn page_field_json(owner: &str, f: &eda_engine::fields::PageField) ->
         "h": match f.h { HJustify::Left => "left", HJustify::Center => "center", HJustify::Right => "right" },
         "v": match f.v { VJustify::Top => "top", VJustify::Center => "center", VJustify::Bottom => "bottom" },
         "visible": f.visible,
-        "size_um": f.size_um,
+        "size_nm": f.size_nm,
         "bold": f.bold,
         "italic": f.italic,
         "name_shown": f.name_shown,
@@ -2478,7 +2478,7 @@ mod tests {
 
     fn design(root: SchematicSection, screens: std::collections::BTreeMap<String, SchematicSection>) -> eda_model::ir::Design {
         eda_model::ir::Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(root),
             nets: None,

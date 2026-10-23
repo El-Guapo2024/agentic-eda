@@ -109,12 +109,12 @@ fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
 }
 
 /// The box round the ink of one line of a cell's text, as the stroke font draws it with its first glyph's origin at `origin` (µm).
-fn expected_ink(text: &str, origin: (f64, f64), size: i64, pen_um: f64, angle_deg: f64) -> Option<[f64; 4]> {
-    let (offx, offy) = (pen_um / 1.52, size as f64 - pen_um * 0.052);
+fn expected_ink(text: &str, origin: (f64, f64), size: i64, pen_nm: f64, angle_deg: f64) -> Option<[f64; 4]> {
+    let (offx, offy) = (pen_nm / 1.52, size as f64 - pen_nm * 0.052);
     let (s, c) = angle_deg.to_radians().sin_cos();
     let (rx, ry) = (offx * c + offy * s, offy * c - offx * s);
     let pos = Point { x: (origin.0 - rx).round() as i64, y: (origin.1 - ry).round() as i64 };
-    let segs = kicad_text_segments(&TextLayout { text, pos, size: (size, size), thickness: pen_um.round() as i64, angle_deg, mirror: false, halign: -1, valign: -1 });
+    let segs = kicad_text_segments(&TextLayout { text, pos, size: (size, size), thickness: pen_nm.round() as i64, angle_deg, mirror: false, halign: -1, valign: -1 });
     if segs.is_empty() {
         return None;
     }
@@ -138,7 +138,7 @@ fn expected_text(t: &Table) -> Vec<(String, [f64; 4])> {
             let draw = sch_cell_draw(t, row, col, &|_: &str| None);
             let cell = t.cell(row, col).unwrap();
             for line in &draw.lines {
-                if let Some(b) = expected_ink(&line.text, (line.x_um, line.y_um), cell.style.height_um, draw.pen_um, draw.angle as f64 / 1000.0) {
+                if let Some(b) = expected_ink(&line.text, (line.x_nm, line.y_nm), cell.style.height_nm, draw.pen_nm, draw.angle as f64 / 1000.0) {
                     out.push((line.text.clone(), b));
                 }
             }
@@ -188,7 +188,7 @@ fn assert_borders_drawn_as_kicad_cli_plots_them(t: &Table, svg: &str, what: &str
 }
 
 fn design_with(sch: SchematicSection) -> Design {
-    Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
+    Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
 }
 
 fn sheet_of(tables: Vec<Table>) -> Design {
@@ -210,9 +210,9 @@ fn lying_table() -> Table {
     t.cells[3].style.h_align = TextJustify::Right;
     t.cells[3].style.v_align = TextVAlign::Bottom;
     t.cells[1].style.bold = true;
-    t.cells[1].style.height_um = 1_800;
-    t.cells[1].style.width_um = 1_800;
-    t.cells[4].style.thickness_um = 300;
+    t.cells[1].style.height_nm = 1_800;
+    t.cells[1].style.width_nm = 1_800;
+    t.cells[4].style.thickness_nm = 300;
     t
 }
 

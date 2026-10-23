@@ -227,7 +227,7 @@ impl Board<'_> {
         let Some(def) = &f.definition else { return edit };
         // The library's own footprint by that name: a probe with no reference, so that the copy's source (a footprint of this board with this
         // reference, whose pads may be edited) is not what is found.
-        let probe = Part { reference: String::new(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(f.name.clone()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+        let probe = Part { reference: String::new(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(f.name.clone()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
         let Some(known) = self.model.footprint_of(&probe) else { return edit };
         for d in eda_model::fp_edit::pad_edits_between(&known, def) {
             let e = edit.get_or_insert_with(|| FootprintEdit::new(&f.reference));
@@ -606,7 +606,7 @@ impl Board<'_> {
             references.insert(reference.clone());
             zone_edits.extend(f.zone_overrides.iter().map(|z| FootprintZoneOverrides { id: reference.clone(), ..z.clone() }));
             // Keep the pads and courtyard with the copy unless the model already knows the footprint by that name.
-            let probe = Part { reference: reference.clone(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(f.footprint.clone()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+            let probe = Part { reference: reference.clone(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(f.footprint.clone()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
             let definition = match (&f.definition, self.model.footprint_of(&probe)) {
                 (Some(def), None) => Some(LibraryFootprint::from_engine_footprint(def)),
                 _ => None,

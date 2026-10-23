@@ -21,17 +21,17 @@ use crate::arcs::ArcPts;
 use crate::item::{net_of, Item, ItemId, Net};
 use crate::layer::{LayerMap, LayerRange};
 use crate::line::{Line, LinePiece};
-use crate::line_placer::{FixOutcome, LinePlacer, Preview, EXACT_UM};
+use crate::line_placer::{FixOutcome, LinePlacer, Preview, EXACT_NM};
 use crate::node::Node;
 use crate::settings::RoutingSettings;
-use eda_model::ir::{Design, Point, Um};
+use eda_model::ir::{Design, Point, Nm};
 use eda_model::via_extra::ViaKind;
 use eda_model::ConstraintModel;
 use std::collections::HashMap;
 
-/// `ANCHOR_SNAP_UM`-equivalent used for picking a *start* item -- see
-/// `line_placer::SNAP_UM` for the same radius used at the route's end.
-const START_SNAP_UM: Um = 500;
+/// `ANCHOR_SNAP_NM`-equivalent used for picking a *start* item -- see
+/// `line_placer::SNAP_NM` for the same radius used at the route's end.
+const START_SNAP_NM: Nm = 500;
 
 /// A track cut in two where a route starts or ends in the middle of one (`SplitAdjacentSegments`, `SplitAdjacentArcs`): the commit gives the IR
 /// track `track` a vertex at `at`, or, for an arc track, cuts it into two arc tracks there.
@@ -66,8 +66,8 @@ struct Session {
 struct PlacedVia {
     at: Point,
     layers: LayerRange,
-    diameter: Um,
-    drill: Um,
+    diameter: Nm,
+    drill: Nm,
     kind: ViaKind,
 }
 
@@ -109,14 +109,14 @@ pub struct Continuation {
     pub net: String,
     /// The layer the new route starts on: the current one if the far end is on it, else the far end's own.
     pub layer: String,
-    pub width: Um,
+    pub width: Nm,
     /// The far end of the connection: where the new route starts.
     pub from: Point,
     /// Where the head of the old route ended: the new route heads there.
     pub to: Point,
     /// A pair's gap and via gap (`UpdateSizes`: the sizes the router keeps survive the restart); 0 for a single track.
-    pub gap: Um,
-    pub via_gap: Um,
+    pub gap: Nm,
+    pub via_gap: Nm,
 }
 
 pub struct Router {
@@ -202,7 +202,7 @@ impl Router {
     /// isn't a mode the task asked for. Replaces any route already in
     /// progress (matching `StopRouting()` + fresh `StartRouting()`, not an
     /// error).
-    pub fn start(&mut self, at: Point, layer_name: &str, width: Um) -> Result<(), String> {
+    pub fn start(&mut self, at: Point, layer_name: &str, width: Nm) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
         let Some(pick) = self.pick_start(at, layer) else {
             return Err("no pad, via, or track end there to route from".into());
@@ -237,17 +237,17 @@ impl Router {
     /// `TOOL_BASE::updateStartItem` for a point the studio's snapping has already put on what it picked (`PcbSnap.routePoint`): the
     /// pad, via or track end the point is exactly on; else the track whose copper it is in -- at the end nearer to it if that is within
     /// half the track's width (`snapToItem`), else at the point on its centre line, in the middle of the track; else (a point that was
-    /// not snapped: a script's, the API's) the nearest pad, via or track end within [`START_SNAP_UM`].
+    /// not snapped: a script's, the API's) the nearest pad, via or track end within [`START_SNAP_NM`].
     fn pick_start(&self, at: Point, layer: i32) -> Option<StartPick> {
         let layers = LayerRange::single(layer);
-        if let Some((item, pos)) = self.world.nearest_anchor(at, layers, EXACT_UM, None) {
+        if let Some((item, pos)) = self.world.nearest_anchor(at, layers, EXACT_NM, None) {
             return Some(StartPick { item, pos, split: None });
         }
         if let Some(id) = self.world.segment_at(at, layer, None, None, &[]) {
             match self.world.get(id) {
                 Some(Item::Segment(s)) => {
                     let seg = eda_drc::kimath::Seg::new(s.a, s.b);
-                    let on = if seg.sq_distance_to_point(at) <= (EXACT_UM * EXACT_UM) as i128 { at } else { seg.nearest_point(at) };
+                    let on = if seg.sq_distance_to_point(at) <= (EXACT_NM * EXACT_NM) as i128 { at } else { seg.nearest_point(at) };
                     let half = s.width / 2;
                     let (da, db) = (crate::seg_ops::length(at, s.a), crate::seg_ops::length(at, s.b));
                     if da < half || db < half {
@@ -266,14 +266,14 @@ impl Router {
                         return Some(StartPick { item: id, pos: if da < db { a.start() } else { a.end() }, split: None });
                     }
                     if a.source_track.is_some() {
-                        let on = if a.arc.distance_to(at) <= EXACT_UM as f64 { at } else { a.arc.nearest_point(at) };
+                        let on = if a.arc.distance_to(at) <= EXACT_NM as f64 { at } else { a.arc.nearest_point(at) };
                         return Some(StartPick { item: id, pos: on, split: Some(id) });
                     }
                 }
                 _ => {}
             }
         }
-        let (item, pos) = self.world.nearest_anchor(at, layers, START_SNAP_UM, None)?;
+        let (item, pos) = self.world.nearest_anchor(at, layers, START_SNAP_NM, None)?;
         Some(StartPick { item, pos, split: None })
     }
 
@@ -298,7 +298,7 @@ impl Router {
         }
     }
 
-    pub fn set_width(&mut self, width: Um) {
+    pub fn set_width(&mut self, width: Nm) {
         if let Some(s) = &mut self.session {
             s.placer.width = width;
         }
@@ -308,7 +308,7 @@ impl Router {
     /// the *next* fix. `to_layer`, when arming, is which layer the route
     /// continues on after that via -- the layer-switch half of the task's
     /// "live via placement (V with layer switch)" requirement.
-    pub fn toggle_via(&mut self, enabled: bool, diameter: Um, drill: Um, to_layer: Option<i32>) {
+    pub fn toggle_via(&mut self, enabled: bool, diameter: Nm, drill: Nm, to_layer: Option<i32>) {
         self.toggle_via_typed(enabled, diameter, drill, to_layer, None, ViaKind::Through);
     }
 
@@ -316,7 +316,7 @@ impl Router {
     /// `sizes.AddLayerPair( currentLayer, targetLayer )`, then `ToggleViaPlacement()`. `span` is the layers the via spans (`LINE_PLACER::makeVia`:
     /// `F_Cu` .. `B_Cu` for a through via, the pair for any other); `None` is from the layer being routed to `to_layer`. The via commits with
     /// `kind` (`RouteCommit::via_kinds`).
-    pub fn toggle_via_typed(&mut self, enabled: bool, diameter: Um, drill: Um, to_layer: Option<i32>, span: Option<(i32, i32)>, kind: ViaKind) {
+    pub fn toggle_via_typed(&mut self, enabled: bool, diameter: Nm, drill: Nm, to_layer: Option<i32>, span: Option<(i32, i32)>, kind: ViaKind) {
         if let Some(s) = &mut self.session {
             s.placer.toggle_via(enabled, diameter, drill);
             // the via spans from the layer being routed to the one the route goes on to (`makeVia`): the shove and the collision check see both
@@ -524,7 +524,7 @@ impl Router {
             }) {
                 let mut pieces = vec![arc.arc];
                 for p in points {
-                    if let Some(k) = pieces.iter().position(|a| a.start != p && a.end != p && a.distance_to(p) <= EXACT_UM as f64) {
+                    if let Some(k) = pieces.iter().position(|a| a.start != p && a.end != p && a.distance_to(p) <= EXACT_NM as f64) {
                         if let Some((l, r)) = pieces[k].split(p) {
                             pieces.splice(k..=k, [l, r]);
                         }
@@ -549,7 +549,7 @@ impl Router {
                 if pts.contains(&p) {
                     continue;
                 }
-                if let Some(k) = (0..pts.len() - 1).find(|&k| eda_drc::kimath::Seg::new(pts[k], pts[k + 1]).sq_distance_to_point(p) <= (EXACT_UM * EXACT_UM) as i128) {
+                if let Some(k) = (0..pts.len() - 1).find(|&k| eda_drc::kimath::Seg::new(pts[k], pts[k + 1]).sq_distance_to_point(p) <= (EXACT_NM * EXACT_NM) as i128) {
                     pts.insert(k + 1, p);
                 }
             }
@@ -626,7 +626,7 @@ impl Router {
         }
     }
 
-    fn build_commit(&self, net: &Net, runs: Vec<Line>, _layer: i32, _width: Um) -> RouteCommit {
+    fn build_commit(&self, net: &Net, runs: Vec<Line>, _layer: i32, _width: Nm) -> RouteCommit {
         let mut commit = RouteCommit::default();
         let net_name = net.as_deref().unwrap_or("").to_string();
         for run in &runs {
@@ -697,7 +697,7 @@ impl Router {
     /// resolution, e.g. deciding what `start()` would attach to before the
     /// user actually presses X). Not a literal upstream method name -- see
     /// `node.rs`'s own doc comment on `nearest_anchor`.
-    pub fn item_near(&self, at: Point, layer_name: &str, max_dist: Um) -> Option<ItemId> {
+    pub fn item_near(&self, at: Point, layer_name: &str, max_dist: Nm) -> Option<ItemId> {
         let layer = self.layer_index(layer_name)?;
         self.world.nearest_anchor(at, LayerRange::single(layer), max_dist, None).map(|(id, _)| id)
     }
@@ -725,7 +725,7 @@ impl Router {
     /// of them). Without `drag_locked` a locked item is refused with [`crate::dragger::LOCKED_MESSAGE`].
     pub fn drag_start_locked(&mut self, at: Point, layer_name: &str, free_angle: bool, drag_locked: bool) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
-        let item_id = self.world.item_at(at, LayerRange::single(layer), START_SNAP_UM).ok_or("nothing to drag there")?;
+        let item_id = self.world.item_at(at, LayerRange::single(layer), START_SNAP_NM).ok_or("nothing to drag there")?;
         if drag_locked {
             self.world.set_locked(item_id, false);
         }
@@ -818,12 +818,12 @@ impl Router {
     // vias. See that module's own doc comment for what differs from KiCad.
 
     /// `DIFF_PAIR_PLACER::Start` plus `ROUTER::isStartingPointRoutable`'s checks for a pair: resolve whatever is at `at` the same
-    /// way [`Self::start`] does (a real pad/via/track-end within [`START_SNAP_UM`]), then find its differential-pair partner net's
+    /// way [`Self::start`] does (a real pad/via/track-end within [`START_SNAP_NM`]), then find its differential-pair partner net's
     /// nearest item of the same kind ([`crate::dp_placer::find_dp_primitive_pair`]). Replaces any route/drag/diff-pair session already
     /// in progress. The error is KiCad's own message.
     pub fn start_diff_pair(&mut self, at: Point, layer_name: &str) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
-        let hit = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_UM, None);
+        let hit = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_NM, None);
         let Some((start_item, _)) = hit else {
             return Err("no pad, via, or track end there to route from".into());
         };
@@ -837,12 +837,12 @@ impl Router {
     /// `ROUTER::UpdateSizes` for a pair (the "Differential Pair Dimensions..." dialog,
     /// `ROUTER_TOOL::DpDimensionsDialog`): the running pair's track width, gap and via gap. `None` leaves a value as it is. The pair's
     /// own preview and its commit read them, so the next `move` already uses the new values. Returns whether a pair is running.
-    pub fn set_diff_pair_dimensions(&mut self, width: Option<Um>, gap: Option<Um>) -> bool {
+    pub fn set_diff_pair_dimensions(&mut self, width: Option<Nm>, gap: Option<Nm>) -> bool {
         self.set_diff_pair_sizes(width, gap, None)
     }
 
     /// [`Self::set_diff_pair_dimensions`] with the dialog's via gap too.
-    pub fn set_diff_pair_sizes(&mut self, width: Option<Um>, gap: Option<Um>, via_gap: Option<Um>) -> bool {
+    pub fn set_diff_pair_sizes(&mut self, width: Option<Nm>, gap: Option<Nm>, via_gap: Option<Nm>) -> bool {
         let Some(d) = self.diff.as_mut() else { return false };
         d.set_dimensions(width, gap, via_gap);
         true
@@ -868,7 +868,7 @@ impl Router {
     }
 
     /// `ROUTER::ToggleViaPlacement` for a pair (`V`): the head ends in a pair of vias, and the route goes on to `to_layer` from them.
-    pub fn toggle_diff_pair_via(&mut self, enabled: bool, diameter: Option<Um>, drill: Option<Um>, to_layer: Option<i32>) {
+    pub fn toggle_diff_pair_via(&mut self, enabled: bool, diameter: Option<Nm>, drill: Option<Nm>, to_layer: Option<i32>) {
         if let Some(d) = &mut self.diff {
             d.toggle_via(enabled, diameter, drill, to_layer);
         }
@@ -902,7 +902,7 @@ impl Router {
     /// What a finished pair puts on the board, as the IR has it.
     fn build_dp_commit(&self, c: &crate::dp_placer::DpCommit) -> RouteCommit {
         let mut commit = RouteCommit::default();
-        let track = |net: &Net, layer: i32, width: Um, pts: &[Point]| eda_model::ir::Track { id: String::new(), net: net.as_deref().unwrap_or("").to_string(), pins: Vec::new(), layer: self.layer_name(layer).to_string(), width, pts: pts.to_vec(), arc_mid_offset: None };
+        let track = |net: &Net, layer: i32, width: Nm, pts: &[Point]| eda_model::ir::Track { id: String::new(), net: net.as_deref().unwrap_or("").to_string(), pins: Vec::new(), layer: self.layer_name(layer).to_string(), width, pts: pts.to_vec(), arc_mid_offset: None };
         for leg in &c.legs {
             for (net, pts) in [(&c.net_p, &leg.p), (&c.net_n, &leg.n)] {
                 // a line that goes nowhere is no track
@@ -964,11 +964,11 @@ mod tests {
     use eda_model::{Net as IrNet, Part, Pin, PinKind};
 
     fn two_pad_board() -> (Design, ConstraintModel) {
-        let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None };
+        let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None };
         let model = ConstraintModel { parts: vec![part("R1"), part("R2")], nets: vec![IrNet { name: "SIG".into(), pins: vec!["R1.1".into(), "R2.1".into()] }], ..Default::default() };
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -986,7 +986,7 @@ mod tests {
         let model = ConstraintModel::default();
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,

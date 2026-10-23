@@ -18,12 +18,12 @@ fn part(r: &str, value: &str) -> Part {
         symbol: None,
         datasheet: None,
         pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-        body_um: None,
+        body_nm: None,
         edge: None,
     }
 }
 
-fn pose(id: &str, x: Um, y: Um, side: Side) -> FootprintInstance {
+fn pose(id: &str, x: Nm, y: Nm, side: Side) -> FootprintInstance {
     FootprintInstance { id: id.into(), at: p(x, y), rot: 0, side, label: LabelSide::default() }
 }
 
@@ -39,13 +39,13 @@ fn fixture() -> (ConstraintModel, Design) {
         nets: vec![net("N1", &["R1.2", "U1.1"]), net("N2", &["R2.1", "U1.2"])],
         ..Default::default()
     };
-    let sym = |id: &str, x: Um| symbol(id, "Device:R", "10k", 1, p(x, 0));
+    let sym = |id: &str, x: Nm| symbol(id, "Device:R", "10k", 1, p(x, 0));
     let mut pad_edit = PadEdit::none("1", 1);
     pad_edit.size = Some((900, 900));
     let mut edit = FootprintEdit::new("R1");
     edit.set_pad(pad_edit);
     let design = Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(section(vec![sym("R1", 0), sym("R2", 10_000), sym("R3", 20_000), sym("R4", 30_000), sym("U1", 40_000)], vec![])),
         nets: Some(vec![net("N1", &["R1.2", "U1.1"]), net("N2", &["R2.1", "U1.2"])]),
@@ -89,7 +89,7 @@ fn loaded(model: &ConstraintModel, design: &Design) -> ConstraintModel {
     m
 }
 
-fn at(d: &Design, id: &str) -> Option<(Um, Um)> {
+fn at(d: &Design, id: &str) -> Option<(Nm, Nm)> {
     d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == id).map(|f| (f.at.x, f.at.y))
 }
 
@@ -109,7 +109,7 @@ fn the_footprints_are_renumbered_by_place_and_the_symbols_and_the_boards_parts_g
     assert_eq!(d.placement.as_ref().unwrap().footprints.len(), 5, "no pose lost, none made");
     // the symbols took the numbers: the one drawn first (it was R1) is R2 now
     let sch = d.schematic.as_ref().unwrap();
-    let id_at = |x: Um| sch.symbols.iter().find(|s| s.at.x == x).map(|s| s.id.as_str());
+    let id_at = |x: Nm| sch.symbols.iter().find(|s| s.at.x == x).map(|s| s.id.as_str());
     assert_eq!((id_at(0), id_at(10_000), id_at(20_000), id_at(30_000), id_at(40_000)), (Some("R2"), Some("R1"), Some("R4"), Some("R3"), Some("U1")));
     // what was R1's is R2's: the route's pad, the net's pin, the lock, the edit, the group
     assert_eq!(d.routing.as_ref().unwrap().tracks[0].pins, ["R2.2", "U1.1"], "the route stays on the pad of the same part");

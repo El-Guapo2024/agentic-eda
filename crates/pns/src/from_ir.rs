@@ -146,7 +146,7 @@ pub fn locked_ids_with(design: &Design, lock_pattern_members: bool) -> std::coll
 fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: &LayerMap) {
     let mut i = 0usize;
     for shape in &board.edge_cuts {
-        for chain in eda_model::outline::shape_chains(shape, eda_model::outline::MAX_ERROR_UM as f64) {
+        for chain in eda_model::outline::shape_chains(shape, eda_model::outline::MAX_ERROR_NM as f64) {
             let n = chain.pts.len();
             let sides = if chain.closed { n } else { n.saturating_sub(1) };
             for k in 0..sides {
@@ -164,7 +164,7 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
 }
 
 /// `GetMaxError()` of a board this IR does not say otherwise of: `ARC_HIGH_DEF`, 0.005 mm.
-const TEXT_MAX_ERROR_UM: eda_model::ir::Um = 5;
+const TEXT_MAX_ERROR_NM: eda_model::ir::Nm = 5;
 
 /// The board's copper text as router obstacles: `PNS_KICAD_IFACE_BASE::syncTextItem` for each `PCB_TEXT` on a copper layer
 /// (`syncGraphicalItem`'s `PCB_TEXT_T` case) -- a `SOLID` on that one layer, with no net, not routable ([`Solid::is_text`]), whose shape is
@@ -176,9 +176,9 @@ const TEXT_MAX_ERROR_UM: eda_model::ir::Um = 5;
 /// copper too), a table (`PCB_TABLE`), a knockout text's margin, and a text box (`gr_text_box` is not read by the importer).
 fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap) {
     let Some(d) = design.drawings.as_ref() else { return };
-    let mut add = |id: &str, layer: &str, at: Point, rot_deg: f64, segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Um| {
+    let mut add = |id: &str, layer: &str, at: Point, rot_deg: f64, segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Nm| {
         let (Some(layer), false) = (layers.index_of(layer), segs.is_empty()) else { return };
-        let hull = text_bounding_hull(segs, r + TEXT_MAX_ERROR_UM, at, rot_deg);
+        let hull = text_bounding_hull(segs, r + TEXT_MAX_ERROR_NM, at, rot_deg);
         node.add(Item::Solid(Solid { net: None, layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source: format!("{}{id}", Solid::TEXT_SOURCE), edge: false }));
     };
     for (i, t) in d.copper_texts.iter().enumerate() {
@@ -188,7 +188,7 @@ fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap) {
     }
     for t in d.texts.iter().filter(|t| t.layer.ends_with(".Cu")) {
         // laid out as the silkscreen check lays out a plain text (`eda_drc::board::build`): square glyphs, vertically centred
-        let size = (t.size_um, t.size_um);
+        let size = (t.size_nm, t.size_nm);
         let pen = eda_drc::stroke_font::effective_pen_width(t.stroke_width, size, false);
         let halign = match t.justify {
             eda_model::ir::TextJustify::Left => -1,
@@ -204,7 +204,7 @@ fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap) {
 /// `PCB_TEXT::buildBoundingHull`: the glyph strokes turned back by the draw rotation about `at` (`poly.Rotate( -GetDrawRotation(), GetDrawPos() )`),
 /// their box grown by `r` (half the pen, and the error), its four corners turned forward again (`RotatePoint( corner, GetDrawPos(), GetDrawRotation() )`).
 /// KiCad's rotation is counter-clockwise on screen, y down.
-fn text_bounding_hull(segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Um, at: Point, rot_deg: f64) -> Vec<Point> {
+fn text_bounding_hull(segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Nm, at: Point, rot_deg: f64) -> Vec<Point> {
     let (sin, cos) = rot_deg.to_radians().sin_cos();
     // `RotatePoint( p, centre, angle )` with y down: x' = x cos + y sin, y' = -x sin + y cos (relative to the centre)
     let turn = |p: (f64, f64), s: f64| (p.0 * cos + p.1 * s, -p.0 * s + p.1 * cos);
@@ -218,7 +218,7 @@ fn text_bounding_hull(segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Um, at: P
         .into_iter()
         .map(|c| {
             let q = turn(c, sin);
-            Point { x: at.x + q.0.round() as eda_model::ir::Um, y: at.y + q.1.round() as eda_model::ir::Um }
+            Point { x: at.x + q.0.round() as eda_model::ir::Nm, y: at.y + q.1.round() as eda_model::ir::Nm }
         })
         .collect()
 }
@@ -230,12 +230,12 @@ mod tests {
     use eda_model::{ConstraintModel, Part, Pin, PinKind};
 
     fn two_pad_board() -> (Design, ConstraintModel) {
-        let part_a = Part { reference: "U1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None };
+        let part_a = Part { reference: "U1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None };
         let model = ConstraintModel { parts: vec![part_a.clone()], ..Default::default() };
         let fp = FootprintInstance { id: "U1".into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above };
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -250,7 +250,7 @@ mod tests {
     fn padstack_board(side: Side) -> (Design, ConstraintModel) {
         use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode};
         use eda_model::{BoardRules, Footprint, Pad, PadKind, PadShape};
-        let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("TH1".into()), footprint: Some("TH1".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None };
+        let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("TH1".into()), footprint: Some("TH1".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None };
         let mut pad = Pad { number: "1".into(), at: (0, 0), size: (1600, 1600), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(800), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
         pad.ext.stack = PadStack {
             mode: PadStackMode::FrontInnerBack,

@@ -18,7 +18,7 @@ fn style_token(s: TableLineStyle) -> &'static str {
 }
 
 pub(crate) fn stroke_json(s: &TableStroke) -> Value {
-    json!({ "width": s.width_um, "style": style_token(s.style), "color": color_json(s.color) })
+    json!({ "width": s.width_nm, "style": style_token(s.style), "color": color_json(s.color) })
 }
 
 fn pt(p: eda_model::ir::Point) -> Value {
@@ -53,7 +53,7 @@ pub(crate) fn sch_table_json(t: &Table, sheet: &Resolver) -> Value {
 }
 
 /// The width a stroke of width 0 draws with on a sheet: 6 mils (`DEFAULT_LINE_WIDTH_MILS`), micrometres.
-const SCH_DEFAULT_LINE_UM: f64 = 152.4;
+const SCH_DEFAULT_LINE_NM: f64 = 152.4;
 
 fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: bool) -> Value {
     if !t.is_well_formed() {
@@ -77,17 +77,17 @@ fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: boo
                 "margins": c.margins,
                 "h_align": halign(c.style.h_align),
                 "v_align": valign(c.style.v_align),
-                "size_w": c.style.width_um,
-                "size_h": c.style.height_um,
-                "thickness": c.style.thickness_um,
-                "pen": draw.pen_um,
+                "size_w": c.style.width_nm,
+                "size_h": c.style.height_nm,
+                "thickness": c.style.thickness_nm,
+                "pen": draw.pen_nm,
                 "bold": c.style.bold,
                 "italic": c.style.italic,
                 "mirror": c.style.mirror,
                 "face": c.style.face,
                 "line_spacing": c.style.line_spacing_permille,
                 "color": color_json(c.style.color),
-                "lines": draw.lines.iter().map(|l| json!({ "text": l.text, "x": l.x_um, "y": l.y_um })).collect::<Vec<_>>(),
+                "lines": draw.lines.iter().map(|l| json!({ "text": l.text, "x": l.x_nm, "y": l.y_nm })).collect::<Vec<_>>(),
             });
             if draw.shown != c.text {
                 v["shown"] = json!(draw.shown);
@@ -100,7 +100,7 @@ fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: boo
             v
         })
         .collect();
-    let border_width = |w: i64| if sheet && w == 0 { json!(SCH_DEFAULT_LINE_UM) } else { json!(w) };
+    let border_width = |w: i64| if sheet && w == 0 { json!(SCH_DEFAULT_LINE_NM) } else { json!(w) };
     json!({
         "id": t.id,
         "layer": t.layer,
@@ -114,7 +114,7 @@ fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: boo
         "border": { "external": t.border.external, "header": t.border.header, "stroke": stroke_json(&t.border.stroke) },
         "separators": { "rows": t.separators.rows, "cols": t.separators.cols, "stroke": stroke_json(&t.separators.stroke) },
         "bbox": [bbox.x0, bbox.y0, bbox.x1, bbox.y1],
-        "borders": t.borders().iter().map(|l| json!({ "a": pt(l.a), "b": pt(l.b), "width": border_width(l.stroke.width_um), "style": style_token(l.stroke.drawn_style()), "color": color_json(l.stroke.color) })).collect::<Vec<_>>(),
+        "borders": t.borders().iter().map(|l| json!({ "a": pt(l.a), "b": pt(l.b), "width": border_width(l.stroke.width_nm), "style": style_token(l.stroke.drawn_style()), "color": color_json(l.stroke.color) })).collect::<Vec<_>>(),
         "cells": cells,
     })
 }

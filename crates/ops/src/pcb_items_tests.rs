@@ -34,10 +34,10 @@ fn a_text_box_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
     edited.text = "REV B".into();
     edited.layer = "F.Fab".into();
     edited.knockout = true;
-    edited.margin_top_um = 2_000;
+    edited.margin_top_nm = 2_000;
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditTextBox { id: id.clone(), text_box: edited })).unwrap();
     let t = &boxes(&b)[0];
-    assert_eq!((t.id.as_str(), t.text.as_str(), t.layer.as_str(), t.knockout, t.margin_top_um), (id.as_str(), "REV B", "F.Fab", true, 2_000), "an edit keeps the id");
+    assert_eq!((t.id.as_str(), t.text.as_str(), t.layer.as_str(), t.knockout, t.margin_top_nm), (id.as_str(), "REV B", "F.Fab", true, 2_000), "an edit keeps the id");
 
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteTextBox { id: id.clone() })).unwrap();
     assert!(boxes(&b).is_empty());
@@ -58,11 +58,11 @@ fn a_text_box_that_cannot_be_drawn_is_refused_and_leaves_the_board_as_it_was() {
         e[0].check.clone()
     };
     assert_eq!(refused(&mut b, &|t| t.layer = String::new()), "ops_bad_text_box");
-    assert_eq!(refused(&mut b, &|t| t.size_um = 0), "ops_bad_text_box");
-    assert_eq!(refused(&mut b, &|t| t.size_um = 300_000), "ops_bad_text_box", "250 mm is the largest text");
-    assert_eq!(refused(&mut b, &|t| t.width_um = Some(0)), "ops_bad_text_box");
-    assert_eq!(refused(&mut b, &|t| t.margin_left_um = -1), "ops_bad_text_box");
-    assert_eq!(refused(&mut b, &|t| t.stroke_width_um = -1), "ops_bad_text_box");
+    assert_eq!(refused(&mut b, &|t| t.size_nm = 0), "ops_bad_text_box");
+    assert_eq!(refused(&mut b, &|t| t.size_nm = 300_000), "ops_bad_text_box", "250 mm is the largest text");
+    assert_eq!(refused(&mut b, &|t| t.width_nm = Some(0)), "ops_bad_text_box");
+    assert_eq!(refused(&mut b, &|t| t.margin_left_nm = -1), "ops_bad_text_box");
+    assert_eq!(refused(&mut b, &|t| t.stroke_width_nm = -1), "ops_bad_text_box");
     assert_eq!(refused(&mut b, &|t| t.pts = vec![p(0, 0), p(1, 1)]), "ops_bad_text_box", "a polygon box has four corners");
     assert_eq!(refused(&mut b, &|t| t.angle = 360_000), "ops_bad_text_box");
     // a layer the board has turned off takes nothing (Board Editor Layers)
@@ -122,8 +122,8 @@ fn the_command_has_one_wire_form_and_describes_itself() {
         "op": "pcb_item", "verb": "add_text_box",
         "text_box": {
             "layer": "F.SilkS", "text": "hi", "start": {"x": 0, "y": 0}, "end": {"x": 5000, "y": 3000},
-            "margin_left_um": 810, "margin_top_um": 810, "margin_right_um": 810, "margin_bottom_um": 810,
-            "stroke_width_um": 120, "size_um": 1000, "line_style": "dash", "halign": "left", "valign": "top"
+            "margin_left_nm": 810, "margin_top_nm": 810, "margin_right_nm": 810, "margin_bottom_nm": 810,
+            "stroke_width_nm": 120, "size_nm": 1000, "line_style": "dash", "halign": "left", "valign": "top"
         }
     });
     let cmd: Cmd = serde_json::from_value(json).unwrap();
@@ -169,7 +169,7 @@ fn a_reference_image_is_added_with_an_id_of_ours_edited_and_deleted() {
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditRefImage { id: id.clone(), layer: "Dwgs.User".into(), at: p(0, 0), scale_ppm: 2_000_000 })).unwrap();
     let i = &images(&b)[0];
     assert_eq!((i.id.as_str(), i.layer.as_str(), i.at, i.scale_ppm), (id.as_str(), "Dwgs.User", p(0, 0), 2_000_000));
-    assert_eq!(i.size_um(), (12_000, 8_000), "the scale doubles the size");
+    assert_eq!(i.size_nm(), (12_000, 8_000), "the scale doubles the size");
 
     let greyer = png_text(60, 40, [9, 9, 9]);
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageData { id: id.clone(), data: greyer.clone() })).unwrap();
@@ -279,16 +279,16 @@ fn a_point_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: p })).unwrap();
     let id = points(&b)[0].id.clone();
     assert!(id.starts_with("pnt_"), "{id}");
-    assert_eq!((points(&b)[0].size_um, points(&b)[0].bounds()), (1_000, [4_500, 5_500, 5_500, 6_500]), "a new point is 1 mm");
+    assert_eq!((points(&b)[0].size_nm, points(&b)[0].bounds()), (1_000, [4_500, 5_500, 5_500, 6_500]), "a new point is 1 mm");
 
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id: id.clone(), layer: "F.Fab".into(), at: p_at(1_000, 2_000), size_um: 2_500 })).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id: id.clone(), layer: "F.Fab".into(), at: p_at(1_000, 2_000), size_nm: 2_500 })).unwrap();
     let q = &points(&b)[0];
-    assert_eq!((q.id.as_str(), q.layer.as_str(), q.at, q.size_um), (id.as_str(), "F.Fab", p_at(1_000, 2_000), 2_500), "an edit keeps the id");
+    assert_eq!((q.id.as_str(), q.layer.as_str(), q.at, q.size_nm), (id.as_str(), "F.Fab", p_at(1_000, 2_000), 2_500), "an edit keeps the id");
 
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeletePoint { id: id.clone() })).unwrap();
     assert!(points(&b).is_empty());
     assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeletePoint { id: id.clone() })).unwrap_err()[0].check, "ops_unknown_point");
-    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id, layer: "F.Fab".into(), at: p_at(0, 0), size_um: 1_000 })).unwrap_err()[0].check, "ops_unknown_point");
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id, layer: "F.Fab".into(), at: p_at(0, 0), size_nm: 1_000 })).unwrap_err()[0].check, "ops_unknown_point");
 }
 
 fn p_at(x: i64, y: i64) -> Point {
@@ -306,8 +306,8 @@ fn a_point_that_cannot_be_drawn_is_refused() {
         assert!(points(b).is_empty(), "nothing was added");
         e[0].check.clone()
     };
-    assert_eq!(refused(&mut b, &|q| q.size_um = 0), "ops_bad_point");
-    assert_eq!(refused(&mut b, &|q| q.size_um = -5), "ops_bad_point");
+    assert_eq!(refused(&mut b, &|q| q.size_nm = 0), "ops_bad_point");
+    assert_eq!(refused(&mut b, &|q| q.size_nm = -5), "ops_bad_point");
     assert_eq!(refused(&mut b, &|q| q.layer = String::new()), "ops_bad_point");
     let mut off = model(&["F.Cu", "B.Cu"]);
     off.board.layer_setup.enabled.retain(|l| l != "F.Fab");
@@ -334,9 +334,9 @@ fn a_point_moves_turns_and_flips_with_the_verbs_that_take_any_item_but_cannot_be
 fn the_point_commands_have_one_wire_form() {
     let add: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "add_point", "point": {"layer": "F.SilkS", "at": {"x": 1000, "y": 2000}}})).unwrap();
     let Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point }) = &add else { panic!("{add:?}") };
-    assert_eq!((point.layer.as_str(), point.at, point.size_um), ("F.SilkS", p_at(1_000, 2_000), 1_000), "the size left out is 1 mm");
+    assert_eq!((point.layer.as_str(), point.at, point.size_nm), ("F.SilkS", p_at(1_000, 2_000), 1_000), "the size left out is 1 mm");
     assert_eq!(add.domain(), Domain::Pcb);
-    let edit: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "edit_point", "id": "pnt_x", "layer": "F.Cu", "at": {"x": 1, "y": 2}, "size_um": 3000})).unwrap();
+    let edit: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "edit_point", "id": "pnt_x", "layer": "F.Cu", "at": {"x": 1, "y": 2}, "size_nm": 3000})).unwrap();
     assert_eq!(edit.subjects(), vec!["pnt_x"]);
     let Cmd::PcbItem(c) = &edit else { panic!() };
     assert_eq!(c.describe(), "point edit pnt_x --layer F.Cu --at 0.001,0.002 --size 3.000");
@@ -506,16 +506,16 @@ fn qr(layer: &str, at: Point) -> Barcode {
         at,
         angle: 0,
         layer: layer.into(),
-        width_um: 10_000,
-        height_um: 10_000,
+        width_nm: 10_000,
+        height_nm: 10_000,
         text: "HELLO".into(),
-        text_height_um: 1_500,
+        text_height_nm: 1_500,
         kind: BarcodeKind::Qr,
         ecc: EccLevel::L,
         show_text: true,
         knockout: false,
-        margin_x_um: 0,
-        margin_y_um: 0,
+        margin_x_nm: 0,
+        margin_y_nm: 0,
     }
 }
 
@@ -539,11 +539,11 @@ fn a_barcode_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
     edited.kind = BarcodeKind::DataMatrix;
     edited.layer = "F.Fab".into();
     edited.knockout = true;
-    edited.margin_x_um = 700;
+    edited.margin_x_nm = 700;
     edited.angle = 90_000;
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditBarcode { id: id.clone(), barcode: edited })).unwrap();
     let c = &barcodes(&b)[0];
-    assert_eq!((c.id.as_str(), c.text.as_str(), c.kind, c.layer.as_str(), c.knockout, c.margin_x_um, c.angle), (id.as_str(), "WORLD", BarcodeKind::DataMatrix, "F.Fab", true, 700, 90_000), "an edit keeps the id");
+    assert_eq!((c.id.as_str(), c.text.as_str(), c.kind, c.layer.as_str(), c.knockout, c.margin_x_nm, c.angle), (id.as_str(), "WORLD", BarcodeKind::DataMatrix, "F.Fab", true, 700, 90_000), "an edit keeps the id");
 
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteBarcode { id: id.clone() })).unwrap();
     assert!(barcodes(&b).is_empty());
@@ -563,11 +563,11 @@ fn a_barcode_that_cannot_be_drawn_is_refused_and_a_micro_qr_code_has_no_high_lev
         e[0].check.clone()
     };
     assert_eq!(refused(&mut b, &|c| c.layer = String::new()), "ops_bad_barcode");
-    assert_eq!(refused(&mut b, &|c| c.width_um = 0), "ops_bad_barcode");
-    assert_eq!(refused(&mut b, &|c| c.height_um = -1), "ops_bad_barcode");
-    assert_eq!(refused(&mut b, &|c| c.text_height_um = 0), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.width_nm = 0), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.height_nm = -1), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.text_height_nm = 0), "ops_bad_barcode");
     assert_eq!(refused(&mut b, &|c| c.angle = 360_000), "ops_bad_barcode");
-    assert_eq!(refused(&mut b, &|c| c.margin_y_um = -5), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.margin_y_nm = -5), "ops_bad_barcode");
     let mut off = model(&["F.Cu", "B.Cu"]);
     off.board.layer_setup.enabled.retain(|l| l != "F.Fab");
     let mut c = Board::new(design(), &off, 100, 300);
@@ -609,7 +609,7 @@ fn a_barcode_moves_turns_flips_and_locks_with_the_verbs_that_take_any_item() {
 fn the_barcode_commands_have_one_wire_form_and_describe_themselves() {
     let add: Cmd = serde_json::from_value(serde_json::json!({
         "op": "pcb_item", "verb": "add_barcode",
-        "barcode": {"layer": "F.SilkS", "at": {"x": 1000, "y": 2000}, "width_um": 12000, "height_um": 12000, "text": "A1", "text_height_um": 1500, "kind": "code128"}
+        "barcode": {"layer": "F.SilkS", "at": {"x": 1000, "y": 2000}, "width_nm": 12000, "height_nm": 12000, "text": "A1", "text_height_nm": 1500, "kind": "code128"}
     }))
     .unwrap();
     let Cmd::PcbItem(pcb_items::PcbItemCmd::AddBarcode { barcode }) = &add else { panic!("{add:?}") };
@@ -617,7 +617,7 @@ fn the_barcode_commands_have_one_wire_form_and_describe_themselves() {
     assert_eq!(add.domain(), Domain::Pcb);
     let edit: Cmd = serde_json::from_value(serde_json::json!({
         "op": "pcb_item", "verb": "edit_barcode", "id": "bar_x",
-        "barcode": {"layer": "F.Cu", "at": {"x": 1, "y": 2}, "width_um": 5000, "height_um": 6000, "text": "T", "text_height_um": 1000, "kind": "qr", "ecc": "M"}
+        "barcode": {"layer": "F.Cu", "at": {"x": 1, "y": 2}, "width_nm": 5000, "height_nm": 6000, "text": "T", "text_height_nm": 1000, "kind": "qr", "ecc": "M"}
     }))
     .unwrap();
     assert_eq!(edit.subjects(), vec!["bar_x"]);
@@ -643,7 +643,7 @@ fn endings_of(b: &Board<'_>, id: &str) -> LineEndings {
 fn a_line_an_arc_and_a_curve_get_line_endings_and_a_closed_shape_none() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = Board::new(design(), &m, 100, 300);
-    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_um: 3_000, width_um: 2_000, ..Default::default() };
+    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_nm: 3_000, width_nm: 2_000, ..Default::default() };
     endings(&mut b, &["shp_seg", "shp_arc"], Some(arrow), None).unwrap();
     assert_eq!(endings_of(&b, "shp_seg"), LineEndings { start: arrow, end: LineEnding::default() });
     assert_eq!(endings_of(&b, "shp_arc").start, arrow);
@@ -651,8 +651,8 @@ fn a_line_an_arc_and_a_curve_get_line_endings_and_a_closed_shape_none() {
     endings(&mut b, &["shp_seg"], None, Some(LineEnding::new(LineEndingStyle::Circle))).unwrap();
     assert_eq!(endings_of(&b, "shp_seg"), LineEndings { start: arrow, end: LineEnding::new(LineEndingStyle::Circle) });
     // A size below 0 is 0 (`std::max( 0, .. )`).
-    endings(&mut b, &["shp_seg"], Some(LineEnding { style: LineEndingStyle::Square, length_um: -5, width_um: 1_000, stroke_width_um: -1, ..Default::default() }), None).unwrap();
-    assert_eq!(endings_of(&b, "shp_seg").start, LineEnding { style: LineEndingStyle::Square, width_um: 1_000, ..Default::default() });
+    endings(&mut b, &["shp_seg"], Some(LineEnding { style: LineEndingStyle::Square, length_nm: -5, width_nm: 1_000, stroke_width_nm: -1, ..Default::default() }), None).unwrap();
+    assert_eq!(endings_of(&b, "shp_seg").start, LineEnding { style: LineEndingStyle::Square, width_nm: 1_000, ..Default::default() });
 
     let before = serde_json::to_value(b.design()).unwrap();
     assert_eq!(endings(&mut b, &["shp_seg", "shp_rect"], Some(arrow), None).unwrap_err()[0].check, "ops_bad_shape_style", "a rectangle is closed");
@@ -682,9 +682,9 @@ fn a_shape_keeps_its_endings_through_a_move_a_turn_a_flip_and_a_duplicate_and_lo
 
 #[test]
 fn the_endings_have_one_wire_form() {
-    let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_shape_style", "ids": ["shp_a"], "start_ending": {"style": "arrow_open", "length_um": 3000, "width_um": 3000, "stroke_width_um": 600}})).unwrap();
+    let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_shape_style", "ids": ["shp_a"], "start_ending": {"style": "arrow_open", "length_nm": 3000, "width_nm": 3000, "stroke_width_nm": 600}})).unwrap();
     let Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { start_ending, end_ending, fill, .. }) = &c else { panic!("{c:?}") };
-    assert_eq!((*start_ending, *end_ending, *fill), (Some(LineEnding { style: LineEndingStyle::ArrowOpen, length_um: 3_000, width_um: 3_000, stroke_width_um: 600, ..Default::default() }), None, None));
+    assert_eq!((*start_ending, *end_ending, *fill), (Some(LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: 3_000, width_nm: 3_000, stroke_width_nm: 600, ..Default::default() }), None, None));
     let Cmd::PcbItem(p) = &c else { panic!() };
     assert_eq!(p.describe(), "shape style shp_a --fill unchanged --start-shape arrow_open --start-size 3.000x3.000 --start-stroke 0.600");
     let back: Cmd = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
@@ -749,8 +749,8 @@ use pcb_items::PlannedVia;
 fn stitch() -> ViaStitch {
     let mut v = ViaStitch::new(vec![p(0, 0), p(10_000, 0), p(10_000, 10_000), p(0, 10_000)]);
     v.net = "GND".into();
-    v.pitch_um = 2_000;
-    v.via = ViaTemplate { size_um: 600, drill_um: 300, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() };
+    v.pitch_nm = 2_000;
+    v.via = ViaTemplate { size_nm: 600, drill_nm: 300, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() };
     v
 }
 
@@ -809,7 +809,7 @@ fn a_stitching_makes_its_vias_and_churns_as_few_as_update_does() {
     set_stitch(&mut b, Some(&id), gnd, &[(1, 1), (2, 1), (4, 1)]).unwrap();
     // A new via size makes them again.
     let mut bigger = stitches(&b)[0].clone();
-    bigger.via.size_um = 800;
+    bigger.via.size_nm = 800;
     set_stitch(&mut b, Some(&id), bigger, &[(1, 1), (2, 1), (4, 1)]).unwrap();
     assert!(member_vias(&b).iter().all(|(vid, _)| !after.iter().any(|(o, _)| o == vid)));
     assert!(b.design().routing.as_ref().unwrap().vias.iter().filter(|v| stitches(&b)[0].member_ids.contains(&v.id)).all(|v| v.diameter == 800));
@@ -835,7 +835,7 @@ fn a_nudged_via_is_put_back_on_its_cell_and_a_stitching_without_a_plan_is_refuse
     let err = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetViaStitch { id: Some(id.clone()), stitch: stitch(), vias: None })).unwrap_err();
     assert_eq!(err[0].check, "ops_via_stitch_unplanned");
     let mut odd = stitch();
-    odd.via.drill_um = 700;
+    odd.via.drill_nm = 700;
     assert_eq!(set_stitch(&mut b, Some(&id), odd, &[]).unwrap_err()[0].check, "ops_bad_via_stitch");
     let mut poisson = stitch();
     poisson.layout = StitchLayout::Poisson;
@@ -864,8 +864,8 @@ fn a_stitching_turns_and_flips_with_its_vias() {
 #[test]
 fn the_via_stitching_commands_have_one_wire_form() {
     let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_via_stitch", "stitch": {
-        "outline": [{"x": 0, "y": 0}, {"x": 1000, "y": 0}, {"x": 1000, "y": 1000}], "net": "GND", "pitch_um": 1000, "layout": "staggered",
-        "via": {"size_um": 600, "drill_um": 300, "from_layer": "F.Cu", "to_layer": "B.Cu"}}})).unwrap();
+        "outline": [{"x": 0, "y": 0}, {"x": 1000, "y": 0}, {"x": 1000, "y": 1000}], "net": "GND", "pitch_nm": 1000, "layout": "staggered",
+        "via": {"size_nm": 600, "drill_nm": 300, "from_layer": "F.Cu", "to_layer": "B.Cu"}}})).unwrap();
     let Cmd::PcbItem(pcb_items::PcbItemCmd::SetViaStitch { id, stitch, vias }) = &c else { panic!("{c:?}") };
     assert_eq!((id.as_deref(), stitch.layout, vias.is_none()), (None, StitchLayout::Staggered, true));
     let back: Cmd = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
@@ -885,7 +885,7 @@ fn a_drill_map_is_placed_once_a_layer_and_moves_its_marks_not_its_holes() {
     assert!(place(&mut b, "F.Cu").is_err());
     let map = drawings(&b).board_items.drill_maps[0].clone();
     assert!(map.id.starts_with("dmap_"), "{}", map.id);
-    assert_eq!((map.size_um, map.span.is_none(), map.outline_slots, map.guide_cross), (1_500, true, true, false), "PCB_DRILL_MAP's defaults");
+    assert_eq!((map.size_nm, map.span.is_none(), map.outline_slots, map.guide_cross), (1_500, true, true, false), "PCB_DRILL_MAP's defaults");
     // Move slides the marks (`m_offset`); a turn has nothing to turn; a flip takes the map to the other side's layer.
     b.apply(&Cmd::MoveItems { ids: ids(&[&map.id]), dx: 50_000, dy: 0 }).unwrap();
     b.apply(&Cmd::RotateItems { ids: ids(&[&map.id]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
@@ -894,9 +894,9 @@ fn a_drill_map_is_placed_once_a_layer_and_moves_its_marks_not_its_holes() {
     assert_eq!((moved.offset, moved.layer.as_str()), (p(50_000, 0), "B.Fab"));
     let mut edited = moved.clone();
     edited.guide_cross = true;
-    edited.size_um = 0;
+    edited.size_nm = 0;
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditDrillMap { id: map.id.clone(), map: edited })).unwrap();
-    assert_eq!((drawings(&b).board_items.drill_maps[0].guide_cross, drawings(&b).board_items.drill_maps[0].size_um), (true, 1), "`SetSymbolSize`: at least one");
+    assert_eq!((drawings(&b).board_items.drill_maps[0].guide_cross, drawings(&b).board_items.drill_maps[0].size_nm), (true, 1), "`SetSymbolSize`: at least one");
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteDrillMap { id: map.id })).unwrap();
     assert!(drawings(&b).board_items.drill_maps.is_empty());
 }

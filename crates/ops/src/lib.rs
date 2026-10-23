@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Nm, Via, ViaPreset, Wire, Zone,
 };
 #[cfg(test)]
 use eda_model::ir::Group;
@@ -209,7 +209,7 @@ pub enum Region {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SizeSpec {
     NetClass,
-    Value { um: Um },
+    Value { um: Nm },
 }
 
 /// Same idea as [`SizeSpec`], for a via's diameter+drill pair (which
@@ -219,7 +219,7 @@ pub enum SizeSpec {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ViaSizeSpec {
     NetClass,
-    Value { diameter: Um, drill: Um },
+    Value { diameter: Nm, drill: Nm },
 }
 
 impl Region {
@@ -285,11 +285,11 @@ pub enum Cmd {
     /// speaks and cannot be off by a rounding error. This one is for
     /// when the position is actually known: a part being restored, a
     /// board being replayed, or a caller that has already decided.
-    PlaceAt { part: String, x: Um, y: Um },
+    PlaceAt { part: String, x: Nm, y: Nm },
     /// Move a placed part to a board position, µm, keeping its rotation
     /// and side: what dragging it does. Like `Nudge`, the gates judge
     /// where it lands.
-    MoveTo { part: String, x: Um, y: Um },
+    MoveTo { part: String, x: Nm, y: Nm },
     Nudge { part: String, dir: Dir, steps: u32 },
     /// Turn a placed part by quarter turns.
     Rotate { part: String, quarter_turns: u8 },
@@ -324,7 +324,7 @@ pub enum Cmd {
         #[serde(default)]
         zone_connection: Option<PadConnection>,
         #[serde(default)]
-        clearance: Option<Um>,
+        clearance: Option<Nm>,
     },
     /// Pad Properties' zone fields on the pads numbered `pad` of a placed footprint: "Pad connection" (`PAD::SetLocalZoneConnection`:
     /// solid, thermal relief, none, or `None` for "From parent footprint"), "Relief gap", "Spoke width" and "Spoke angle" (millidegrees,
@@ -335,13 +335,13 @@ pub enum Cmd {
         #[serde(default)]
         zone_connection: Option<PadConnection>,
         #[serde(default)]
-        thermal_gap: Option<Um>,
+        thermal_gap: Option<Nm>,
         #[serde(default)]
-        thermal_spoke_width: Option<Um>,
+        thermal_spoke_width: Option<Nm>,
         #[serde(default)]
         thermal_spoke_angle_mdeg: Option<Millideg>,
         #[serde(default)]
-        clearance: Option<Um>,
+        clearance: Option<Nm>,
     },
 
     /// Add a hand-drawn copper track. `net` and `layer` are refused if
@@ -349,32 +349,32 @@ pub enum Cmd {
     /// track's *path* is any good (wrong net touched, clearance violated)
     /// is left to the routing gates, exactly as it is for the router's own
     /// output -- see the report.
-    AddTrack { net: String, layer: String, width: Um, pts: Vec<Point> },
+    AddTrack { net: String, layer: String, width: Nm, pts: Vec<Point> },
     /// Remove a track by id.
     DeleteTrack { id: String },
     /// Widen or narrow a track in place. Its id, net, layer and path do
     /// not change.
-    SetTrackWidth { id: String, width: Um },
+    SetTrackWidth { id: String, width: Nm },
 
     /// Add a via.
-    AddVia { net: String, x: Um, y: Um, drill: Um, diameter: Um, from_layer: String, to_layer: String },
+    AddVia { net: String, x: Nm, y: Nm, drill: Nm, diameter: Nm, from_layer: String, to_layer: String },
     /// Remove a via by id.
     DeleteVia { id: String },
     /// Move a via to a new position. Its id, net, drill, diameter and
     /// layer span do not change.
-    MoveVia { id: String, x: Um, y: Um },
+    MoveVia { id: String, x: Nm, y: Nm },
     /// `dialog_track_via_properties.cpp`'s editable via fields (GAPS.md
     /// #11): pad diameter and drill. Net, position and layer span are
     /// unchanged (KiCad does not let you re-net or re-span an existing via
     /// from this dialog either -- that is what delete-and-redraw is for).
-    EditVia { id: String, diameter: Um, drill: Um },
+    EditVia { id: String, diameter: Nm, drill: Nm },
     /// `BOARD_DESIGN_SETTINGS::m_TrackWidthList`, replaced wholesale --
     /// the studio's Board Setup "Track Widths & Vias" panel has no
     /// per-entry add/remove Cmd of its own, it just resubmits the whole
     /// list on every change, same spirit as `PasteItems`. The board's own
     /// default (`BoardRules::track_width`) is not part of this list -- a
     /// consumer always offers it as the implicit first entry.
-    SetTrackWidthPresets { widths: Vec<Um> },
+    SetTrackWidthPresets { widths: Vec<Nm> },
     /// Same idea as `SetTrackWidthPresets`, for `m_ViaSizeList`.
     SetViaPresets { presets: Vec<ViaPreset> },
 
@@ -429,17 +429,17 @@ pub enum Cmd {
         /// zone (it has no net).
         #[serde(default)]
         layers: Option<Vec<String>>,
-        clearance: Um,
-        min_thickness: Um,
-        thermal_gap: Um,
-        thermal_spoke_width: Um,
+        clearance: Nm,
+        min_thickness: Nm,
+        thermal_gap: Nm,
+        thermal_spoke_width: Nm,
         pad_connection: PadConnection,
         priority: u32,
         island_removal_mode: IslandRemovalMode,
         min_island_area: i64,
         fill_mode: FillMode,
-        hatch_thickness: Um,
-        hatch_gap: Um,
+        hatch_thickness: Nm,
+        hatch_gap: Nm,
         hatch_orientation_mdeg: Millideg,
         hatch_smoothing_level: i32,
         hatch_smoothing_value: f64,
@@ -467,7 +467,7 @@ pub enum Cmd {
         #[serde(default)]
         smoothing: Option<eda_model::ir::ZoneSmoothing>,
         #[serde(default)]
-        corner_radius: Option<Um>,
+        corner_radius: Option<Nm>,
         /// The rule area's Placement tab (`DIALOG_RULE_AREA_PROPERTIES`: No placement, or the sheet, component class or group whose footprints the area stands
         /// for; [`eda_model::multichannel::PlacementArea`]). `None` leaves what the zone has.
         #[serde(default)]
@@ -574,7 +574,7 @@ pub enum Cmd {
     DeleteDimension { id: String },
     /// Translate both feature points by `(dx, dy)` -- what dragging a
     /// dimension does (`PCB_DIMENSION_BASE::Move`).
-    MoveDimension { id: String, dx: Um, dy: Um },
+    MoveDimension { id: String, dx: Nm, dy: Nm },
     /// Properties dialog's OK: replace every field at once (kind,
     /// feature points included) -- same "whole panel commits together"
     /// shape `EditZone`/`EditPad` already have. `id` on `dimension` is
@@ -723,7 +723,7 @@ pub enum Cmd {
     /// `{"op": "embedded", "verb": "add", "owner": {"kind": "board"}, "name": "part.step", "data": "<base64>"}`.
     Embedded(embedded::EmbeddedCmd),
     /// The microwave tools (`pcbnew.MicrowaveTool.*`, GAPS.md item 9, package P19): a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own, one verb family, see
-    /// [`microwave::MicrowaveCmd`]. On the wire: `{"op": "microwave", "verb": "gap", "at": {..}, "size_um": 500, "track_width_um": 250}`.
+    /// [`microwave::MicrowaveCmd`]. On the wire: `{"op": "microwave", "verb": "gap", "at": {..}, "size_nm": 500, "track_width_nm": 250}`.
     Microwave(microwave::MicrowaveCmd),
     /// The multichannel tool (GAPS.md items 24 and 32, package P24): Generate Placement Rule Areas, Repeat Layout and Apply Design Block Layout -- one verb family, see
     /// [`multichannel::MultichannelCmd`]. On the wire: `{"op": "multichannel", "verb": "repeat_layout", "reference": "zone_..", "targets": [..]}`.
@@ -746,22 +746,22 @@ pub enum Cmd {
     /// Translate a shape by `(dx, dy)` -- what dragging it does. A shape
     /// has no single position the way a via or a text does (its geometry
     /// is two or more points), so the move is a delta, not a destination.
-    MoveShape { id: String, dx: Um, dy: Um },
+    MoveShape { id: String, dx: Nm, dy: Nm },
     /// `dialog_pcb_shape_properties.cpp`'s editable fields (GAPS.md #11):
     /// layer, line width, and filled/unfilled. Geometry itself has no
     /// dialog field to edit in source either (dragging the shape's own
     /// points is the only way) -- left for a future point editor.
-    EditShape { id: String, layer: String, stroke_width: Um, filled: bool },
+    EditShape { id: String, layer: String, stroke_width: Nm, filled: bool },
 
     /// Add free text.
     AddText { text: Text },
     /// Replace a text's content and styling in place. Its id and position
     /// do not change (see `MoveText` for that).
-    EditText { id: String, content: String, angle: Millideg, layer: String, size_um: Um, stroke_width: Um, justify: TextJustify, mirror: bool },
+    EditText { id: String, content: String, angle: Millideg, layer: String, size_nm: Nm, stroke_width: Nm, justify: TextJustify, mirror: bool },
     /// Remove a text by id.
     DeleteText { id: String },
     /// Move a text to a new position, keeping its id and styling.
-    MoveText { id: String, x: Um, y: Um },
+    MoveText { id: String, x: Nm, y: Nm },
     /// `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close", scoped to what this model has of the dialog's items: free-standing board
     /// graphics (`Shape`), board text (`Text`) and board dimensions -- no footprint reference/value fields, tables or barcodes exist as editable
     /// board items here, see PARITY-pcb.md section 2. `shape_ids`/`text_ids`/`dimension_ids` are already filtered by the caller (scope, layer,
@@ -781,15 +781,15 @@ pub enum Cmd {
         layer: Option<String>,
         /// Shapes' and dimensions' `stroke_width`.
         #[serde(default)]
-        line_width: Option<Um>,
-        /// Texts' `size_um` (applied to both the width and height this
-        /// model draws text at -- see `Text::size_um`'s own doc) and a
-        /// dimension's `text_size_um`.
+        line_width: Option<Nm>,
+        /// Texts' `size_nm` (applied to both the width and height this
+        /// model draws text at -- see `Text::size_nm`'s own doc) and a
+        /// dimension's `text_size_nm`.
         #[serde(default)]
-        text_size: Option<Um>,
-        /// Texts' `stroke_width` and a dimension's `text_thickness_um`.
+        text_size: Option<Nm>,
+        /// Texts' `stroke_width` and a dimension's `text_thickness_nm`.
         #[serde(default)]
-        text_thickness: Option<Um>,
+        text_thickness: Option<Nm>,
     },
     /// `pcbnew.GlobalEdit.removeUnusedPads` (Remove Unused Pads...), `DIALOG_UNUSED_PAD_LAYERS::updatePadsAndVias` -- see `unused_pads.rs`: the plated
     /// through-hole pads (`pads`) and the vias (`vias`) the dialog picked stop having copper on the layers nothing connects them on (`remove` with `keep_outside`:
@@ -1001,7 +1001,7 @@ pub enum Cmd {
     /// "local coordinates origin" anchor choices), which the caller
     /// resolves to an actual board point since this crate has no
     /// selection/UI-origin concept of its own.
-    MoveExact { parts: Vec<String>, dx: Um, dy: Um, rotate_millideg: i64, pivot: Option<Point> },
+    MoveExact { parts: Vec<String>, dx: Nm, dy: Nm, rotate_millideg: i64, pivot: Option<Point> },
 
     // --------------------------------------------- move, rotate, flip: any item
     //
@@ -1012,7 +1012,7 @@ pub enum Cmd {
     // happens are the tool's rules, which the studio applies before it sends one of these
     // (`web/studio/src/kicad-port/pcbTransform.ts`).
     /// Translate every item by `(dx, dy)`. Tracks keep their ids and shapes, a footprint lands on the placement grid.
-    MoveItems { ids: Vec<String>, dx: Um, dy: Um },
+    MoveItems { ids: Vec<String>, dx: Nm, dy: Nm },
     /// Turn every item about `pivot` by `angle_millideg`, positive clockwise on the screen (the sense of `MoveExact`'s
     /// `rotate_millideg`). Each item turns about the one shared point, and its own orientation follows: a footprint's
     /// `rot`, a text's and a dimension's text angle.
@@ -1151,7 +1151,7 @@ pub enum Cmd {
     /// *not* take one, since Reference/Value/Footprint/Datasheet are
     /// part-wide, not per-unit (`ONE part, one footprint, several placed
     /// units` -- every unit shares them).
-    MoveSymbol { id: String, x: Um, y: Um, #[serde(default)] unit: Option<u32> },
+    MoveSymbol { id: String, x: Nm, y: Nm, #[serde(default)] unit: Option<u32> },
     /// `G`: move a symbol AND drag along the endpoint of every wire
     /// presently attached to one of its pins (KiCad's rubber-band) --
     /// `attached_wire_endpoints` names which (wire index, endpoint index)
@@ -1159,7 +1159,7 @@ pub enum Cmd {
     /// started, so this moves exactly those points by the same delta
     /// rather than re-deriving attachment from the new position. `unit`:
     /// see `MoveSymbol`'s own doc.
-    DragSymbol { id: String, x: Um, y: Um, attached_wire_endpoints: Vec<(usize, usize)>, #[serde(default)] unit: Option<u32> },
+    DragSymbol { id: String, x: Nm, y: Nm, attached_wire_endpoints: Vec<(usize, usize)>, #[serde(default)] unit: Option<u32> },
     /// `R`: quarter turns, same convention as `Rotate`. `unit`: see
     /// `MoveSymbol`'s own doc.
     RotateSymbol { id: String, quarter_turns: u8, #[serde(default)] unit: Option<u32> },
@@ -1236,11 +1236,11 @@ pub enum Cmd {
     DeleteJunction { id: String },
     /// `I` (`eeschema.InteractiveDrawingLineWireBus.drawLines`, `SCH_LINE_WIRE_BUS_TOOL::DrawSegments` on
     /// `LAYER_NOTES`): a graphic polyline of at least two points, decoration only (see `eda_model::ir::SchLine`).
-    /// `width_um` 0 is the default line width.
+    /// `width_nm` 0 is the default line width.
     AddSchLine {
         pts: Vec<Point>,
         #[serde(default)]
-        width_um: Um,
+        width_nm: Nm,
     },
     DeleteSchLine { id: String },
     /// `S` (`eeschema.InteractiveDrawing.drawSheet`, `SCH_DRAWING_TOOLS::DrawSheet`): place a hierarchical sheet
@@ -1248,7 +1248,7 @@ pub enum Cmd {
     /// when missing). A `file` no sheet uses yet gets a new, empty screen; one that exists is shared
     /// (`EditSheetProperties`' "use the existing file" case). Refused for an empty or already-used sheet name
     /// ("A sheet named ... already exists"), a name with a path separator, or a non-positive size.
-    AddSheet { name: String, file: String, at: Point, size: (Um, Um) },
+    AddSheet { name: String, file: String, at: Point, size: (Nm, Nm) },
     /// Import Sheet... and Draw Sheet from File (`eeschema.InteractiveDrawing.importSheet` / `drawSheetFromFile`, `SCH_DRAWING_TOOLS::ImportSheet` /
     /// `DrawSheet`, with `SCH_EDIT_FRAME::LoadSheetFromFile`): put the schematic file `source` in the design as a sheet -- a sheet symbol `name` of `size`
     /// at `at` showing a copy of the file under `file` (a bare name; made unique when the design has one of that name), and a copy of the screen of each sheet
@@ -1270,7 +1270,7 @@ pub enum Cmd {
         file: String,
         at: Point,
         #[serde(default)]
-        size: (Um, Um),
+        size: (Nm, Nm),
         #[serde(default)]
         keep_annotations: bool,
         #[serde(default)]
@@ -1302,9 +1302,9 @@ pub enum Cmd {
     PasteSch {
         fragment: eda_model::sch_clipboard::SchFragment,
         #[serde(default)]
-        dx: Um,
+        dx: Nm,
         #[serde(default)]
-        dy: Um,
+        dy: Nm,
         #[serde(default)]
         mode: eda_model::sch_clipboard::PasteMode,
     },
@@ -1393,7 +1393,7 @@ pub enum Cmd {
     /// why this is a separate verb from `AddText` (the PCB one, a
     /// different shape entirely: layer/stroke/justify/mirror, none of
     /// which a schematic has).
-    AddSchText { content: String, at: Point, angle_millideg: Millideg, size_um: Um },
+    AddSchText { content: String, at: Point, angle_millideg: Millideg, size_nm: Nm },
     DeleteSchText { id: String },
     /// `P`: place a power symbol on a pin.
     AddPowerSymbol { lib_id: String, at: Point, rot_millideg: Millideg, net: String, pin: String },
@@ -1681,7 +1681,7 @@ pub enum Cmd {
     /// Move a pad to an absolute position in the footprint's local frame
     /// -- a pad has one center point, like a via or text (see `MoveVia`/
     /// `MoveText`), not `MoveShape`'s delta form.
-    MovePad { footprint: String, id: String, x: Um, y: Um },
+    MovePad { footprint: String, id: String, x: Nm, y: Nm },
     /// Quarter turns about the pad's own center, same convention as
     /// `Cmd::Rotate`. KiCad's own pad rotation step is the generic
     /// `EDIT_TOOL`'s configurable `PCBNEW_SETTINGS::m_RotationAngle`
@@ -1728,14 +1728,14 @@ pub enum Cmd {
     /// same id-assignment/validation rules as the PCB tab's `AddShape`.
     AddFootprintGraphic { footprint: String, shape: Shape },
     DeleteFootprintGraphic { footprint: String, id: String },
-    MoveFootprintGraphic { footprint: String, id: String, dx: Um, dy: Um },
-    EditFootprintGraphic { footprint: String, id: String, layer: String, stroke_width: Um, filled: bool },
+    MoveFootprintGraphic { footprint: String, id: String, dx: Nm, dy: Nm },
+    EditFootprintGraphic { footprint: String, id: String, layer: String, stroke_width: Nm, filled: bool },
     /// Free-standing text on a footprint, same `Text` type as the PCB
     /// tab's `AddText`.
     AddFootprintText { footprint: String, text: Text },
-    EditFootprintText { footprint: String, id: String, content: String, angle: Millideg, layer: String, size_um: Um, stroke_width: Um, justify: TextJustify, mirror: bool },
+    EditFootprintText { footprint: String, id: String, content: String, angle: Millideg, layer: String, size_nm: Nm, stroke_width: Nm, justify: TextJustify, mirror: bool },
     DeleteFootprintText { footprint: String, id: String },
-    MoveFootprintText { footprint: String, id: String, x: Um, y: Um },
+    MoveFootprintText { footprint: String, id: String, x: Nm, y: Nm },
     /// `pcbnew.Array.createArray` (Ctrl+T) in the Footprint Editor, `ARRAY_TOOL::CreateArray` with `m_isFootprintEditor` -- see [`fp_array`]: a grid or a
     /// circular array of the pads, graphics and texts `ids` name, in one undo step. `arrange` puts the selected items on the points instead of copying them
     /// (and numbers nothing); `numbering`, when given, renumbers the pads of the array ([`PadNumbering`]: "Renumber pads" with its scheme, direction and
@@ -2466,9 +2466,9 @@ impl Cmd {
 pub struct Board<'a> {
     model: &'a ConstraintModel,
     design: Design,
-    snap: Um,
+    snap: Nm,
     /// Minimum gap left between courtyards when resolving a `Place`.
-    spacing: Um,
+    spacing: Nm,
     /// [`unruled_decoupling_pairs`] both ways round, computed once: every
     /// neighbour query reads it.
     decoupling: Arc<BTreeMap<String, BTreeSet<String>>>,
@@ -2517,7 +2517,7 @@ impl Outcome {
 
 impl<'a> Board<'a> {
     /// An empty board with the given outline.
-    pub fn new(design: Design, model: &'a ConstraintModel, snap: Um, spacing: Um) -> Self {
+    pub fn new(design: Design, model: &'a ConstraintModel, snap: Nm, spacing: Nm) -> Self {
         let mut decoupling: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for (cap, ic) in unruled_decoupling_pairs(model) {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
@@ -2542,7 +2542,7 @@ impl<'a> Board<'a> {
 
     /// A point on the placement grid: whole snap steps from the grid origin, not from (0, 0), so a position the editor snapped to the grid it
     /// draws (`origin + n * grid`) is the position the verb stores.
-    fn snap_point(&self, x: Um, y: Um) -> Point {
+    fn snap_point(&self, x: Nm, y: Nm) -> Point {
         let o = self.grid_origin();
         Point { x: snap(x - o.x, self.snap) + o.x, y: snap(y - o.y, self.snap) + o.y }
     }
@@ -2863,8 +2863,8 @@ impl<'a> Board<'a> {
             Cmd::EditShape { id, layer, stroke_width, filled } => self.edit_shape(id, layer, *stroke_width, *filled),
 
             Cmd::AddText { text } => self.add_text(text.clone()),
-            Cmd::EditText { id, content, angle, layer, size_um, stroke_width, justify, mirror } => {
-                self.edit_text(id, content.clone(), *angle, layer.clone(), *size_um, *stroke_width, *justify, *mirror)
+            Cmd::EditText { id, content, angle, layer, size_nm, stroke_width, justify, mirror } => {
+                self.edit_text(id, content.clone(), *angle, layer.clone(), *size_nm, *stroke_width, *justify, *mirror)
             }
             Cmd::DeleteText { id } => self.delete_text(id),
             Cmd::MoveText { id, x, y } => self.move_text(id, *x, *y),
@@ -2930,7 +2930,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteBusEntry { id } => self.delete_bus_entry(id),
             Cmd::AddJunction { at } => self.add_junction(*at),
             Cmd::DeleteJunction { id } => self.delete_junction(id),
-            Cmd::AddSchLine { pts, width_um } => self.add_sch_line(pts.clone(), *width_um),
+            Cmd::AddSchLine { pts, width_nm } => self.add_sch_line(pts.clone(), *width_nm),
             Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
             Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options, as_group, group_name, block } => match content {
@@ -2959,7 +2959,7 @@ impl<'a> Board<'a> {
             Cmd::ClearErcExclusions => self.clear_erc_exclusions(),
             Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
             Cmd::DeleteLabel { id } => self.delete_label(id),
-            Cmd::AddSchText { content, at, angle_millideg, size_um } => self.add_sch_text(content, *at, *angle_millideg, *size_um),
+            Cmd::AddSchText { content, at, angle_millideg, size_nm } => self.add_sch_text(content, *at, *angle_millideg, *size_nm),
             Cmd::DeleteSchText { id } => self.delete_sch_text(id),
             Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
             Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
@@ -3014,8 +3014,8 @@ impl<'a> Board<'a> {
             Cmd::MoveFootprintGraphic { footprint, id, dx, dy } => self.move_footprint_graphic(footprint, id, *dx, *dy),
             Cmd::EditFootprintGraphic { footprint, id, layer, stroke_width, filled } => self.edit_footprint_graphic(footprint, id, layer, *stroke_width, *filled),
             Cmd::AddFootprintText { footprint, text } => self.add_footprint_text(footprint, text.clone()),
-            Cmd::EditFootprintText { footprint, id, content, angle, layer, size_um, stroke_width, justify, mirror } => {
-                self.edit_footprint_text(footprint, id, content.clone(), *angle, layer.clone(), *size_um, *stroke_width, *justify, *mirror)
+            Cmd::EditFootprintText { footprint, id, content, angle, layer, size_nm, stroke_width, justify, mirror } => {
+                self.edit_footprint_text(footprint, id, content.clone(), *angle, layer.clone(), *size_nm, *stroke_width, *justify, *mirror)
             }
             Cmd::DeleteFootprintText { footprint, id } => self.delete_footprint_text(footprint, id),
             Cmd::MoveFootprintText { footprint, id, x, y } => self.move_footprint_text(footprint, id, *x, *y),
@@ -3121,7 +3121,7 @@ impl<'a> Board<'a> {
     }
 
     /// Courtyard the part would have at this pose.
-    fn courtyard_at(&self, r: &str, fp: &FootprintInstance) -> Result<(Um, Um, Um, Um), Vec<CheckResult>> {
+    fn courtyard_at(&self, r: &str, fp: &FootprintInstance) -> Result<(Nm, Nm, Nm, Nm), Vec<CheckResult>> {
         let p = self.part(r)?;
         placed_courtyard(self.model, p, fp)
             .ok_or_else(|| vec![CheckResult::fail("ops_no_footprint", r, "the part has no resolvable footprint, so it has no courtyard to place")])
@@ -3136,26 +3136,26 @@ impl<'a> Board<'a> {
     /// `placement_refdes_clear` failures on a board the annealer clears.
     /// The gate judges label against courtyard, so the placer has to as
     /// well.
-    fn keepout_at(&self, r: &str, fp: &FootprintInstance) -> Result<(Um, Um, Um, Um), Vec<CheckResult>> {
+    fn keepout_at(&self, r: &str, fp: &FootprintInstance) -> Result<(Nm, Nm, Nm, Nm), Vec<CheckResult>> {
         let p = self.part(r)?;
         placed_keepout(self.model, &self.placement().outline, p, fp)
             .ok_or_else(|| vec![CheckResult::fail("ops_no_footprint", r, "the part has no resolvable footprint, so it has no keepout to place")])
     }
 
     /// Keepout of a placed part, for collision tests.
-    fn keepout_of(&self, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
+    fn keepout_of(&self, fp: &FootprintInstance) -> Option<(Nm, Nm, Nm, Nm)> {
         let p = self.model.part(&fp.id)?;
         placed_keepout(self.model, &self.placement().outline, p, fp)
     }
 
     /// Does this trial rectangle hit anything already down?
-    fn collides(&self, r: &str, rect: (Um, Um, Um, Um)) -> bool {
+    fn collides(&self, r: &str, rect: (Nm, Nm, Nm, Nm)) -> bool {
         self.placement().footprints.iter().filter(|f| f.id != r).any(|f| {
             self.keepout_of(f).map(|k| overlaps(rect, k)).unwrap_or(false)
         })
     }
 
-    fn board_bbox(&self) -> (Um, Um, Um, Um) {
+    fn board_bbox(&self) -> (Nm, Nm, Nm, Nm) {
         let o = &self.placement().outline;
         (
             o.iter().map(|p| p.x).min().unwrap_or(0),
@@ -3174,7 +3174,7 @@ impl<'a> Board<'a> {
     /// the placer has to know where it may put pads in the first place, and
     /// cannot ask kicad-cli on every candidate. `place_on_edge` has always
     /// kept its connectors out of the band the same way.
-    fn pads_clear_of_edge(&self, part: &str, fp: &FootprintInstance, bb: (Um, Um, Um, Um)) -> bool {
+    fn pads_clear_of_edge(&self, part: &str, fp: &FootprintInstance, bb: (Nm, Nm, Nm, Nm)) -> bool {
         let clearance = self.model.board.tuning.copper_edge_clearance();
         let Some(p) = self.model.part(part) else { return true };
         let Some(pads) = placed_pads(self.model, p, fp) else { return true };
@@ -3268,8 +3268,8 @@ impl<'a> Board<'a> {
         let bb = self.board_bbox();
         let (fx, fy) = region.fractions();
         let centre = (
-            bb.0 + ((bb.2 - bb.0) as f64 * fx) as Um,
-            bb.1 + ((bb.3 - bb.1) as f64 * fy) as Um,
+            bb.0 + ((bb.2 - bb.0) as f64 * fx) as Nm,
+            bb.1 + ((bb.3 - bb.1) as f64 * fy) as Nm,
         );
         for ring in 0..MAX_SLIDE_STEPS {
             let r = ring as i64 * self.snap;
@@ -3332,9 +3332,9 @@ impl<'a> Board<'a> {
         let c = self.courtyard_at(part, &probe)?;
         let (half_w, half_h) = ((c.2 - c.0) / 2, (c.3 - c.1) / 2);
 
-        let along = |lo: Um, hi: Um, half: Um| -> Um {
+        let along = |lo: Nm, hi: Nm, half: Nm| -> Nm {
             let usable = (hi - half) - (lo + half);
-            lo + half + (usable as f64 * fraction) as Um
+            lo + half + (usable as f64 * fraction) as Nm
         };
         // Sit one snap step inside the edge, not exactly on it.
         //
@@ -3354,14 +3354,14 @@ impl<'a> Board<'a> {
         let step = self.snap.max(1);
         let clearance = self.model.board.tuning.copper_edge_clearance();
         let pads = placed_pads(self.model, self.part(part)?, &probe).unwrap_or_default();
-        let copper = pads.iter().fold((Um::MAX, Um::MAX, Um::MIN, Um::MIN), |r, p| {
+        let copper = pads.iter().fold((Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN), |r, p| {
             (r.0.min(p.center.x - p.size.0 / 2), r.1.min(p.center.y - p.size.1 / 2), r.2.max(p.center.x + p.size.0 / 2), r.3.max(p.center.y + p.size.1 / 2))
         });
         // Per side, how much further in than its courtyard the part must
         // sit for that: whole snap steps, plus one for the snapping below,
         // and nothing where the pads clear it anyway. The ends count too:
         // a row put near a corner has its end pad by the other edge.
-        let room = |gap: Um| -> Um {
+        let room = |gap: Nm| -> Nm {
             let short = clearance - gap;
             if short <= 0 { 0 } else { (short + step - 1) / step * step + step }
         };
@@ -3414,7 +3414,7 @@ impl<'a> Board<'a> {
     /// leaves the outline is refused rather than quietly slid somewhere
     /// nearby. A command that silently does something other than what it
     /// says cannot be learned from.
-    fn place_at(&mut self, part: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+    fn place_at(&mut self, part: &str, x: Nm, y: Nm) -> Result<(), Vec<CheckResult>> {
         self.require_unplaced(part)?;
         let bb = self.board_bbox();
         let at = self.snap_point(x, y);
@@ -3582,7 +3582,7 @@ impl<'a> Board<'a> {
         }
     }
 
-    fn add_track(&mut self, net: &str, layer: &str, width: Um, pts: &[Point]) -> Result<(), Vec<CheckResult>> {
+    fn add_track(&mut self, net: &str, layer: &str, width: Nm, pts: &[Point]) -> Result<(), Vec<CheckResult>> {
         self.known_net(net)?;
         self.known_layer(layer)?;
         if width <= 0 {
@@ -3608,7 +3608,7 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn set_track_width(&mut self, id: &str, width: Um) -> Result<(), Vec<CheckResult>> {
+    fn set_track_width(&mut self, id: &str, width: Nm) -> Result<(), Vec<CheckResult>> {
         if width <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_track", id, "track width must be positive")]);
         }
@@ -3619,7 +3619,7 @@ impl<'a> Board<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn add_via(&mut self, net: &str, x: Um, y: Um, drill: Um, diameter: Um, from_layer: &str, to_layer: &str) -> Result<(), Vec<CheckResult>> {
+    fn add_via(&mut self, net: &str, x: Nm, y: Nm, drill: Nm, diameter: Nm, from_layer: &str, to_layer: &str) -> Result<(), Vec<CheckResult>> {
         self.known_net(net)?;
         self.known_layer(from_layer)?;
         self.known_layer(to_layer)?;
@@ -3653,14 +3653,14 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn move_via(&mut self, id: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+    fn move_via(&mut self, id: &str, x: Nm, y: Nm) -> Result<(), Vec<CheckResult>> {
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_via", id, "the board has no routing yet")])?;
         let v = rt.vias.iter_mut().find(|v| v.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_via", id, "no via with this id")])?;
         v.at = Point { x, y };
         Ok(())
     }
 
-    fn edit_via(&mut self, id: &str, diameter: Um, drill: Um) -> Result<(), Vec<CheckResult>> {
+    fn edit_via(&mut self, id: &str, diameter: Nm, drill: Nm) -> Result<(), Vec<CheckResult>> {
         if drill <= 0 || diameter <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_via", id, "via drill and diameter must be positive")]);
         }
@@ -3676,7 +3676,7 @@ impl<'a> Board<'a> {
 
     /// Board Setup > Track Widths & Vias' "Track Widths" list -- a plain
     /// whole-list replace (see `Cmd::SetTrackWidthPresets`'s own doc).
-    fn set_track_width_presets(&mut self, widths: &[Um]) -> Result<(), Vec<CheckResult>> {
+    fn set_track_width_presets(&mut self, widths: &[Nm]) -> Result<(), Vec<CheckResult>> {
         if widths.iter().any(|w| *w <= 0) {
             return Err(vec![CheckResult::fail("ops_bad_track", "track_width_presets", "every preset width must be positive")]);
         }
@@ -3821,17 +3821,17 @@ impl<'a> Board<'a> {
         net: &str,
         layer: &str,
         layers: Option<&[String]>,
-        clearance: Um,
-        min_thickness: Um,
-        thermal_gap: Um,
-        thermal_spoke_width: Um,
+        clearance: Nm,
+        min_thickness: Nm,
+        thermal_gap: Nm,
+        thermal_spoke_width: Nm,
         pad_connection: PadConnection,
         priority: u32,
         island_removal_mode: IslandRemovalMode,
         min_island_area: i64,
         fill_mode: FillMode,
-        hatch_thickness: Um,
-        hatch_gap: Um,
+        hatch_thickness: Nm,
+        hatch_gap: Nm,
         hatch_orientation_mdeg: Millideg,
         hatch_smoothing_level: i32,
         hatch_smoothing_value: f64,
@@ -3844,7 +3844,7 @@ impl<'a> Board<'a> {
         keepout_copper_pour: bool,
         keepout_footprints: bool,
         smoothing: Option<eda_model::ir::ZoneSmoothing>,
-        corner_radius: Option<Um>,
+        corner_radius: Option<Nm>,
         placement: Option<&eda_model::multichannel::PlacementArea>,
     ) -> Result<(), Vec<CheckResult>> {
         // "" (no net) is normal for a rule area, and allowed for an
@@ -4001,7 +4001,7 @@ impl<'a> Board<'a> {
         dr.dimensions.iter_mut().find(|d| d.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_dimension", id, "no dimension with this id")])
     }
 
-    fn move_dimension(&mut self, id: &str, dx: Um, dy: Um) -> Result<(), Vec<CheckResult>> {
+    fn move_dimension(&mut self, id: &str, dx: Nm, dy: Nm) -> Result<(), Vec<CheckResult>> {
         let dr = self.drawings_mut();
         let dim = Self::find_dimension_mut(dr, id)?;
         eda_connectivity::dimension::translate_dimension(dim, dx, dy);
@@ -4221,14 +4221,14 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn move_shape(&mut self, id: &str, dx: Um, dy: Um) -> Result<(), Vec<CheckResult>> {
+    fn move_shape(&mut self, id: &str, dx: Nm, dy: Nm) -> Result<(), Vec<CheckResult>> {
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "the board has no drawings yet")])?;
         let s = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])?;
         s.translate(dx, dy);
         Ok(())
     }
 
-    fn edit_shape(&mut self, id: &str, layer: &str, stroke_width: Um, filled: bool) -> Result<(), Vec<CheckResult>> {
+    fn edit_shape(&mut self, id: &str, layer: &str, stroke_width: Nm, filled: bool) -> Result<(), Vec<CheckResult>> {
         if layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_shape", id, "a shape needs a layer")]);
         }
@@ -4252,7 +4252,7 @@ impl<'a> Board<'a> {
         if text.layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_text", "text", "text needs a layer")]);
         }
-        if text.size_um <= 0 {
+        if text.size_nm <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_text", "text", "text size must be positive")]);
         }
         self.layer_is_on(&text.layer, "text")?;
@@ -4264,29 +4264,29 @@ impl<'a> Board<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn edit_text(&mut self, id: &str, content: String, angle: Millideg, layer: String, size_um: Um, stroke_width: Um, justify: TextJustify, mirror: bool) -> Result<(), Vec<CheckResult>> {
+    fn edit_text(&mut self, id: &str, content: String, angle: Millideg, layer: String, size_nm: Nm, stroke_width: Nm, justify: TextJustify, mirror: bool) -> Result<(), Vec<CheckResult>> {
         if layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text needs a layer")]);
         }
-        if size_um <= 0 {
+        if size_nm <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
         }
         self.layer_is_on(&layer, id)?;
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "the board has no drawings yet")])?;
         let t = dr.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
         // A new size is a square one again (the glyph width an imported text kept is the width of its old size), and a stroke width given is not the automatic one.
-        let resized = t.size_um != size_um;
+        let resized = t.size_nm != size_nm;
         let stroked = t.stroke_width != stroke_width;
         t.content = content;
         t.angle = angle;
         t.layer = layer;
-        t.size_um = size_um;
+        t.size_nm = size_nm;
         t.stroke_width = stroke_width;
         t.justify = justify;
         t.mirror = mirror;
         if let Some(x) = dr.text_extras.iter_mut().find(|x| x.id == id) {
             if resized {
-                x.width_um = None;
+                x.width_nm = None;
             }
             if stroked {
                 x.auto_thickness = false;
@@ -4306,7 +4306,7 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn move_text(&mut self, id: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+    fn move_text(&mut self, id: &str, x: Nm, y: Nm) -> Result<(), Vec<CheckResult>> {
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "the board has no drawings yet")])?;
         let t = dr.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
         t.at = Point { x, y };
@@ -4433,7 +4433,7 @@ impl<'a> Board<'a> {
     /// shared delta/angle for the whole selection); each part's `pivot`,
     /// when given, is still the one shared point (the caller resolves
     /// "selection center" to a single coordinate before sending this).
-    fn move_exact(&mut self, parts: &[String], dx: Um, dy: Um, rotate_millideg: i64, pivot: Option<Point>) -> Result<(), Vec<CheckResult>> {
+    fn move_exact(&mut self, parts: &[String], dx: Nm, dy: Nm, rotate_millideg: i64, pivot: Option<Point>) -> Result<(), Vec<CheckResult>> {
         if parts.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_move_exact", "move_exact", "no parts given")]);
         }
@@ -4576,7 +4576,7 @@ impl<'a> Board<'a> {
         }
     }
 
-    fn move_symbol(&mut self, id: &str, x: Um, y: Um, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
+    fn move_symbol(&mut self, id: &str, x: Nm, y: Nm, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
         let i = self.find_symbol_unit_index(id, unit)?;
         self.schematic_mut()?.symbols[i].at = Point { x, y };
         Ok(())
@@ -4587,7 +4587,7 @@ impl<'a> Board<'a> {
     /// (`(wire index, point index)` pairs into `wires`/`wires[i].pts`) --
     /// see `Cmd::DragSymbol`'s own doc for why resolving "attached" is the
     /// caller's job, not this method's.
-    fn drag_symbol(&mut self, id: &str, x: Um, y: Um, attached: &[(usize, usize)], unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
+    fn drag_symbol(&mut self, id: &str, x: Nm, y: Nm, attached: &[(usize, usize)], unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
         let i = self.find_symbol_unit_index(id, unit)?;
         let before = self.schematic()?.symbols[i].at;
         let (dx, dy) = (x - before.x, y - before.y);
@@ -4739,17 +4739,17 @@ impl<'a> Board<'a> {
     }
 
     /// `I`: a graphic line on the notes layer.
-    fn add_sch_line(&mut self, mut pts: Vec<Point>, width_um: Um) -> Result<(), Vec<CheckResult>> {
+    fn add_sch_line(&mut self, mut pts: Vec<Point>, width_nm: Nm) -> Result<(), Vec<CheckResult>> {
         // A zero-length segment is dropped (`SCH_LINE_WIRE_BUS_TOOL::finishSegments` deletes null lines): a double-click lands its point twice.
         pts.dedup();
         if pts.len() < 2 {
             return Err(vec![CheckResult::fail("ops_bad_line", "line", "a line needs at least two points")]);
         }
-        if width_um < 0 {
+        if width_nm < 0 {
             return Err(vec![CheckResult::fail("ops_bad_line", "line", "a line width cannot be negative")]);
         }
         let sch = self.schematic_mut_or_create();
-        sch.lines.push(SchLine { id: String::new(), pts, width_um });
+        sch.lines.push(SchLine { id: String::new(), pts, width_nm });
         sch.assign_missing_ids();
         Ok(())
     }
@@ -4765,7 +4765,7 @@ impl<'a> Board<'a> {
     }
 
     /// `S`: a hierarchical sheet symbol. See `Cmd::AddSheet`.
-    fn add_sheet(&mut self, name: &str, file: &str, at: Point, size: (Um, Um)) -> Result<(), Vec<CheckResult>> {
+    fn add_sheet(&mut self, name: &str, file: &str, at: Point, size: (Nm, Nm)) -> Result<(), Vec<CheckResult>> {
         let name = name.trim();
         if name.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_sheet", "sheet", "a sheet needs a name")]);
@@ -4932,8 +4932,8 @@ impl<'a> Board<'a> {
     /// `TextDialog.tsx` already uses for the PCB side's own `add_text`),
     /// so a backend-level refusal would never actually trigger in
     /// practice; this keeps the verb itself simple.
-    fn add_sch_text(&mut self, content: &str, at: Point, angle: Millideg, size_um: Um) -> Result<(), Vec<CheckResult>> {
-        self.schematic_mut_or_create().texts.push(SchematicText { id: String::new(), content: content.into(), at, angle, size_um });
+    fn add_sch_text(&mut self, content: &str, at: Point, angle: Millideg, size_nm: Nm) -> Result<(), Vec<CheckResult>> {
+        self.schematic_mut_or_create().texts.push(SchematicText { id: String::new(), content: content.into(), at, angle, size_nm });
         Ok(())
     }
 
@@ -5432,7 +5432,7 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn move_pad(&mut self, footprint: &str, id: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+    fn move_pad(&mut self, footprint: &str, id: &str, x: Nm, y: Nm) -> Result<(), Vec<CheckResult>> {
         let fp = self.library_footprint_mut(footprint)?;
         Self::find_pad_mut(fp, id)?.at = Point { x, y };
         Ok(())
@@ -5543,13 +5543,13 @@ impl<'a> Board<'a> {
         fp.graphics.iter_mut().find(|s| s.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])
     }
 
-    fn move_footprint_graphic(&mut self, footprint: &str, id: &str, dx: Um, dy: Um) -> Result<(), Vec<CheckResult>> {
+    fn move_footprint_graphic(&mut self, footprint: &str, id: &str, dx: Nm, dy: Nm) -> Result<(), Vec<CheckResult>> {
         let fp = self.library_footprint_mut(footprint)?;
         Self::find_footprint_graphic_mut(fp, id)?.translate(dx, dy);
         Ok(())
     }
 
-    fn edit_footprint_graphic(&mut self, footprint: &str, id: &str, layer: &str, stroke_width: Um, filled: bool) -> Result<(), Vec<CheckResult>> {
+    fn edit_footprint_graphic(&mut self, footprint: &str, id: &str, layer: &str, stroke_width: Nm, filled: bool) -> Result<(), Vec<CheckResult>> {
         if layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_shape", id, "a shape needs a layer")]);
         }
@@ -5568,7 +5568,7 @@ impl<'a> Board<'a> {
         if text.layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_text", footprint, "text needs a layer")]);
         }
-        if text.size_um <= 0 {
+        if text.size_nm <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_text", footprint, "text size must be positive")]);
         }
         text.id = String::new();
@@ -5586,15 +5586,15 @@ impl<'a> Board<'a> {
         content: String,
         angle: Millideg,
         layer: String,
-        size_um: Um,
-        stroke_width: Um,
+        size_nm: Nm,
+        stroke_width: Nm,
         justify: TextJustify,
         mirror: bool,
     ) -> Result<(), Vec<CheckResult>> {
         if layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text needs a layer")]);
         }
-        if size_um <= 0 {
+        if size_nm <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
         }
         let fp = self.library_footprint_mut(footprint)?;
@@ -5602,7 +5602,7 @@ impl<'a> Board<'a> {
         t.content = content;
         t.angle = angle;
         t.layer = layer;
-        t.size_um = size_um;
+        t.size_nm = size_nm;
         t.stroke_width = stroke_width;
         t.justify = justify;
         t.mirror = mirror;
@@ -5619,7 +5619,7 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn move_footprint_text(&mut self, footprint: &str, id: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+    fn move_footprint_text(&mut self, footprint: &str, id: &str, x: Nm, y: Nm) -> Result<(), Vec<CheckResult>> {
         let fp = self.library_footprint_mut(footprint)?;
         let t = fp.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
         t.at = Point { x, y };
@@ -5999,7 +5999,7 @@ fn rotate_point_about(pt: Point, pivot: Point, angle_millideg: i64) -> Point {
     let (sin, cos) = rad.sin_cos();
     let dx = (pt.x - pivot.x) as f64;
     let dy = (pt.y - pivot.y) as f64;
-    Point { x: pivot.x + (dx * cos - dy * sin).round() as Um, y: pivot.y + (dx * sin + dy * cos).round() as Um }
+    Point { x: pivot.x + (dx * cos - dy * sin).round() as Nm, y: pivot.y + (dx * sin + dy * cos).round() as Nm }
 }
 
 /// How far a `Place` will slide along the anchor before giving up.
@@ -6012,14 +6012,14 @@ fn rotate_point_about(pt: Point, pivot: Point, angle_millideg: i64) -> Point {
 /// range and the sixth was refused.
 const MAX_SLIDE_STEPS: u32 = 400;
 
-fn snap(v: Um, to: Um) -> Um {
+fn snap(v: Nm, to: Nm) -> Nm {
     if to <= 0 {
         return v;
     }
     ((v as f64 / to as f64).round() as i64) * to
 }
 
-fn overlaps(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> bool {
+fn overlaps(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> bool {
     a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
 }
 

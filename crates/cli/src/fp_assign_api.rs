@@ -144,6 +144,6 @@ pub fn reannotate_plan(dir: &Path, body: &[u8]) -> Value {
         Ok(loaded) => loaded,
         Err(e) => return json!({ "ok": false, "message": board::reasons(&e) }),
     };
-    let plan = eda_ops::Board::new(design, &model, meta.snap_um, meta.spacing_um).reannotate_plan(&options, &selection);
+    let plan = eda_ops::Board::new(design, &model, meta.snap_nm, meta.spacing_nm).reannotate_plan(&options, &selection);
     json!({ "ok": true, "valid": plan.ok(), "plan": plan })
 }

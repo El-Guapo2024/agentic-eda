@@ -62,7 +62,7 @@ fn corner_cost(pts: &[eda_model::ir::Point]) -> i64 {
     dirs.windows(2).map(|w| corner_cost_of(w[0].angle_to(&w[1]))).sum()
 }
 
-fn collides(node: &Node, pts: &[eda_model::ir::Point], layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId]) -> bool {
+fn collides(node: &Node, pts: &[eda_model::ir::Point], layer: i32, width: Nm, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId]) -> bool {
     use crate::layer::LayerRange;
     pts.windows(2).any(|w| {
         let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
@@ -70,7 +70,7 @@ fn collides(node: &Node, pts: &[eda_model::ir::Point], layer: i32, width: Um, ne
     })
 }
 
-use eda_model::ir::Um;
+use eda_model::ir::Nm;
 
 /// One `mergeStep`: try every start position at shortcut span `step`
 /// (segments `n` and `n+step`), accept the first collision-free candidate
@@ -79,7 +79,7 @@ use eda_model::ir::Um;
 /// [`Constraints::corner_mode`]): in a rounded mode it is an arc, which the path then holds (`arcs`); a segment of an arc is never the start or end
 /// of a merge ("Do not attempt to merge false segments that are part of an arc").
 #[allow(clippy::too_many_arguments)] // mirrors the collision query's own (node, net, layer, width, rules, exclude) parameter set, threaded straight through.
-fn merge_step(pts: &[eda_model::ir::Point], arcs: &[ArcPts], origin: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], constraints: &Constraints) -> Option<(Vec<eda_model::ir::Point>, Vec<ArcPts>)> {
+fn merge_step(pts: &[eda_model::ir::Point], arcs: &[ArcPts], origin: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32, width: Nm, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], constraints: &Constraints) -> Option<(Vec<eda_model::ir::Point>, Vec<ArcPts>)> {
     if pts.len() < step + 3 {
         return None;
     }
@@ -157,7 +157,7 @@ pub(crate) fn intersect_lines(a1: eda_model::ir::Point, a2: eda_model::ir::Point
     let t = dir2x * offy - dir2y * offx; // dir2.Cross(offset); point = a1 + (t/det)*dir1
     let px = a1.x as i128 + (dir1x * t) / det;
     let py = a1.y as i128 + (dir1y * t) / det;
-    Some(eda_model::ir::Point { x: px as Um, y: py as Um })
+    Some(eda_model::ir::Point { x: px as Nm, y: py as Nm })
 }
 
 /// `OPTIMIZER::mergeObtuse`: see this module's own doc comment for how
@@ -169,7 +169,7 @@ pub(crate) fn intersect_lines(a1: eda_model::ir::Point, a2: eda_model::ir::Point
 /// span drops below 2 (comparing two *adjacent* segments isn't a gap this
 /// pass is for -- `MERGE_COLINEAR` already owns that case).
 #[allow(clippy::too_many_arguments)] // same query-context parameter set every other pass in this module threads through unchanged.
-fn merge_obtuse(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId]) -> Vec<eda_model::ir::Point> {
+fn merge_obtuse(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Nm, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId]) -> Vec<eda_model::ir::Point> {
     if pts.len() < 3 {
         return pts;
     }
@@ -217,7 +217,7 @@ fn merge_obtuse(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: 
 
 /// `mergeFull`: the outer shrinking-span loop around [`merge_step`].
 #[allow(clippy::too_many_arguments)] // same query-context parameter set every other pass in this module threads through unchanged.
-fn merge_full(pts: Vec<eda_model::ir::Point>, arcs: Vec<ArcPts>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], constraints: &Constraints) -> (Vec<eda_model::ir::Point>, Vec<ArcPts>) {
+fn merge_full(pts: Vec<eda_model::ir::Point>, arcs: Vec<ArcPts>, node: &Node, layer: i32, width: Nm, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], constraints: &Constraints) -> (Vec<eda_model::ir::Point>, Vec<ArcPts>) {
     if pts.len() < 3 {
         return (pts, arcs);
     }
@@ -278,7 +278,7 @@ pub fn optimize_with(line: &Line, node: &Node, rules: &BoardRules, exclude: &[It
 }
 
 /// `OPTIMIZER::SetRestrictArea( area, false )` + `RESTRICT_AREA`: `x0, y0, x1, y1`.
-pub type Area = (Um, Um, Um, Um);
+pub type Area = (Nm, Nm, Nm, Nm);
 
 /// What the callers of the optimizer ask of its shortcuts (`OPT_CONSTRAINT`, checked by `checkConstraints` in the order `OPTIMIZER::Optimize` adds
 /// them: preserve vertex, restrict area, keep topology).
@@ -499,15 +499,15 @@ fn append(v: &mut Vec<eda_model::ir::Point>, more: &[eda_model::ir::Point]) {
 /// `circleBreakouts` for a circle, `customBreakouts` for a polygon. A
 /// rounded rectangle reaches KiCad's router as a compound shape, which
 /// has no breakouts -- so none here either.
-fn breakouts(width: Um, item: &crate::item::Item) -> Vec<Vec<eda_model::ir::Point>> {
+fn breakouts(width: Nm, item: &crate::item::Item) -> Vec<Vec<eda_model::ir::Point>> {
     use eda_model::ir::Point;
     let crate::item::Item::Solid(solid) = item else { return Vec::new() };
-    let rect = |x0: Um, y0: Um, x1: Um, y1: Um| -> Vec<Vec<Point>> {
+    let rect = |x0: Nm, y0: Nm, x1: Nm, y1: Nm| -> Vec<Vec<Point>> {
         let (sx, sy) = (x1 - x0, y1 - y0);
         let c = Point { x: x0 + sx / 2, y: y0 + sy / 2 };
-        let add = |p: Point, d: (Um, Um)| Point { x: p.x + d.0, y: p.y + d.1 };
+        let add = |p: Point, d: (Nm, Nm)| Point { x: p.x + d.0, y: p.y + d.1 };
         let d_off = (if sx > sy { (sx - sy) / 2 } else { 0 }, if sx < sy { (sy - sx) / 2 } else { 0 });
-        let neg = |d: (Um, Um)| (-d.0, -d.1);
+        let neg = |d: (Nm, Nm)| (-d.0, -d.1);
         let (dv, dh) = ((0, sy / 2 + width), (sx / 2 + width, 0));
         let mut out = vec![vec![c, add(c, dh)], vec![c, add(c, neg(dh))], vec![c, add(c, dv)], vec![c, add(c, neg(dv))]];
         let l = width + sx.min(sy) / 2;
@@ -539,7 +539,7 @@ fn breakouts(width: Um, item: &crate::item::Item) -> Vec<Vec<eda_model::ir::Poin
             .map(|i| {
                 let a = i as f64 * std::f64::consts::FRAC_PI_4;
                 let l = r as f64 * std::f64::consts::SQRT_2;
-                vec![c, Point { x: c.x + (l * a.cos()).round() as Um, y: c.y + (l * a.sin()).round() as Um }]
+                vec![c, Point { x: c.x + (l * a.cos()).round() as Nm, y: c.y + (l * a.sin()).round() as Nm }]
             })
             .collect(),
         Shape::Polygon { ref pts } => {
@@ -551,7 +551,7 @@ fn breakouts(width: Um, item: &crate::item::Item) -> Vec<Vec<eda_model::ir::Poin
             (0..8)
                 .filter_map(|i| {
                     let a = i as f64 * std::f64::consts::FRAC_PI_4;
-                    let v0 = Point { x: p0.x + (length as f64 * a.cos()).round() as Um, y: p0.y + (length as f64 * a.sin()).round() as Um };
+                    let v0 = Point { x: p0.x + (length as f64 * a.cos()).round() as Nm, y: p0.y + (length as f64 * a.sin()).round() as Nm };
                     let ray = eda_drc::kimath::Seg::new(p0, v0);
                     (0..n).find_map(|k| ray.intersect(&eda_drc::kimath::Seg::new(pts[k], pts[(k + 1) % n]))).map(|hit| vec![p0, hit])
                 })
@@ -709,7 +709,7 @@ fn find_coupled_vertices(vertex: eda_model::ir::Point, orig_seg: crate::seg_ops:
 struct HitCache<'a> {
     node: &'a Node,
     rules: &'a BoardRules,
-    memo: std::cell::RefCell<std::collections::HashMap<(i64, i64, i64, i64, Um, i32, crate::item::Net), bool, std::hash::BuildHasherDefault<Fnv>>>,
+    memo: std::cell::RefCell<std::collections::HashMap<(i64, i64, i64, i64, Nm, i32, crate::item::Net), bool, std::hash::BuildHasherDefault<Fnv>>>,
 }
 
 /// FNV-1a: the memo is hit by the thousand per preview, and its keys are small and not adversarial.

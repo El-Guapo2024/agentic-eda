@@ -14,7 +14,7 @@ use super::pcb_table_builders::{characteristics_table, effective_stackup, stacku
 use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
 use eda_drc::constraints::Units;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::Stackup;
 use eda_model::table::Table;
 use eda_model::table_edit::{edit_cells, patch_table, CellEdit, TablePatch};
@@ -35,16 +35,16 @@ pub enum TableCmd {
     /// `BOARD_COMMIT::Add( table )` of Draw Table, Place Board Stackup Table and Place Board Characteristics: a new table. Its id and its uuids are made here, whatever
     /// the table brings; it is refused when it is not a grid (no cell, a cell count that is not rows times columns) or its layer is not one the board has on.
     Add { table: Table },
-    /// `DRAWING_TOOL::DrawTable` and its Table Properties dialog, as one step ("Draw Table"): a grid of `cols` x `rows` empty cells of `cell_w_um` x `cell_h_um`, its
-    /// first corner at `at`, on `layer`, drawn with a border and separators `line_width_um` wide; then what the dialog set (`patch`, `locked`).
+    /// `DRAWING_TOOL::DrawTable` and its Table Properties dialog, as one step ("Draw Table"): a grid of `cols` x `rows` empty cells of `cell_w_nm` x `cell_h_nm`, its
+    /// first corner at `at`, on `layer`, drawn with a border and separators `line_width_nm` wide; then what the dialog set (`patch`, `locked`).
     Draw {
         layer: String,
         at: Point,
         cols: usize,
         rows: usize,
-        cell_w_um: Um,
-        cell_h_um: Um,
-        line_width_um: Um,
+        cell_w_nm: Nm,
+        cell_h_nm: Nm,
+        line_width_nm: Nm,
         #[serde(default)]
         locked: bool,
         #[serde(default)]
@@ -183,17 +183,17 @@ impl Board<'_> {
     fn apply_table_in(&mut self, scope: Scope, cmd: &TableCmd) -> Result<(), Vec<CheckResult>> {
         match cmd {
             TableCmd::Add { table } => self.add_table_in(scope, table.clone()),
-            TableCmd::Draw { layer, at, cols, rows, cell_w_um, cell_h_um, line_width_um, locked, patch } => {
+            TableCmd::Draw { layer, at, cols, rows, cell_w_nm, cell_h_nm, line_width_nm, locked, patch } => {
                 if *cols == 0 || *rows == 0 || *cols > 100 || *rows > 1000 {
                     return Err(fail("ops_bad_table", "table", "a table has from 1 to 100 columns and from 1 to 1000 rows"));
                 }
-                if *cell_w_um <= 0 || *cell_h_um <= 0 {
+                if *cell_w_nm <= 0 || *cell_h_nm <= 0 {
                     return Err(fail("ops_bad_table", "table", "a cell has a size"));
                 }
                 let mut t = match scope {
-                    Scope::Board => Table::new_grid(layer, *at, *cols, *rows, *cell_w_um, *cell_h_um, *line_width_um),
+                    Scope::Board => Table::new_grid(layer, *at, *cols, *rows, *cell_w_nm, *cell_h_nm, *line_width_nm),
                     // `SCH_TABLE( 0 )` and cells of the sheet's default text size (`SCH_DRAWING_TOOLS::DrawTable`).
-                    Scope::Sheet => Table::new_sch_grid(*at, *cols, *rows, *cell_w_um, *cell_h_um, eda_model::ir::DEFAULT_FIELD_SIZE_UM),
+                    Scope::Sheet => Table::new_sch_grid(*at, *cols, *rows, *cell_w_nm, *cell_h_nm, eda_model::ir::DEFAULT_FIELD_SIZE_NM),
                 };
                 patch_table(&mut t, patch).map_err(|m| fail("ops_bad_table", "table", m))?;
                 self.add_table_in(scope, t)?;
@@ -327,7 +327,7 @@ impl Board<'_> {
             .and_then(|r| r.stackup.as_ref())
             .map(|s| (s.copper_layers as usize, s.stackup.clone()))
             .or_else(|| self.model.stackup.as_ref().map(|s| (copper, s.clone())));
-        effective_stackup(setup, copper, self.model.board.board_thickness_um)
+        effective_stackup(setup, copper, self.model.board.board_thickness_nm)
     }
 
     fn add_table_in(&mut self, scope: Scope, mut table: Table) -> Result<(), Vec<CheckResult>> {

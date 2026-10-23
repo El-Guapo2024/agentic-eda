@@ -10,9 +10,9 @@ use crate::sch_move::SchMoveCmd;
 use eda_model::ir::{Group, Junction, LabelKind, NetLabel, NoConnect, PowerSymbol, Provenance, SchLine, SchematicSection, SchematicText, SymbolInstance, Wire};
 use std::collections::BTreeMap;
 
-const G: Um = 1_270;
+const G: Nm = 1_270;
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -39,10 +39,10 @@ fn sheet() -> SchematicSection {
     s.wires.push(wire("wire_in", &[p(20_320, 21_590), p(20_320, 17_780), p(40_640, 17_780), p(40_640, 21_590)]));
     s.wires.push(wire("wire_out", &[p(40_640, 29_210), p(40_640, 33_020), p(63_500, 33_020)]));
     s.labels.push(NetLabel { id: "lbl_a".into(), net: "A".into(), at: p(63_500, 33_020), kind: LabelKind::Local });
-    s.texts.push(SchematicText { id: "txt_a".into(), content: "note".into(), at: p(30_480, 50_800), angle: 0, size_um: 1_270 });
-    s.texts.push(SchematicText { id: "txt_far".into(), content: "far".into(), at: p(152_400, 50_800), angle: 0, size_um: 1_270 });
+    s.texts.push(SchematicText { id: "txt_a".into(), content: "note".into(), at: p(30_480, 50_800), angle: 0, size_nm: 1_270 });
+    s.texts.push(SchematicText { id: "txt_far".into(), content: "far".into(), at: p(152_400, 50_800), angle: 0, size_nm: 1_270 });
     s.no_connects.push(NoConnect { id: "nc_a".into(), at: p(20_320, 29_210), pin: String::new() });
-    s.lines.push(SchLine { id: "sln_a".into(), pts: vec![p(10_160, 63_500), p(50_800, 63_500)], width_um: 0 });
+    s.lines.push(SchLine { id: "sln_a".into(), pts: vec![p(10_160, 63_500), p(50_800, 63_500)], width_nm: 0 });
     s.junctions.push(Junction { id: "jct_a".into(), at: p(30_480, 17_780) });
     s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(76_200, 38_100), rot: 0, net: "GND".into(), pin: String::new() });
     s.assign_missing_ids();
@@ -55,7 +55,7 @@ fn design_with(sch: SchematicSection) -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(sch),
         nets: None,
@@ -231,7 +231,7 @@ fn the_verbs_round_trip_as_json() {
 
 // ------------------------------------------------------------------------------------------------------------------- the tree acts as one
 
-fn mv(v: &[&str], dx: Um, dy: Um) -> Cmd {
+fn mv(v: &[&str], dx: Nm, dy: Nm) -> Cmd {
     Cmd::SchMove(SchMoveCmd::Move { ids: ids(v), dx, dy, turns: Vec::new(), about: None })
 }
 
@@ -382,14 +382,14 @@ fn a_renamed_reference_stays_in_its_group() {
 fn an_item_made_while_a_group_is_entered_joins_it() {
     let m = ConstraintModel::default();
     let mut b = board(&m, nested());
-    let add = Cmd::AddSchText { content: "new".into(), at: p(10_160, 76_200), angle_millideg: 0, size_um: 1_270 };
+    let add = Cmd::AddSchText { content: "new".into(), at: p(10_160, 76_200), angle_millideg: 0, size_nm: 1_270 };
     b.apply(&Cmd::InGroup { group: "grp_inner".into(), cmd: Box::new(add) }).unwrap();
     let s = sch(&b);
     let new_id = s.texts.iter().find(|t| t.content == "new").unwrap().id.clone();
     assert!(members(&s, "grp_inner").contains(&new_id), "{:?}", s.extras.groups);
     assert_eq!(s.extras.parent_group(&new_id).map(|g| g.id.as_str()), Some("grp_inner"));
     // a group that is gone is not joined, and the command still stands
-    let add2 = Cmd::AddSchText { content: "second".into(), at: p(10_160, 88_900), angle_millideg: 0, size_um: 1_270 };
+    let add2 = Cmd::AddSchText { content: "second".into(), at: p(10_160, 88_900), angle_millideg: 0, size_nm: 1_270 };
     b.apply(&Cmd::InGroup { group: "grp_gone".into(), cmd: Box::new(add2) }).unwrap();
     assert!(sch(&b).texts.iter().any(|t| t.content == "second"));
 }
@@ -430,13 +430,13 @@ fn grouped_fragment() -> SchFragment {
     section.symbols.push(sym("R2", p(120_000, 50_000)));
     section.wires.push(wire("w1", &[p(100_000, 46_190), p(120_000, 46_190)]));
     section.labels.push(NetLabel { id: "l1".into(), net: "SDA".into(), at: p(130_000, 46_190), kind: LabelKind::Local });
-    section.texts.push(SchematicText { id: "t1".into(), content: "outside".into(), at: p(100_000, 70_000), angle: 0, size_um: 1_270 });
+    section.texts.push(SchematicText { id: "t1".into(), content: "outside".into(), at: p(100_000, 70_000), angle: 0, size_nm: 1_270 });
     section.extras.groups = vec![Group { id: "grp_a".into(), name: "inner".into(), member_ids: ids(&["R1", "w1"]), design_block: String::new() }, Group { id: "grp_b".into(), name: "outer".into(), member_ids: ids(&["grp_a", "R2", "l1"]), design_block: String::new() }];
     let lib_symbols = ["Device:R"].iter().filter_map(|id| eda_model::symbol::builtin(id)).map(|s| LibrarySymbol::from_engine_symbol(&s)).collect();
     SchFragment { section, lib_symbols, notes: vec![], sheet_screens: Default::default() }
 }
 
-fn paste(f: &SchFragment, dx: Um, dy: Um) -> Cmd {
+fn paste(f: &SchFragment, dx: Nm, dy: Nm) -> Cmd {
     Cmd::PasteSch { fragment: f.clone(), dx, dy, mode: PasteMode::Unique }
 }
 

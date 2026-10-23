@@ -32,10 +32,10 @@
 //! `pns_node.cpp` directly.
 
 /// See `all_colliding`.
-pub const CLEARANCE_EPSILON: Um = 1;
+pub const CLEARANCE_EPSILON: Nm = 1;
 
 /// How far from a point [`Node::segment_at`] looks for a segment: half the widest track it can find (5 mm of copper).
-const SEGMENT_AT_REACH: Um = 2_500;
+const SEGMENT_AT_REACH: Nm = 2_500;
 
 /// `NODE::AssembleLine`'s `MaxVerts` (1024 * 16): hard cap on a followed line.
 const ASSEMBLE_MAX_VERTS: usize = 1024 * 16;
@@ -46,7 +46,7 @@ use crate::joint::{Joint, JointKey};
 use crate::layer::LayerRange;
 use crate::line::Line;
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 use std::collections::HashMap;
 
@@ -132,8 +132,8 @@ pub struct Obstacle {
     pub id: ItemId,
     pub kind: Kind,
     /// Edge-to-edge gap actually measured, vs. `clearance_needed` required.
-    pub actual: Um,
-    pub clearance_needed: Um,
+    pub actual: Nm,
+    pub clearance_needed: Nm,
     pub pos: Point,
 }
 
@@ -154,11 +154,11 @@ impl Clone for Node {
 /// Cell size for the broad-phase grid: a few mm, coarse enough that a
 /// typical query touches a handful of cells regardless of board size (the
 /// same reasoning as `eda_drc::rtree::DrcRTree::new`'s doc comment).
-const INDEX_CELL_UM: Um = 5_000_000 / 1000; // 5mm in um (board coords are um)
+const INDEX_CELL_NM: Nm = 5_000_000 / 1000; // 5mm in um (board coords are um)
 
 impl Node {
     pub fn new() -> Self {
-        Node { items: HashMap::new(), next_id: 1, joints: HashMap::new(), index: Index::new(INDEX_CELL_UM) }
+        Node { items: HashMap::new(), next_id: 1, joints: HashMap::new(), index: Index::new(INDEX_CELL_NM) }
     }
 
     /// `NODE::Branch()`, simplified to a full clone -- see this module's
@@ -261,8 +261,8 @@ impl Node {
         }
     }
 
-    fn bbox_of(item: &Item) -> (Um, Um, Um, Um) {
-        let mut bbox: Option<(Um, Um, Um, Um)> = None;
+    fn bbox_of(item: &Item) -> (Nm, Nm, Nm, Nm) {
+        let mut bbox: Option<(Nm, Nm, Nm, Nm)> = None;
         for layer in item.layers().iter() {
             let b = item.shape(layer).bbox(0);
             bbox = Some(match bbox {
@@ -346,7 +346,7 @@ impl Node {
 
     /// `NODE::QueryJoints( bbox, joints, layers, ITEM::SOLID_T )` for what the optimizer's `KEEP_TOPOLOGY_CONSTRAINT` asks: the position and net of the joint of
     /// every pad (`Solid`) that is inside `bbox` (`x0, y0, x1, y1`) and on one of `layers`.
-    pub fn solid_joints_in(&self, bbox: (Um, Um, Um, Um), layers: LayerRange) -> Vec<(Point, Net)> {
+    pub fn solid_joints_in(&self, bbox: (Nm, Nm, Nm, Nm), layers: LayerRange) -> Vec<(Point, Net)> {
         let mut out: Vec<(Point, Net)> = Vec::new();
         for id in self.index.query(bbox) {
             let Some(Item::Solid(s)) = self.items.get(&id) else { continue };
@@ -770,7 +770,7 @@ impl Node {
 
     /// The segment or arc whose copper `pos` is on, on `layer` (of `net`, when given): the one whose centre line passes nearest. `within` is how
     /// far off the centre line `pos` may be -- the half width when `None`. The items in `exclude` are not looked at.
-    pub fn segment_at(&self, pos: Point, layer: i32, net: Option<&Net>, within: Option<Um>, exclude: &[ItemId]) -> Option<ItemId> {
+    pub fn segment_at(&self, pos: Point, layer: i32, net: Option<&Net>, within: Option<Nm>, exclude: &[ItemId]) -> Option<ItemId> {
         let bbox = Shape::Circle { c: pos, r: 0 }.bbox(SEGMENT_AT_REACH);
         let mut best: Option<(ItemId, i128)> = None;
         for id in self.index.query(bbox) {
@@ -826,8 +826,8 @@ impl Node {
 
     /// `TOPOLOGY::ConnectedJoints( aStart )`: the joints reachable from the joint at `start` by walking along segments -- track to
     /// track, through junctions, pads and vias alike -- as the set of positions.
-    fn connected_joints(&self, start: Point, net: &Net) -> std::collections::HashSet<(Um, Um)> {
-        let mut seen: std::collections::HashSet<(Um, Um)> = std::collections::HashSet::new();
+    fn connected_joints(&self, start: Point, net: &Net) -> std::collections::HashSet<(Nm, Nm)> {
+        let mut seen: std::collections::HashSet<(Nm, Nm)> = std::collections::HashSet::new();
         let mut queue: std::collections::VecDeque<Point> = std::collections::VecDeque::new();
         seen.insert((start.x, start.y));
         queue.push_back(start);
@@ -881,7 +881,7 @@ impl Node {
     /// `ITEM::Collide` in real KiCad (board-specific, injected via
     /// `RULE_RESOLVER`), not in `NODE` itself. Same-net items never collide
     /// at all (checked by the caller before this is reached).
-    pub fn clearance(rules: &BoardRules, a: &Net, b: &Net) -> Um {
+    pub fn clearance(rules: &BoardRules, a: &Net, b: &Net) -> Nm {
         eda_drc::constraints::clearance(rules, Self::net_str(a), Self::net_str(b))
     }
 
@@ -890,7 +890,7 @@ impl Node {
     /// (`isCopper` is false for it), so `CT_CLEARANCE` is never asked; `isEdge( aB )` asks `CT_EDGE_CLEARANCE`, which is
     /// the board's copper-to-edge clearance (`bds.m_CopperEdgeClearance`, [`eda_drc::constraints::edge_clearance_min`]) --
     /// whatever net class the copper is in.
-    pub fn clearance_to(rules: &BoardRules, net: &Net, item: &Item) -> Um {
+    pub fn clearance_to(rules: &BoardRules, net: &Net, item: &Item) -> Nm {
         match item {
             Item::Solid(s) if s.edge => eda_drc::constraints::edge_clearance_min(rules),
             _ => Self::clearance(rules, net, item.net()),
@@ -899,7 +899,7 @@ impl Node {
 
     /// How far from an item the search for what it could collide with has to look: the largest clearance anything can ask for
     /// (the net classes', the holes', and the board edge's).
-    fn search_margin(rules: &BoardRules) -> Um {
+    fn search_margin(rules: &BoardRules) -> Nm {
         eda_drc::constraints::worst_case_clearance(rules).max(eda_drc::constraints::edge_clearance_min(rules))
     }
 
@@ -981,7 +981,7 @@ impl Node {
         if found.is_empty() {
             return None;
         }
-        let eps = |c: Um| if opts.use_epsilon && c > 0 { (c - CLEARANCE_EPSILON).max(0) } else { c };
+        let eps = |c: Nm| if opts.use_epsilon && c > 0 { (c - CLEARANCE_EPSILON).max(0) } else { c };
         let first_entry = |hull: &[Point]| -> Option<(i64, Point)> {
             crate::line_walk::hull_intersection(hull, &line.pts).into_iter().map(|(p, idx)| (path_length(&line.pts, p, idx), p)).min_by_key(|&(d, _)| d)
         };
@@ -1048,8 +1048,8 @@ impl Node {
         let mut pending: std::collections::VecDeque<ItemId> = std::collections::VecDeque::new();
         pending.push_back(start);
         let bbox_of_shape = |it: &Item| it.shape(layer).bbox(0);
-        let merge = |a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3));
-        let area = |b: (Um, Um, Um, Um)| (b.2 - b.0) as i128 * (b.3 - b.1) as i128;
+        let merge = |a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3));
+        let area = |b: (Nm, Nm, Nm, Nm)| (b.2 - b.0) as i128 * (b.3 - b.1) as i128;
         let mut cluster_bbox = bbox_of_shape(start_item);
         let initial_area = area(cluster_bbox);
         let mut processed: std::collections::HashSet<ItemId> = std::collections::HashSet::new();
@@ -1126,7 +1126,7 @@ impl Node {
     /// literal KiCad `NODE` method (KiCad's equivalent snapping lives in
     /// the UI tool layer, `router_tool.cpp`), but the natural place for it
     /// here since it only needs `items`.
-    pub fn nearest_anchor(&self, pos: Point, layers: LayerRange, max_dist: Um, net_filter: Option<&Net>) -> Option<(ItemId, Point)> {
+    pub fn nearest_anchor(&self, pos: Point, layers: LayerRange, max_dist: Nm, net_filter: Option<&Net>) -> Option<(ItemId, Point)> {
         let mut best: Option<(ItemId, Point, i128)> = None;
         for (&id, item) in &self.items {
             if !item.layers().overlaps(&layers) || item.is_virtual() {
@@ -1157,10 +1157,10 @@ impl Node {
     /// (route start/end snapping); this one is "what's physically under
     /// the cursor," the same distinction `pcb_selection_tool.cpp` draws
     /// between a point hit-test and anchor snapping.
-    pub fn item_at(&self, pos: Point, layers: LayerRange, max_dist: Um) -> Option<ItemId> {
+    pub fn item_at(&self, pos: Point, layers: LayerRange, max_dist: Nm) -> Option<ItemId> {
         let probe = Shape::Circle { c: pos, r: 0 };
         let bbox = probe.bbox(max_dist);
-        let mut best: Option<(ItemId, Um)> = None;
+        let mut best: Option<(ItemId, Nm)> = None;
         for id in self.index.query(bbox) {
             let Some(item) = self.items.get(&id) else { continue };
             if !item.layers().overlaps(&layers) || matches!(item, Item::Solid(s) if !s.routable()) {
@@ -1182,7 +1182,7 @@ fn same_net_exact(a: &Net, b: &Net) -> bool {
 }
 
 /// Bounding box of a line's points, inflated by half its width.
-fn line_bbox(l: &Line) -> Option<(Um, Um, Um, Um)> {
+fn line_bbox(l: &Line) -> Option<(Nm, Nm, Nm, Nm)> {
     let first = l.pts.first()?;
     let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
     for p in &l.pts {
@@ -1224,7 +1224,7 @@ mod tests {
     use crate::item::{net_of, Segment, Solid, Via};
     use eda_model::ir::Point;
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 
@@ -1338,11 +1338,11 @@ mod tests {
         assert!(!child.contains(id));
     }
 
-    fn seg_item(net: &str, a: Point, b: Point, width: Um) -> Item {
+    fn seg_item(net: &str, a: Point, b: Point, width: Nm) -> Item {
         Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width, source_track: None, locked: false })
     }
 
-    fn pad_item(net: &str, c: Point, r: Um) -> Item {
+    fn pad_item(net: &str, c: Point, r: Nm) -> Item {
         Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false })
     }
 

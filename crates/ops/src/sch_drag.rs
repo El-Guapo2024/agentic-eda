@@ -6,7 +6,7 @@
 //! then a `y` move, as `performItemMove` splits every move). Where a function differs from the C++ the difference is said at that function.
 
 use crate::sch_scene::{on_segment, parallel, Item, Scene, Seg, F_BY_DRAG, F_END, F_NEW, F_SELECTED, F_START};
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// `SPECIAL_CASE_LABEL_INFO`: a label on a wire with one end dragged slides along as the wire's ends move.
@@ -39,7 +39,7 @@ pub(crate) struct Drag {
     /// `isLineModeConstrained`: keep partially dragged wires at right angles.
     pub ortho: bool,
     /// `lineGrid`: the wire grid, for the bends.
-    pub grid: Um,
+    pub grid: Nm,
 }
 
 impl<'m> Scene<'m> {

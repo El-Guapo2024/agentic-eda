@@ -132,7 +132,7 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
         }
         Cmd::PlaceFootprint { footprint, at, reference, value, definition: None } => {
             // The model knows it already (the intent's, a library's it resolved, the built-in table): nothing to bring.
-            let probe = eda_model::Part { reference: "?".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(footprint.trim().to_string()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+            let probe = eda_model::Part { reference: "?".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(footprint.trim().to_string()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
             if model.footprint_of(&probe).is_some() {
                 return None;
             }
@@ -150,7 +150,7 @@ fn find_footprint<F: LibSource + ?Sized>(wanted: &str, id: &str, design: &Design
         return Some(Some(copy));
     }
     let value = model.part(id).and_then(|p| p.value.clone());
-    let probe = eda_model::Part { reference: id.to_string(), mpn: None, lcsc: None, value, package: None, footprint: Some(wanted.to_string()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+    let probe = eda_model::Part { reference: id.to_string(), mpn: None, lcsc: None, value, package: None, footprint: Some(wanted.to_string()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
     let in_editor = design.footprint_library.as_ref().is_some_and(|l| l.by_name(wanted).is_some());
     (model.footprint_of(&probe).is_some() || in_editor).then_some(None)
 }

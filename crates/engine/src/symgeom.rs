@@ -194,7 +194,7 @@ mod tests {
             symbol: None,
             datasheet: None,
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-            body_um: None,
+            body_nm: None,
             edge: None,
         }
     }

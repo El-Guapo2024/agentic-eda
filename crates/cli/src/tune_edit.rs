@@ -15,9 +15,9 @@
 use eda_drc::constraints::CType;
 use eda_drc::pcbexpr::{Condition, Env};
 use eda_drc::rule_item::{Class, RuleItem};
-use eda_model::ir::{tessellate_arc, Design, Point, Track, Um};
+use eda_model::ir::{tessellate_arc, Design, Point, Track, Nm};
 use eda_model::setup_pages::{CornerStyle, MeanderSettings as PageSettings};
-use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern, LENGTH_UNCONSTRAINED_UM};
+use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern, LENGTH_UNCONSTRAINED_NM};
 use eda_model::{BoardRules, ConstraintModel};
 use eda_ops::{Board, Cmd};
 use eda_pns::chain::ShapeLineChain;
@@ -66,14 +66,14 @@ pub struct Pick {
     pub track_id: String,
     pub net: String,
     pub layer: String,
-    pub width: Um,
+    pub width: Nm,
     /// The point of the segment nearest the cursor: where a pattern started here would start (`m_pickerItem->GetFocusPosition()`).
     pub at: Point,
 }
 
 /// The track segment or arc at `(x, y)` within `tolerance` of its edge, preferring `layer`. On an arc the pattern starts at the end of it the cursor is
 /// nearer to (`getSnappedStartPoint`).
-pub fn pick(scene: &Scene, x: Um, y: Um, tolerance: Um, layer: Option<&str>) -> Option<Pick> {
+pub fn pick(scene: &Scene, x: Nm, y: Nm, tolerance: Nm, layer: Option<&str>) -> Option<Pick> {
     let cursor = Point { x, y };
     let mut best: Option<(bool, i128, Pick)> = None;
     for (id, item) in scene.world.iter() {
@@ -132,9 +132,9 @@ pub fn default_pattern(model: &ConstraintModel, kind: TuningMode, layer: &str) -
         origin: Point { x: 0, y: 0 },
         end: Point { x: 0, y: 0 },
         initial_side: PatternSide::Left,
-        min_amplitude: s.min_amplitude_um,
-        max_amplitude: s.max_amplitude_um,
-        spacing: s.spacing_um,
+        min_amplitude: s.min_amplitude_nm,
+        max_amplitude: s.max_amplitude_nm,
+        spacing: s.spacing_nm,
         corner_radius_percent: s.corner_radius_percentage,
         rounded: s.corner_style == CornerStyle::Round,
         single_sided: s.single_sided,
@@ -171,7 +171,7 @@ fn range_of(v: &Value, skew: bool) -> Option<TargetRange> {
     let obj = v.as_object()?;
     let get = |k: &str| obj.get(k).and_then(Value::as_f64).map(|f| f.round() as i64);
     let opt = get("opt").or_else(|| get("min")).unwrap_or(0);
-    if !skew && opt >= LENGTH_UNCONSTRAINED_UM {
+    if !skew && opt >= LENGTH_UNCONSTRAINED_NM {
         return Some(TargetRange::unconstrained());
     }
     let base = TargetRange::around(opt);
@@ -811,7 +811,7 @@ impl Tuner {
     }
 }
 
-fn track_of(net: &str, layer: &str, width: Um, shape: &PieceShape) -> Track {
+fn track_of(net: &str, layer: &str, width: Nm, shape: &PieceShape) -> Track {
     match shape {
         PieceShape::Poly(pts) => Track { id: String::new(), net: net.to_string(), pins: Vec::new(), layer: layer.to_string(), width, pts: pts.clone(), arc_mid_offset: None },
         PieceShape::Arc { start, mid, end } => Track::new_arc(net.to_string(), layer.to_string(), width, *start, *mid, *end),
@@ -1164,7 +1164,7 @@ pub fn patterns_of(design: &Design) -> Vec<TuningPattern> {
 mod tests {
     use super::*;
 
-    fn rule(name: &str, ty: &str, min: Option<Um>, max: Option<Um>, opt: Option<Um>, cond: Option<&str>) -> eda_model::CustomRule {
+    fn rule(name: &str, ty: &str, min: Option<Nm>, max: Option<Nm>, opt: Option<Nm>, cond: Option<&str>) -> eda_model::CustomRule {
         eda_model::CustomRule { name: name.into(), constraint_type: ty.into(), min, max, opt, layer: None, severity: None, condition: cond.map(String::from) }
     }
 
@@ -1370,8 +1370,8 @@ mod tests {
                     tried += 1;
                     // its length (or skew) now, and the target 3 mm longer
                     let Ok(h) = hover(&scene, kind, &pk, &Value::Null) else { continue };
-                    let target_um = h.readout.current / 1000 + 3_000;
-                    let settings = if kind == TuningMode::DiffPairSkew { json!({}) } else { json!({ "target_length": target_um }) };
+                    let target_nm = h.readout.current / 1000 + 3_000;
+                    let settings = if kind == TuningMode::DiffPairSkew { json!({}) } else { json!({ "target_length": target_nm }) };
                     let Ok(mut t) = Tuner::start(scene.clone(), kind, &pk, pk.at, &settings) else { continue };
                     started += 1;
                     // the end of the stretch: an end of the picked segment, and the cursor a little off it

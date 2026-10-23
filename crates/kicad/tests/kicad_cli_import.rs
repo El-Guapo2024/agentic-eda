@@ -155,8 +155,8 @@ fn round_trips_shapes_and_text() {
             Shape::Polygon { id: String::new(), layer: "F.CrtYd".into(), stroke_width: 50, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 3_000, y: 0 }, Point { x: 3_000, y: 3_000 }, Point { x: 0, y: 3_000 }] },
         ],
         texts: vec![
-            Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000, y: 2_000 }, angle: 90_000, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: TextJustify::Left, mirror: true },
-            Text { id: String::new(), content: "made in eda".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_um: 800, stroke_width: 120, justify: TextJustify::Center, mirror: false },
+            Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000, y: 2_000 }, angle: 90_000, layer: "F.SilkS".into(), size_nm: 1_000, stroke_width: 150, justify: TextJustify::Left, mirror: true },
+            Text { id: String::new(), content: "made in eda".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_nm: 800, stroke_width: 120, justify: TextJustify::Center, mirror: false },
         ],
         ..Default::default()
     };
@@ -164,7 +164,7 @@ fn round_trips_shapes_and_text() {
 
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "drawings_rt".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection {
@@ -433,13 +433,13 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
         text_position: DimensionTextPosition::Outside,
         keep_text_aligned: true,
         text_angle: 0,
-        text_size_um: 1_200,
+        text_size_nm: 1_200,
         stroke_width: 150,
         arrow_length: 1_270,
         extension_offset: 500,
         extension_height: 580,
         arrow_direction: ArrowDirection::Inward,
-        text_thickness_um: Some(180),
+        text_thickness_nm: Some(180),
     };
     board.drawings = Some(eda_model::ir::DrawingsSection { dimensions: vec![dimension.clone()], ..Default::default() });
     board.assign_missing_ids();

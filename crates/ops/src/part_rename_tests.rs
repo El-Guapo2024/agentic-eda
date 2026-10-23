@@ -17,12 +17,12 @@ fn part(r: &str, pkg: &str) -> Part {
         symbol: None,
         datasheet: None,
         pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-        body_um: None,
+        body_nm: None,
         edge: None,
     }
 }
 
-fn pose(id: &str, x: Um) -> FootprintInstance {
+fn pose(id: &str, x: Nm) -> FootprintInstance {
     FootprintInstance { id: id.into(), at: p(x, 20_000), rot: 0, side: Side::Top, label: LabelSide::default() }
 }
 
@@ -33,13 +33,13 @@ fn net(name: &str, pins: &[&str]) -> eda_model::Net {
 /// R1, R2 and U1 on a board with a stored schematic, routed from R1.2 to U1.1, with a net list, a floorplan block, and every kind of edit a footprint can have.
 fn fixture() -> (ConstraintModel, Design) {
     let model = ConstraintModel { parts: vec![part("R1", "0603"), part("R2", "0603"), part("U1", "SOIC-8")], nets: vec![net("N1", &["R1.2", "U1.1"]), net("N2", &["R2.1", "U1.2"])], ..Default::default() };
-    let sym = |id: &str, x: Um| symbol(id, "Device:R", "10k", 1, p(x, 0));
+    let sym = |id: &str, x: Nm| symbol(id, "Device:R", "10k", 1, p(x, 0));
     let mut pad_edit = PadEdit::none("1", 1);
     pad_edit.size = Some((900, 900));
     let mut edit = FootprintEdit::new("U1");
     edit.set_pad(pad_edit);
     let design = Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(section(vec![sym("R1", 0), sym("R2", 10_000), sym("U1", 20_000)], vec![])),
         nets: Some(vec![net("N1", &["R1.2", "U1.1"]), net("N2", &["R2.1", "U1.2"])]),

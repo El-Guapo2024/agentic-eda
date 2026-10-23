@@ -29,7 +29,7 @@
 //! outline (none given) is finally shrunk to the placed cluster.
 
 use eda_model::footprint::{placed_pads, rotated_extent};
-use eda_model::ir::{LabelSide, Design, FootprintInstance, PlacementSection, Point, Side, Um};
+use eda_model::ir::{LabelSide, Design, FootprintInstance, PlacementSection, Point, Side, Nm};
 use eda_model::{CheckResult, ConstraintModel, PlacementRule};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -38,14 +38,14 @@ use std::collections::HashMap;
 pub struct PlaceOptions {
     pub seed: u64,
     /// Position snap, µm.
-    pub snap: Um,
+    pub snap: Nm,
     /// Annealing moves per part. Larger = better, slower.
     pub moves_per_part: usize,
     /// Explicit outline; else `model.board.outline`; else an auto square.
     pub outline: Option<Vec<Point>>,
     /// Extra keep-apart margin around every courtyard during placement,
     /// µm — routing channel space. Gates still judge the true courtyards.
-    pub spacing: Um,
+    pub spacing: Nm,
     /// Lower bound on the fitted board as a fraction of the outline the
     /// intent declared. The placer shrinks the board to
     /// `model.solver.fit_board_utilization` before packing parts into it;
@@ -123,20 +123,20 @@ const COMPACT_RATIO: f64 = 1.3;
 /// should have decided it.
 /// Auto proximity rule, µm courtyard gap, for a decoupling capacitor and
 /// the IC it decouples (gate: `placement_decoupling`, 3000 µm).
-const DECOUPLING_UM: i64 = 2200;
+const DECOUPLING_NM: i64 = 2200;
 
 struct Item {
     id: String,
     /// Edge connector (header/jack/USB): wants a board edge.
     connector: bool,
     /// Courtyard half-extents (hw, hh) at rot 0.
-    half: (Um, Um),
+    half: (Nm, Nm),
     /// Local pad centres (x, y) at rot 0, per pad number.
-    pads: Vec<(String, (Um, Um))>,
+    pads: Vec<(String, (Nm, Nm))>,
     /// The least distance, on any side, from the courtyard (as `half`
     /// has it) in to pad copper: how far pads stay off an edge the
     /// courtyard touches.
-    pad_inset: Um,
+    pad_inset: Nm,
     /// Pads boxed in by a neighbour on both sides along their row: their
     /// only escape is outward, so the keepout grows on that side of the
     /// courtyard (`Problem::keepout`). Middle pins of a SOT-23-6 row, the
@@ -146,7 +146,7 @@ struct Item {
 
 /// Indices of pads with an in-line neighbour within `pitch_max` on both
 /// sides (same row or same column).
-fn boxed_pads(pads: &[(String, (Um, Um))], pitch_max: Um) -> Vec<usize> {
+fn boxed_pads(pads: &[(String, (Nm, Nm))], pitch_max: Nm) -> Vec<usize> {
     let mut out = Vec::new();
     for (k, (_, (x, y))) in pads.iter().enumerate() {
         let (mut left, mut right, mut up, mut down) = (false, false, false, false);
@@ -163,8 +163,8 @@ fn boxed_pads(pads: &[(String, (Um, Um))], pitch_max: Um) -> Vec<usize> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Pose {
-    x: Um,
-    y: Um,
+    x: Nm,
+    y: Nm,
     rot: u8, // quarter turns
     /// Refdes label side (the placer's choice; see `Problem::label_side`).
     label: LabelSide,
@@ -213,20 +213,20 @@ fn geom(pose: Pose) -> FootprintInstance {
     FootprintInstance { id: String::new(), at: Point { x: pose.x, y: pose.y }, rot: pose.rot as u32 * 90_000, side: Side::Top, label: pose.label }
 }
 
-fn courtyard(item: &Item, pose: Pose) -> (Um, Um, Um, Um) {
+fn courtyard(item: &Item, pose: Pose) -> (Nm, Nm, Nm, Nm) {
     let fp = geom(pose);
     let (w, h) = rotated_extent(&fp, (item.half.0 * 2, item.half.1 * 2));
     (pose.x - w / 2, pose.y - h / 2, pose.x + w / 2, pose.y + h / 2)
 }
 
-fn overlap(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> i64 {
+fn overlap(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> i64 {
     let w = (a.2.min(b.2) - a.0.max(b.0)).max(0);
     let h = (a.3.min(b.3) - a.1.max(b.1)).max(0);
     w * h
 }
 
 /// Edge-to-edge gap between two rectangles (0 when they touch/overlap).
-fn gap(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> f64 {
+fn gap(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> f64 {
     let dx = (a.0 - b.2).max(b.0 - a.2).max(0) as f64;
     let dy = (a.1 - b.3).max(b.1 - a.3).max(0) as f64;
     (dx * dx + dy * dy).sqrt()
@@ -238,13 +238,13 @@ fn gap(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> f64 {
 /// penalty lets a part wander arbitrarily far out of its block for a
 /// modest wirelength gain. A block boundary has to get more expensive the
 /// further you are from it, the way the proximity rules do.
-fn region_escape(c: (Um, Um, Um, Um), r: (Um, Um, Um, Um)) -> f64 {
+fn region_escape(c: (Nm, Nm, Nm, Nm), r: (Nm, Nm, Nm, Nm)) -> f64 {
     let dx = (r.0 - c.0).max(0) + (c.2 - r.2).max(0);
     let dy = (r.1 - c.1).max(0) + (c.3 - r.3).max(0);
     (dx.max(0) + dy.max(0)) as f64
 }
 
-fn outside_area(r: (Um, Um, Um, Um), bb: (Um, Um, Um, Um)) -> i64 {
+fn outside_area(r: (Nm, Nm, Nm, Nm), bb: (Nm, Nm, Nm, Nm)) -> i64 {
     let area = (r.2 - r.0) * (r.3 - r.1);
     area - overlap(r, bb)
 }
@@ -277,33 +277,33 @@ struct Problem<'a> {
     /// such stubs is the placer's to fix (swap the two). Matches the gate.
     stub_free: Vec<bool>,
     stubs_of: Vec<Vec<usize>>,
-    bbox: (Um, Um, Um, Um),
+    bbox: (Nm, Nm, Nm, Nm),
     /// Extra keepout beyond the spaced courtyard on a side where a boxed
     /// pad must escape: room for a via site, minus the spacing already
     /// in `Item::half`.
-    escape_lane: Um,
+    escape_lane: Nm,
     /// Lane for parts with at most 8 pads (see `build_problem`).
-    escape_lane_small: Um,
+    escape_lane_small: Nm,
     /// Board minus the router's edge keep-away: where a non-connector
     /// part's courtyard must stay so its pads are not sealed against the
     /// edge (L4 sweep: D3 in a corner failed placement_pad_reach on every
     /// anneal seed). Connectors still go to `bbox`.
-    inner: (Um, Um, Um, Um),
+    inner: (Nm, Nm, Nm, Nm),
     /// How far pad copper keeps from the board edge, whatever the bound.
-    copper_edge: Um,
+    copper_edge: Nm,
     outline: Vec<Point>,
     /// No outline was given: we placed on a generous square and will
     /// shrink it to the cluster afterwards, so board-use terms don't apply.
     auto_outline: bool,
-    spacing: Um,
+    spacing: Nm,
     /// Refdes font size for this board; the label box above each courtyard
     /// is part of the part's keep-out (gate `placement_refdes_clear`).
-    font: Um,
+    font: Nm,
     model: &'a ConstraintModel,
     /// Congestion grid bin size, µm (~2 mm).
-    bin_um: Um,
+    bin_nm: Nm,
     /// Tracks that can cross one bin, all routing layers combined —
-    /// `layers * bin_um / (track_width + clearance)`.
+    /// `layers * bin_nm / (track_width + clearance)`.
     congest_capacity: f64,
     /// Nets eligible for congestion accounting: 2-6 pins. Wide fan-out
     /// nets (GND/VCC) spread over the whole board aren't a local
@@ -316,11 +316,11 @@ struct Problem<'a> {
     /// cache per item turns nearly all of those into a compare and a copy.
     /// `Cell`, not `RefCell`: the payload is `Copy` and this crate is
     /// single-threaded.
-    keep_cache: Vec<Cell<Option<(Pose, (Um, Um, Um, Um))>>>,
+    keep_cache: Vec<Cell<Option<(Pose, (Nm, Nm, Nm, Nm))>>>,
     /// Per item: the floorplan rectangle it must stay inside, if the
     /// caller ran the floorplan stage. `None` for a part the floorplan
     /// left free, and for every part when there is no floorplan.
-    region: Vec<Option<(Um, Um, Um, Um)>>,
+    region: Vec<Option<(Nm, Nm, Nm, Nm)>>,
 }
 
 impl Problem<'_> {
@@ -360,7 +360,7 @@ impl Problem<'_> {
         pose.label
     }
 
-    fn keepout(&self, i: usize, pose: Pose) -> (Um, Um, Um, Um) {
+    fn keepout(&self, i: usize, pose: Pose) -> (Nm, Nm, Nm, Nm) {
         if let Some((p, r)) = self.keep_cache[i].get() {
             if p == pose {
                 return r;
@@ -371,7 +371,7 @@ impl Problem<'_> {
         r
     }
 
-    fn keepout_uncached(&self, i: usize, pose: Pose) -> (Um, Um, Um, Um) {
+    fn keepout_uncached(&self, i: usize, pose: Pose) -> (Nm, Nm, Nm, Nm) {
         let bare = courtyard(&self.items[i], pose);
         let mut c = bare;
         let side = self.label_side(i, pose);
@@ -392,7 +392,7 @@ impl Problem<'_> {
     /// The rectangle item `i`'s keepout must lie inside: `inner`, or the
     /// board for a connector, and never so near the edge that a pad's
     /// copper breaks the edge clearance.
-    fn bounds(&self, i: usize) -> (Um, Um, Um, Um) {
+    fn bounds(&self, i: usize) -> (Nm, Nm, Nm, Nm) {
         let b = if self.items[i].connector { self.bbox } else { self.inner };
         let s = (self.copper_edge - self.items[i].pad_inset).max(0);
         (b.0.max(self.bbox.0 + s), b.1.max(self.bbox.1 + s), b.2.min(self.bbox.2 - s), b.3.min(self.bbox.3 - s))
@@ -414,7 +414,7 @@ impl Problem<'_> {
 
     /// Net's pad bounding box; (`i64::MAX`, ...) when the net has no placed
     /// pads (shouldn't happen — `build_problem` drops sub-2-pin nets).
-    fn net_bbox(&self, net: usize, poses: &[Pose]) -> (Um, Um, Um, Um) {
+    fn net_bbox(&self, net: usize, poses: &[Pose]) -> (Nm, Nm, Nm, Nm) {
         let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
         for &(i, k) in &self.nets[net] {
             let p = self.pad_center(i, k, poses[i]);
@@ -427,7 +427,7 @@ impl Problem<'_> {
     }
 
     /// RUDY-style demand this net adds to each grid bin it overlaps:
-    /// `net_hpwl * (bin ∩ net_bbox area) / net_bbox area / bin_um`, a
+    /// `net_hpwl * (bin ∩ net_bbox area) / net_bbox area / bin_nm`, a
     /// dimensionless "tracks needed" estimate spread uniformly over the
     /// net's bounding box. Empty for ineligible (wide fan-out) nets.
     fn congest_contrib(&self, net: usize, poses: &[Pose], out: &mut Vec<((i32, i32), f64)>) {
@@ -438,7 +438,7 @@ impl Problem<'_> {
         let (w, h) = ((x1 - x0).max(1), (y1 - y0).max(1));
         let area = w as f64 * h as f64;
         let hpwl = (w + h) as f64;
-        let bin = self.bin_um;
+        let bin = self.bin_nm;
         let (bx0, by0, bx1, by1) = ((x0.div_euclid(bin)) as i32, (y0.div_euclid(bin)) as i32, (x1.div_euclid(bin)) as i32, (y1.div_euclid(bin)) as i32);
         if (bx1 - bx0 + 1) as i64 * (by1 - by0 + 1) as i64 > 64 {
             // Too spread out right now to be a useful local congestion
@@ -571,7 +571,7 @@ impl Problem<'_> {
     /// Connectors live on edges by construction — every move that touches
     /// one ends here — so the edge cost only has to catch what
     /// legalisation later pushes inward.
-    fn flush_to_edge(&self, i: usize, pose: Pose, snap_um: Um) -> Pose {
+    fn flush_to_edge(&self, i: usize, pose: Pose, snap_nm: Nm) -> Pose {
         if !self.items[i].connector {
             return pose;
         }
@@ -582,19 +582,19 @@ impl Problem<'_> {
         // a clearance margin, not part of the connector's shape. See
         // `raw_courtyard`.
         let (vertical_ok, _, horizontal_ok, _) = eda_model::footprint::usable_edges(self.raw_courtyard(i, pose));
-        let mut best: Option<(Um, Pose)> = None;
-        let mut consider = |gap: Um, p: Pose| {
+        let mut best: Option<(Nm, Pose)> = None;
+        let mut consider = |gap: Nm, p: Pose| {
             if best.map_or(true, |(g, _)| gap < g) {
                 best = Some((gap, p));
             }
         };
         if vertical_ok {
-            consider(left, Pose { x: snap_up(self.bbox.0 + w / 2, snap_um), ..pose });
-            consider(right, Pose { x: snap_down(self.bbox.2 - w / 2, snap_um), ..pose });
+            consider(left, Pose { x: snap_up(self.bbox.0 + w / 2, snap_nm), ..pose });
+            consider(right, Pose { x: snap_down(self.bbox.2 - w / 2, snap_nm), ..pose });
         }
         if horizontal_ok {
-            consider(top, Pose { y: snap_up(self.bbox.1 + h / 2, snap_um), ..pose });
-            consider(bottom, Pose { y: snap_down(self.bbox.3 - h / 2, snap_um), ..pose });
+            consider(top, Pose { y: snap_up(self.bbox.1 + h / 2, snap_nm), ..pose });
+            consider(bottom, Pose { y: snap_down(self.bbox.3 - h / 2, snap_nm), ..pose });
         }
         best.map_or(pose, |(_, p)| p)
     }
@@ -613,7 +613,7 @@ impl Problem<'_> {
     ///
     /// Spacing is a clearance margin. It belongs in overlap tests and
     /// nowhere near a question about the part's own shape.
-    fn raw_courtyard(&self, i: usize, pose: Pose) -> (Um, Um, Um, Um) {
+    fn raw_courtyard(&self, i: usize, pose: Pose) -> (Nm, Nm, Nm, Nm) {
         let r = courtyard(&self.items[i], pose);
         (r.0 + self.spacing, r.1 + self.spacing, r.2 - self.spacing, r.3 - self.spacing)
     }
@@ -707,7 +707,7 @@ impl Problem<'_> {
     /// True-courtyard edge gap (spacing inflation removed), matching the
     /// placement gate's definition of proximity.
     fn rule_gap(&self, a: usize, b: usize, poses: &[Pose]) -> f64 {
-        let shrink = |r: (Um, Um, Um, Um)| (r.0 + self.spacing, r.1 + self.spacing, r.2 - self.spacing, r.3 - self.spacing);
+        let shrink = |r: (Nm, Nm, Nm, Nm)| (r.0 + self.spacing, r.1 + self.spacing, r.2 - self.spacing, r.3 - self.spacing);
         gap(shrink(courtyard(&self.items[a], poses[a])), shrink(courtyard(&self.items[b], poses[b])))
     }
 
@@ -822,7 +822,7 @@ fn decoupling_pairs(model: &ConstraintModel) -> Vec<(String, String)> {
     eda_model::decoupling_pairs(model)
 }
 
-fn snap_up(v: Um, s: Um) -> Um {
+fn snap_up(v: Nm, s: Nm) -> Nm {
     if s <= 1 {
         v
     } else {
@@ -830,7 +830,7 @@ fn snap_up(v: Um, s: Um) -> Um {
     }
 }
 
-fn snap_down(v: Um, s: Um) -> Um {
+fn snap_down(v: Nm, s: Nm) -> Nm {
     if s <= 1 {
         v
     } else {
@@ -838,11 +838,11 @@ fn snap_down(v: Um, s: Um) -> Um {
     }
 }
 
-fn snap(v: Um, s: Um) -> Um {
+fn snap(v: Nm, s: Nm) -> Nm {
     if s <= 1 {
         v
     } else {
-        (v as f64 / s as f64).round() as Um * s
+        (v as f64 / s as f64).round() as Nm * s
     }
 }
 
@@ -854,7 +854,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     for part in parts {
         match model.footprint_of(part) {
             Some(fp) => {
-                let mut pads: Vec<(String, (Um, Um))> = fp.pads.iter().map(|p| (p.number.clone(), p.at)).collect();
+                let mut pads: Vec<(String, (Nm, Nm))> = fp.pads.iter().map(|p| (p.number.clone(), p.at)).collect();
                 pads.sort_by(|a, b| a.0.cmp(&b.0));
                 let (hw, hh) = fp.courtyard_half();
                 let half = (hw + opts.spacing, hh + opts.spacing);
@@ -936,7 +936,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
         if let (Some(&ic), Some(&iu)) = (index.get(&c), index.get(&u)) {
             match group_rules.iter_mut().find(|(a, _, _)| *a == ic) {
                 Some((_, bs, _)) => bs.push(iu),
-                None => group_rules.push((ic, vec![iu], DECOUPLING_UM)),
+                None => group_rules.push((ic, vec![iu], DECOUPLING_NM)),
             }
         }
     }
@@ -976,7 +976,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
         None => {
             // Auto square: 2.5x the summed courtyard area, rounded up to mm.
             let area: f64 = items.iter().map(|it| (it.half.0 * 2) as f64 * (it.half.1 * 2) as f64).sum();
-            let side = ((area * 2.5).sqrt() / 1000.0).ceil() as Um * 1000;
+            let side = ((area * 2.5).sqrt() / 1000.0).ceil() as Nm * 1000;
             let side = side.max(items.iter().map(|it| it.half.0.max(it.half.1) * 2 + 1000).max().unwrap_or(1000));
             vec![Point { x: 0, y: 0 }, Point { x: side, y: 0 }, Point { x: side, y: side }, Point { x: 0, y: side }]
         }
@@ -991,7 +991,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     // via site (diameter + clearance each side) and one track, so a pad
     // row facing the edge can still escape (D3 on L4 sat 2.7 mm from the
     // edge with a 1 mm² pocket and no via site).
-    let edge_margin = model.board.tuning.edge_clearance_um + model.board.track_width + model.board.clearance;
+    let edge_margin = model.board.tuning.edge_clearance_nm + model.board.track_width + model.board.clearance;
     let inner = (bbox.0 + edge_margin, bbox.1 + edge_margin, bbox.2 - edge_margin, bbox.3 - edge_margin);
     let inner = if inner.2 > inner.0 && inner.3 > inner.1 { inner } else { bbox };
     // A track lane (not a via site): the label-side rule is what unsealed
@@ -1003,9 +1003,9 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     // IC rows open onto the board and only need a track lane.
     let escape_lane_small = (model.board.via_diameter + 2 * model.board.clearance + model.board.track_width - opts.spacing).max(0);
 
-    let bin_um: Um = 2000;
+    let bin_nm: Nm = 2000;
     let pitch = (model.board.track_width + model.board.clearance).max(1);
-    let congest_capacity = model.board.layers.len() as f64 * bin_um as f64 / pitch as f64;
+    let congest_capacity = model.board.layers.len() as f64 * bin_nm as f64 / pitch as f64;
     let congest_nets: Vec<usize> = (0..nets.len()).filter(|&n| nets[n].len() >= 2 && nets[n].len() <= 6).collect();
 
     let font = model.board.refdes_font(&outline);
@@ -1019,8 +1019,8 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
             return Err(vec![CheckResult::fail("floorplan_stale", "modules", format!("the floorplan assigns parts this design does not have: {}", unknown.join(" ")))]);
         }
     }
-    let region: Vec<Option<(Um, Um, Um, Um)>> = items.iter().map(|it| opts.floorplan.as_ref().and_then(|f| f.region_of(&it.id))).collect();
-    Ok(Problem { region, keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, copper_edge: model.board.tuning.copper_edge_clearance(), outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
+    let region: Vec<Option<(Nm, Nm, Nm, Nm)>> = items.iter().map(|it| opts.floorplan.as_ref().and_then(|f| f.region_of(&it.id))).collect();
+    Ok(Problem { region, keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, copper_edge: model.board.tuning.copper_edge_clearance(), outline, auto_outline, spacing: opts.spacing, font, model, bin_nm, congest_capacity, congest_nets })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a
@@ -1071,7 +1071,7 @@ fn connectivity_order(pb: &Problem) -> Vec<usize> {
 /// its tallest member. Overlap-free and inside the board by construction
 /// whenever the board is big enough, which is what makes legalisation a
 /// no-op for the common case.
-fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
+fn initial(pb: &Problem, snap_nm: Nm) -> Vec<Pose> {
     let n = pb.items.len();
     let order = connectivity_order(pb);
     let mut poses = vec![Pose { x: 0, y: 0, rot: 0, label: LabelSide::Above }; n];
@@ -1099,7 +1099,7 @@ fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
                     2 => (bx1 - c, by1 - thick / 2),
                     _ => (bx0 + thick / 2, by1 - c),
                 };
-                poses[i] = pb.flush_to_edge(i, Pose { x: snap(x, snap_um), y: snap(y, snap_um), rot, label: LabelSide::Above }, snap_um);
+                poses[i] = pb.flush_to_edge(i, Pose { x: snap(x, snap_nm), y: snap(y, snap_nm), rot, label: LabelSide::Above }, snap_nm);
                 inset[edge] = inset[edge].max(thick);
                 along += long;
                 placed = true;
@@ -1109,7 +1109,7 @@ fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
             along = 0;
         }
         if !placed {
-            poses[i] = pb.flush_to_edge(i, Pose { x: bx0 + long / 2, y: by0 + thick / 2, rot: 0, label: LabelSide::Above }, snap_um);
+            poses[i] = pb.flush_to_edge(i, Pose { x: bx0 + long / 2, y: by0 + thick / 2, rot: 0, label: LabelSide::Above }, snap_nm);
         }
     }
 
@@ -1126,7 +1126,7 @@ fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
             y += row_h;
             row_h = 0;
         }
-        poses[i] = Pose { x: snap(x + w / 2, snap_um), y: snap(y + h / 2, snap_um), rot: 0, label: LabelSide::Above };
+        poses[i] = Pose { x: snap(x + w / 2, snap_nm), y: snap(y + h / 2, snap_nm), rot: 0, label: LabelSide::Above };
         x += w;
         row_h = row_h.max(h);
     }
@@ -1326,7 +1326,7 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
 /// the global shape right; this folds nets tight in a way random
 /// displacement rarely finishes — a six-way star net into a ring, a
 /// stranded header onto its edge.
-fn polish(pb: &Problem, poses: &mut [Pose], snap_um: Um) {
+fn polish(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) {
     let n = pb.items.len();
     let clean_at = |pb: &Problem, poses: &[Pose], i: usize| -> bool {
         let ci = pb.keepout(i, poses[i]);
@@ -1346,7 +1346,7 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_um: Um) {
                 let probe = Pose { rot, ..start };
                 let ci = pb.keepout(i, probe);
                 let (w, h) = (ci.2 - ci.0, ci.3 - ci.1);
-                let mut cands: Vec<(Um, Um)> = vec![(start.x, start.y)];
+                let mut cands: Vec<(Nm, Nm)> = vec![(start.x, start.y)];
                 for j in 0..n {
                     if j == i {
                         continue;
@@ -1358,12 +1358,12 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_um: Um) {
                     // Snapped outward so the snapped courtyards still
                     // touch rather than overlap.
                     for ay in [jy, cj.1 + h / 2, cj.3 - h / 2] {
-                        cands.push((snap_up(cj.2 + w / 2, snap_um), ay));
-                        cands.push((snap_down(cj.0 - w / 2, snap_um), ay));
+                        cands.push((snap_up(cj.2 + w / 2, snap_nm), ay));
+                        cands.push((snap_down(cj.0 - w / 2, snap_nm), ay));
                     }
                     for ax in [jx, cj.0 + w / 2, cj.2 - w / 2] {
-                        cands.push((ax, snap_up(cj.3 + h / 2, snap_um)));
-                        cands.push((ax, snap_down(cj.1 - h / 2, snap_um)));
+                        cands.push((ax, snap_up(cj.3 + h / 2, snap_nm)));
+                        cands.push((ax, snap_down(cj.1 - h / 2, snap_nm)));
                     }
                 }
                 // Around every pad of the other parts on this item's
@@ -1388,16 +1388,16 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_um: Um) {
                 }
                 if pb.items[i].connector {
                     for t in [0.25, 0.5, 0.75] {
-                        let x = pb.bbox.0 + ((pb.bbox.2 - pb.bbox.0) as f64 * t) as Um;
-                        let y = pb.bbox.1 + ((pb.bbox.3 - pb.bbox.1) as f64 * t) as Um;
-                        cands.push((snap_up(pb.bbox.0 + w / 2, snap_um), y));
-                        cands.push((snap_down(pb.bbox.2 - w / 2, snap_um), y));
-                        cands.push((x, snap_up(pb.bbox.1 + h / 2, snap_um)));
-                        cands.push((x, snap_down(pb.bbox.3 - h / 2, snap_um)));
+                        let x = pb.bbox.0 + ((pb.bbox.2 - pb.bbox.0) as f64 * t) as Nm;
+                        let y = pb.bbox.1 + ((pb.bbox.3 - pb.bbox.1) as f64 * t) as Nm;
+                        cands.push((snap_up(pb.bbox.0 + w / 2, snap_nm), y));
+                        cands.push((snap_down(pb.bbox.2 - w / 2, snap_nm), y));
+                        cands.push((x, snap_up(pb.bbox.1 + h / 2, snap_nm)));
+                        cands.push((x, snap_down(pb.bbox.3 - h / 2, snap_nm)));
                     }
                 }
                 for (x, y) in cands {
-                    poses[i] = Pose { x: snap(x, snap_um), y: snap(y, snap_um), rot, label: LabelSide::Above };
+                    poses[i] = Pose { x: snap(x, snap_nm), y: snap(y, snap_nm), rot, label: LabelSide::Above };
                     if clean_at(pb, poses, i) {
                         let c = cost_of(pb, poses, i);
                         if c < best.0 - 1.0 {
@@ -1422,7 +1422,7 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_um: Um) {
 
 /// Margin, µm, from the placed cluster's true courtyards to an auto-sized
 /// board edge (routing channel + mechanical clearance).
-const AUTO_OUTLINE_MARGIN: Um = 2000;
+const AUTO_OUTLINE_MARGIN: Nm = 2000;
 
 /// Shrink an auto-sized outline to the placed cluster: the board becomes
 /// the union of true courtyards plus `AUTO_OUTLINE_MARGIN`, except on a
@@ -1431,11 +1431,11 @@ const AUTO_OUTLINE_MARGIN: Um = 2000;
 /// the edge. Rounded out to a 0.5 mm grid and re-based at (0, 0). A generous square is
 /// right for annealing (room to move) and wrong as a deliverable (a
 /// breakout with a quarter of bare copper reads as unfinished).
-fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Um, Um, Um, Um)) {
+fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Nm, Nm, Nm, Nm)) {
     let sp = pb.spacing;
     let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
     let mut flush = [false; 4]; // left, top, right, bottom held by a connector
-    let rects: Vec<(Um, Um, Um, Um)> = pb.items.iter().zip(poses.iter()).map(|(it, p)| {
+    let rects: Vec<(Nm, Nm, Nm, Nm)> = pb.items.iter().zip(poses.iter()).map(|(it, p)| {
         let r = courtyard(it, *p);
         (r.0 + sp, r.1 + sp, r.2 - sp, r.3 - sp)
     }).collect();
@@ -1460,9 +1460,9 @@ fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Um, Um, Um,
     // clears the edge, and is not rounded further out (gate
     // `placement_edge_connector`: ≤ 1.5 mm); the opposite side absorbs
     // the rounding so the board dimension still comes out on the grid.
-    const HELD: Um = 1200;
-    const GRID: Um = 500;
-    let span_of = |lo: Um, hi: Um, held_lo: bool, held_hi: bool| -> (Um, Um) {
+    const HELD: Nm = 1200;
+    const GRID: Nm = 500;
+    let span_of = |lo: Nm, hi: Nm, held_lo: bool, held_hi: bool| -> (Nm, Nm) {
         let margin = AUTO_OUTLINE_MARGIN.min((hi - lo) / 4);
         match (held_lo, held_hi) {
             (true, true) => (snap_down(lo - HELD, 100), snap_up(hi + HELD, 100)),
@@ -1527,7 +1527,7 @@ fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Um, Um, Um,
 // reverted compactness weight -- rest on less evidence than they seemed
 // to at the time.
 
-fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_um: Um, debug: bool) {
+fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_nm: Nm, debug: bool) {
     let n = pb.items.len();
     // A repair pose must be clean in every sense the gates check, the
     // floorplan region included. Without the region test this pass happily
@@ -1576,7 +1576,7 @@ fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_um: Um, debug: bool) {
                     for sy in -40..=40i64 {
                         if sx == 0 && sy == 0 && rot == start.rot && label == start.label { continue }
                         if axis_only && sx != 0 && sy != 0 { continue }
-                        let probe = Pose { x: start.x + sx * snap_um, y: start.y + sy * snap_um, rot, label };
+                        let probe = Pose { x: start.x + sx * snap_nm, y: start.y + sy * snap_nm, rot, label };
                         poses[mover] = probe;
                         if clean_at(poses, mover) {
                             let d = pb.rule_gap(a, b, poses);
@@ -1605,7 +1605,7 @@ fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_um: Um, debug: bool) {
     }
 }
 
-fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
+fn legalize(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) -> bool {
     let n = pb.items.len();
     let clamp_inside = |pb: &Problem, poses: &mut [Pose], i: usize| {
         let ci = pb.keepout(i, poses[i]);
@@ -1627,8 +1627,8 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
         if dx != 0 || dy != 0 {
             // Snap toward the interior so an odd half-extent can't
             // oscillate half a snap outside the edge forever.
-            poses[i].x = snap(poses[i].x + dx, snap_um) + dx.signum() * snap_um;
-            poses[i].y = snap(poses[i].y + dy, snap_um) + dy.signum() * snap_um;
+            poses[i].x = snap(poses[i].x + dx, snap_nm) + dx.signum() * snap_nm;
+            poses[i].y = snap(poses[i].y + dy, snap_nm) + dy.signum() * snap_nm;
             true
         } else {
             false
@@ -1664,16 +1664,16 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
                 // apart across it would only bounce off the board edge.
                 let along_x = if ci_conn && cj_conn { (poses[i].x - poses[j].x).abs() >= (poses[i].y - poses[j].y).abs() } else { px <= py };
                 if along_x {
-                    let step = px / 2 + snap_um;
-                    poses[j].x = snap(poses[j].x + dir_x * step * wj, snap_um);
-                    poses[i].x = snap(poses[i].x - dir_x * step * wi, snap_um);
+                    let step = px / 2 + snap_nm;
+                    poses[j].x = snap(poses[j].x + dir_x * step * wj, snap_nm);
+                    poses[i].x = snap(poses[i].x - dir_x * step * wi, snap_nm);
                 } else {
-                    let step = py / 2 + snap_um;
-                    poses[j].y = snap(poses[j].y + dir_y * step * wj, snap_um);
-                    poses[i].y = snap(poses[i].y - dir_y * step * wi, snap_um);
+                    let step = py / 2 + snap_nm;
+                    poses[j].y = snap(poses[j].y + dir_y * step * wj, snap_nm);
+                    poses[i].y = snap(poses[i].y - dir_y * step * wi, snap_nm);
                 }
-                poses[i] = pb.flush_to_edge(i, poses[i], snap_um);
-                poses[j] = pb.flush_to_edge(j, poses[j], snap_um);
+                poses[i] = pb.flush_to_edge(i, poses[i], snap_nm);
+                poses[j] = pb.flush_to_edge(j, poses[j], snap_nm);
                 moved = true;
             }
         }

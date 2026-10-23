@@ -219,9 +219,9 @@ mod tests {
         LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600), rules }
     }
 
-    fn settings(target_um: i64) -> MeanderSettings {
+    fn settings(target_nm: i64) -> MeanderSettings {
         let mut s = MeanderSettings::default();
-        s.set_target_length(target_um * 1000);
+        s.set_target_length(target_nm * 1000);
         s.keep_endpoints = true;
         s
     }

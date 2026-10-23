@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, Track, Um, Via, Zone};
+use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, Track, Nm, Via, Zone};
 use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, Part};
 
@@ -72,7 +72,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
     writeln!(out, "\t(general").unwrap();
     // `(general (thickness ..))`: the board's thickness (`BOARD_DESIGN_SETTINGS::GetBoardThickness()`), KiCad's 1.6 mm unless Board Setup's
     // Physical Stackup says otherwise.
-    writeln!(out, "\t\t(thickness {})", mm(model.board.board_thickness_um)).unwrap();
+    writeln!(out, "\t\t(thickness {})", mm(model.board.board_thickness_nm)).unwrap();
     writeln!(out, "\t\t(legacy_teardrops no)").unwrap();
     writeln!(out, "\t)").unwrap();
     // The board's paper and title block (Page Settings); A4 landscape and no title block when it never set them.
@@ -95,12 +95,12 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
     write_stackup(&mut out, model);
     // Solder mask and paste (`PCB_IO_KICAD_SEXPR::formatSetup`): the mask expansion is always written, the rest when set.
     let sm = &model.board.solder_mask;
-    writeln!(out, "\t\t(pad_to_mask_clearance {})", mm(sm.expansion_um)).unwrap();
-    if sm.min_width_um != 0 {
-        writeln!(out, "\t\t(solder_mask_min_width {})", mm(sm.min_width_um)).unwrap();
+    writeln!(out, "\t\t(pad_to_mask_clearance {})", mm(sm.expansion_nm)).unwrap();
+    if sm.min_width_nm != 0 {
+        writeln!(out, "\t\t(solder_mask_min_width {})", mm(sm.min_width_nm)).unwrap();
     }
-    if sm.paste_margin_um != 0 {
-        writeln!(out, "\t\t(pad_to_paste_clearance {})", mm(sm.paste_margin_um)).unwrap();
+    if sm.paste_margin_nm != 0 {
+        writeln!(out, "\t\t(pad_to_paste_clearance {})", mm(sm.paste_margin_nm)).unwrap();
     }
     if sm.paste_margin_ratio != 0.0 {
         writeln!(out, "\t\t(pad_to_paste_clearance_ratio {})", fmt_mm_f(sm.paste_margin_ratio)).unwrap();
@@ -122,7 +122,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         if !offsets.is_empty() {
             write!(out, "\t\t(zone_defaults").unwrap();
             for (layer, o) in offsets {
-                write!(out, " (property (layer {}) (hatch_position (xy {} {})))", sexpr_str(layer), mm(o.x_um), mm(o.y_um)).unwrap();
+                write!(out, " (property (layer {}) (hatch_position (xy {} {})))", sexpr_str(layer), mm(o.x_nm), mm(o.y_nm)).unwrap();
             }
             writeln!(out, ")").unwrap();
         }
@@ -465,7 +465,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
     if pl.outline.len() >= 2 && !eda_model::outline::outline_is_shapes(design) {
         let n = pl.outline.len();
         // The width the lines were drawn at, when the board says (an imported outline of lines of one width).
-        let stroke = design.drawings.as_ref().and_then(|d| d.outline_width_um).map(|w| format!(" (stroke (width {}) (type default))", mm(w))).unwrap_or_default();
+        let stroke = design.drawings.as_ref().and_then(|d| d.outline_width_nm).map(|w| format!(" (stroke (width {}) (type default))", mm(w))).unwrap_or_default();
         for i in 0..n {
             let a = pl.outline[i];
             let b = pl.outline[(i + 1) % n];
@@ -649,29 +649,29 @@ fn write_stackup(out: &mut String, model: &ConstraintModel) {
 /// something narrowing a signal net's clearance has any bearing on.
 pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     let b = &model.board;
-    let mm_f = |um: Um| um as f64 / 1000.0;
+    let mm_f = |um: Nm| um as f64 / 1000.0;
     let rules = if b.constraints_explicit {
         // The constraints were stated -- by the project the board came from or by Board Setup -- so they are written
         // exactly (`BOARD_DESIGN_SETTINGS`'s `rules.*` keys, `pcbnew/board_design_settings.cpp`).
         serde_json::json!({
-            "max_error": mm_f(b.max_error_um),
-            "min_clearance": mm_f(b.min_clearance_um),
-            "min_connection": mm_f(b.min_connection_um),
-            "min_copper_edge_clearance": mm_f(b.copper_edge_clearance_um.unwrap_or(eda_model::KICAD_EDGE_CLEARANCE_UM)),
-            "min_groove_width": mm_f(b.min_groove_width_um),
-            "min_hole_clearance": mm_f(b.hole_clearance_um),
-            "min_hole_to_hole": mm_f(b.hole_to_hole_min_um),
-            "min_microvia_diameter": mm_f(b.microvia_diameter_min_um),
-            "min_microvia_drill": mm_f(b.microvia_drill_min_um),
+            "max_error": mm_f(b.max_error_nm),
+            "min_clearance": mm_f(b.min_clearance_nm),
+            "min_connection": mm_f(b.min_connection_nm),
+            "min_copper_edge_clearance": mm_f(b.copper_edge_clearance_nm.unwrap_or(eda_model::KICAD_EDGE_CLEARANCE_NM)),
+            "min_groove_width": mm_f(b.min_groove_width_nm),
+            "min_hole_clearance": mm_f(b.hole_clearance_nm),
+            "min_hole_to_hole": mm_f(b.hole_to_hole_min_nm),
+            "min_microvia_diameter": mm_f(b.microvia_diameter_min_nm),
+            "min_microvia_drill": mm_f(b.microvia_drill_min_nm),
             "min_resolved_spokes": b.min_resolved_spokes,
-            "min_silk_clearance": mm_f(b.silk_clearance_um),
-            "min_text_height": mm_f(b.min_silk_text_height_um),
-            "min_text_thickness": mm_f(b.min_silk_text_thickness_um),
-            "min_through_hole_diameter": mm_f(b.via_drill_min_um),
-            "min_track_width": mm_f(b.track_width_min_um),
-            "min_via_annular_width": mm_f(b.annular_width_min_um),
-            "min_via_diameter": mm_f(b.via_diameter_min_um),
-            "solder_mask_to_copper_clearance": mm_f(b.solder_mask.to_copper_clearance_um),
+            "min_silk_clearance": mm_f(b.silk_clearance_nm),
+            "min_text_height": mm_f(b.min_silk_text_height_nm),
+            "min_text_thickness": mm_f(b.min_silk_text_thickness_nm),
+            "min_through_hole_diameter": mm_f(b.via_drill_min_nm),
+            "min_track_width": mm_f(b.track_width_min_nm),
+            "min_via_annular_width": mm_f(b.annular_width_min_nm),
+            "min_via_diameter": mm_f(b.via_diameter_min_nm),
+            "solder_mask_to_copper_clearance": mm_f(b.solder_mask.to_copper_clearance_nm),
             "use_height_for_length_calcs": b.use_height_for_length_calcs,
         })
     } else {
@@ -680,8 +680,8 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
         // board's own default clearance from copper on another net (see `crates/freeroute`'s clearance matrix); that is
         // the real guarantee behind a hole on this board, so it is what the hole-clearance floor should ask for, never
         // more.
-        let min_clearance = b.net_classes.iter().filter_map(|c| c.clearance).fold(b.clearance, Um::min);
-        let min_track_width = b.net_classes.iter().filter_map(|c| c.track_width).fold(b.track_width, Um::min);
+        let min_clearance = b.net_classes.iter().filter_map(|c| c.clearance).fold(b.clearance, Nm::min);
+        let min_track_width = b.net_classes.iter().filter_map(|c| c.track_width).fold(b.track_width, Nm::min);
         serde_json::json!({
             "min_clearance": mm_f(min_clearance),
             "min_track_width": mm_f(min_track_width),
@@ -697,10 +697,10 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     let t = &b.text_graphics;
     let class = |prefix: &str, c: &eda_model::rules::LayerClassDefaults| -> Vec<(String, serde_json::Value)> {
         vec![
-            (format!("{prefix}_line_width"), serde_json::json!(mm_f(c.line_width_um))),
-            (format!("{prefix}_text_size_h"), serde_json::json!(mm_f(c.text_width_um))),
-            (format!("{prefix}_text_size_v"), serde_json::json!(mm_f(c.text_height_um))),
-            (format!("{prefix}_text_thickness"), serde_json::json!(mm_f(c.text_thickness_um))),
+            (format!("{prefix}_line_width"), serde_json::json!(mm_f(c.line_width_nm))),
+            (format!("{prefix}_text_size_h"), serde_json::json!(mm_f(c.text_width_nm))),
+            (format!("{prefix}_text_size_v"), serde_json::json!(mm_f(c.text_height_nm))),
+            (format!("{prefix}_text_thickness"), serde_json::json!(mm_f(c.text_thickness_nm))),
             (format!("{prefix}_text_italic"), serde_json::json!(c.italic)),
             (format!("{prefix}_text_upright"), serde_json::json!(c.upright)),
         ]
@@ -710,8 +710,8 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     for (k, v) in class("silk", &t.silk).into_iter().chain(class("copper", &t.copper)).chain(class("fab", &t.fab)).chain(class("other", &t.others)) {
         defaults.insert(k, v);
     }
-    defaults.insert("board_outline_line_width".into(), serde_json::json!(mm_f(t.edge_cuts_line_width_um)));
-    defaults.insert("courtyard_line_width".into(), serde_json::json!(mm_f(t.courtyard_line_width_um)));
+    defaults.insert("board_outline_line_width".into(), serde_json::json!(mm_f(t.edge_cuts_line_width_nm)));
+    defaults.insert("courtyard_line_width".into(), serde_json::json!(mm_f(t.courtyard_line_width_nm)));
 
     // Text & Graphics > Formatting: the "apply board defaults to footprint .." boxes (`defaults.apply_defaults_to_fp_*`).
     let f = &b.formatting;
@@ -728,9 +728,9 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     if !b.tuning_patterns.is_default() {
         let group = |m: &eda_model::setup_pages::MeanderSettings| {
             serde_json::json!({
-                "min_amplitude": mm_f(m.min_amplitude_um),
-                "max_amplitude": mm_f(m.max_amplitude_um),
-                "spacing": mm_f(m.spacing_um),
+                "min_amplitude": mm_f(m.min_amplitude_nm),
+                "max_amplitude": mm_f(m.max_amplitude_nm),
+                "spacing": mm_f(m.spacing_nm),
                 "corner_style": m.corner_style.code(),
                 "corner_radius_percentage": m.corner_radius_percentage,
                 "single_sided": m.single_sided,
@@ -774,8 +774,8 @@ fn project_tuning_profile(p: &eda_model::setup_pages::TuningProfile) -> serde_js
             "signal_layer": e.signal_layer,
             "top_reference_layer": e.top_reference_layer.as_deref().unwrap_or("UNDEFINED"),
             "bottom_reference_layer": e.bottom_reference_layer.as_deref().unwrap_or("UNDEFINED"),
-            "width": e.width_um * 1000,
-            "diff_pair_gap": e.diff_pair_gap_um * 1000,
+            "width": e.width_nm * 1000,
+            "diff_pair_gap": e.diff_pair_gap_nm * 1000,
             "delay": e.delay_as_per_mm,
         })).collect::<Vec<_>>(),
         "via_prop_delay": p.via_propagation_delay_as,
@@ -793,7 +793,7 @@ fn project_tuning_profile(p: &eda_model::setup_pages::TuningProfile) -> serde_js
 /// has a class (the nets a class's patterns match, as the board file's `add_net` lists name them). A class that only exists because a profile is named for it is a class of its own.
 fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
     let b = &model.board;
-    let mm_f = |um: Um| um as f64 / 1000.0;
+    let mm_f = |um: Nm| um as f64 / 1000.0;
     let profile_of = |class: &str| b.tuning_profiles.class_profiles.get(class).cloned().unwrap_or_default();
     let mut classes = Vec::new();
     let mut default = serde_json::json!({ "name": "Default", "priority": i32::MAX, "tuning_profile": profile_of("Default"), "clearance": mm_f(b.clearance), "track_width": mm_f(b.track_width), "via_diameter": mm_f(b.via_diameter), "via_drill": mm_f(b.via_drill) });
@@ -1373,7 +1373,7 @@ pub(crate) fn write_footprint(
 /// `style` is what the board keeps of the shape beyond `Shape` ([`eda_model::pcb_items::ShapeStyle`]): its hatch, its line endings (`(start_shape ..)` and `(end_shape ..)`
 /// after the stroke, `LINE_ENDING::Format`; an open shape's only) and its net, which `net` has already turned into the file's number (0 is none: `GetNetCode() > 0`).
 pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: Option<&eda_model::pcb_items::ShapeStyle>, net: usize) -> String {
-    let sw = |w: Um| mm(w.max(0));
+    let sw = |w: Nm| mm(w.max(0));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
     let hatch = style.and_then(|st| st.hatch);
     let ends = style.map(|st| crate::line_ending_io::words(&st.endings, matches!(shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. }))).unwrap_or_default();
@@ -1478,7 +1478,7 @@ mod tests {
         Pin { number: number.into(), name: None, kind }
     }
     fn part(reference: &str, package: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: Some(package.into()), footprint: Some(package.into()), pins, body_um: None, symbol: None, datasheet: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: Some(package.into()), footprint: Some(package.into()), pins, body_nm: None, symbol: None, datasheet: None, edge: None }
     }
     fn net(name: &str, pins: &[&str]) -> Net {
         Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }
@@ -1507,7 +1507,7 @@ mod tests {
         };
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(placement),
@@ -1563,7 +1563,7 @@ mod tests {
         let plain = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(plain.contains("(paper \"A4\")") && !plain.contains("(title_block"), "never set: A4 landscape, no title block");
         design.drawings = Some(eda_model::ir::DrawingsSection {
-            page: Some(eda_model::page::PageSettings { paper: "A3".into(), portrait: true, user_size_um: None }),
+            page: Some(eda_model::page::PageSettings { paper: "A3".into(), portrait: true, user_size_nm: None }),
             title_block: Some(eda_model::ir::TitleBlock { title: "Blinky".into(), rev: "B".into(), comments: vec!["one".into()], ..Default::default() }),
             ..Default::default()
         });
@@ -1572,13 +1572,13 @@ mod tests {
         assert!(out.contains("(title_block\n\t\t(title \"Blinky\")\n\t\t(rev \"B\")\n\t\t(comment 1 \"one\")\n\t)"), "{out}");
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let drawings = back.drawings.unwrap();
-        assert_eq!(drawings.page, Some(eda_model::page::PageSettings { paper: "A3".into(), portrait: true, user_size_um: None }));
+        assert_eq!(drawings.page, Some(eda_model::page::PageSettings { paper: "A3".into(), portrait: true, user_size_nm: None }));
         assert_eq!(drawings.title_block, Some(eda_model::ir::TitleBlock { title: "Blinky".into(), rev: "B".into(), comments: vec!["one".into()], ..Default::default() }));
         // A user size goes out in mm and comes back as the same size.
-        design.drawings.as_mut().unwrap().page = Some(eda_model::page::PageSettings { paper: "User".into(), portrait: false, user_size_um: Some((300_000, 200_500)) });
+        design.drawings.as_mut().unwrap().page = Some(eda_model::page::PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((300_000, 200_500)) });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(paper \"User\" 300 200.5)"), "{out}");
-        assert_eq!(crate::import_kicad_pcb(&out).unwrap().0.drawings.unwrap().page.unwrap().user_size_um, Some((300_000, 200_500)));
+        assert_eq!(crate::import_kicad_pcb(&out).unwrap().0.drawings.unwrap().page.unwrap().user_size_nm, Some((300_000, 200_500)));
         // A board saved with the defaults imports with none of them (no empty drawings section is invented for it).
         let (default_back, _, _) = crate::import_kicad_pcb(&plain).unwrap();
         assert!(default_back.drawings.is_none() || default_back.drawings.as_ref().is_some_and(|d| d.page.is_none() && d.title_block.is_none()));
@@ -1899,8 +1899,8 @@ mod tests {
                 Shape::Bezier { id: "s6".into(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: 0, y: 0 }, c1: Point { x: 0, y: 2000 }, c2: Point { x: 3000, y: 2000 }, end: Point { x: 3000, y: 0 } },
             ],
             texts: vec![
-                Text { id: "t1".into(), content: "REV A".into(), at: Point { x: 1000, y: 2000 }, angle: 90_000, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Left, mirror: true },
-                Text { id: "t2".into(), content: "centred".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false },
+                Text { id: "t1".into(), content: "REV A".into(), at: Point { x: 1000, y: 2000 }, angle: 90_000, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Left, mirror: true },
+                Text { id: "t2".into(), content: "centred".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false },
             ],
             ..Default::default()
         });
@@ -1982,7 +1982,7 @@ mod tests {
         assert!(!zone.contains("filled_polygon"), "a rule area is never filled: {zone}");
     }
 
-    fn square(x: Um, y: Um, side: Um) -> Vec<eda_model::ir::Point> {
+    fn square(x: Nm, y: Nm, side: Nm) -> Vec<eda_model::ir::Point> {
         vec![
             eda_model::ir::Point { x, y },
             eda_model::ir::Point { x: x + side, y },
@@ -2405,7 +2405,7 @@ mod tests {
         design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         design.drawings = Some(eda_model::ir::DrawingsSection {
             shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000, y: 0 } }],
-            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000, y: 2_000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000, y: 2_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
             ..Default::default()
         });
         design.assign_missing_ids();
@@ -2449,13 +2449,13 @@ mod tests {
             text_position: DimensionTextPosition::Outside,
             keep_text_aligned: true,
             text_angle: 0,
-            text_size_um: 1_200,
+            text_size_nm: 1_200,
             stroke_width: 150,
             arrow_length: 1_270,
             extension_offset: 500,
             extension_height: 580,
             arrow_direction: ArrowDirection::Inward,
-            text_thickness_um: Some(180),
+            text_thickness_nm: Some(180),
         };
         let mut dims = vec![
             dim(DimensionKind::Aligned { height: 2_000 }, Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }),
@@ -2505,8 +2505,8 @@ mod tests {
                 g.units_format = want.units_format;
                 g.precision = want.precision;
                 g.suppress_trailing_zeros = want.suppress_trailing_zeros;
-                g.text_size_um = want.text_size_um;
-                g.text_thickness_um = want.text_thickness_um;
+                g.text_size_nm = want.text_size_nm;
+                g.text_thickness_nm = want.text_thickness_nm;
             }
             assert_eq!(g.kind, want.kind);
             assert_eq!(g.layer, want.layer);
@@ -2619,7 +2619,7 @@ mod tests {
         // `aArea->GetParent() == item`). Written at board level it reported that footprint as a keepout
         // violation, on every real board that carries such an area (found on four connectors of one).
         let (mut design, model) = fixture();
-        let rule_area = |id: &str, parent: Option<&str>, at: Um| Zone {
+        let rule_area = |id: &str, parent: Option<&str>, at: Nm| Zone {
             id: id.into(),
             layer: "F.Cu".into(),
             outline: square(at, at, 2_000),
@@ -2655,12 +2655,12 @@ mod tests {
 
         // Stated minimums (Board Setup's Constraints, or the project the board came from) are written as they are.
         model.board.constraints_explicit = true;
-        model.board.track_width_min_um = 250;
-        model.board.min_clearance_um = 300;
-        model.board.copper_edge_clearance_um = Some(350);
-        model.board.annular_width_min_um = 130;
-        model.board.min_silk_text_height_um = 1_000;
-        model.board.solder_mask.to_copper_clearance_um = 40;
+        model.board.track_width_min_nm = 250;
+        model.board.min_clearance_nm = 300;
+        model.board.copper_edge_clearance_nm = Some(350);
+        model.board.annular_width_min_nm = 130;
+        model.board.min_silk_text_height_nm = 1_000;
+        model.board.solder_mask.to_copper_clearance_nm = 40;
         let exact: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).unwrap();
         let rules = &exact["board"]["design_settings"]["rules"];
         assert_eq!(rules["min_track_width"], 0.25, "the stated floor, not the narrowest class");
@@ -2677,16 +2677,16 @@ mod tests {
         let mut back = ConstraintModel::default();
         crate::merge_project_design_rules(&mut back, &export_kicad_pro(&model));
         assert!(back.board.constraints_explicit);
-        assert_eq!((back.board.track_width_min_um, back.board.min_clearance_um, back.board.copper_edge_clearance_um, back.board.annular_width_min_um), (250, 300, Some(350), 130));
-        assert_eq!((back.board.max_error_um, back.board.min_resolved_spokes, back.board.min_silk_text_height_um), (5, 2, 1_000));
+        assert_eq!((back.board.track_width_min_nm, back.board.min_clearance_nm, back.board.copper_edge_clearance_nm, back.board.annular_width_min_nm), (250, 300, Some(350), 130));
+        assert_eq!((back.board.max_error_nm, back.board.min_resolved_spokes, back.board.min_silk_text_height_nm), (5, 2, 1_000));
     }
 
     #[test]
     fn solder_mask_paste_the_stackup_and_the_board_thickness_are_written_and_read_back() {
         let (design, mut model) = fixture();
-        model.board.solder_mask = eda_model::SolderMaskRules { expansion_um: 50, min_width_um: 120, to_copper_clearance_um: 0, allow_bridges_in_footprints: true, tent_vias_front: false, tent_vias_back: true, paste_margin_um: -40, paste_margin_ratio: -0.05 };
+        model.board.solder_mask = eda_model::SolderMaskRules { expansion_nm: 50, min_width_nm: 120, to_copper_clearance_nm: 0, allow_bridges_in_footprints: true, tent_vias_front: false, tent_vias_back: true, paste_margin_nm: -40, paste_margin_ratio: -0.05 };
         let stackup = eda_model::rules::default_stackup(4, 1_600);
-        model.board.board_thickness_um = eda_model::rules::stackup_thickness_um(&stackup);
+        model.board.board_thickness_nm = eda_model::rules::stackup_thickness_nm(&stackup);
         model.stackup = Some(stackup.clone());
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         for want in [
@@ -2704,11 +2704,11 @@ mod tests {
         ] {
             assert!(out.contains(want), "missing {want}:\n{}", &out[..out.len().min(2500)]);
         }
-        assert!(out.contains(&format!("(thickness {})", mm(model.board.board_thickness_um))), "the board's thickness is the stackup's sum");
+        assert!(out.contains(&format!("(thickness {})", mm(model.board.board_thickness_nm))), "the board's thickness is the stackup's sum");
 
         let (_, back, _) = crate::import_kicad_pcb(&out).unwrap();
         assert_eq!(back.board.solder_mask, model.board.solder_mask);
-        assert_eq!(back.board.board_thickness_um, model.board.board_thickness_um);
+        assert_eq!(back.board.board_thickness_nm, model.board.board_thickness_nm);
         let got = back.stackup.expect("the stackup comes back");
         assert_eq!(got.layers.len(), stackup.layers.len());
         assert_eq!(got.layers.iter().map(|l| (l.name.as_str(), l.kind.as_deref())).collect::<Vec<_>>(), stackup.layers.iter().map(|l| (l.name.as_str(), l.kind.as_deref())).collect::<Vec<_>>());
@@ -2725,7 +2725,7 @@ mod tests {
         for (name, color) in [("F.Mask", "Red"), ("F.SilkS", "#FFEE00"), ("dielectric 1", "FR4 natural"), ("F.Cu", "Green"), ("F.Paste", "Silver"), ("B.Mask", "Not specified")] {
             stackup.layers.iter_mut().find(|l| l.name == name).unwrap().color = Some(color.into());
         }
-        model.board.board_thickness_um = eda_model::rules::stackup_thickness_um(&stackup);
+        model.board.board_thickness_nm = eda_model::rules::stackup_thickness_nm(&stackup);
         model.stackup = Some(stackup);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         for want in ["(layer \"F.Mask\" (type \"Top Solder Mask\") (color \"Red\") (thickness", "(layer \"F.SilkS\" (type \"Top Silk Screen\") (color \"#FFEE00\")", "(layer \"dielectric 1\" (type \"core\") (color \"FR4 natural\") (thickness"] {
@@ -2943,7 +2943,7 @@ mod tests {
         let (mut design, model) = fixture();
         let content = "Actionneur\nPiezo \"New\" Amp\\V02\r\nline 3";
         design.drawings = Some(eda_model::ir::DrawingsSection {
-            texts: vec![Text { id: "t1".into(), content: content.into(), at: Point { x: 1000, y: 2000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            texts: vec![Text { id: "t1".into(), content: content.into(), at: Point { x: 1000, y: 2000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
             ..Default::default()
         });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -2986,19 +2986,19 @@ mod tests {
         let extra = |content: &str| dr.text_extra(&by_text(content).id).cloned();
         // The square, centred, regular text with a stroke width is the model's own default and keeps no extras.
         assert_eq!(extra("plain"), None);
-        assert_eq!((by_text("plain").size_um, by_text("plain").stroke_width), (1000, 150));
+        assert_eq!((by_text("plain").size_nm, by_text("plain").stroke_width), (1000, 150));
 
         let labels = extra("High_current netclass:").expect("bold, bottom");
-        assert!(labels.bold && !labels.italic && labels.valign == eda_model::ir::TextVAlign::Bottom && labels.width_um.is_none() && !labels.auto_thickness, "{labels:?}");
+        assert!(labels.bold && !labels.italic && labels.valign == eda_model::ir::TextVAlign::Bottom && labels.width_nm.is_none() && !labels.auto_thickness, "{labels:?}");
         assert_eq!((by_text("High_current netclass:").justify, by_text("High_current netclass:").stroke_width), (TextJustify::Left, 40));
 
         let wide = extra("Actionneur").expect("italic, narrow");
-        assert_eq!((wide.width_um, wide.italic, wide.knockout, wide.line_spacing_permille, wide.face.as_deref(), wide.valign), (Some(1524), true, true, 1500, Some("Arial"), eda_model::ir::TextVAlign::Top));
-        assert_eq!((by_text("Actionneur").size_um, by_text("Actionneur").stroke_width, by_text("Actionneur").justify, by_text("Actionneur").mirror), (2032, 305, TextJustify::Right, true));
+        assert_eq!((wide.width_nm, wide.italic, wide.knockout, wide.line_spacing_permille, wide.face.as_deref(), wide.valign), (Some(1524), true, true, 1500, Some("Arial"), eda_model::ir::TextVAlign::Top));
+        assert_eq!((by_text("Actionneur").size_nm, by_text("Actionneur").stroke_width, by_text("Actionneur").justify, by_text("Actionneur").mirror), (2032, 305, TextJustify::Right, true));
 
         // No thickness in the file: KiCad's automatic stroke width (an eighth of the glyph width), and none is written back.
         let auto = extra("auto").expect("auto thickness");
-        assert_eq!((auto.auto_thickness, auto.width_um, by_text("auto").size_um, by_text("auto").stroke_width), (true, Some(1600), 1200, 200));
+        assert_eq!((auto.auto_thickness, auto.width_nm, by_text("auto").size_nm, by_text("auto").stroke_width), (true, Some(1600), 1200, 200));
 
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let block = |content: &str| -> String {
@@ -3020,8 +3020,8 @@ mod tests {
         assert_eq!(a.texts.len(), b.texts.len());
         for t in &a.texts {
             let u = b.texts.iter().find(|u| u.content == t.content).unwrap();
-            assert_eq!((t.size_um, t.stroke_width, t.justify, t.mirror, t.angle, &t.layer), (u.size_um, u.stroke_width, u.justify, u.mirror, u.angle, &u.layer));
-            assert_eq!(a.text_extra(&t.id).map(|x| (x.width_um, x.valign, x.bold, x.italic, x.knockout, x.auto_thickness)), b.text_extra(&u.id).map(|x| (x.width_um, x.valign, x.bold, x.italic, x.knockout, x.auto_thickness)));
+            assert_eq!((t.size_nm, t.stroke_width, t.justify, t.mirror, t.angle, &t.layer), (u.size_nm, u.stroke_width, u.justify, u.mirror, u.angle, &u.layer));
+            assert_eq!(a.text_extra(&t.id).map(|x| (x.width_nm, x.valign, x.bold, x.italic, x.knockout, x.auto_thickness)), b.text_extra(&u.id).map(|x| (x.width_nm, x.valign, x.bold, x.italic, x.knockout, x.auto_thickness)));
         }
     }
 
@@ -3114,13 +3114,13 @@ mod tests {
         };
         let (design, model, notes) = crate::import_kicad_pcb(&outline(["0.2032"; 4])).unwrap();
         assert_eq!(notes.outline_source, "lines");
-        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_um), Some(203));
+        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(203));
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let lines: Vec<&str> = out.lines().filter(|l| l.contains("\"Edge.Cuts\")") && l.contains("(gr_line")).collect();
         assert_eq!(lines.len(), 4, "{out}");
         assert!(lines.iter().all(|l| l.contains("(stroke (width 0.203) (type default))")), "{lines:?}");
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
-        assert_eq!(back.drawings.as_ref().and_then(|d| d.outline_width_um), Some(203));
+        assert_eq!(back.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(203));
 
         // An outline made here says no width, and is written as it always was.
         let (made, made_model) = fixture();
@@ -3130,7 +3130,7 @@ mod tests {
         // Four widths: shapes, each as it was.
         let (design, model, notes) = crate::import_kicad_pcb(&outline(["0.1", "0.2", "0.1", "0.2"])).unwrap();
         assert_eq!(notes.outline_source, "shapes");
-        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_um), None);
+        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_nm), None);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(out.matches("(stroke (width 0.2)").count(), 2, "{out}");
     }
@@ -3219,8 +3219,8 @@ mod tests {
         assert!(dr.board_items.text_boxes.iter().all(|t| t.id.starts_with("tbx_")), "ids of ours");
         let rev = dr.board_items.text_boxes.iter().find(|t| t.text.starts_with("Rev A")).unwrap();
         assert_eq!((rev.start, rev.end, rev.layer.as_str()), (Point { x: 20_000, y: 20_000 }, Point { x: 40_000, y: 30_000 }, "F.SilkS"));
-        assert_eq!((rev.margin_left_um, rev.margin_top_um, rev.margin_right_um, rev.margin_bottom_um), (1_000, 1_500, 2_000, 2_500));
-        assert_eq!((rev.size_um, rev.width_um, rev.bold, rev.knockout, rev.border), (1_000, Some(1_200), true, true, true));
+        assert_eq!((rev.margin_left_nm, rev.margin_top_nm, rev.margin_right_nm, rev.margin_bottom_nm), (1_000, 1_500, 2_000, 2_500));
+        assert_eq!((rev.size_nm, rev.width_nm, rev.bold, rev.knockout, rev.border), (1_000, Some(1_200), true, true, true));
         let turned = dr.board_items.text_boxes.iter().find(|t| t.text == "turned").unwrap();
         assert_eq!((turned.pts.len(), turned.angle, turned.border, turned.mirror), (4, 45_000, false, true));
         assert!(dr.locked_ids.contains(&turned.id), "a locked text box comes back locked");
@@ -3263,14 +3263,14 @@ mod tests {
         assert_eq!(dr.barcodes.len(), 3);
         assert!(dr.barcodes.iter().all(|b| b.id.starts_with("bar_")), "{:?}", dr.barcodes.iter().map(|b| &b.id).collect::<Vec<_>>());
         let qr = dr.barcodes.iter().find(|b| b.text == "acode").unwrap();
-        assert_eq!((qr.at, qr.angle, qr.layer.as_str(), qr.width_um, qr.height_um, qr.text_height_um), (Point { x: 258_500, y: 141_500 }, 90_000, "F.Cu", 42_000, 44_000, 3_000));
+        assert_eq!((qr.at, qr.angle, qr.layer.as_str(), qr.width_nm, qr.height_nm, qr.text_height_nm), (Point { x: 258_500, y: 141_500 }, 90_000, "F.Cu", 42_000, 44_000, 3_000));
         assert_eq!((qr.kind, qr.ecc, qr.show_text, qr.knockout), (eda_model::barcode::BarcodeKind::Qr, eda_model::barcode::EccLevel::M, true, false));
         let dm = dr.barcodes.iter().find(|b| b.text == "differentcode").unwrap();
-        assert_eq!((dm.kind, dm.show_text, dm.knockout, dm.margin_x_um, dm.margin_y_um), (eda_model::barcode::BarcodeKind::DataMatrix, false, true, 1_000, 2_000));
+        assert_eq!((dm.kind, dm.show_text, dm.knockout, dm.margin_x_nm, dm.margin_y_nm), (eda_model::barcode::BarcodeKind::DataMatrix, false, true, 1_000, 2_000));
         assert!(dr.locked_ids.contains(&dm.id), "a locked barcode comes back locked");
         // What the file left out is PCB_BARCODE's own: 40 mm square, the text printed.
         let plain = dr.barcodes.iter().find(|b| b.text == "123").unwrap();
-        assert_eq!((plain.width_um, plain.height_um, plain.show_text, plain.kind), (40_000, 40_000, true, eda_model::barcode::BarcodeKind::Code128));
+        assert_eq!((plain.width_nm, plain.height_nm, plain.show_text, plain.kind), (40_000, 40_000, true, eda_model::barcode::BarcodeKind::Code128));
 
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let line = |text: &str| out.lines().find(|l| l.contains("(barcode") && l.contains(&format!("(text \"{text}\")"))).unwrap_or_else(|| panic!("{text} in {out}")).trim().to_string();

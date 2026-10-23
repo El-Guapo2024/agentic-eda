@@ -5,7 +5,7 @@ use super::*;
 use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintEdit, FootprintKind, PadEdit, UserField};
 use eda_model::{PadKind, PadShape};
 
-fn layout(x: Um, y: Um, layer: &str) -> FieldLayout {
+fn layout(x: Nm, y: Nm, layer: &str) -> FieldLayout {
     FieldLayout::new(p(x, y), layer)
 }
 
@@ -213,7 +213,7 @@ fn a_pad_becomes_a_trapezoid_a_chamfered_rectangle_or_a_custom_pad_and_an_empty_
     assert!(edit_of(&b, "U1").is_none());
 }
 
-fn p0(x: Um, y: Um) -> Point {
+fn p0(x: Nm, y: Nm) -> Point {
     p(x, y)
 }
 
@@ -366,7 +366,7 @@ fn a_field_of_a_footprint_that_is_not_on_the_board_is_unknown_and_a_deleted_foot
 fn one_field_is_edited_on_its_own_and_edits_of_two_fields_of_one_footprint_compose() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    let user = |name: &str, y: Um| UserField { name: name.into(), text: format!("{name} text"), layout: layout(0, y, "F.Fab") };
+    let user = |name: &str, y: Nm| UserField { name: name.into(), text: format!("{name} text"), layout: layout(0, y, "F.Fab") };
     b.apply(&set_fields("U1", None, None, Some(vec![user("Vendor", 2_000), user("Rev", 3_000)]), None)).unwrap();
 
     let mut vendor = layout(500, 2_500, "F.Fab");

@@ -34,7 +34,7 @@
 //! lays it over the library footprint beside the pad edits. `None` is the footprint's own list, which an update from the library brings.
 
 use crate::footprint::{to_board, Footprint, Model3d, Pad, PadCustom, PadKind, PadShape};
-use crate::ir::{ChamferCorners, Design, FootprintInstance, LabelSide, Millideg, Point, Side, Um};
+use crate::ir::{ChamferCorners, Design, FootprintInstance, LabelSide, Millideg, Point, Side, Nm};
 use serde::{Deserialize, Serialize};
 
 /// The mandatory fields' names, as `PCB_FIELD::GetCanonicalName` gives them.
@@ -68,17 +68,19 @@ fn is_true(b: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FieldLayout {
-    /// The text's anchor, in the footprint's own frame (the frame of `Pad::at`), µm.
+    /// The text's anchor, in the footprint's own frame (the frame of `Pad::at`), nm.
     pub at: Point,
     /// The text's angle in that frame, millidegrees, counter-clockwise on the screen as KiCad's text angles are. On a bottom-side
     /// footprint the frame is mirrored, and so is the sense of the angle: see [`FieldLayout::file_angle_deg`].
     #[serde(default, skip_serializing_if = "is_zero")]
     pub angle: i64,
-    /// `(width, height)` of a glyph, µm (`GetTextWidth`, `GetTextHeight`).
-    pub size: (Um, Um),
-    /// Stroke width, µm; 0 is KiCad's auto thickness (no `(thickness ..)` written).
+    /// `(width, height)` of a glyph, nm (`GetTextWidth`, `GetTextHeight`).
+    #[serde(deserialize_with = "crate::units::de")]
+    pub size: (Nm, Nm),
+    /// Stroke width, nm; 0 is KiCad's auto thickness (no `(thickness ..)` written).
     #[serde(default)]
-    pub thickness: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub thickness: Nm,
     /// The layer the text is drawn on: `F.SilkS`, `B.Fab`, `Cmts.User` ... absolute, not relative to the footprint's side.
     pub layer: String,
     /// "Show" (`PCB_FIELD::IsVisible`); a hidden field is written `(hide yes)`.
@@ -115,8 +117,8 @@ impl FieldLayout {
         FieldLayout {
             at,
             angle: 0,
-            size: (1000, 1000),
-            thickness: 150,
+            size: (1_000_000, 1_000_000),
+            thickness: 150_000,
             layer: layer.to_string(),
             visible: true,
             halign: 0,
@@ -141,7 +143,7 @@ impl FieldLayout {
 
     /// The anchor as the `.kicad_pcb` stores it: relative to the footprint, un-rotated, in the file's frame, which does not mirror
     /// a bottom-side footprint (so x is negated, as a pad's is).
-    pub fn file_position(&self, side: Side) -> (Um, Um) {
+    pub fn file_position(&self, side: Side) -> (Nm, Nm) {
         (if side == Side::Bottom { -self.at.x } else { self.at.x }, self.at.y)
     }
 
@@ -154,7 +156,7 @@ impl FieldLayout {
 
     /// Inverse of [`FieldLayout::file_position`] and [`FieldLayout::file_angle_deg`]: the layout's `at` and `angle` for a field
     /// the file puts at `(x, y)` with absolute `angle_deg`.
-    pub fn set_from_file(&mut self, side: Side, fp_rot: Millideg, x: Um, y: Um, angle_deg: f64) {
+    pub fn set_from_file(&mut self, side: Side, fp_rot: Millideg, x: Nm, y: Nm, angle_deg: f64) {
         self.at = Point { x: if side == Side::Bottom { -x } else { x }, y };
         let abs = (angle_deg * 1000.0).round() as i64;
         self.angle = (Self::sense(side) * (abs + fp_rot as i64)).rem_euclid(360_000);
@@ -200,7 +202,7 @@ pub fn local_of(fp: &FootprintInstance, p: Point) -> Point {
     let lx = dx * cos + dy * sin;
     let ly = -dx * sin + dy * cos;
     let mirror = if fp.side == Side::Bottom { -1.0 } else { 1.0 };
-    Point { x: (lx * mirror).round() as Um, y: ly.round() as Um }
+    Point { x: (lx * mirror).round() as Nm, y: ly.round() as Nm }
 }
 
 /// A user field (`FIELD_T::USER`): a name, a value and the layout of the text. Their order is their `m_ordinal`.
@@ -283,16 +285,19 @@ pub struct PadEdit {
     pub kind: Option<PadKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<PadShape>,
-    /// `(width, height)`, un-rotated, µm.
+    /// `(width, height)`, un-rotated, nm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size: Option<(Um, Um)>,
-    /// A round hole's diameter, µm. Mutually exclusive with `drill_slot`; either one given replaces the library pad's hole.
+    #[serde(deserialize_with = "crate::units::de")]
+    pub size: Option<(Nm, Nm)>,
+    /// A round hole's diameter, nm. Mutually exclusive with `drill_slot`; either one given replaces the library pad's hole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drill: Option<Um>,
-    /// An oblong hole's `(width, height)`, µm.
+    #[serde(deserialize_with = "crate::units::de")]
+    pub drill: Option<Nm>,
+    /// An oblong hole's `(width, height)`, nm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drill_slot: Option<(Um, Um)>,
-    /// `PAD::SetOffset`: how far the copper shape sits from the pad's position (where the hole is), in the pad's own frame, µm.
+    #[serde(deserialize_with = "crate::units::de")]
+    pub drill_slot: Option<(Nm, Nm)>,
+    /// `PAD::SetOffset`: how far the copper shape sits from the pad's position (where the hole is), in the pad's own frame, nm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<Point>,
     /// The pad's own rotation relative to its footprint, millidegrees clockwise (`Pad::rot`).
@@ -303,16 +308,19 @@ pub struct PadEdit {
     pub roundrect_ratio: Option<f64>,
     /// `PAD::SetLocalSolderMaskMargin`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub solder_mask_margin: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub solder_mask_margin: Option<Nm>,
     /// `PAD::SetLocalSolderPasteMargin`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub solder_paste_margin: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub solder_paste_margin: Option<Nm>,
     /// `PAD::SetLocalSolderPasteMarginRatio`: a fraction of the pad's size (-0.5 is 50% smaller).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solder_paste_margin_ratio: Option<f64>,
-    /// `PAD::SetDelta`: a trapezoid's two deltas, µm (KiCad keeps one of them zero); `(0, 0)` takes the delta away.
+    /// `PAD::SetDelta`: a trapezoid's two deltas, nm (KiCad keeps one of them zero); `(0, 0)` takes the delta away.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trapezoid_delta: Option<(Um, Um)>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub trapezoid_delta: Option<(Nm, Nm)>,
     /// `PAD::SetChamferRectRatio`: the chamfer as a fraction of the shorter side, `0..=0.5`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chamfer_ratio: Option<f64>,
@@ -533,12 +541,12 @@ impl Design {
 /// numbers are `eda_kicad`'s writer's own, kept so an unedited footprint is written exactly as before.
 pub fn default_reference_layout(fp: &FootprintInstance, footprint: &Footprint) -> FieldLayout {
     let (hw, hh) = footprint.courtyard_half();
-    let half_w = 300 * fp.id.chars().count() as Um;
+    let half_w = 300_000 * fp.id.chars().count() as Nm;
     let (file_x, file_y) = match fp.label {
-        LabelSide::Above => (0, -(hh + 700)),
-        LabelSide::Below => (0, hh + 700),
-        LabelSide::Left => (-(hw + 200 + half_w), 0),
-        LabelSide::Right => (hw + 200 + half_w, 0),
+        LabelSide::Above => (0, -(hh + 700_000)),
+        LabelSide::Below => (0, hh + 700_000),
+        LabelSide::Left => (-(hw + 200_000 + half_w), 0),
+        LabelSide::Right => (hw + 200_000 + half_w, 0),
     };
     let layer = if fp.side == Side::Bottom { "B.SilkS" } else { "F.SilkS" };
     let mut l = FieldLayout::new(Point { x: if fp.side == Side::Bottom { -file_x } else { file_x }, y: file_y }, layer);
@@ -550,7 +558,7 @@ pub fn default_reference_layout(fp: &FootprintInstance, footprint: &Footprint) -
 /// fabrication layer of the footprint's side.
 pub fn default_value_layout(fp: &FootprintInstance) -> FieldLayout {
     let layer = if fp.side == Side::Bottom { "B.Fab" } else { "F.Fab" };
-    let mut l = FieldLayout::new(Point { x: 0, y: 1000 }, layer);
+    let mut l = FieldLayout::new(Point { x: 0, y: 1_000_000 }, layer);
     l.angle = (FieldLayout::sense(fp.side) * fp.rot as i64).rem_euclid(360_000);
     l
 }
@@ -560,12 +568,12 @@ pub const LIBRARY_REFERENCE_TEXT: &str = "REF**";
 
 /// Where a library footprint's Reference is when the file has none of its own: 1 mm text on the silkscreen above the origin.
 pub fn default_library_reference_layout() -> FieldLayout {
-    FieldLayout::new(Point { x: 0, y: -2000 }, "F.SilkS")
+    FieldLayout::new(Point { x: 0, y: -2_000_000 }, "F.SilkS")
 }
 
 /// Where a library footprint's Value is when the file has none of its own: 1 mm text on the fabrication layer below the origin.
 pub fn default_library_value_layout() -> FieldLayout {
-    FieldLayout::new(Point { x: 0, y: 2000 }, "F.Fab")
+    FieldLayout::new(Point { x: 0, y: 2_000_000 }, "F.Fab")
 }
 
 /// Where a library footprint's Datasheet and Description fields are when the file has none of their own: `FOOTPRINT::FOOTPRINT`'s `addField( FIELD_T::DATASHEET,
@@ -574,7 +582,7 @@ pub fn default_library_value_layout() -> FieldLayout {
 pub fn default_library_datasheet_layout() -> FieldLayout {
     let mut l = FieldLayout::new(Point { x: 0, y: 0 }, "F.Fab");
     l.visible = false;
-    l.size = (1270, 1270);
+    l.size = (1_270_000, 1_270_000);
     l.thickness = 0;
     l
 }
@@ -802,17 +810,17 @@ mod tests {
     use super::*;
 
     fn fp(side: Side, rot: Millideg) -> FootprintInstance {
-        FootprintInstance { id: "R1".into(), at: Point { x: 10_000, y: 20_000 }, rot, side, label: LabelSide::Above }
+        FootprintInstance { id: "R1".into(), at: Point { x: 10_000_000, y: 20_000_000 }, rot, side, label: LabelSide::Above }
     }
 
-    fn pad(number: &str, at: (Um, Um)) -> Pad {
-        Pad { number: number.into(), at, size: (600, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
+    fn pad(number: &str, at: (Nm, Nm)) -> Pad {
+        Pad { number: number.into(), at, size: (600_000, 600_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
     }
 
     #[test]
     fn a_field_goes_across_to_the_file_and_back_on_either_side() {
         for (side, rot) in [(Side::Top, 0), (Side::Top, 90_000), (Side::Bottom, 0), (Side::Bottom, 90_000), (Side::Bottom, 270_000), (Side::Top, 45_000)] {
-            let mut l = FieldLayout::new(Point { x: 1_500, y: -2_000 }, "F.SilkS");
+            let mut l = FieldLayout::new(Point { x: 1_500_000, y: -2_000_000 }, "F.SilkS");
             l.angle = 90_000;
             let (x, y) = l.file_position(side);
             let a = l.file_angle_deg(side, rot);
@@ -824,9 +832,9 @@ mod tests {
 
     #[test]
     fn the_file_position_is_unmirrored_for_the_top_side_and_negated_for_the_bottom() {
-        let l = FieldLayout::new(Point { x: 1_500, y: -2_000 }, "F.SilkS");
-        assert_eq!(l.file_position(Side::Top), (1_500, -2_000));
-        assert_eq!(l.file_position(Side::Bottom), (-1_500, -2_000));
+        let l = FieldLayout::new(Point { x: 1_500_000, y: -2_000_000 }, "F.SilkS");
+        assert_eq!(l.file_position(Side::Top), (1_500_000, -2_000_000));
+        assert_eq!(l.file_position(Side::Bottom), (-1_500_000, -2_000_000));
     }
 
     #[test]
@@ -841,11 +849,11 @@ mod tests {
 
     #[test]
     fn a_text_turns_with_its_footprint_and_the_board_position_follows_to_board() {
-        let mut l = FieldLayout::new(Point { x: 1_000, y: 0 }, "F.SilkS");
+        let mut l = FieldLayout::new(Point { x: 1_000_000, y: 0 }, "F.SilkS");
         l.angle = 0;
         // a footprint turned 90 degrees clockwise on the screen: the text 1 mm to its right is now 1 mm below it
         let f = fp(Side::Top, 90_000);
-        assert_eq!(l.board_position(&f), Point { x: 10_000, y: 21_000 });
+        assert_eq!(l.board_position(&f), Point { x: 10_000_000, y: 21_000_000 });
         // and its angle (counter-clockwise) follows: 0 - 90 degrees
         assert_eq!(l.board_angle(&f), 270_000);
     }
@@ -854,7 +862,7 @@ mod tests {
     fn local_of_is_the_inverse_of_to_board() {
         for (side, rot) in [(Side::Top, 0), (Side::Top, 90_000), (Side::Bottom, 0), (Side::Bottom, 270_000), (Side::Bottom, 180_000)] {
             let f = fp(side, rot);
-            let local = Point { x: 1_234, y: -5_678 };
+            let local = Point { x: 1_234_000, y: -5_678_000 };
             let on_board = to_board(&f, (local.x, local.y));
             assert_eq!(local_of(&f, on_board), local, "{side:?} {rot}");
         }
@@ -865,20 +873,20 @@ mod tests {
         for (side, rot) in [(Side::Top, 0), (Side::Bottom, 90_000), (Side::Top, 180_000)] {
             let f = fp(side, rot);
             let mut l = FieldLayout::new(Point { x: 0, y: 0 }, "F.SilkS");
-            l.set_from_board(&f, Point { x: 12_000, y: 19_000 }, 45_000);
-            assert_eq!(l.board_position(&f), Point { x: 12_000, y: 19_000 });
+            l.set_from_board(&f, Point { x: 12_000_000, y: 19_000_000 }, 45_000);
+            assert_eq!(l.board_position(&f), Point { x: 12_000_000, y: 19_000_000 });
             assert_eq!(l.board_angle(&f), 45_000);
         }
     }
 
     #[test]
     fn the_default_reference_is_where_the_writer_has_always_put_it_and_stays_horizontal() {
-        let footprint = Footprint { name: "X".into(), pads: vec![pad("1", (-1_000, 0)), pad("2", (1_000, 0))], courtyard: Some((2_000, 1_000)), courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
+        let footprint = Footprint { name: "X".into(), pads: vec![pad("1", (-1_000_000, 0)), pad("2", (1_000_000, 0))], courtyard: Some((2_000_000, 1_000_000)), courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         for (side, rot) in [(Side::Top, 0), (Side::Top, 90_000), (Side::Bottom, 0), (Side::Bottom, 270_000)] {
             let f = fp(side, rot);
             let l = default_reference_layout(&f, &footprint);
             // above the courtyard: 700 um over the 1000 um half height, in the file's frame
-            assert_eq!(l.file_position(side), (0, -1_700));
+            assert_eq!(l.file_position(side), (0, -1_700_000));
             assert_eq!(l.file_angle_deg(side, rot), 0.0, "the file angle stays 0, {side:?} {rot}");
             assert_eq!(l.layer, if side == Side::Bottom { "B.SilkS" } else { "F.SilkS" });
             assert_eq!(l.mirror, side == Side::Bottom);
@@ -886,14 +894,14 @@ mod tests {
         let mut left = fp(Side::Bottom, 0);
         left.label = LabelSide::Left;
         let l = default_reference_layout(&left, &footprint);
-        let half_w = 600;
-        assert_eq!(l.file_position(Side::Bottom), (-(2_000 + 200 + half_w), 0));
+        let half_w = 600_000;
+        assert_eq!(l.file_position(Side::Bottom), (-(2_000_000 + 200_000 + half_w), 0));
     }
 
     #[test]
     fn the_default_value_is_a_millimetre_below_the_origin_on_the_fab_layer() {
         let l = default_value_layout(&fp(Side::Top, 0));
-        assert_eq!((l.file_position(Side::Top), l.layer.as_str()), ((0, 1_000), "F.Fab"));
+        assert_eq!((l.file_position(Side::Top), l.layer.as_str()), ((0, 1_000_000), "F.Fab"));
         assert_eq!(default_value_layout(&fp(Side::Bottom, 0)).layer, "B.Fab");
     }
 
@@ -910,38 +918,38 @@ mod tests {
 
     #[test]
     fn an_edit_finds_the_kth_pad_with_a_number_and_changes_what_it_names() {
-        let footprint = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0)), pad("2", (1_000, 0)), pad("2", (2_000, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
+        let footprint = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0)), pad("2", (1_000_000, 0)), pad("2", (2_000_000, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         assert_eq!(pad_index(&footprint, "2", 2), Some(2));
         assert_eq!(pad_index(&footprint, "2", 3), None);
         let mut e = PadEdit::none("2", 2);
-        e.size = Some((900, 400));
+        e.size = Some((900_000, 400_000));
         e.shape = Some(PadShape::Oval);
         let patched = patched_footprint(&footprint, &[e]);
-        assert_eq!(patched.pads[2].size, (900, 400));
+        assert_eq!(patched.pads[2].size, (900_000, 400_000));
         assert_eq!(patched.pads[2].shape, PadShape::Oval);
-        assert_eq!(patched.pads[1].size, (600, 600), "the other pad with that number is untouched");
-        assert_eq!(footprint.pads[2].size, (600, 600), "the library footprint is not changed");
+        assert_eq!(patched.pads[1].size, (600_000, 600_000), "the other pad with that number is untouched");
+        assert_eq!(footprint.pads[2].size, (600_000, 600_000), "the library footprint is not changed");
     }
 
     #[test]
     fn the_edits_between_two_footprints_are_the_pads_that_differ_and_lay_back_on_the_first() {
-        let base = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0)), pad("2", (1_000, 0)), pad("2", (2_000, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
+        let base = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0)), pad("2", (1_000_000, 0)), pad("2", (2_000_000, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         let mut edited = base.clone();
         edited.pads[1].shape = PadShape::Oval;
-        edited.pads[1].size = (900, 500);
+        edited.pads[1].size = (900_000, 500_000);
         edited.pads[2].kind = PadKind::ThroughHole;
-        edited.pads[2].drill_slot = Some((700, 1_200));
+        edited.pads[2].drill_slot = Some((700_000, 1_200_000));
         edited.pads[0].rot = 90_000;
         let edits = pad_edits_between(&base, &edited);
         assert_eq!(edits.iter().map(|e| (e.number.as_str(), e.nth)).collect::<Vec<_>>(), [("1", 1), ("2", 1), ("2", 2)], "the k-th pad with a number is told apart");
         assert_eq!((edits[0].rot, edits[0].shape), (Some(90_000), None), "only what differs");
-        assert_eq!((edits[1].shape, edits[1].size), (Some(PadShape::Oval), Some((900, 500))));
-        assert_eq!((edits[2].kind, edits[2].drill, edits[2].drill_slot), (Some(PadKind::ThroughHole), None, Some((700, 1_200))));
+        assert_eq!((edits[1].shape, edits[1].size), (Some(PadShape::Oval), Some((900_000, 500_000))));
+        assert_eq!((edits[2].kind, edits[2].drill, edits[2].drill_slot), (Some(PadKind::ThroughHole), None, Some((700_000, 1_200_000))));
         assert_eq!(patched_footprint(&base, &edits).pads, edited.pads, "laid on the first footprint they make the second");
         assert!(pad_edits_between(&base, &base).is_empty(), "the same footprint needs no edit");
         // A pad the base lacks, or a hole taken away, is not an edit.
         let mut other = base.clone();
-        other.pads.push(pad("3", (3_000, 0)));
+        other.pads.push(pad("3", (3_000_000, 0)));
         assert!(pad_edits_between(&base, &other).is_empty());
     }
 
@@ -949,17 +957,17 @@ mod tests {
     fn a_hole_edit_replaces_the_hole_and_an_smd_pad_has_none() {
         let mut p = pad("1", (0, 0));
         p.kind = PadKind::ThroughHole;
-        p.drill = Some(800);
-        p.size = (1_600, 1_600);
+        p.drill = Some(800_000);
+        p.size = (1_600_000, 1_600_000);
         p.shape = PadShape::Circle;
         let mut e = PadEdit::none("1", 1);
-        e.drill_slot = Some((1_000, 600));
+        e.drill_slot = Some((1_000_000, 600_000));
         apply_pad_edit(&mut p, &e);
-        assert_eq!((p.drill, p.drill_slot), (None, Some((1_000, 600))), "an oblong hole replaces the round one");
+        assert_eq!((p.drill, p.drill_slot), (None, Some((1_000_000, 600_000))), "an oblong hole replaces the round one");
         let mut e = PadEdit::none("1", 1);
-        e.drill = Some(900);
+        e.drill = Some(900_000);
         apply_pad_edit(&mut p, &e);
-        assert_eq!((p.drill, p.drill_slot), (Some(900), None));
+        assert_eq!((p.drill, p.drill_slot), (Some(900_000), None));
         let mut e = PadEdit::none("1", 1);
         e.kind = Some(PadKind::Smd);
         apply_pad_edit(&mut p, &e);
@@ -971,9 +979,9 @@ mod tests {
         let mut p = pad("1", (0, 0));
         let mut e = PadEdit::none("1", 1);
         e.shape = Some(PadShape::Circle);
-        e.size = Some((900, 500));
+        e.size = Some((900_000, 500_000));
         apply_pad_edit(&mut p, &e);
-        assert_eq!(p.size, (900, 900));
+        assert_eq!(p.size, (900_000, 900_000));
         let mut e = PadEdit::none("1", 1);
         e.shape = Some(PadShape::RoundRect);
         apply_pad_edit(&mut p, &e);
@@ -993,9 +1001,9 @@ mod tests {
         let smd = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         let mut th_pad = pad("1", (0, 0));
         th_pad.kind = PadKind::ThroughHole;
-        th_pad.drill = Some(800);
+        th_pad.drill = Some(800_000);
         let th = Footprint { name: "Y".into(), pads: vec![pad("2", (0, 0)), th_pad], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
-        let hole = Footprint { name: "Z".into(), pads: vec![Pad { kind: PadKind::NonPlatedHole, drill: Some(2_000), ..pad("", (0, 0)) }], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
+        let hole = Footprint { name: "Z".into(), pads: vec![Pad { kind: PadKind::NonPlatedHole, drill: Some(2_000_000), ..pad("", (0, 0)) }], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         assert_eq!(FootprintAttrs::derived(&smd, false, false).kind, FootprintKind::Smd);
         assert_eq!(FootprintAttrs::derived(&th, false, false).kind, FootprintKind::ThroughHole, "any hole makes it through-hole");
         assert_eq!(FootprintAttrs::derived(&hole, false, false).kind, FootprintKind::Unspecified);
@@ -1008,13 +1016,13 @@ mod tests {
         let mut e = FootprintEdit::new("R1");
         assert!(e.is_empty());
         let mut p = PadEdit::none("1", 1);
-        p.size = Some((700, 700));
+        p.size = Some((700_000, 700_000));
         e.set_pad(p.clone());
         assert!(!e.is_empty() && e.pad("1", 1).is_some());
-        p.size = Some((800, 800));
+        p.size = Some((800_000, 800_000));
         e.set_pad(p);
         assert_eq!(e.pads.len(), 1);
-        assert_eq!(e.pad("1", 1).unwrap().size, Some((800, 800)));
+        assert_eq!(e.pad("1", 1).unwrap().size, Some((800_000, 800_000)));
         e.set_pad(PadEdit::none("1", 1));
         assert!(e.is_empty(), "an edit that changes nothing is dropped");
     }
@@ -1022,7 +1030,7 @@ mod tests {
     #[test]
     fn the_edit_reads_and_writes_json_without_the_defaults() {
         let mut e = FootprintEdit::new("R1");
-        e.reference = Some(FieldLayout::new(Point { x: 0, y: -1_700 }, "F.SilkS"));
+        e.reference = Some(FieldLayout::new(Point { x: 0, y: -1_700_000 }, "F.SilkS"));
         let text = serde_json::to_string(&e).unwrap();
         assert!(!text.contains("visible") && !text.contains("mirror") && !text.contains("keep_upright"), "{text}");
         let back: FootprintEdit = serde_json::from_str(&text).unwrap();

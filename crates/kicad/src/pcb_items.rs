@@ -324,8 +324,8 @@ pub(crate) fn write_dimension(out: &mut String, d: &Dimension, a: &DimensionArgs
         // The dimension's text goes last "to be sure the text options are known when reading the file"; always `gr_text`.
         // Text on a back layer is read from below, so it is written mirrored.
         let mirror = if d.layer.starts_with("B.") { " (justify mirror)" } else { "" };
-        let size = mm(d.text_size_um);
-        let thickness = mm(d.text_thickness_um.unwrap_or_else(|| (d.text_size_um as f64 * 0.15).round() as i64));
+        let size = mm(d.text_size_nm);
+        let thickness = mm(d.text_thickness_nm.unwrap_or_else(|| (d.text_size_nm as f64 * 0.15).round() as i64));
         writeln!(
             out,
             "\t\t(gr_text {} (at {} {} {}) (layer {}) (uuid \"{}\")\n\t\t\t(effects (font (size {size} {size}) (thickness {thickness})){mirror})\n\t\t)",

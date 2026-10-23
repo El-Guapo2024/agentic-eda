@@ -162,7 +162,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let (tracks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts, text_extras) = import_drawings(root, &net_names, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
-    let (outline, outline_is_shapes, outline_width_um) = import_outline(root, &mut shapes, &mut refs, &mut notes);
+    let (outline, outline_is_shapes, outline_width_nm) = import_outline(root, &mut shapes, &mut refs, &mut notes);
     let dimensions = import_items::import_dimensions(root, &mut refs);
     let barcodes = crate::barcode_io::read_all(root, &mut refs.barcodes);
     let board_items = crate::pcb_items_io::read_all(root, &mut refs.board_items);
@@ -212,7 +212,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     };
 
     let mut design = Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance {
             engine_version: env!("CARGO_PKG_VERSION").into(),
             intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(),
@@ -223,7 +223,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() && outline_width_um.is_none() && barcodes.is_empty() && board_items.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, outline_width_um, barcodes, board_items, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() && outline_width_nm.is_none() && barcodes.is_empty() && board_items.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, outline_width_nm, barcodes, board_items, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
     if !raw_items.is_empty() {
@@ -308,7 +308,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     }
     // `(generated ..)`: the tuning patterns, named by the same file uuids.
     crate::pcb_generated::attach_patterns(&mut design, root, &refs);
-    let model = ConstraintModel {
+    let model = ConstraintModel { schema: eda_model::INTENT_SCHEMA_VERSION,
         parts,
         nets,
         clusters: vec![],
@@ -513,7 +513,7 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
     let mut board = BoardRules { layers: layers.to_vec(), constraints_explicit: true, layer_setup: import_layer_setup(root), ..BoardRules::default() };
     // Legacy boards keep the copper-to-edge clearance in `(setup (edge_clearance ..))`.
     if let Some(v) = sexpr::find(root, "setup").and_then(|st| sexpr::find(st, "edge_clearance")).and_then(|e| sexpr::num(e, 1)) {
-        board.copper_edge_clearance_um = Some(mm_to_um(v));
+        board.copper_edge_clearance_nm = Some(mm_to_um(v));
     }
     let classes: Vec<&[Sexpr]> = sexpr::find_all(root, "net_class").collect();
     let default_idx = classes.iter().position(|nc| sexpr::txt(nc, 1) == Some("Default")).or(if classes.len() == 1 { Some(0) } else { None });
@@ -577,8 +577,8 @@ fn import_formatting_and_hatch_offsets(root: &[Sexpr], board: &mut BoardRules) {
         for prop in sexpr::find_all(defaults, "property") {
             let (Some(layer), Some(xy)) = (sexpr::find(prop, "layer").and_then(|l| sexpr::txt(l, 1)), sexpr::find(prop, "hatch_position").and_then(|h| sexpr::find(h, "xy"))) else { continue };
             let (Some(x), Some(y)) = (sexpr::num(xy, 1), sexpr::num(xy, 2)) else { continue };
-            let offset = eda_model::setup_pages::HatchOffset { x_um: mm_to_um(x), y_um: mm_to_um(y) };
-            if !offset.is_zero() && board.layers.iter().any(|l| l == layer) && offset.x_um.abs() <= eda_model::setup_pages::MAX_HATCH_OFFSET_UM && offset.y_um.abs() <= eda_model::setup_pages::MAX_HATCH_OFFSET_UM {
+            let offset = eda_model::setup_pages::HatchOffset { x_nm: mm_to_um(x), y_nm: mm_to_um(y) };
+            if !offset.is_zero() && board.layers.iter().any(|l| l == layer) && offset.x_nm.abs() <= eda_model::setup_pages::MAX_HATCH_OFFSET_NM && offset.y_nm.abs() <= eda_model::setup_pages::MAX_HATCH_OFFSET_NM {
                 board.hatch_offsets.insert(layer.to_string(), offset);
             }
         }
@@ -619,13 +619,13 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
             let mut m = MeanderSettings::single_track();
             let um = |key: &str| e.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
             if let Some(v) = um("min_amplitude") {
-                m.min_amplitude_um = v;
+                m.min_amplitude_nm = v;
             }
             if let Some(v) = um("max_amplitude") {
-                m.max_amplitude_um = v;
+                m.max_amplitude_nm = v;
             }
             if let Some(v) = um("spacing") {
-                m.spacing_um = v;
+                m.spacing_nm = v;
             }
             if let Some(v) = e.get("corner_style").and_then(|v| v.as_i64()) {
                 m.corner_style = CornerStyle::from_code(v);
@@ -663,8 +663,8 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
                                 signal_layer: layer_of(r, "signal_layer")?,
                                 top_reference_layer: layer_of(r, "top_reference_layer"),
                                 bottom_reference_layer: layer_of(r, "bottom_reference_layer"),
-                                width_um: int(r, "width") / 1000,
-                                diff_pair_gap_um: int(r, "diff_pair_gap") / 1000,
+                                width_nm: int(r, "width") / 1000,
+                                diff_pair_gap_nm: int(r, "diff_pair_gap") / 1000,
                                 delay_as_per_mm: int(r, "delay"),
                             })
                         })
@@ -771,10 +771,10 @@ fn front_back_opt_bool(list: &[Sexpr]) -> (Option<bool>, Option<bool>) {
 fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
     let Some(setup) = sexpr::find(root, "setup") else { return };
     if let Some(v) = sexpr::find(setup, "pad_to_mask_clearance").and_then(|f| sexpr::num(f, 1)) {
-        board.solder_mask.expansion_um = mm_to_um(v);
+        board.solder_mask.expansion_nm = mm_to_um(v);
     }
     if let Some(v) = sexpr::find(setup, "solder_mask_min_width").and_then(|f| sexpr::num(f, 1)) {
-        board.solder_mask.min_width_um = mm_to_um(v);
+        board.solder_mask.min_width_nm = mm_to_um(v);
     }
     if let Some(v) = sexpr::find(setup, "allow_soldermask_bridges_in_footprints").and_then(|f| sexpr::txt(f, 1)) {
         board.solder_mask.allow_bridges_in_footprints = v == "yes";
@@ -786,14 +786,14 @@ fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
     }
     // `m_SolderPasteMargin` / `m_SolderPasteMarginRatio`.
     if let Some(v) = sexpr::find(setup, "pad_to_paste_clearance").and_then(|f| sexpr::num(f, 1)) {
-        board.solder_mask.paste_margin_um = mm_to_um(v);
+        board.solder_mask.paste_margin_nm = mm_to_um(v);
     }
     if let Some(v) = sexpr::find(setup, "pad_to_paste_clearance_ratio").and_then(|f| sexpr::num(f, 1)) {
         board.solder_mask.paste_margin_ratio = v;
     }
     // `(general (thickness ..))`: `BOARD_DESIGN_SETTINGS::SetBoardThickness`.
     if let Some(v) = sexpr::find(root, "general").and_then(|g| sexpr::find(g, "thickness")).and_then(|f| sexpr::num(f, 1)) {
-        board.board_thickness_um = mm_to_um(v);
+        board.board_thickness_nm = mm_to_um(v);
     }
 }
 
@@ -851,23 +851,23 @@ fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
 fn import_legacy_setup_minimums(root: &[Sexpr], board: &mut BoardRules) {
     let Some(setup) = sexpr::find(root, "setup") else { return };
     if let Some(v) = sexpr::find(setup, "trace_min").and_then(|f| sexpr::num(f, 1)) {
-        board.track_width_min_um = mm_to_um(v);
+        board.track_width_min_nm = mm_to_um(v);
     }
     if let Some(v) = sexpr::find(setup, "clearance_min").and_then(|f| sexpr::num(f, 1)) {
-        board.min_clearance_um = mm_to_um(v);
+        board.min_clearance_nm = mm_to_um(v);
     }
     if let Some(v) = sexpr::find(setup, "via_min_size").and_then(|f| sexpr::num(f, 1)) {
-        board.via_diameter_min_um = mm_to_um(v);
+        board.via_diameter_min_nm = mm_to_um(v);
     }
     let through_hole_min = sexpr::find(setup, "through_hole_min").or_else(|| sexpr::find(setup, "via_min_drill"));
     if let Some(v) = through_hole_min.and_then(|f| sexpr::num(f, 1)) {
-        board.via_drill_min_um = mm_to_um(v);
+        board.via_drill_min_nm = mm_to_um(v);
     }
     if let Some(v) = sexpr::find(setup, "hole_to_hole_min").and_then(|f| sexpr::num(f, 1)) {
-        board.hole_to_hole_min_um = mm_to_um(v);
+        board.hole_to_hole_min_nm = mm_to_um(v);
     }
     if let Some(v) = sexpr::find(setup, "via_min_annulus").and_then(|f| sexpr::num(f, 1)) {
-        board.annular_width_min_um = mm_to_um(v);
+        board.annular_width_min_nm = mm_to_um(v);
     }
 }
 
@@ -1057,57 +1057,57 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     // The project stated its minimums: they are exact, and written back exactly (`BoardRules::constraints_explicit`).
     b.constraints_explicit = true;
     if let Some(v) = mm("min_track_width") {
-        b.track_width_min_um = v;
+        b.track_width_min_nm = v;
     }
     if let Some(v) = mm("min_clearance") {
-        b.min_clearance_um = v;
+        b.min_clearance_nm = v;
     }
     if let Some(v) = mm("min_copper_edge_clearance") {
-        b.copper_edge_clearance_um = Some(v);
+        b.copper_edge_clearance_nm = Some(v);
     }
     if let Some(v) = mm("min_via_diameter") {
-        b.via_diameter_min_um = v;
+        b.via_diameter_min_nm = v;
     }
     if let Some(v) = mm("min_through_hole_diameter") {
-        b.via_drill_min_um = v;
+        b.via_drill_min_nm = v;
     }
     if let Some(v) = mm("min_hole_to_hole") {
-        b.hole_to_hole_min_um = v;
+        b.hole_to_hole_min_nm = v;
     }
     if let Some(v) = mm("min_hole_clearance") {
-        b.hole_clearance_um = v;
+        b.hole_clearance_nm = v;
     }
     if let Some(v) = mm("min_via_annular_width") {
-        b.annular_width_min_um = v;
+        b.annular_width_min_nm = v;
     }
     if let Some(v) = mm("min_silk_clearance") {
-        b.silk_clearance_um = v;
+        b.silk_clearance_nm = v;
     }
     if let Some(v) = mm("min_text_height") {
-        b.min_silk_text_height_um = v;
+        b.min_silk_text_height_nm = v;
     }
     if let Some(v) = mm("min_text_thickness") {
-        b.min_silk_text_thickness_um = v;
+        b.min_silk_text_thickness_nm = v;
     }
     // `m_SolderMaskToCopperClearance` lives only in the project file.
     if let Some(v) = mm("solder_mask_to_copper_clearance") {
-        b.solder_mask.to_copper_clearance_um = v;
+        b.solder_mask.to_copper_clearance_nm = v;
     }
     // The rest of Board Setup > Constraints.
     if let Some(v) = mm("min_connection") {
-        b.min_connection_um = v;
+        b.min_connection_nm = v;
     }
     if let Some(v) = mm("min_microvia_diameter") {
-        b.microvia_diameter_min_um = v;
+        b.microvia_diameter_min_nm = v;
     }
     if let Some(v) = mm("min_microvia_drill") {
-        b.microvia_drill_min_um = v;
+        b.microvia_drill_min_nm = v;
     }
     if let Some(v) = mm("min_groove_width") {
-        b.min_groove_width_um = v;
+        b.min_groove_width_nm = v;
     }
     if let Some(v) = mm("max_error") {
-        b.max_error_um = v.max(1);
+        b.max_error_nm = v.max(1);
     }
     if let Some(v) = rules.get("min_resolved_spokes").and_then(|v| v.as_u64()) {
         b.min_resolved_spokes = v.min(99) as u32;
@@ -1124,16 +1124,16 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
         let flag = |key: &str| def.get(key).and_then(|v| v.as_bool());
         let class = |prefix: &str, c: &mut eda_model::rules::LayerClassDefaults| {
             if let Some(v) = num(&format!("{prefix}_line_width")) {
-                c.line_width_um = v;
+                c.line_width_nm = v;
             }
             if let Some(v) = num(&format!("{prefix}_text_size_h")) {
-                c.text_width_um = v;
+                c.text_width_nm = v;
             }
             if let Some(v) = num(&format!("{prefix}_text_size_v")) {
-                c.text_height_um = v;
+                c.text_height_nm = v;
             }
             if let Some(v) = num(&format!("{prefix}_text_thickness")) {
-                c.text_thickness_um = v;
+                c.text_thickness_nm = v;
             }
             if let Some(v) = flag(&format!("{prefix}_text_italic")) {
                 c.italic = v;
@@ -1147,10 +1147,10 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
         class("fab", &mut b.text_graphics.fab);
         class("other", &mut b.text_graphics.others);
         if let Some(v) = num("board_outline_line_width") {
-            b.text_graphics.edge_cuts_line_width_um = v;
+            b.text_graphics.edge_cuts_line_width_nm = v;
         }
         if let Some(v) = num("courtyard_line_width") {
-            b.text_graphics.courtyard_line_width_um = v;
+            b.text_graphics.courtyard_line_width_nm = v;
         }
     }
 }
@@ -1622,7 +1622,7 @@ fn import_footprints(
         let courtyard_outlines = footprint_courtyard_outlines(fp, side);
         explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, courtyard_outlines, model: crate::footprint_lib::model_from(fp), models3d, art });
 
-        parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(key), pins, body_um: None, symbol: None, datasheet: None, edge: None });
+        parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(key), pins, body_nm: None, symbol: None, datasheet: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });
         refs.footprints.push(ItemRef::of(fp));
     }
@@ -2063,7 +2063,7 @@ fn import_drawings(root: &[Sexpr], net_names: &BTreeMap<i64, String>, refs: &mut
         let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
         let angle = ((sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32;
         let style = crate::board_text_io::read_style(item);
-        texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_um(x), y: mm_to_um(y) }, angle, layer: layer_of(item), size_um: style.size_um, stroke_width: style.stroke_width, justify: style.justify, mirror: style.mirror });
+        texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_um(x), y: mm_to_um(y) }, angle, layer: layer_of(item), size_nm: style.size_nm, stroke_width: style.stroke_width, justify: style.justify, mirror: style.mirror });
         extras.push(style.extra);
         refs.texts.push(ItemRef::of(item));
     }
@@ -2179,7 +2179,7 @@ fn footprint_edge_cuts(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs)
 /// has the same gap, and kicad-cli says so, instead of a loop closed behind the user's back.
 ///
 /// Returns the polygon for `placement.outline`, whether the shapes are the outline, and, when the outline is the loop of lines, the one width they are drawn at
-/// (`DrawingsSection::outline_width_um`; lines of different widths are not one loop of lines here, they stay shapes).
+/// (`DrawingsSection::outline_width_nm`; lines of different widths are not one loop of lines here, they stay shapes).
 fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNotes) -> (Vec<Point>, bool, Option<i64>) {
     footprint_edge_cuts(root, shapes, refs);
     let items: Vec<Shape> = shapes.iter().filter(|s| edge::is_edge_cuts(s)).cloned().collect();
@@ -2188,7 +2188,7 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
         return (Vec::new(), false, None);
     }
 
-    let (polys, chained, _) = eda_drc::outline::convert_outline_to_polygon(&items, edge::MAX_ERROR_UM as f64, edge::CHAINING_EPSILON_UM, true);
+    let (polys, chained, _) = eda_drc::outline::convert_outline_to_polygon(&items, edge::MAX_ERROR_NM as f64, edge::CHAINING_EPSILON_NM, true);
     let one_loop = chained && polys.outline_count() == 1 && !polys.has_holes();
     let line_widths: std::collections::BTreeSet<i64> = items.iter().filter_map(|s| if let Shape::Segment { stroke_width, .. } = s { Some(*stroke_width) } else { None }).collect();
     if one_loop && items.iter().all(|s| matches!(s, Shape::Segment { .. })) && line_widths.len() == 1 {
@@ -2428,7 +2428,7 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
                 let (start, mid, end) = (sexpr::find(l, "start").and_then(xy_point), sexpr::find(l, "mid").and_then(xy_point), sexpr::find(l, "end").and_then(xy_point));
                 match (start, mid, end) {
                     (Some(s), Some(m), Some(e)) => {
-                        for pt in edge::Arc::through(s, m, e).polyline(edge::MAX_ERROR_UM as f64) {
+                        for pt in edge::Arc::through(s, m, e).polyline(edge::MAX_ERROR_NM as f64) {
                             push(pt, &mut out);
                         }
                     }
@@ -2820,16 +2820,16 @@ mod tests {
     fn merge_project_design_rules_reads_the_board_wide_minimums() {
         let mut model = eda_model::ConstraintModel::default();
         merge_project_design_rules(&mut model, SAMPLE_DESIGN_RULES_JSON);
-        assert_eq!(model.board.track_width_min_um, 102, "0.1016mm rounds to 102um");
-        assert_eq!(model.board.min_clearance_um, 0);
-        assert_eq!(model.board.via_diameter_min_um, 450);
-        assert_eq!(model.board.via_drill_min_um, 200);
-        assert_eq!(model.board.hole_to_hole_min_um, 250);
-        assert_eq!(model.board.hole_clearance_um, 254);
-        assert_eq!(model.board.annular_width_min_um, 125);
-        assert_eq!(model.board.silk_clearance_um, 150);
-        assert_eq!(model.board.min_silk_text_height_um, 800);
-        assert_eq!(model.board.min_silk_text_thickness_um, 120);
+        assert_eq!(model.board.track_width_min_nm, 102, "0.1016mm rounds to 102um");
+        assert_eq!(model.board.min_clearance_nm, 0);
+        assert_eq!(model.board.via_diameter_min_nm, 450);
+        assert_eq!(model.board.via_drill_min_nm, 200);
+        assert_eq!(model.board.hole_to_hole_min_nm, 250);
+        assert_eq!(model.board.hole_clearance_nm, 254);
+        assert_eq!(model.board.annular_width_min_nm, 125);
+        assert_eq!(model.board.silk_clearance_nm, 150);
+        assert_eq!(model.board.min_silk_text_height_nm, 800);
+        assert_eq!(model.board.min_silk_text_thickness_nm, 120);
     }
 
     #[test]
@@ -2859,12 +2859,12 @@ mod tests {
             (net 0 "")
         )"#;
         let (_design, model, _notes) = import_kicad_pcb(text).expect("parses");
-        assert_eq!(model.board.track_width_min_um, 150);
-        assert_eq!(model.board.min_clearance_um, 100);
-        assert_eq!(model.board.via_diameter_min_um, 400);
-        assert_eq!(model.board.via_drill_min_um, 250, "falls back to the legacy via_min_drill token when through_hole_min is absent");
-        assert_eq!(model.board.hole_to_hole_min_um, 200);
-        assert_eq!(model.board.annular_width_min_um, 90);
+        assert_eq!(model.board.track_width_min_nm, 150);
+        assert_eq!(model.board.min_clearance_nm, 100);
+        assert_eq!(model.board.via_diameter_min_nm, 400);
+        assert_eq!(model.board.via_drill_min_nm, 250, "falls back to the legacy via_min_drill token when through_hole_min is absent");
+        assert_eq!(model.board.hole_to_hole_min_nm, 200);
+        assert_eq!(model.board.annular_width_min_nm, 90);
     }
 
     #[test]
@@ -2950,7 +2950,7 @@ mod tests {
         assert_eq!(t.at, Point { x: 3000, y: 3000 });
         assert_eq!(t.angle, 90_000);
         assert_eq!(t.layer, "F.SilkS");
-        assert_eq!(t.size_um, 1000);
+        assert_eq!(t.size_nm, 1000);
         assert_eq!(t.stroke_width, 150);
         assert_eq!(t.justify, TextJustify::Left);
         assert!(t.mirror);
@@ -2992,7 +2992,7 @@ mod tests {
         };
         let (_, model, _) = import_kicad_pcb(&text("(tenting (front yes) (back no))")).expect("parses");
         let m = &model.board.solder_mask;
-        assert_eq!((m.expansion_um, m.min_width_um), (50, 100));
+        assert_eq!((m.expansion_nm, m.min_width_nm), (50, 100));
         assert!(m.allow_bridges_in_footprints);
         assert!(m.tent_vias_front && !m.tent_vias_back);
 
@@ -3005,7 +3005,7 @@ mod tests {
 
         let (_, mut with_pro, _) = import_kicad_pcb(&text("(tenting (front yes) (back yes))")).expect("parses");
         merge_project_design_rules(&mut with_pro, r#"{"board":{"design_settings":{"rules":{"solder_mask_to_copper_clearance":0.07}}}}"#);
-        assert_eq!(with_pro.board.solder_mask.to_copper_clearance_um, 70);
+        assert_eq!(with_pro.board.solder_mask.to_copper_clearance_nm, 70);
     }
 
     /// Per-pad layer sets and mask margins, footprint margin / allow-bridges /

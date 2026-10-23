@@ -893,7 +893,7 @@ fn check_sheet_aspect(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_>
 /// content — coarse enough that a few wire jogs don't paper over a truly
 /// empty region, fine enough that a real functional block spans several
 /// cells rather than one.
-const DENSITY_CELL_UM: i64 = 20_000;
+const DENSITY_CELL_NM: i64 = 20_000;
 
 /// Fraction of grid cells (over the drawing's own bounding box) that may be
 /// completely empty (no symbol box, wire segment or label) before the sheet
@@ -920,7 +920,7 @@ const MAX_EMPTY_CELL_FRACTION: f64 = 0.40;
 const MAX_EMPTY_BAND_FRACTION: f64 = 0.25;
 
 /// Fails when the drawn content leaves too much of the sheet empty: divide
-/// the drawing's own bounding box into a grid of ~`DENSITY_CELL_UM` cells
+/// the drawing's own bounding box into a grid of ~`DENSITY_CELL_NM` cells
 /// and fail if too many cells hold nothing (`MAX_EMPTY_CELL_FRACTION`), or
 /// if any fully-empty band of cells spans too much of the sheet's width or
 /// height (`MAX_EMPTY_BAND_FRACTION`). Purely geometric — no rasterisation
@@ -955,15 +955,15 @@ fn check_sheet_density(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_
 
     let width = (x1 - x0).max(1);
     let height = (y1 - y0).max(1);
-    let cols = ((width + DENSITY_CELL_UM - 1) / DENSITY_CELL_UM).max(1) as usize;
-    let rows = ((height + DENSITY_CELL_UM - 1) / DENSITY_CELL_UM).max(1) as usize;
+    let cols = ((width + DENSITY_CELL_NM - 1) / DENSITY_CELL_NM).max(1) as usize;
+    let rows = ((height + DENSITY_CELL_NM - 1) / DENSITY_CELL_NM).max(1) as usize;
     let mut occupied = vec![vec![false; cols]; rows];
 
     let mut mark_rect = |bx0: i64, bx1: i64, by0: i64, by1: i64| {
-        let c0 = ((bx0 - x0) / DENSITY_CELL_UM).clamp(0, cols as i64 - 1) as usize;
-        let c1 = ((bx1 - x0) / DENSITY_CELL_UM).clamp(0, cols as i64 - 1) as usize;
-        let r0 = ((by0 - y0) / DENSITY_CELL_UM).clamp(0, rows as i64 - 1) as usize;
-        let r1 = ((by1 - y0) / DENSITY_CELL_UM).clamp(0, rows as i64 - 1) as usize;
+        let c0 = ((bx0 - x0) / DENSITY_CELL_NM).clamp(0, cols as i64 - 1) as usize;
+        let c1 = ((bx1 - x0) / DENSITY_CELL_NM).clamp(0, cols as i64 - 1) as usize;
+        let r0 = ((by0 - y0) / DENSITY_CELL_NM).clamp(0, rows as i64 - 1) as usize;
+        let r1 = ((by1 - y0) / DENSITY_CELL_NM).clamp(0, rows as i64 - 1) as usize;
         for r in r0..=r1 {
             for c in c0..=c1 {
                 occupied[r][c] = true;
@@ -1031,7 +1031,7 @@ fn check_sheet_density(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_
             status: CheckStatus::Fail,
             location: Some("sheet".into()),
             hint: Some(format!(
-                "{empty_cells}/{total_cells} of {DENSITY_CELL_UM}um grid cells are empty ({:.0}% > {:.0}% max); widest empty band is {:.0}% of width / {:.0}% of height (max {:.0}%)",
+                "{empty_cells}/{total_cells} of {DENSITY_CELL_NM}um grid cells are empty ({:.0}% > {:.0}% max); widest empty band is {:.0}% of width / {:.0}% of height (max {:.0}%)",
                 empty_fraction * 100.0,
                 MAX_EMPTY_CELL_FRACTION * 100.0,
                 max_col_band * 100.0,
@@ -1254,13 +1254,13 @@ fn check_wire_detour(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_>>
 /// that still produced a real wire — rather than the power-flag/ground-glyph
 /// symbols `eda-engine` normally emits for such nets instead of wiring them
 /// — reads as a rail snaking across the sheet. Fails when that wire is
-/// either long (>`MAX_POWER_WIRE_LEN_UM`) or bendy (>2 bends): a short,
+/// either long (>`MAX_POWER_WIRE_LEN_NM`) or bendy (>2 bends): a short,
 /// single-segment drop between two adjacent pins on the same net is
 /// harmless and common (e.g. a decoupling cap's own two legs are never on a
 /// "net" in this sense, but a hand-authored intent could still tie two
 /// adjacent power pins directly), so this only flags a wire that actually
 /// behaves like the sheet-spanning rail this gate exists to catch.
-const MAX_POWER_WIRE_LEN_UM: i64 = 30_000; // 30mm
+const MAX_POWER_WIRE_LEN_NM: i64 = 30_000; // 30mm
 const MAX_POWER_WIRE_BENDS: usize = 2;
 
 fn check_power_net_as_wire(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
@@ -1271,13 +1271,13 @@ fn check_power_net_as_wire(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
         }
         let length: i64 = w.pts.windows(2).map(|s| (s[0].x - s[1].x).abs() + (s[0].y - s[1].y).abs()).sum();
         let bends = w.pts.len().saturating_sub(2);
-        if length > MAX_POWER_WIRE_LEN_UM || bends > MAX_POWER_WIRE_BENDS {
+        if length > MAX_POWER_WIRE_LEN_NM || bends > MAX_POWER_WIRE_BENDS {
             out.push(CheckResult {
                 check: "schematic_power_net_as_wire".into(),
                 status: CheckStatus::Fail,
                 location: Some(format!("{}:{:?}", w.net, w.pins)),
                 hint: Some(format!(
-                    "power/ground net '{}' drawn as a {length}um/{bends}-bend wire (max {MAX_POWER_WIRE_LEN_UM}um / {MAX_POWER_WIRE_BENDS} bends) instead of a flag/glyph at each pin",
+                    "power/ground net '{}' drawn as a {length}um/{bends}-bend wire (max {MAX_POWER_WIRE_LEN_NM}um / {MAX_POWER_WIRE_BENDS} bends) instead of a flag/glyph at each pin",
                     w.net
                 )), detail: None
             });
@@ -1336,7 +1336,7 @@ fn check_column_overflow(sch: &SchematicSection, model: &ConstraintModel, out: &
 /// to bite exactly the drawings that already carried one page-crossing
 /// wire, and the layout change (not a tuned threshold) is what brings every
 /// fixture under it. Not since relaxed.
-const MAX_WIRE_LEN_UM: i64 = 80_000;
+const MAX_WIRE_LEN_NM: i64 = 80_000;
 
 fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
     let mut ok = true;
@@ -1345,7 +1345,7 @@ fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
             continue;
         }
         let len: i64 = w.pts.windows(2).map(|s| (s[0].x - s[1].x).abs() + (s[0].y - s[1].y).abs()).sum();
-        if len > MAX_WIRE_LEN_UM {
+        if len > MAX_WIRE_LEN_NM {
             out.push(CheckResult {
                 check: "schematic_wire_length".into(),
                 status: CheckStatus::Fail,
@@ -1353,7 +1353,7 @@ fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
                 hint: Some(format!(
                     "wire polyline is {:.1}mm long (max {:.1}mm) — this net belongs on a net label, not a wire",
                     len as f64 / 1000.0,
-                    MAX_WIRE_LEN_UM as f64 / 1000.0
+                    MAX_WIRE_LEN_NM as f64 / 1000.0
                 )), detail: None
             });
             ok = false;
@@ -1471,7 +1471,7 @@ mod tests {
     }
 
     fn design(sch: SchematicSection) -> Design {
-        Design { schema: 1, provenance: provenance(), schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None }
+        Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: provenance(), schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None }
     }
 
     /// One part: a 2-pin passive with pins at Left(offset 1270)/Right
@@ -1490,7 +1490,7 @@ mod tests {
                 Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                 Pin { number: "2".into(), name: None, kind: PinKind::Passive },
             ],
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         };
         ConstraintModel { parts: vec![r1], ..Default::default() }
@@ -1656,15 +1656,15 @@ mod tests {
             parts: vec![
                 Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
-                       body_um: None, symbol: None, datasheet: None,
+                       body_nm: None, symbol: None, datasheet: None,
                        edge: None, },
                 Part { reference: "J2".into(), mpn: None, lcsc: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
-                       body_um: None, symbol: None, datasheet: None,
+                       body_nm: None, symbol: None, datasheet: None,
                        edge: None, },
                 Part { reference: "U1".into(), mpn: None, lcsc: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
-                       body_um: None, symbol: None, datasheet: None,
+                       body_nm: None, symbol: None, datasheet: None,
                        edge: None, },
             ],
             ..Default::default()
@@ -1899,7 +1899,7 @@ mod integration {
     }
 
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, pins, body_um: None, symbol: None, datasheet: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, pins, body_nm: None, symbol: None, datasheet: None, edge: None }
     }
 
     fn net(name: &str, pins: &[&str]) -> Net {

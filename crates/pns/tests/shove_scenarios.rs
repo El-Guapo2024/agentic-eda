@@ -8,7 +8,7 @@
 //! scenario is about.
 
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 use eda_pns::item::{net_of, Item, ItemId, Segment, Solid, Via};
 use eda_pns::layer::LayerRange;
@@ -22,22 +22,22 @@ fn rules() -> BoardRules {
     serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap()
 }
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
-fn seg(net: &str, track: &str, a: Point, b: Point, width: Um) -> Item {
+fn seg(net: &str, track: &str, a: Point, b: Point, width: Nm) -> Item {
     Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width, source_track: Some((track.into(), 0)), locked: false })
 }
 
 /// A chain of segments of one IR track.
-fn track(node: &mut Node, net: &str, id: &str, pts: &[Point], width: Um) {
+fn track(node: &mut Node, net: &str, id: &str, pts: &[Point], width: Nm) {
     for (i, w) in pts.windows(2).enumerate() {
         node.add(Item::Segment(Segment { net: net_of(net), layer: 0, a: w[0], b: w[1], width, source_track: Some((id.into(), i)), locked: false }));
     }
 }
 
-fn pad(net: &str, name: &str, c: Point, r: Um) -> Item {
+fn pad(net: &str, name: &str, c: Point, r: Nm) -> Item {
     Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: name.into(), edge: false })
 }
 
@@ -57,13 +57,13 @@ fn violations(node: &Node, rules: &BoardRules) -> HashSet<(ItemId, ItemId)> {
 }
 
 /// The world after a shove with the head put back in.
-fn with_head(out: &ShoveOutcome, net: &str, width: Um) -> Node {
+fn with_head(out: &ShoveOutcome, net: &str, width: Nm) -> Node {
     let mut w = out.world.branch();
     w.add_line(&Line::from_points(net_of(net), 0, width, out.head.clone()), None, false);
     w
 }
 
-fn assert_no_new_violations(before: &Node, out: &ShoveOutcome, head_net: &str, head_width: Um, rules: &BoardRules) {
+fn assert_no_new_violations(before: &Node, out: &ShoveOutcome, head_net: &str, head_width: Nm, rules: &BoardRules) {
     let mut start = before.branch();
     let head_pts = out.head.clone();
     // the head as it was asked for is not part of "before": judge only the shoved world

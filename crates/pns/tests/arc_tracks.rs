@@ -3,7 +3,7 @@
 //! arc in it is written back to the IR as segments and `(arc ..)` tracks (`docs/parity/CODE-COMPARE-router.md` D18).
 
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Um};
+use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Nm};
 use eda_model::{ConstraintModel, Net as IrNet, Part, Pin, PinKind};
 use eda_pns::arcs::ArcPts;
 use eda_pns::item::{net_of, Arc, Item, Segment};
@@ -12,7 +12,7 @@ use eda_pns::node::Node;
 use eda_pns::router::{Router, RouteCommit};
 use eda_pns::settings::Mode;
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -35,7 +35,7 @@ fn rules() -> eda_model::BoardRules {
 
 /// A quarter circle of radius 4 mm about (0, 0), from (4000, 0) to (0, 4000).
 fn quarter() -> ArcPts {
-    let h = (4000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as Um;
+    let h = (4000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as Nm;
     ArcPts::new(p(4000, 0), p(h, h), p(0, 4000))
 }
 
@@ -146,7 +146,7 @@ fn an_arc_collides_with_a_track_across_it_and_not_with_one_beyond_the_clearance(
     assert!(!node.all_colliding(&across, &net_of("SIG"), eda_pns::layer::LayerRange::single(0), &rules, &[]).is_empty());
     // a SIG track 4 mm - 100 - 100 - 200 = 3600 from the centre, at the clearance of the arc's near edge: the arc's stroke is 3900..4100
     let radius_at = |r: f64| {
-        let h = (r * std::f64::consts::FRAC_1_SQRT_2).round() as Um;
+        let h = (r * std::f64::consts::FRAC_1_SQRT_2).round() as Nm;
         Shape::Circle { c: p(h, h), r: 100 }
     };
     // 3900 - 200 (clearance) - 100 (the circle) = 3600: touching the clearance is not a collision, 30 um inside it is
@@ -192,7 +192,7 @@ fn splitting_an_arc_joins_its_halves_at_the_point_and_leaves_the_track_whole_for
 // ------------------------------------------------------------------------------------------------------------------------------
 
 fn part(r: &str) -> Part {
-    Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None }
+    Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None }
 }
 
 /// Two 0603 resistors, R1 at (-9000, 0) and R2 at (9000, 0), net SIG on R1.1 and R2.1, and a GND arc track across the middle of the board.
@@ -201,14 +201,14 @@ fn board_with(tracks: Vec<Track>) -> (Design, ConstraintModel) {
 }
 
 /// [`board_with`], the two resistors `y` below the origin.
-fn board_with_pads_at(tracks: Vec<Track>, y: Um) -> (Design, ConstraintModel) {
+fn board_with_pads_at(tracks: Vec<Track>, y: Nm) -> (Design, ConstraintModel) {
     let model = ConstraintModel { parts: vec![part("R1"), part("R2")], nets: vec![IrNet { name: "SIG".into(), pins: vec!["R1.1".into(), "R2.1".into()] }], ..Default::default() };
     let design = Design {
         footprint_library: None,
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -236,7 +236,7 @@ fn straight(id: &str, net: &str, pts: &[Point]) -> Track {
 /// A quarter arc of radius 3 mm bulging toward +x +y: centre (-1000, -1000), from (2000, -1000) to (-1000, 2000).
 fn gnd_arc() -> ArcPts {
     let r = 3000.0;
-    let h = (r * std::f64::consts::FRAC_1_SQRT_2).round() as Um;
+    let h = (r * std::f64::consts::FRAC_1_SQRT_2).round() as Nm;
     ArcPts::new(p(2000, -1000), p(-1000 + h, -1000 + h), p(-1000, 2000))
 }
 

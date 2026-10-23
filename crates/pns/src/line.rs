@@ -12,13 +12,13 @@ use crate::arcs::ArcPts;
 use crate::direction45::{AngleType, Direction45};
 use crate::item::{ItemId, Net};
 use crate::seg_ops::{self, Seg2};
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 
 #[derive(Debug, Clone)]
 pub struct Line {
     pub net: Net,
     pub layer: i32,
-    pub width: Um,
+    pub width: Nm,
     /// At least 1 point (a lone via has exactly 1); 0 or 1 points means
     /// there is no routable segment yet (`PointCount() < 2` in KiCad).
     pub pts: Vec<Point>,
@@ -90,11 +90,11 @@ pub enum LinePiece {
 }
 
 impl Line {
-    pub fn new(net: Net, layer: i32, width: Um) -> Self {
+    pub fn new(net: Net, layer: i32, width: Nm) -> Self {
         Line { net, layer, width, pts: Vec::new(), segment_ids: Vec::new(), via_at_start: None, via_at_end: None, arcs: Vec::new() }
     }
 
-    pub fn from_points(net: Net, layer: i32, width: Um, pts: Vec<Point>) -> Self {
+    pub fn from_points(net: Net, layer: i32, width: Nm, pts: Vec<Point>) -> Self {
         Line { net, layer, width, pts, segment_ids: Vec::new(), via_at_start: None, via_at_end: None, arcs: Vec::new() }
     }
 
@@ -228,7 +228,7 @@ impl Line {
 
     /// `LINE::DragCorner( aP, aIndex, aFreeAngle )`: `dragCornerFree` (the vertex goes to the cursor, whatever angle that
     /// makes) or `dragCorner45`, which snaps the cursor first by `snap` (`m_snapThreshhold`).
-    pub fn drag_corner(&mut self, p: Point, index: usize, free_angle: bool, snap: Um) {
+    pub fn drag_corner(&mut self, p: Point, index: usize, free_angle: bool, snap: Nm) {
         if free_angle {
             self.drag_corner_free(p, index);
         } else {
@@ -258,7 +258,7 @@ impl Line {
 
     /// `LINE::dragCorner45` with `m_snapThreshhold = snap`: [`Self::drag_corner45`] after `snapDraggedCorner` has pulled the
     /// cursor onto the point where two nearby segments of the line, at an obtuse angle, would meet.
-    pub fn drag_corner45_snapped(&mut self, p: Point, index: usize, snap: Um) {
+    pub fn drag_corner45_snapped(&mut self, p: Point, index: usize, snap: Nm) {
         let n_segs = self.pts.len().saturating_sub(1);
         let width = self.width;
         let p = self.snap_dragged_corner(p, index, snap);
@@ -298,7 +298,7 @@ impl Line {
     /// segments among those two either side of the dragged vertex, at an obtuse angle to each other, would meet if extended,
     /// the vertex goes there instead -- so a corner dragged near where it would fall onto the neighbouring legs' own corner
     /// lands on it. `snap <= 0` leaves the cursor alone.
-    fn snap_dragged_corner(&self, p: Point, index: usize, snap: Um) -> Point {
+    fn snap_dragged_corner(&self, p: Point, index: usize, snap: Nm) -> Point {
         if snap <= 0 {
             return p;
         }
@@ -328,7 +328,7 @@ impl Line {
     /// `LINE::snapToNeighbourSegments( aPath, aP, aIndex )`: when the segment being dragged runs in the same direction as the
     /// one two before it or two after it, and the cursor is within `snap` of that one's line, the cursor snaps to its start
     /// -- so the dragged segment lines up with it and the two can merge.
-    fn snap_to_neighbour_segments(path: &[Point], p: Point, index: usize, snap: Um) -> Point {
+    fn snap_to_neighbour_segments(path: &[Point], p: Point, index: usize, snap: Nm) -> Point {
         if snap == 0 {
             return p;
         }
@@ -367,7 +367,7 @@ impl Line {
     /// dragged segment is the first or the last of the line, a new 45-degree leg is made to connect (whichever of the two ways
     /// of turning gives the shortest line). A line of three or more segments keeps its far ends where they were.
     /// `snap` is `m_snapThreshhold`: `snapToNeighbourSegments`.
-    pub fn drag_segment45(&mut self, p: Point, index: usize, snap: Um) {
+    pub fn drag_segment45(&mut self, p: Point, index: usize, snap: Nm) {
         let m_seg_count = self.segment_count();
         if self.pts.len() < 2 || index >= m_seg_count {
             return;

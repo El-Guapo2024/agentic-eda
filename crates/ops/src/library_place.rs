@@ -103,7 +103,7 @@ impl Board<'_> {
         }
         // The pads must come from somewhere: the model knows the name (the intent's, a library's it resolved, the built-in table), or the command
         // brought the definition.
-        let probe = Part { reference: "?".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(name.to_string()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+        let probe = Part { reference: "?".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(name.to_string()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
         let known = self.model.footprint_of(&probe).is_some();
         if !known && definition.is_none() {
             return Err(vec![CheckResult::fail("ops_unknown_footprint", name, "no footprint with this name is installed or known to the board")]);
@@ -144,16 +144,16 @@ impl Board<'_> {
         }
         let defaults = self.model.board.text_graphics;
         let style = |l: &mut FieldLayout| {
-            let (_, h) = defaults.text_size_um(&l.layer);
+            let (_, h) = defaults.text_size_nm(&l.layer);
             l.size = (h, h);
-            l.thickness = defaults.text_thickness_um(&l.layer);
+            l.thickness = defaults.text_thickness_nm(&l.layer);
             let (italic, upright) = defaults.text_italic_upright(&l.layer);
             l.italic = italic;
             l.keep_upright = upright;
             l.mirror = l.layer.starts_with("B.");
         };
         if f.apply_to_fp_fields {
-            let probe = Part { reference: "?".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(footprint.to_string()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+            let probe = Part { reference: "?".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(footprint.to_string()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
             let engine = self.model.footprint_of(&probe).or_else(|| self.design.drawings.as_ref()?.board_parts.iter().find(|b| b.reference == reference)?.definition.as_ref().map(|d| d.to_engine_footprint()));
             let inst = self.placement().footprints.iter().find(|i| i.id == reference).cloned();
             if let (Some(engine), Some(inst)) = (engine, inst) {
@@ -176,15 +176,15 @@ impl Board<'_> {
             if let Some(def) = dr.board_parts.iter_mut().find(|b| b.reference == reference).and_then(|b| b.definition.as_mut()) {
                 if f.apply_to_fp_text {
                     for t in &mut def.texts {
-                        t.size_um = defaults.text_size_um(&t.layer).1;
-                        t.stroke_width = defaults.text_thickness_um(&t.layer);
+                        t.size_nm = defaults.text_size_nm(&t.layer).1;
+                        t.stroke_width = defaults.text_thickness_nm(&t.layer);
                         t.mirror = t.layer.starts_with("B.");
                     }
                 }
                 if f.apply_to_fp_shapes {
                     for s in &mut def.graphics {
                         if !s.layer().ends_with(".Cu") {
-                            s.set_stroke_width(defaults.line_thickness_um(s.layer()));
+                            s.set_stroke_width(defaults.line_thickness_nm(s.layer()));
                         }
                     }
                 }
@@ -300,18 +300,18 @@ mod tests {
             let mut def = hole();
             def.graphics.push(eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000, y: 0 } });
             def.graphics.push(eda_model::ir::Shape::Segment { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 500 }, end: Point { x: 1_000, y: 500 } });
-            def.texts.push(eda_model::ir::Text { id: String::new(), content: "note".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false });
+            def.texts.push(eda_model::ir::Text { id: String::new(), content: "note".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false });
             b.apply(&Cmd::PlaceFootprint { footprint: "MountingHole:MountingHole_3.2mm_M3".into(), at: Point { x: 10_000, y: 10_000 }, reference: String::new(), value: String::new(), definition: Some(def) }).unwrap();
             b
         }
         let mut model = ConstraintModel::default();
-        model.board.text_graphics.silk.text_width_um = 1_200;
-        model.board.text_graphics.silk.text_height_um = 1_200;
-        model.board.text_graphics.silk.text_thickness_um = 200;
-        model.board.text_graphics.silk.line_width_um = 180;
-        model.board.text_graphics.fab.text_height_um = 800;
-        model.board.text_graphics.fab.text_width_um = 800;
-        model.board.text_graphics.fab.line_width_um = 90;
+        model.board.text_graphics.silk.text_width_nm = 1_200;
+        model.board.text_graphics.silk.text_height_nm = 1_200;
+        model.board.text_graphics.silk.text_thickness_nm = 200;
+        model.board.text_graphics.silk.line_width_nm = 180;
+        model.board.text_graphics.fab.text_height_nm = 800;
+        model.board.text_graphics.fab.text_width_nm = 800;
+        model.board.text_graphics.fab.line_width_nm = 90;
 
         // Nothing ticked: the footprint as its library has it, with no edit of its fields.
         let b = place(&model);
@@ -319,7 +319,7 @@ mod tests {
         assert!(dr.footprint_edits.is_empty());
         let def = dr.board_parts[0].definition.as_ref().unwrap();
         let width_on = |def: &LibraryFootprint, layer: &str| def.graphics.iter().find(|g| g.layer() == layer).map(|g| g.stroke_width());
-        assert_eq!((width_on(def, "F.SilkS"), width_on(def, "F.Fab"), def.texts[0].size_um), (Some(120), Some(100), 1_000));
+        assert_eq!((width_on(def, "F.SilkS"), width_on(def, "F.Fab"), def.texts[0].size_nm), (Some(120), Some(100), 1_000));
 
         // Fields ticked: Reference on the silkscreen and Value on the fabrication layer take their classes' text; the art is left alone.
         model.board.formatting.apply_to_fp_fields = true;
@@ -338,7 +338,7 @@ mod tests {
         assert!(dr.footprint_edits.is_empty(), "the fields were not ticked");
         let def = dr.board_parts[0].definition.as_ref().unwrap();
         assert_eq!((width_on(def, "F.SilkS"), width_on(def, "F.Fab"), width_on(def, "F.CrtYd")), (Some(180), Some(90), Some(50)), "each shape by its layer's class; the courtyard's 0.05 mm is the Courtyard class's default");
-        assert_eq!((def.texts[0].size_um, def.texts[0].stroke_width), (800, 150));
+        assert_eq!((def.texts[0].size_nm, def.texts[0].stroke_width), (800, 150));
     }
 
     #[test]

@@ -849,7 +849,7 @@ fn stub_tip(port: &Port, lx: f64, ly: f64) -> (f64, f64) {
 
 /// Local (mm) pin-name text anchor position + CSS class, placed just inside
 /// the box from the port point.
-fn pin_text_pos(port: &Port, lx_um: f64, ly_um: f64, width_mm: f64) -> (f64, f64, &'static str) {
+fn pin_text_pos(port: &Port, lx_nm: f64, ly_nm: f64, width_mm: f64) -> (f64, f64, &'static str) {
     let _ = width_mm;
     let (dx, dy, anchor) = geometry::pin_text_offset(port.side);
     let class = match anchor {
@@ -857,7 +857,7 @@ fn pin_text_pos(port: &Port, lx_um: f64, ly_um: f64, width_mm: f64) -> (f64, f64
         geometry::HAnchor::Start => "pin-left",
         geometry::HAnchor::End => "pin-right",
     };
-    (lx_um / 1000.0 + dx, ly_um / 1000.0 + dy, class)
+    (lx_nm / 1000.0 + dx, ly_nm / 1000.0 + dy, class)
 }
 
 /// SVG `transform` attribute for a symbol instance (empty when the symbol
@@ -1085,7 +1085,7 @@ mod tests {
     }
 
     fn part(reference: &str, value: Option<&str>, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: value.map(String::from), package: None, footprint: None, pins, body_um: None, symbol: None, datasheet: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: value.map(String::from), package: None, footprint: None, pins, body_nm: None, symbol: None, datasheet: None, edge: None }
     }
 
     fn net(name: &str, pins: &[&str]) -> Net {
@@ -1248,7 +1248,7 @@ mod tests {
     fn malformed_design_no_schematic_returns_check_result_not_panic() {
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: eda_model::ir::Provenance {
                 engine_version: "0".into(),
                 intent_hash: "x".into(),

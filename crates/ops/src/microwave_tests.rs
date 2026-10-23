@@ -22,8 +22,8 @@ fn board(model: &ConstraintModel) -> Board<'_> {
     Board::new(design, model, 100, 300)
 }
 
-fn gap(b: &mut Board, at: Point, size_um: i64) {
-    b.apply(&Cmd::Microwave(MicrowaveCmd::Gap { at, size_um, track_width_um: 250, hand: Hand::default() })).unwrap();
+fn gap(b: &mut Board, at: Point, size_nm: i64) {
+    b.apply(&Cmd::Microwave(MicrowaveCmd::Gap { at, size_nm, track_width_nm: 250, hand: Hand::default() })).unwrap();
 }
 
 fn part<'a>(b: &'a Board, reference: &str) -> &'a eda_model::ir::BoardPart {
@@ -78,7 +78,7 @@ fn a_gaps_fields_texts_and_attributes_are_createnewfootprints() {
     let fp = def(&b, "REF1");
     assert_eq!(fp.texts.len(), 1);
     let t = &fp.texts[0];
-    assert_eq!((t.content.as_str(), t.layer.as_str(), t.at, t.size_um, t.stroke_width), ("${REFERENCE}", "F.Fab", p(0, 2500), 1000, 150), "the third default text item of the board, at the board's size");
+    assert_eq!((t.content.as_str(), t.layer.as_str(), t.at, t.size_nm, t.stroke_width), ("${REFERENCE}", "F.Fab", p(0, 2500), 1000, 150), "the third default text item of the board, at the board's size");
     // `SetAttributes( FP_EXCLUDE_FROM_POS_FILES | FP_EXCLUDE_FROM_BOM )`: neither SMD nor through hole
     let a = edit.attrs.expect("the attributes are set");
     assert_eq!((a.kind, a.exclude_from_pos_files, a.exclude_from_bom, a.board_only, a.dnp), (eda_model::fp_edit::FootprintKind::Unspecified, true, true, false, false));
@@ -96,14 +96,14 @@ fn a_gaps_fields_texts_and_attributes_are_createnewfootprints() {
 #[test]
 fn the_boards_text_defaults_place_and_size_the_fields() {
     let mut model = ConstraintModel::default();
-    model.board.text_graphics.silk.text_height_um = 1_200;
-    model.board.text_graphics.silk.text_width_um = 1_200;
-    model.board.text_graphics.fab.text_height_um = 800;
-    model.board.text_graphics.fab.text_width_um = 800;
-    model.board.text_graphics.fab.text_thickness_um = 120;
+    model.board.text_graphics.silk.text_height_nm = 1_200;
+    model.board.text_graphics.silk.text_width_nm = 1_200;
+    model.board.text_graphics.fab.text_height_nm = 800;
+    model.board.text_graphics.fab.text_width_nm = 800;
+    model.board.text_graphics.fab.text_thickness_nm = 120;
     let mut b = board(&model);
     // A stub of the arc kind keeps the board's sizes (`text_size` 0).
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 1_000, angle_millideg: 90_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 1_000, angle_millideg: 90_000, track_width_nm: 250, hand: Hand::default() })).unwrap();
     let edit = &b.design().drawings.as_ref().unwrap().footprint_edits[0];
     let (r, v) = (edit.reference.as_ref().unwrap(), edit.value.as_ref().unwrap());
     // y = -silk/2 = -600; then + silk = 600; + fab/2 = 1000 (the Value); + fab = 1800; + fab/2 = 2200 (the user text)
@@ -128,7 +128,7 @@ fn a_gap_needs_a_size_and_a_track() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
     for (size, track) in [(0, 250), (-5, 250), (500, 0)] {
-        let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Gap { at: p(0, 0), size_um: size, track_width_um: track, hand: Hand::default() })).unwrap_err();
+        let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Gap { at: p(0, 0), size_nm: size, track_width_nm: track, hand: Hand::default() })).unwrap_err();
         assert_eq!(e[0].check, "ops_bad_microwave", "{size} {track}");
     }
     assert!(b.design().drawings.as_ref().map_or(true, |d| d.board_parts.is_empty()), "a refused command changes nothing");
@@ -141,7 +141,7 @@ fn a_gap_needs_a_size_and_a_track() {
 fn a_stub_is_a_square_pad_and_the_stub_above_it() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(5_000, 5_000), size_um: 1_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(5_000, 5_000), size_nm: 1_000, track_width_nm: 250, hand: Hand::default() })).unwrap();
     let bp = part(&b, "REF1");
     assert_eq!(bp.footprint, "muwave_stub");
     let fp = def(&b, "REF1");
@@ -171,7 +171,7 @@ fn arc_points(b: &Board) -> Vec<Point> {
 fn an_arc_stub_is_one_custom_pad_with_a_pie_slice() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 1_000, angle_millideg: 90_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 1_000, angle_millideg: 90_000, track_width_nm: 250, hand: Hand::default() })).unwrap();
     assert_eq!(part(&b, "REF1").footprint, "muwave_arcstub");
     let fp = def(&b, "REF1");
     assert_eq!(fp.pads.len(), 1, "`pad_count = 1`");
@@ -198,21 +198,21 @@ fn the_arc_stubs_angle_is_taken_as_an_absolute_value_and_clamped_to_a_half_turn(
     let model = ConstraintModel::default();
     // 270 degrees is 180: 180 / 5 + 3 = 39 points in all, -90 .. +90 degrees
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 2_000, angle_millideg: 270_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 2_000, angle_millideg: 270_000, track_width_nm: 250, hand: Hand::default() })).unwrap();
     let pts = arc_points(&b);
     assert_eq!(pts.len(), 39);
     assert_eq!((pts[1], pts[37]), (p(2_000, 0), p(-2_000, 0)));
     // a negative angle is its absolute value
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 1_000, angle_millideg: -90_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 1_000, angle_millideg: -90_000, track_width_nm: 250, hand: Hand::default() })).unwrap();
     assert_eq!(arc_points(&b).len(), 21);
     // an angle of nothing is the one point the loop makes: origin, (0, -r), origin
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 1_000, angle_millideg: 0, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 1_000, angle_millideg: 0, track_width_nm: 250, hand: Hand::default() })).unwrap();
     assert_eq!(arc_points(&b), vec![p(0, 0), p(0, -1_000), p(0, 0)]);
     // an angle that does not divide by 5: the last step is clamped to angle / 2 (12 degrees: -6, -1, 4, 6 -> numPoints = 12 / 5 + 3 = 5, three points)
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 10_000, angle_millideg: 12_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 10_000, angle_millideg: 12_000, track_width_nm: 250, hand: Hand::default() })).unwrap();
     let pts = arc_points(&b);
     assert_eq!(pts.len(), 5);
     // thetas -6, -1, 4: x = round(r * sin(6)) = 1045, round(r * sin(1)) = 175, round(-r * sin(4)) = -698
@@ -223,7 +223,7 @@ fn the_arc_stubs_angle_is_taken_as_an_absolute_value_and_clamped_to_a_half_turn(
 fn an_arc_stub_needs_a_radius() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 0, angle_millideg: 90_000, track_width_um: 250, hand: Hand::default() })).unwrap_err();
+    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 0, angle_millideg: 90_000, track_width_nm: 250, hand: Hand::default() })).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_microwave");
 }
 
@@ -278,10 +278,10 @@ fn deleting_a_microwave_footprint_takes_its_edit_and_facts_with_it() {
 fn what_was_done_in_the_hand_is_the_footprints_pose() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_000, 10_000), size_um: 1_000, track_width_um: 250, hand: Hand { rotate_millideg: 90_000, flip: None } })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_000, 10_000), size_nm: 1_000, track_width_nm: 250, hand: Hand { rotate_millideg: 90_000, flip: None } })).unwrap();
     let f = pose(&b, "REF1");
     assert_eq!((f.at, f.rot, f.side), (p(10_000, 10_000), 90_000, Side::Top));
-    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(30_000, 10_000), size_um: 1_000, track_width_um: 250, hand: Hand { rotate_millideg: 0, flip: Some(FlipDirection::LeftRight) } })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(30_000, 10_000), size_nm: 1_000, track_width_nm: 250, hand: Hand { rotate_millideg: 0, flip: Some(FlipDirection::LeftRight) } })).unwrap();
     let f = pose(&b, "REF2");
     assert_eq!((f.at, f.side), (p(30_000, 10_000), Side::Bottom), "turned over about its own anchor");
     // its fields went to the back with it (`FOOTPRINT::Flip`)
@@ -294,19 +294,19 @@ fn what_was_done_in_the_hand_is_the_footprints_pose() {
 
 #[test]
 fn the_verbs_read_from_and_write_to_the_json_the_studio_sends() {
-    let gap = Cmd::Microwave(MicrowaveCmd::Gap { at: p(1_000, 2_000), size_um: 500, track_width_um: 250, hand: Hand::default() });
+    let gap = Cmd::Microwave(MicrowaveCmd::Gap { at: p(1_000, 2_000), size_nm: 500, track_width_nm: 250, hand: Hand::default() });
     let text = serde_json::to_string(&gap).unwrap();
-    assert_eq!(text, r#"{"op":"microwave","verb":"gap","at":{"x":1000,"y":2000},"size_um":500,"track_width_um":250}"#);
+    assert_eq!(text, r#"{"op":"microwave","verb":"gap","at":{"x":1000,"y":2000},"size_nm":500,"track_width_nm":250}"#);
     // (a body the studio parsed, as `/api/cmd` reads it)
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(serde_json::from_value::<Cmd>(value).unwrap(), gap);
 
-    let shape = serde_json::json!({ "op": "microwave", "verb": "function_shape", "at": { "x": 0, "y": 0 }, "file": "XScale=1", "kind": "symmetrical", "size_x_um": 4000, "track_width_um": 250, "hand": { "rotate_millideg": 90000, "flip": "left_right" } });
-    let Cmd::Microwave(MicrowaveCmd::FunctionShape { kind, size_x_um, size_y_um, hand, .. }) = serde_json::from_value(shape).unwrap() else { panic!("not a function shape") };
-    assert_eq!((kind, size_x_um, size_y_um, hand), (ShapeKind::Symmetrical, Some(4_000), None, Hand { rotate_millideg: 90_000, flip: Some(FlipDirection::LeftRight) }));
+    let shape = serde_json::json!({ "op": "microwave", "verb": "function_shape", "at": { "x": 0, "y": 0 }, "file": "XScale=1", "kind": "symmetrical", "size_x_nm": 4000, "track_width_nm": 250, "hand": { "rotate_millideg": 90000, "flip": "left_right" } });
+    let Cmd::Microwave(MicrowaveCmd::FunctionShape { kind, size_x_nm, size_y_nm, hand, .. }) = serde_json::from_value(shape).unwrap() else { panic!("not a function shape") };
+    assert_eq!((kind, size_x_nm, size_y_nm, hand), (ShapeKind::Symmetrical, Some(4_000), None, Hand { rotate_millideg: 90_000, flip: Some(FlipDirection::LeftRight) }));
 
     // the inductor's name defaults to the dialog's "L"
-    let ind = serde_json::json!({ "op": "microwave", "verb": "inductor", "start": { "x": 0, "y": 0 }, "end": { "x": 0, "y": 10000 }, "length_um": 12000, "track_width_um": 250 });
+    let ind = serde_json::json!({ "op": "microwave", "verb": "inductor", "start": { "x": 0, "y": 0 }, "end": { "x": 0, "y": 10000 }, "length_nm": 12000, "track_width_nm": 250 });
     let Cmd::Microwave(MicrowaveCmd::Inductor { name, .. }) = serde_json::from_value(ind).unwrap() else { panic!("not an inductor") };
     assert_eq!(name, "L");
 }
@@ -337,7 +337,7 @@ fn a_shape_description_file_is_read_as_readdatashapedescr_reads_it() {
 }
 
 fn shape(kind: ShapeKind, file: &str) -> Cmd {
-    Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(10_000, 10_000), file: file.into(), kind, size_x_um: None, size_y_um: None, track_width_um: 250, hand: Hand::default() })
+    Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(10_000, 10_000), file: file.into(), kind, size_x_nm: None, size_y_nm: None, track_width_nm: 250, hand: Hand::default() })
 }
 
 fn polygon(b: &Board) -> Vec<Point> {
@@ -393,7 +393,7 @@ fn a_shape_that_ends_on_the_line_is_not_closed_down_to_it() {
 fn the_size_boxes_of_the_dialog_scale_the_shape() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(0, 0), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_um: Some(20_000), size_y_um: Some(1_000), track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(0, 0), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_nm: Some(20_000), size_y_nm: Some(1_000), track_width_nm: 250, hand: Hand::default() })).unwrap();
     assert_eq!(def(&b, "REF1").pads[1].at.x, 10_000);
     assert_eq!(polygon(&b), vec![p(-10_000, 0), p(-10_000, -500), p(0, -1_000), p(10_000, -500), p(10_000, 0)]);
 }
@@ -414,8 +414,8 @@ fn a_shape_with_no_points_or_no_size_is_refused_with_kicads_words() {
 
 // ----------------------------------------------------------------------------------------------------------------------------- the inductor
 
-fn inductor(start: Point, end: Point, length_um: i64) -> Cmd {
-    Cmd::Microwave(MicrowaveCmd::Inductor { start, end, length_um, name: "L".into(), track_width_um: 250 })
+fn inductor(start: Point, end: Point, length_nm: i64) -> Cmd {
+    Cmd::Microwave(MicrowaveCmd::Inductor { start, end, length_nm, name: "L".into(), track_width_nm: 250 })
 }
 
 /// The segments of the coil as `(start, end)` pairs, in the footprint's frame.
@@ -515,17 +515,17 @@ fn an_inductor_needs_two_points_a_name_and_a_track() {
     let mut b = board(&model);
     let e = b.apply(&inductor(p(1_000, 1_000), p(1_000, 1_000), 5_000)).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_microwave");
-    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_um: 20_000, name: "  ".into(), track_width_um: 250 })).unwrap_err();
+    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_nm: 20_000, name: "  ".into(), track_width_nm: 250 })).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_microwave");
-    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_um: 20_000, name: "L".into(), track_width_um: 0 })).unwrap_err();
+    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_nm: 20_000, name: "L".into(), track_width_nm: 0 })).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_microwave");
     // a value with a character `FOOTPRINT_NAME_VALIDATOR` does not take
     for bad in ["L/1", "L:2", "L%", "a\"b"] {
-        let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_um: 20_000, name: bad.into(), track_width_um: 250 })).unwrap_err();
+        let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_nm: 20_000, name: bad.into(), track_width_nm: 250 })).unwrap_err();
         assert_eq!(e[0].check, "ops_bad_microwave", "{bad}");
     }
     // the value is what the dialog's "Component value:" holds
-    b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_um: 20_000, name: "L22".into(), track_width_um: 250 })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_nm: 20_000, name: "L22".into(), track_width_nm: 250 })).unwrap();
     assert_eq!(part(&b, "REF1").value.as_deref(), Some("L22"));
 }
 

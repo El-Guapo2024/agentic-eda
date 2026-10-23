@@ -22,8 +22,8 @@ fn p(x: i64, y: i64) -> Point {
     Point { x, y }
 }
 
-fn gap(at: Point, size_um: i64) -> Cmd {
-    Cmd::Microwave(MicrowaveCmd::Gap { at, size_um, track_width_um: 250, hand: Hand::default() })
+fn gap(at: Point, size_nm: i64) -> Cmd {
+    Cmd::Microwave(MicrowaveCmd::Gap { at, size_nm, track_width_nm: 250, hand: Hand::default() })
 }
 
 fn derived_board(dir: &Path) -> String {
@@ -86,11 +86,11 @@ fn microwave_footprints_are_not_held_to_a_courtyard_of_their_pads_with_strict_on
     let dir = scratch("mw_strict");
     setup(&dir);
     step(&dir, gap(p(10_000, 12_000), 500), true, "test").unwrap();
-    step(&dir, Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_000, 14_500), size_um: 1_000, track_width_um: 250, hand: Hand::default() }), true, "test").expect("a stub 2.5 mm under the gap, its pad reaching up to the gap's");
+    step(&dir, Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_000, 14_500), size_nm: 1_000, track_width_nm: 250, hand: Hand::default() }), true, "test").expect("a stub 2.5 mm under the gap, its pad reaching up to the gap's");
     step(&dir, gap(p(13_000, 12_000), 500), true, "test").expect("a gap 3 mm to its side");
     step(&dir, gap(p(500, 500), 500), true, "test").expect("a gap at the corner of the board");
     // a pad of the stub overlapping the gap's is not a placement matter: the copper is judged by the routing checks
-    step(&dir, Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_375, 13_000), size_um: 1_000, track_width_um: 250, hand: Hand { rotate_millideg: 0, flip: None } }), true, "test").expect("a stub whose pad lies over the gap's");
+    step(&dir, Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_375, 13_000), size_nm: 1_000, track_width_nm: 250, hand: Hand { rotate_millideg: 0, flip: None } }), true, "test").expect("a stub whose pad lies over the gap's");
 }
 
 /// What `createBaseFootprint` leaves in the file: the footprint has no library (`LIB_ID( wxEmptyString, name )`), the attributes, the fields at the size of the track, the
@@ -135,9 +135,9 @@ fn a_duplicate_of_a_microwave_footprint_is_copper_only_with_no_courtyard_too() {
 fn the_derived_board_writes_the_arc_stub_the_polygon_and_the_inductor() {
     let dir = scratch("mw_file_others");
     setup(&dir);
-    step(&dir, Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(10_000, 12_000), radius_um: 1_500, angle_millideg: 90_000, track_width_um: 250, hand: Hand::default() }), false, "test").unwrap();
-    step(&dir, Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(6_000, 16_000), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_um: None, size_y_um: None, track_width_um: 250, hand: Hand::default() }), false, "test").unwrap();
-    step(&dir, Cmd::Microwave(MicrowaveCmd::Inductor { start: p(12_000, 16_000), end: p(17_000, 16_000), length_um: 12_000, name: "L7".into(), track_width_um: 250 }), false, "test").unwrap();
+    step(&dir, Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(10_000, 12_000), radius_nm: 1_500, angle_millideg: 90_000, track_width_nm: 250, hand: Hand::default() }), false, "test").unwrap();
+    step(&dir, Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(6_000, 16_000), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_nm: None, size_y_nm: None, track_width_nm: 250, hand: Hand::default() }), false, "test").unwrap();
+    step(&dir, Cmd::Microwave(MicrowaveCmd::Inductor { start: p(12_000, 16_000), end: p(17_000, 16_000), length_nm: 12_000, name: "L7".into(), track_width_nm: 250 }), false, "test").unwrap();
     let pcb = derived_board(&dir);
     let arc = footprint_block(&pcb, "REF1");
     assert!(arc.contains("(pad \"1\" smd custom (at 0 0 0) (size 0.25 0.25) (layers \"F.Cu\") (options (clearance outline) (anchor rect)) (primitives (gr_poly (pts (xy 0 0) (xy 1.061 -1.061)"), "{arc}");
@@ -158,7 +158,7 @@ fn an_inductor_that_cannot_be_made_says_why_in_kicads_words_and_changes_nothing(
     let dir = scratch("mw_refused");
     setup(&dir);
     let before = serde_json::to_value(load(&dir).unwrap().1).unwrap();
-    let e = step(&dir, Cmd::Microwave(MicrowaveCmd::Inductor { start: p(5_000, 10_000), end: p(5_000, 20_000), length_um: 100_000, name: "L".into(), track_width_um: 250 }), false, "test").unwrap_err();
+    let e = step(&dir, Cmd::Microwave(MicrowaveCmd::Inductor { start: p(5_000, 10_000), end: p(5_000, 20_000), length_nm: 100_000, name: "L".into(), track_width_nm: 250 }), false, "test").unwrap_err();
     assert_eq!(super::reasons(&e), "Requested length too large");
     assert_eq!(serde_json::to_value(load(&dir).unwrap().1).unwrap(), before);
 }
@@ -389,12 +389,12 @@ fn kicad_cli_loads_and_plots_each_microwave_footprint_as_its_tool_makes_it() {
     let dir = scratch("mw_kicad_cli_proof");
     setup(&dir);
     let mw = |c: MicrowaveCmd| step(&dir, Cmd::Microwave(c), false, "test").unwrap();
-    mw(MicrowaveCmd::Gap { at: p(3_000, 11_000), size_um: 500, track_width_um: 250, hand: Hand::default() }); // REF1
-    mw(MicrowaveCmd::Stub { at: p(17_000, 11_000), size_um: 800, track_width_um: 250, hand: Hand { rotate_millideg: 90_000, flip: None } }); // REF2
-    mw(MicrowaveCmd::ArcStub { at: p(10_000, 11_000), radius_um: 1_500, angle_millideg: 90_000, track_width_um: 250, hand: Hand::default() }); // REF3
-    mw(MicrowaveCmd::FunctionShape { at: p(6_000, 15_000), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_um: None, size_y_um: None, track_width_um: 250, hand: Hand::default() }); // REF4
-    mw(MicrowaveCmd::Inductor { start: p(12_000, 17_000), end: p(17_000, 17_000), length_um: 12_000, name: "L".into(), track_width_um: 250 }); // REF5
-    mw(MicrowaveCmd::FunctionShape { at: p(5_000, 18_500), file: LEAN.into(), kind: ShapeKind::Normal, size_x_um: None, size_y_um: None, track_width_um: 250, hand: Hand { rotate_millideg: 0, flip: Some(FlipDirection::LeftRight) } }); // REF6, on the back
+    mw(MicrowaveCmd::Gap { at: p(3_000, 11_000), size_nm: 500, track_width_nm: 250, hand: Hand::default() }); // REF1
+    mw(MicrowaveCmd::Stub { at: p(17_000, 11_000), size_nm: 800, track_width_nm: 250, hand: Hand { rotate_millideg: 90_000, flip: None } }); // REF2
+    mw(MicrowaveCmd::ArcStub { at: p(10_000, 11_000), radius_nm: 1_500, angle_millideg: 90_000, track_width_nm: 250, hand: Hand::default() }); // REF3
+    mw(MicrowaveCmd::FunctionShape { at: p(6_000, 15_000), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_nm: None, size_y_nm: None, track_width_nm: 250, hand: Hand::default() }); // REF4
+    mw(MicrowaveCmd::Inductor { start: p(12_000, 17_000), end: p(17_000, 17_000), length_nm: 12_000, name: "L".into(), track_width_nm: 250 }); // REF5
+    mw(MicrowaveCmd::FunctionShape { at: p(5_000, 18_500), file: LEAN.into(), kind: ShapeKind::Normal, size_x_nm: None, size_y_nm: None, track_width_nm: 250, hand: Hand { rotate_millideg: 0, flip: Some(FlipDirection::LeftRight) } }); // REF6, on the back
 
     let ours = derived_board(&dir);
     let work = dir.join("kicad");

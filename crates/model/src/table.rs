@@ -7,7 +7,7 @@
 //!
 //! * `at` is where cell (0, 0)'s top-left corner is, in the table's own frame (`PCB_TABLE::GetPosition`); `angle` turns the whole grid about it
 //!   (`EDA_TEXT::GetTextAngle` of the cells, which all share it), counter-clockwise on the screen as every angle in a KiCad file.
-//! * Lengths are micrometres. A board's `layer` is a KiCad layer name; a sheet's table has none.
+//! * Lengths are nanometres. A board's `layer` is a KiCad layer name; a sheet's table has none.
 //! * A stroke width of -1 is KiCad's "not drawn" (`STROKE_PARAMS` of a border or separator the table does not have).
 //! * The edit operations that `EDIT_TABLE_TOOL_BASE` (`include/tool/edit_table_tool_base.h`) shares between the two editors are methods of [`Table`]:
 //!   [`Table::add_row`], [`Table::add_column`], [`Table::delete_rows`], [`Table::delete_columns`], [`Table::merge`] and [`Table::unmerge`]. Each one is
@@ -16,7 +16,7 @@
 //! The data is additive: `DrawingsSection::tables` (a board's) and `SchExtras::tables` (a sheet's) are empty in a design that has none and are never
 //! written when empty.
 
-use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Um};
+use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Nm};
 use crate::sch_extras::{SchColor, SchFill, SchLineStyle};
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +29,7 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-fn is_zero(n: &Um) -> bool {
+fn is_zero(n: &Nm) -> bool {
     *n == 0
 }
 
@@ -49,7 +49,7 @@ fn is_one(n: &u32) -> bool {
     *n == 1
 }
 
-fn d_none_width() -> Um {
+fn d_none_width() -> Nm {
     -1
 }
 
@@ -75,7 +75,8 @@ pub fn parse_cell_item_id(id: &str) -> Option<(&str, usize, usize)> {
 pub struct TableStroke {
     /// The line width; -1 is "no stroke" (the width a table has when the file says none, `PCB_TABLE( aParent, -1 )`), 0 the default width of the editor.
     #[serde(default = "d_none_width")]
-    pub width_um: Um,
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de_width")]
+    pub width_nm: Nm,
     #[serde(default, skip_serializing_if = "TableLineStyle::is_default")]
     pub style: TableLineStyle,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,14 +86,14 @@ pub struct TableStroke {
 impl Default for TableStroke {
     /// What a table the file gave no stroke has: width -1, `LINE_STYLE::DEFAULT`, no colour.
     fn default() -> Self {
-        TableStroke { width_um: -1, style: TableLineStyle::Default, color: None }
+        TableStroke { width_nm: -1, style: TableLineStyle::Default, color: None }
     }
 }
 
 impl TableStroke {
-    /// A stroke of `width_um`, solid and uncoloured.
-    pub fn solid(width_um: Um) -> Self {
-        TableStroke { width_um, style: TableLineStyle::Solid, color: None }
+    /// A stroke of `width_nm`, solid and uncoloured.
+    pub fn solid(width_nm: Nm) -> Self {
+        TableStroke { width_nm, style: TableLineStyle::Solid, color: None }
     }
 
     /// `PCB_TABLE::GetBorderStyle`: the style a line is drawn in (`DEFAULT` is solid).
@@ -148,13 +149,16 @@ impl Default for TableSeparators {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TableText {
-    /// The glyph height, µm (`GetTextHeight`).
-    pub height_um: Um,
-    /// The glyph width, µm (`GetTextWidth`).
-    pub width_um: Um,
+    /// The glyph height, nm (`GetTextHeight`).
+    #[serde(alias = "height_um", deserialize_with = "crate::units::de")]
+    pub height_nm: Nm,
+    /// The glyph width, nm (`GetTextWidth`).
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Nm,
     /// The stroke width of the glyphs; 0 is KiCad's automatic one (`GetAutoThickness`: no `(thickness ..)` in the file).
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub thickness_um: Um,
+    #[serde(alias = "thickness_um", deserialize_with = "crate::units::de")]
+    pub thickness_nm: Nm,
     #[serde(default, skip_serializing_if = "is_false")]
     pub bold: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -171,32 +175,32 @@ pub struct TableText {
     pub face: Option<String>,
     /// `(line_spacing N)` in thousandths; 0 is KiCad's 1.0, and 1000 is the same.
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub line_spacing_permille: Um,
+    pub line_spacing_permille: i64,
     /// `(color r g b a)` of the font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<TableColor>,
 }
 
 impl TableText {
-    /// A sheet's text box until something sets it (`SCH_TEXTBOX`): glyphs `size_um` high (the sheet's default text size, 50 mil), automatic thickness, left and top.
-    pub fn sch_default(size_um: Um) -> Self {
-        TableText { height_um: size_um, width_um: size_um, v_align: TextVAlign::Top, ..TableText::pcb_default() }
+    /// A sheet's text box until something sets it (`SCH_TEXTBOX`): glyphs `size_nm` high (the sheet's default text size, 50 mil), automatic thickness, left and top.
+    pub fn sch_default(size_nm: Nm) -> Self {
+        TableText { height_nm: size_nm, width_nm: size_nm, v_align: TextVAlign::Top, ..TableText::pcb_default() }
     }
 
     /// What an `EDA_TEXT` is until something sets it: 50 mil glyphs (`DEFAULT_SIZE_TEXT`), automatic thickness, and the justification a text box starts with
     /// (`PCB_TEXTBOX`: left, centre).
     pub fn pcb_default() -> Self {
-        TableText { height_um: 1_270, width_um: 1_270, thickness_um: 0, bold: false, italic: false, h_align: TextJustify::Left, v_align: TextVAlign::Center, mirror: false, face: None, line_spacing_permille: 0, color: None }
+        TableText { height_nm: 1_270_000, width_nm: 1_270_000, thickness_nm: 0, bold: false, italic: false, h_align: TextJustify::Left, v_align: TextVAlign::Center, mirror: false, face: None, line_spacing_permille: 0, color: None }
     }
 
     /// `EDA_TEXT::GetEffectiveTextPenWidth`: the stroke width the glyphs are drawn with, which is the automatic one (an eighth of the glyph width, a fifth if
     /// bold) when none is set, never more than a quarter of the smaller glyph dimension (`ClampTextPenSize`).
-    pub fn pen_um(&self) -> Um {
-        let mut pen = self.thickness_um;
+    pub fn pen_nm(&self) -> Nm {
+        let mut pen = self.thickness_nm;
         if pen <= 1 {
-            pen = (self.width_um as f64 / if self.bold { 5.0 } else { 8.0 }).round() as Um;
+            pen = (self.width_nm as f64 / if self.bold { 5.0 } else { 8.0 }).round() as Nm;
         }
-        let max = (self.width_um.abs().min(self.height_um.abs()) as f64 * 0.25).round() as Um;
+        let max = (self.width_nm.abs().min(self.height_nm.abs()) as f64 * 0.25).round() as Nm;
         pen.min(max)
     }
 
@@ -232,8 +236,9 @@ pub struct TableCell {
     /// `GetRowSpan`: how many rows; 0 for a cell another one covers.
     #[serde(default = "d_one", skip_serializing_if = "is_one")]
     pub row_span: u32,
-    /// `(margins left top right bottom)`, µm.
-    pub margins: [Um; 4],
+    /// `(margins left top right bottom)`, nm.
+    #[serde(deserialize_with = "crate::units::de")]
+    pub margins: [Nm; 4],
     #[serde(default)]
     pub style: TableText,
     /// A sheet's cell (`SCH_TABLECELL` is an `SCH_SHAPE`): the background. A board's cell has none.
@@ -247,29 +252,15 @@ pub struct TableCell {
 }
 
 impl TableCell {
-    /// `PCB_TEXTBOX::GetLegacyTextMargin`: half the stroke width plus three quarters of the glyph height, which is what a cell has until a margin is set. The
-    /// stroke of a new cell is the shape default, 0.1 mm.
-    pub fn legacy_margin_um(text: &TableText, stroke_um: Um) -> Um {
-        ((stroke_um as f64 / 2.0).round() + (text.height_um as f64 * 0.75).round()) as Um
+    /// `PCB_TEXTBOX::GetLegacyTextMargin`: `KiROUND( GetStroke().GetWidth() / 2.0 ) + KiROUND( GetTextSize().y * 0.75 )`, which is what a cell has until a
+    /// margin is set -- 1.0025 mm for a new cell's 1.27 mm text on a 0.1 mm stroke (the shape default).
+    pub fn legacy_margin_nm(text: &TableText, stroke_nm: Nm) -> Nm {
+        crate::units::kiround(stroke_nm as f64 / 2.0) + crate::units::kiround(text.height_nm as f64 * 0.75)
     }
 
-    /// `GetLegacyTextMargin` in nanometres, as KiCad has it: `KiROUND( stroke / 2.0 ) + KiROUND( GetTextSize().y * 0.75 )` -- 1.0025 mm for a new cell's 1.27 mm text on
-    /// a 0.1 mm stroke, which the IR's micrometres round to 1.003.
-    pub fn legacy_margin_nm(text: &TableText, stroke_um: Um) -> i64 {
-        ((stroke_um * 1000) as f64 / 2.0).round() as i64 + ((text.height_um * 1000) as f64 * 0.75).round() as i64
-    }
-
-    /// Margin `i` (left, top, right, bottom) in nanometres: a new cell's legacy margin (`pcb_new`'s, the one the IR rounds) as KiCad holds it, any other the micrometres it is.
-    /// What `Autosize` lays a table out with and the writer writes, so a chart a rebuild makes is KiCad's to the nanometre the IR can say.
-    pub fn margin_nm(&self, i: usize) -> i64 {
-        let m = self.margins[i];
-        if m == Self::legacy_margin_um(&self.style, 100) {
-            let nm = Self::legacy_margin_nm(&self.style, 100);
-            if (nm as f64 / 1000.0).round() as Um == m {
-                return nm;
-            }
-        }
-        m * 1000
+    /// Margin `i` (left, top, right, bottom): what `Autosize` lays a table out with and the writer writes.
+    pub fn margin_nm(&self, i: usize) -> Nm {
+        self.margins[i]
     }
 
     /// A new board cell (`new PCB_TABLECELL( table )`): an empty text box of KiCad's defaults, mirrored when the table is on a back layer
@@ -277,15 +268,15 @@ impl TableCell {
     pub fn pcb_new(back: bool) -> Self {
         let mut style = TableText::pcb_default();
         style.mirror = back;
-        let margin = Self::legacy_margin_um(&style, 100);
+        let margin = Self::legacy_margin_nm(&style, 100_000);
         TableCell { uuid: String::new(), text: String::new(), col_span: 1, row_span: 1, margins: [margin; 4], style, fill: SchFill::None, fill_color: None, exclude_from_sim: false }
     }
 
     /// A new sheet cell (`new SCH_TABLECELL()`, then `SetTextSize` to the sheet's default text size, as Draw Table does): empty, no fill, left and top, and the margin the
     /// constructor gave it -- the legacy margin of 50 mil text on a stroke 0 wide.
-    pub fn sch_new(text_size_um: Um) -> Self {
-        let margin = Self::legacy_margin_um(&TableText::sch_default(1_270), 0);
-        TableCell { uuid: String::new(), text: String::new(), col_span: 1, row_span: 1, margins: [margin; 4], style: TableText::sch_default(text_size_um), fill: SchFill::None, fill_color: None, exclude_from_sim: false }
+    pub fn sch_new(text_size_nm: Nm) -> Self {
+        let margin = Self::legacy_margin_nm(&TableText::sch_default(1_270_000), 0);
+        TableCell { uuid: String::new(), text: String::new(), col_span: 1, row_span: 1, margins: [margin; 4], style: TableText::sch_default(text_size_nm), fill: SchFill::None, fill_color: None, exclude_from_sim: false }
     }
 
     /// Is this cell covered by a merged one?
@@ -307,15 +298,17 @@ pub struct Table {
     /// A board table's KiCad layer (`F.SilkS`, `Dwgs.User` ..); empty on a sheet.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub layer: String,
-    /// The top-left corner of cell (0, 0), µm (`PCB_TABLE::GetPosition`).
+    /// The top-left corner of cell (0, 0), nm (`PCB_TABLE::GetPosition`).
     pub at: Point,
     /// The grid's angle about [`Table::at`], millidegrees, counter-clockwise on the screen.
     #[serde(default)]
     pub angle: Millideg,
-    /// The column widths, left to right, µm. The column count is its length.
-    pub col_widths: Vec<Um>,
-    /// The row heights, top to bottom, µm.
-    pub row_heights: Vec<Um>,
+    /// The column widths, left to right, nm. The column count is its length.
+    #[serde(deserialize_with = "crate::units::de")]
+    pub col_widths: Vec<Nm>,
+    /// The row heights, top to bottom, nm.
+    #[serde(deserialize_with = "crate::units::de")]
+    pub row_heights: Vec<Nm>,
     /// The cells, row by row: `row_heights.len() * col_widths.len()` of them.
     pub cells: Vec<TableCell>,
     #[serde(default)]
@@ -326,7 +319,7 @@ pub struct Table {
 
 /// `RotatePoint( VECTOR2I&, EDA_ANGLE )` (`libs/kimath/src/trigo.cpp`): the turn is counter-clockwise on a screen whose y runs down, exact for the quarter
 /// turns and rounded (`KiROUND`) for any other angle.
-pub fn rotate_point(x: Um, y: Um, angle: Millideg) -> (Um, Um) {
+pub fn rotate_point(x: Nm, y: Nm, angle: Millideg) -> (Nm, Nm) {
     match angle % 360_000 {
         0 => (x, y),
         90_000 => (y, -x),
@@ -334,23 +327,23 @@ pub fn rotate_point(x: Um, y: Um, angle: Millideg) -> (Um, Um) {
         270_000 => (-y, x),
         a => {
             let (s, c) = (a as f64 / 1000.0).to_radians().sin_cos();
-            (((y as f64 * s) + (x as f64 * c)).round() as Um, ((y as f64 * c) - (x as f64 * s)).round() as Um)
+            (((y as f64 * s) + (x as f64 * c)).round() as Nm, ((y as f64 * c) - (x as f64 * s)).round() as Nm)
         }
     }
 }
 
-/// An axis-aligned box, µm.
+/// An axis-aligned box, nm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableBox {
-    pub x0: Um,
-    pub y0: Um,
-    pub x1: Um,
-    pub y1: Um,
+    pub x0: Nm,
+    pub y0: Nm,
+    pub x1: Nm,
+    pub y1: Nm,
 }
 
 impl TableBox {
     fn of(points: &[Point]) -> TableBox {
-        let mut b = TableBox { x0: Um::MAX, y0: Um::MAX, x1: Um::MIN, y1: Um::MIN };
+        let mut b = TableBox { x0: Nm::MAX, y0: Nm::MAX, x1: Nm::MIN, y1: Nm::MIN };
         for p in points {
             b.x0 = b.x0.min(p.x);
             b.y0 = b.y0.min(p.y);
@@ -360,7 +353,7 @@ impl TableBox {
         b
     }
 
-    pub fn contains(&self, p: Point, slack: Um) -> bool {
+    pub fn contains(&self, p: Point, slack: Nm) -> bool {
         p.x >= self.x0 - slack && p.x <= self.x1 + slack && p.y >= self.y0 - slack && p.y <= self.y1 + slack
     }
 
@@ -393,10 +386,10 @@ pub fn is_back_layer(layer: &str) -> bool {
 impl Table {
     /// The table `DRAWING_TOOL::DrawTable` makes: `cols` x `rows` empty cells of `cell_w` x `cell_h` with KiCad's cell defaults (`PCB_TABLECELL`), its first corner at
     /// `at`, drawn with a border and separators of `line_width` (`PCB_TABLE( aParent, bds.GetLineThickness( layer ) )`: the style is the default one, which draws solid).
-    pub fn new_grid(layer: &str, at: Point, cols: usize, rows: usize, cell_w: Um, cell_h: Um, line_width: Um) -> Table {
+    pub fn new_grid(layer: &str, at: Point, cols: usize, rows: usize, cell_w: Nm, cell_h: Nm, line_width: Nm) -> Table {
         let (cols, rows) = (cols.max(1), rows.max(1));
         let back = is_back_layer(layer);
-        let stroke = TableStroke { width_um: line_width, style: TableLineStyle::Default, color: None };
+        let stroke = TableStroke { width_nm: line_width, style: TableLineStyle::Default, color: None };
         Table {
             id: String::new(),
             uuid: String::new(),
@@ -413,9 +406,9 @@ impl Table {
 
     /// The table `SCH_DRAWING_TOOLS::DrawTable` makes: `cols` x `rows` empty sheet cells of `cell_w` x `cell_h`, the first corner at `at`, drawn with a border and separators
     /// of the default width (`SCH_TABLE( 0 )`: width 0, the style the default one).
-    pub fn new_sch_grid(at: Point, cols: usize, rows: usize, cell_w: Um, cell_h: Um, text_size_um: Um) -> Table {
+    pub fn new_sch_grid(at: Point, cols: usize, rows: usize, cell_w: Nm, cell_h: Nm, text_size_nm: Nm) -> Table {
         let (cols, rows) = (cols.max(1), rows.max(1));
-        let stroke = TableStroke { width_um: 0, style: TableLineStyle::Default, color: None };
+        let stroke = TableStroke { width_nm: 0, style: TableLineStyle::Default, color: None };
         Table {
             id: String::new(),
             uuid: String::new(),
@@ -424,7 +417,7 @@ impl Table {
             angle: 0,
             col_widths: vec![cell_w; cols],
             row_heights: vec![cell_h; rows],
-            cells: (0..cols * rows).map(|_| TableCell::sch_new(text_size_um)).collect(),
+            cells: (0..cols * rows).map(|_| TableCell::sch_new(text_size_nm)).collect(),
             border: TableBorder { external: true, header: true, stroke },
             separators: TableSeparators { rows: true, cols: true, stroke },
         }
@@ -469,9 +462,9 @@ impl Table {
     /// The offset of cell (`row`, `col`)'s top-left corner from the table's origin, in the table's own (unturned) frame, and its extent: a merged cell takes the
     /// widths and heights of the columns and rows it spans (`PCB_TABLE::Normalize`; a cell another one covers has its own column's width and its own row's
     /// height).
-    pub fn cell_local_rect(&self, row: usize, col: usize) -> (Um, Um, Um, Um) {
-        let x: Um = self.col_widths.iter().take(col).sum();
-        let y: Um = self.row_heights.iter().take(row).sum();
+    pub fn cell_local_rect(&self, row: usize, col: usize) -> (Nm, Nm, Nm, Nm) {
+        let x: Nm = self.col_widths.iter().take(col).sum();
+        let y: Nm = self.row_heights.iter().take(row).sum();
         let mut w = self.col_widths.get(col).copied().unwrap_or(0);
         let mut h = self.row_heights.get(row).copied().unwrap_or(0);
         if let Some(cell) = self.cell(row, col) {
@@ -488,7 +481,7 @@ impl Table {
     }
 
     /// A point of the table's own frame, on the board or the sheet.
-    pub fn to_world(&self, local: (Um, Um)) -> Point {
+    pub fn to_world(&self, local: (Nm, Nm)) -> Point {
         let (x, y) = rotate_point(local.0, local.1, self.angle);
         Point { x: self.at.x + x, y: self.at.y + y }
     }
@@ -514,7 +507,7 @@ impl Table {
     }
 
     /// The table's width and height in its own frame (`PCB_TABLE::GetEnd() - GetPosition()`).
-    pub fn local_size(&self) -> (Um, Um) {
+    pub fn local_size(&self) -> (Nm, Nm) {
         (self.col_widths.iter().sum(), self.row_heights.iter().sum())
     }
 
@@ -571,7 +564,7 @@ impl Table {
                 line(corners[2], corners[3], stroke);
             }
         }
-        if self.border.external && self.border.stroke.width_um >= 0 {
+        if self.border.external && self.border.stroke.width_nm >= 0 {
             let s = self.border.stroke;
             line(top_left[0], top_right[1], s);
             line(top_right[1], bottom_right[2], s);
@@ -584,11 +577,11 @@ impl Table {
     /// The cell a point is in, the one `hitTestDistance` of the selection tool finds under it: a cell is a filled box, a cell another one covers is not there.
     /// `slack` widens every box (the click's tolerance). With cells that overlap (a merged cell and the cells it covers have the same corners), the merged one
     /// wins: covered cells are skipped.
-    pub fn cell_at(&self, p: Point, slack: Um) -> Option<(usize, usize)> {
+    pub fn cell_at(&self, p: Point, slack: Nm) -> Option<(usize, usize)> {
         if !self.is_well_formed() {
             return None;
         }
-        let mut best: Option<((usize, usize), Um)> = None;
+        let mut best: Option<((usize, usize), Nm)> = None;
         for row in 0..self.row_count() {
             for col in 0..self.col_count() {
                 if self.cell(row, col).is_none_or(TableCell::is_covered) {
@@ -605,12 +598,12 @@ impl Table {
     }
 
     /// `PCB_TABLE::HitTest( aPosition, aAccuracy )`: the point is in the box round the table.
-    pub fn hit_test(&self, p: Point, slack: Um) -> bool {
+    pub fn hit_test(&self, p: Point, slack: Nm) -> bool {
         self.is_well_formed() && self.bounding_box().contains(p, slack)
     }
 
     /// `PCB_TABLE::HitTest( aRect, aContained, aAccuracy )`.
-    pub fn hit_test_box(&self, r: &TableBox, contained: bool, slack: Um) -> bool {
+    pub fn hit_test_box(&self, r: &TableBox, contained: bool, slack: Nm) -> bool {
         if !self.is_well_formed() {
             return false;
         }
@@ -626,7 +619,7 @@ impl Table {
     // ------------------------------------------------------------------------------------------------------------------------------ moves
 
     /// `PCB_TABLE::Move`.
-    pub fn translate(&mut self, dx: Um, dy: Um) {
+    pub fn translate(&mut self, dx: Nm, dy: Nm) {
         self.at.x += dx;
         self.at.y += dy;
     }
@@ -860,8 +853,8 @@ impl Table {
     }
 }
 
-/// How far a point is outside a convex polygon, µm: 0 or less when it is in it.
-fn polygon_distance(poly: &[Point; 4], p: Point) -> Um {
+/// How far a point is outside a convex polygon, nm: 0 or less when it is in it.
+fn polygon_distance(poly: &[Point; 4], p: Point) -> Nm {
     // The polygon is a (turned) rectangle: a point is inside when it is on the same side of all four edges.
     let mut sign = 0i32;
     let mut inside = true;
@@ -892,7 +885,7 @@ fn polygon_distance(poly: &[Point; 4], p: Point) -> Um {
     if inside {
         0
     } else {
-        dist.ceil() as Um
+        dist.ceil() as Nm
     }
 }
 
@@ -929,11 +922,11 @@ mod tests {
             layer: "F.SilkS".into(),
             at: Point { x: 0, y: 0 },
             angle: 0,
-            col_widths: vec![10_000; cols],
-            row_heights: vec![5_000; rows],
+            col_widths: vec![10_000_000; cols],
+            row_heights: vec![5_000_000; rows],
             cells: (0..rows * cols).map(|_| TableCell::pcb_new(false)).collect(),
-            border: TableBorder { external: true, header: true, stroke: TableStroke::solid(100) },
-            separators: TableSeparators { rows: true, cols: true, stroke: TableStroke::solid(100) },
+            border: TableBorder { external: true, header: true, stroke: TableStroke::solid(100_000) },
+            separators: TableSeparators { rows: true, cols: true, stroke: TableStroke::solid(100_000) },
         };
         for (i, c) in t.cells.iter_mut().enumerate() {
             c.text = format!("c{i}");
@@ -944,31 +937,31 @@ mod tests {
     #[test]
     fn a_cells_corners_are_the_grids_and_a_quarter_turn_puts_the_first_corner_at_the_bottom_left() {
         let mut t = grid(2, 2);
-        t.at = Point { x: 1_000, y: 2_000 };
-        assert_eq!(t.cell_corners(1, 1), [Point { x: 11_000, y: 7_000 }, Point { x: 21_000, y: 7_000 }, Point { x: 21_000, y: 12_000 }, Point { x: 11_000, y: 12_000 }]);
+        t.at = Point { x: 1_000_000, y: 2_000_000 };
+        assert_eq!(t.cell_corners(1, 1), [Point { x: 11_000_000, y: 7_000_000 }, Point { x: 21_000_000, y: 7_000_000 }, Point { x: 21_000_000, y: 12_000_000 }, Point { x: 11_000_000, y: 12_000_000 }]);
         // `GetCornersInSequence( ANGLE_90 )`: bbox left-bottom, left-top, right-top, right-bottom.
         t.angle = 90_000;
         let b = t.cell_corners(0, 0);
-        assert_eq!(b[0], Point { x: 1_000, y: 2_000 });
-        assert_eq!(b[1], Point { x: 1_000, y: 2_000 - 10_000 });
-        assert_eq!(b[2], Point { x: 1_000 + 5_000, y: 2_000 - 10_000 });
-        assert_eq!(b[3], Point { x: 1_000 + 5_000, y: 2_000 });
+        assert_eq!(b[0], Point { x: 1_000_000, y: 2_000_000 });
+        assert_eq!(b[1], Point { x: 1_000_000, y: 2_000_000 - 10_000_000 });
+        assert_eq!(b[2], Point { x: 1_000_000 + 5_000_000, y: 2_000_000 - 10_000_000 });
+        assert_eq!(b[3], Point { x: 1_000_000 + 5_000_000, y: 2_000_000 });
     }
 
     #[test]
     fn a_merged_cell_takes_the_widths_it_spans_and_a_covered_one_is_not_drawn_around() {
         let mut t = grid(3, 3);
         assert!(t.merge(&[(0, 0), (0, 1), (1, 0), (1, 1)]));
-        assert_eq!(t.cell_local_rect(0, 0), (0, 0, 20_000, 10_000));
+        assert_eq!(t.cell_local_rect(0, 0), (0, 0, 20_000_000, 10_000_000));
         assert_eq!((t.cell(0, 0).unwrap().col_span, t.cell(0, 0).unwrap().row_span), (2, 2));
         assert!(t.cell(1, 1).unwrap().is_covered());
         assert_eq!(t.cell(0, 0).unwrap().text, "c0\nc1\nc3\nc4", "the texts of the block, joined by line feeds");
         assert!(t.cell(0, 1).unwrap().text.is_empty());
         // a click in the merged block finds the merged cell
-        assert_eq!(t.cell_at(Point { x: 15_000, y: 7_000 }, 0), Some((0, 0)));
+        assert_eq!(t.cell_at(Point { x: 15_000_000, y: 7_000_000 }, 0), Some((0, 0)));
         // and the borders skip the lines inside it: the vertical line at x = 10 mm is drawn on row 2 only (rows 0 and 1 are inside the merge)
-        let inside: Vec<_> = t.borders().into_iter().filter(|l| l.a.x == 10_000 && l.b.x == 10_000).collect();
-        assert!(inside.iter().all(|l| l.a.y >= 10_000 && l.b.y >= 10_000), "{inside:?}");
+        let inside: Vec<_> = t.borders().into_iter().filter(|l| l.a.x == 10_000_000 && l.b.x == 10_000_000).collect();
+        assert!(inside.iter().all(|l| l.a.y >= 10_000_000 && l.b.y >= 10_000_000), "{inside:?}");
         assert!(t.unmerge(&[(0, 0)]));
         assert!(t.cells.iter().all(|c| c.col_span == 1 && c.row_span == 1));
     }
@@ -981,11 +974,11 @@ mod tests {
         assert_eq!(lines.len(), 2 * 2 + 3 + 4, "{lines:?}");
         // the line under the header and the verticals of the header row use the border stroke; the others the separators'
         let mut t2 = t.clone();
-        t2.separators.stroke = TableStroke { width_um: 50, style: TableLineStyle::Dash, color: None };
-        let header_vertical = t2.borders().into_iter().find(|l| l.a.x == 10_000 && l.a.y == 0).unwrap();
-        assert_eq!(header_vertical.stroke.width_um, 100);
-        let row2_vertical = t2.borders().into_iter().find(|l| l.a.x == 10_000 && l.a.y == 5_000).unwrap();
-        assert_eq!(row2_vertical.stroke.width_um, 50);
+        t2.separators.stroke = TableStroke { width_nm: 50_000, style: TableLineStyle::Dash, color: None };
+        let header_vertical = t2.borders().into_iter().find(|l| l.a.x == 10_000_000 && l.a.y == 0).unwrap();
+        assert_eq!(header_vertical.stroke.width_nm, 100_000);
+        let row2_vertical = t2.borders().into_iter().find(|l| l.a.x == 10_000_000 && l.a.y == 5_000_000).unwrap();
+        assert_eq!(row2_vertical.stroke.width_nm, 50_000);
         // no border, no separators: only the header lines remain
         t2.border.external = false;
         t2.separators.rows = false;
@@ -993,34 +986,34 @@ mod tests {
         assert_eq!(t2.borders().len(), 2 /* header verticals */ + 3 /* line under the header */);
         // a border with no stroke (width -1) draws no sides
         t2.border.external = true;
-        t2.border.stroke.width_um = -1;
+        t2.border.stroke.width_nm = -1;
         assert_eq!(t2.borders().len(), 5);
     }
 
     #[test]
     fn rows_and_columns_are_added_and_deleted_as_the_tool_does() {
         let mut t = grid(2, 2);
-        t.row_heights = vec![5_000, 8_000];
+        t.row_heights = vec![5_000_000, 8_000_000];
         for (i, c) in t.cells.iter_mut().enumerate() {
             c.style.bold = i % 2 == 0;
         }
         // Add Row Below the first row: copies of its cells, its height, no text; KiCad inserts them at one index so they come out reversed.
         assert!(t.add_row(0, false));
         assert_eq!((t.row_count(), t.col_count()), (3, 2));
-        assert_eq!(t.row_heights, vec![5_000, 5_000, 8_000]);
+        assert_eq!(t.row_heights, vec![5_000_000, 5_000_000, 8_000_000]);
         assert_eq!(t.texts(), vec![vec!["c0", "c1"], vec!["", ""], vec!["c2", "c3"]]);
         assert_eq!((t.cell(1, 0).unwrap().style.bold, t.cell(1, 1).unwrap().style.bold), (false, true), "reversed, as KiCad inserts them");
         // Add Row Above the last row, Add Column After the first and Before the last
         assert!(t.add_row(2, true));
-        assert_eq!(t.row_heights, vec![5_000, 5_000, 8_000, 8_000]);
+        assert_eq!(t.row_heights, vec![5_000_000, 5_000_000, 8_000_000, 8_000_000]);
         assert!(t.add_column(0, false));
         assert_eq!((t.row_count(), t.col_count()), (4, 3));
-        assert_eq!(t.col_widths, vec![10_000; 3]);
+        assert_eq!(t.col_widths, vec![10_000_000; 3]);
         assert_eq!(t.texts()[0], vec!["c0", "", "c1"]);
         assert!(t.is_well_formed());
         // Delete rows 1 and 2, then column 0
         assert!(t.delete_rows(&[1, 2, 2]));
-        assert_eq!((t.row_count(), t.row_heights.clone()), (2, vec![5_000, 8_000]));
+        assert_eq!((t.row_count(), t.row_heights.clone()), (2, vec![5_000_000, 8_000_000]));
         assert_eq!(t.texts(), vec![vec!["c0", "", "c1"], vec!["c2", "", "c3"]]);
         assert!(t.delete_columns(&[0]));
         assert_eq!(t.col_count(), 2);
@@ -1036,7 +1029,7 @@ mod tests {
         t.rotate(Point { x: 0, y: 0 }, 90_000);
         // cell (0,0) centre was (5000, 2500); a quarter turn about the origin takes it to (2500, -5000)
         assert_eq!(t.angle, 90_000);
-        assert_eq!(t.cell_box(0, 0).center(), Point { x: 2_500, y: -5_000 });
+        assert_eq!(t.cell_box(0, 0).center(), Point { x: 2_500_000, y: -5_000_000 });
         // and four quarter turns come back
         for _ in 0..3 {
             t.rotate(Point { x: 0, y: 0 }, 90_000);
@@ -1047,24 +1040,24 @@ mod tests {
     #[test]
     fn a_flipped_table_is_the_mirror_image_with_its_columns_reversed_and_its_text_mirrored() {
         let mut t = grid(2, 3);
-        t.col_widths = vec![10_000, 20_000, 30_000];
-        t.at = Point { x: 10_000, y: 5_000 };
+        t.col_widths = vec![10_000_000, 20_000_000, 30_000_000];
+        t.at = Point { x: 10_000_000, y: 5_000_000 };
         // the table spans x 10..70 mm; mirrored about x = 0 it spans -70..-10
         t.flip(Point { x: 0, y: 0 }, true, "B.SilkS".into(), true);
         assert_eq!(t.layer, "B.SilkS");
-        assert_eq!(t.col_widths, vec![30_000, 20_000, 10_000]);
+        assert_eq!(t.col_widths, vec![30_000_000, 20_000_000, 10_000_000]);
         assert_eq!(t.texts(), vec![vec!["c2", "c1", "c0"], vec!["c5", "c4", "c3"]]);
         assert!(t.cells.iter().all(|c| c.style.mirror));
         let b = t.bounding_box();
-        assert_eq!((b.x0, b.x1, b.y0, b.y1), (-70_000, -10_000, 5_000, 15_000));
+        assert_eq!((b.x0, b.x1, b.y0, b.y1), (-70_000_000, -10_000_000, 5_000_000, 15_000_000));
         // top-bottom reverses the rows instead
         let mut u = grid(2, 2);
-        u.row_heights = vec![5_000, 8_000];
+        u.row_heights = vec![5_000_000, 8_000_000];
         u.flip(Point { x: 0, y: 0 }, false, "B.SilkS".into(), false);
-        assert_eq!(u.row_heights, vec![8_000, 5_000]);
+        assert_eq!(u.row_heights, vec![8_000_000, 5_000_000]);
         assert_eq!(u.texts(), vec![vec!["c2", "c3"], vec!["c0", "c1"]]);
         let b = u.bounding_box();
-        assert_eq!((b.y0, b.y1), (-13_000, 0));
+        assert_eq!((b.y0, b.y1), (-13_000_000, 0));
     }
 
     #[test]

@@ -9,7 +9,7 @@
 
 use eda_model::footprint::to_board;
 use eda_model::fp_art::{FpShape, LineStyle, TextVars};
-use eda_model::ir::{FootprintInstance, Point, Um};
+use eda_model::ir::{FootprintInstance, Point, Nm};
 use eda_model::{Footprint, Part};
 use serde_json::{json, Value};
 
@@ -100,7 +100,7 @@ pub(crate) fn add_art(p: &mut Value, part: &Part, fp: &FootprintInstance, footpr
 /// The part's body in board space, `(x0, y0, x1, y1)`: the box of its footprint's `F.Fab` drawings, the four corners of the local box through the pose and boxed
 /// again. `None` when the footprint has no fab drawing or only a line of one (the caller then looks the footprint up in the libraries, or falls back to the
 /// courtyard).
-pub(crate) fn placed_body(fp: &FootprintInstance, footprint: &Footprint) -> Option<(Um, Um, Um, Um)> {
+pub(crate) fn placed_body(fp: &FootprintInstance, footprint: &Footprint) -> Option<(Nm, Nm, Nm, Nm)> {
     let (x0, y0, x1, y1) = footprint.art.geometry_bbox_on("F.Fab")?;
     // A degenerate box (one fab line) is no body.
     if x1 - x0 <= 0 || y1 - y0 <= 0 {
@@ -116,12 +116,12 @@ mod tests {
     use eda_model::fp_art::{FpArt, FpText, Hatch};
     use eda_model::ir::{Shape, Side};
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 
     fn part() -> Part {
-        Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("LM358".into()), package: None, footprint: Some("Package_SO:SOIC-8".into()), pins: vec![], body_um: None, symbol: None, datasheet: None, edge: None }
+        Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("LM358".into()), package: None, footprint: Some("Package_SO:SOIC-8".into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None }
     }
 
     fn footprint() -> Footprint {
