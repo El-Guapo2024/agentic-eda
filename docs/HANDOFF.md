@@ -42,6 +42,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | P21 (10-23) | The SPICE simulator: kicad-cli's SPICE netlist, `ngspice -b` (`EDA_NGSPICE` or PATH), the Simulation window, Probe and Tune, the exports, the `.wbk` workbook. Reviewed against `eeschema/sim/`; the vectors equal ngspice run by hand on kicad-cli's netlist. Left: plotting while it runs (no libngspice), S-parameter port numbers, potentiometer tuning, IBIS currents. PARITY-sch.md section 38. |
 | Specctra via kicad-cli (10-23) | DSN export through `kicad-cli pcb export specctra` when kicad-cli has it; our exporter is the DEPRECATED fallback (the user's decision). |
 | IDF via kicad-cli (10-23) | File > Export > IDFv3 through `kicad-cli pcb export idf`; GenCAD (already wired) gated the same way. Both are disabled, with the reason, on a kicad-cli without the command. kicad-cli reads `--user-origin-x/-y` in 1/25400 mm with `--units mils`, and `idf_args` compensates; the slow test `idf_takes_the_dialogs_reference_point_in_mils` fails if a later nightly fixes that. |
+| Router leftovers (10-23) | Springback, the four corner modes, virtual vias and copper text as an obstacle, reviewed against `pcbnew/router/`. Left: springback in the dragger (~200 lines) and the pair placer, the mark-obstacles hull snap, and keeping the previous head when the head cannot be resolved. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
@@ -52,8 +53,6 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-router-details` | Next tasks 5, the router's three leftovers: springback, rounded corners, virtual vias (`crates/pns/PARITY.md` Stage 10) | All three done: springback (the line placer), rounded corners, virtual vias | Springback in the dragger and the pair placer; board text on copper is no router obstacle (`syncTextItem`, found by the corner-mode proof) |
-| `task-router-review` | Review of `task-router-details`'s three ports against KiCad (`crates/pns/PARITY.md` "Stage 10 review"); branch cut from it | Six divergences fixed: the tail is pushable (`LockJoint`), Backspace keeps the leg before, 90-degree box hulls, no virtual via at a T (KiCad's `n_seg`), `syncTextItem`, router_tool.cpp's static actions in the catalog | Springback in the dragger and the pair placer; a footprint's copper texts |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
