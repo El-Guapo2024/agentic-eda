@@ -212,6 +212,92 @@ fn a_footprint_on_a_board_lists_its_files_without_data_and_the_boards_list_has_t
     assert_eq!(listed.get("part.step").unwrap().checksum, list.get("part.step").unwrap().checksum);
 }
 
+/// Contents of every kind a person embeds: nothing, one byte, text, every byte value, a file whose frame is many lines long; under names with spaces, dots and non-ASCII letters.
+fn odd_files() -> Vec<(String, Vec<u8>)> {
+    let mut seed = 0x2545_F491_u32;
+    let noise: Vec<u8> = (0..300_000)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed >> 24) as u8
+        })
+        .collect();
+    vec![
+        ("empty.txt".into(), Vec::new()),
+        ("one.bin".into(), vec![0]),
+        ("Notes on the part.PDF".into(), b"%PDF-1.7\n\x00\xff text".to_vec()),
+        ("all bytes.dat".into(), (0..=255u8).cycle().take(4096).collect()),
+        ("Müller résumé.step".into(), noise),
+        ("a.b.c.kicad_wks".into(), b"(kicad_wks (version 20231118))".to_vec()),
+    ]
+}
+
+fn odd_list() -> eda_model::embedded_files::EmbeddedFiles {
+    let mut list = eda_model::embedded_files::EmbeddedFiles::default();
+    for (name, content) in odd_files() {
+        assert!(list.insert(eda_kicad::embedded::encode_new(&name, &content).unwrap()));
+    }
+    list
+}
+
+/// Every file of `list` decodes to the bytes it was made of.
+fn assert_contents(list: &eda_model::embedded_files::EmbeddedFiles, what: &str) {
+    for (name, content) in odd_files() {
+        let f = list.get(&name).unwrap_or_else(|| panic!("{what}: {name} is read back"));
+        assert_eq!(decode(f).unwrap_or_else(|e| panic!("{what}: {name}: {e}")).bytes, content, "{what}: {name}, byte for byte");
+    }
+    assert_eq!(list.files.len(), odd_files().len(), "{what}");
+}
+
+#[test]
+fn every_writer_and_reader_carries_a_file_byte_for_byte() {
+    let list = odd_list();
+    assert_contents(&list, "encoded");
+    // the board
+    if let Some((_, mut design, model, _)) = board_files("pcbnew/footprints_load_save.kicad_pcb") {
+        design.drawings.get_or_insert_with(Default::default).embedded = list.clone();
+        let written = export_kicad_pcb(&design, &model, &ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        let (back, _, notes) = import_kicad_pcb(&written).unwrap();
+        assert!(notes.embedded_problems.is_empty(), "{:?}", notes.embedded_problems);
+        let again = back.drawings.unwrap().embedded;
+        assert_eq!(again, list, "the board's list, data and checksums as they were");
+        assert_contents(&again, "board");
+        // and once more: what was read is written the same
+        let mut d2 = design.clone();
+        d2.drawings.as_mut().unwrap().embedded = again;
+        assert_eq!(block_of(&export_kicad_pcb(&d2, &model, &ExportMeta { date: "2026-01-01", title: "t" }).unwrap()), block_of(&written));
+    }
+    // the schematic
+    if let Some(path) = qa("pcbnew/custom_fields.kicad_sch") {
+        let (mut design, model, _) = eda_kicad::import_kicad_sch(&std::fs::read_to_string(path).unwrap()).unwrap();
+        design.schematic.as_mut().unwrap().extras.embedded = list.clone();
+        let written = eda_kicad::export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        let (back, _, _) = eda_kicad::import_kicad_sch(&written).unwrap();
+        assert_contents(&back.schematic.unwrap().extras.embedded, "schematic");
+    }
+    // a library footprint
+    if let Some(path) = qa(ESP32) {
+        let parsed = eda_kicad::parse_library_footprint(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let written = eda_kicad::export_kicad_mod_with(&parsed.footprint, &list);
+        let again = eda_kicad::parse_library_footprint(&written).unwrap();
+        assert_eq!(again.embedded, list);
+        assert_contents(&again.embedded, "footprint");
+    }
+    // a library symbol
+    let text = r#"(kicad_symbol_lib (version 20231120) (generator "t")
+        (symbol "R" (pin_numbers (hide yes)) (pin_names (offset 0) (hide no)) (in_bom yes) (on_board yes)
+            (property "Reference" "R" (at 0 0 0) (effects (font (size 1.27 1.27))))
+            (symbol "R_1_1" (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1")))
+        )
+    )"#;
+    let parsed = eda_kicad::parse_library_symbols(text).unwrap();
+    let embedded: std::collections::BTreeMap<String, eda_model::embedded_files::EmbeddedFiles> = [("R".to_string(), list.clone())].into();
+    let syms: Vec<&eda_model::ir::LibrarySymbol> = parsed.symbols.iter().collect();
+    let again = eda_kicad::parse_library_symbols(&eda_kicad::export_kicad_sym_library_with(&syms, &embedded)).unwrap();
+    assert_contents(again.embedded.get("R").unwrap(), "symbol");
+}
+
 // ------------------------------------------------------------------------------------------------------------------ the slow tier (kicad-cli)
 
 fn kicad_cli() -> Option<PathBuf> {
