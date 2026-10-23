@@ -24,7 +24,9 @@ while (Date.now() < deadline) {
   if (r.done) break;
   console.log(`... ${r.n} scenario(s) so far`);
 }
-for (const s of r.results || []) {
+// `wait()` answers with the counts; the notes are on the check's own `results`
+const results = r.results || (await p.evaluate((g) => window[g].results || [], global));
+for (const s of results) {
   console.log(`${s.ok ? "ok  " : "FAIL"} ${s.name}`);
   for (const n of s.notes || []) if (!n.startsWith("ok")) console.log(`       ${n}`);
 }
