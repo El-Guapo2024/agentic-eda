@@ -796,6 +796,19 @@ fn handle(
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
         ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
+        // The Embedded Files panel (`crate::embedded_api`): a list without the data, one file extracted, and what Collect and Embed 3D Models would embed.
+        ("GET", "/api/embedded") => {
+            let r = crate::embedded_api::list(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        ("GET", "/api/embedded/file") => {
+            let r = crate::embedded_api::file(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        ("GET", "/api/embedded/collect") => {
+            let r = crate::embedded_api::collect_plan(dir);
+            respond(stream, r.status, r.kind, &r.body)
+        }
         ("GET", "/api/symbol_library/export") => match symbol_library_kicad_sym(dir) {
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
@@ -1011,6 +1024,8 @@ fn handle(
         ("GET", "/api/footprint_diff") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::footprint_diff(dir, &query_value(target, "ref")).to_string().as_bytes()),
         ("GET", "/api/footprint_associations") => respond(stream, "200 OK", "application/json", crate::board_control_api::footprint_associations(dir, &query_value(target, "ref")).to_string().as_bytes()),
         ("POST", "/api/fab/cmp") => respond(stream, "200 OK", "application/json", crate::board_control_api::export_cmp(dir).to_string().as_bytes()),
+        // File > Export > Specctra DSN... (`crate::specctra_api`): an exporter of our own, not kicad-cli's; a read of the board, answered on the loop.
+        ("POST", "/api/specctra/export") => respond(stream, "200 OK", "application/json", crate::specctra_api::export(dir).to_string().as_bytes()),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
     }
@@ -2344,7 +2359,7 @@ fn symbol_library_kicad_sym(dir: &Path) -> Result<String, Vec<CheckResult>> {
     let (_, design, _) = board::load(dir)?;
     let lib = design.symbol_library.as_ref().filter(|l| !l.symbols.is_empty()).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", "symbol_library", "the project symbol library has no symbols yet -- open or create one in the Symbol Editor first")])?;
     let syms: Vec<&eda_model::ir::LibrarySymbol> = lib.symbols.iter().collect();
-    Ok(eda_kicad::export_kicad_sym_library(&syms))
+    Ok(eda_kicad::export_kicad_sym_library_with(&syms, &lib.embedded))
 }
 
 /// `GET /api/ratsnest`: the board's airwires for the React view's ratsnest

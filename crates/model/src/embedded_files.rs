@@ -225,6 +225,93 @@ impl EmbeddedFiles {
 
 // ---------------------------------------------------------------------------------------------------------------- the lists of a design
 
+/// Whose list: the thing a design keeps embedded files for. On the wire `{"kind": "board"}`, `{"kind": "footprint", "reference": "U1"}`, ...
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EmbeddedOwner {
+    /// The board: Board Setup > Board Data > Embedded Files.
+    Board,
+    /// The schematic: Schematic Setup > Schematic Data > Embedded Files.
+    Schematic,
+    /// A footprint on the board, by reference: the Embedded Files tab of its Footprint Properties.
+    Footprint { reference: String },
+    /// A footprint of the project's footprint library (the Footprint Editor), by name.
+    LibraryFootprint { name: String },
+    /// A symbol of the project's symbol library (the Symbol Editor), by `lib_id`.
+    LibrarySymbol { lib_id: String },
+}
+
+impl EmbeddedOwner {
+    /// The name the owner goes by in a message and in the journal.
+    pub fn label(&self) -> String {
+        match self {
+            EmbeddedOwner::Board => "board".into(),
+            EmbeddedOwner::Schematic => "schematic".into(),
+            EmbeddedOwner::Footprint { reference } => format!("footprint {reference}"),
+            EmbeddedOwner::LibraryFootprint { name } => format!("library footprint {name}"),
+            EmbeddedOwner::LibrarySymbol { lib_id } => format!("library symbol {lib_id}"),
+        }
+    }
+}
+
+/// Why an owner has no list: what is missing from the design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoSuchOwner {
+    pub check: &'static str,
+    pub what: String,
+    pub reason: &'static str,
+}
+
+/// The list `owner` has in `design`; an error when the owner is not there (no such footprint on the board or in the library).
+pub fn list_of(design: &crate::ir::Design, owner: &EmbeddedOwner) -> Result<EmbeddedFiles, NoSuchOwner> {
+    match owner {
+        EmbeddedOwner::Board => Ok(design.drawings.as_ref().map(|d| d.embedded.clone()).unwrap_or_default()),
+        EmbeddedOwner::Schematic => Ok(design.schematic.as_ref().map(|s| s.extras.embedded.clone()).unwrap_or_default()),
+        EmbeddedOwner::Footprint { reference } => {
+            if !design.placement.as_ref().is_some_and(|p| p.footprints.iter().any(|f| &f.id == reference)) {
+                return Err(NoSuchOwner { check: "ops_not_placed", what: reference.clone(), reason: "no footprint with this reference is on the board" });
+            }
+            Ok(of_footprint(design, reference).cloned().unwrap_or_default())
+        }
+        EmbeddedOwner::LibraryFootprint { name } => {
+            let lib = design.footprint_library.as_ref();
+            if lib.and_then(|l| l.by_name(name)).is_none() {
+                return Err(NoSuchOwner { check: "ops_unknown_footprint", what: name.clone(), reason: "this footprint is not in the project library; open it in the Footprint Editor first" });
+            }
+            Ok(lib.and_then(|l| l.embedded.get(name)).cloned().unwrap_or_default())
+        }
+        EmbeddedOwner::LibrarySymbol { lib_id } => {
+            let lib = design.symbol_library.as_ref();
+            if lib.and_then(|l| l.by_lib_id(lib_id)).is_none() {
+                return Err(NoSuchOwner { check: "ops_unknown_symbol", what: lib_id.clone(), reason: "this symbol is not in the project library; open it in the Symbol Editor first" });
+            }
+            Ok(lib.and_then(|l| l.embedded.get(lib_id)).cloned().unwrap_or_default())
+        }
+    }
+}
+
+/// Every file with data a lookup by name can find, in the order KiCad's resolver would try them for a model nobody scoped: the board's own, then the footprints' (the order they
+/// are placed in), then the footprints of the project's footprint library (the Footprint Editor's 3D view asks for their models by the same route).
+///
+/// `FILENAME_RESOLVER::ResolvePath` takes a stack of lists and the first that has the name wins; the 3D view's stack is the footprint's own list, then the board's
+/// (`RENDER_3D_OPENGL::load3dModels`). A board file holds one list for the board and its footprints, a name taken once ([`board_file_list`]), so the board's list first finds
+/// what the footprint's would.
+pub fn lookup_files(design: &crate::ir::Design) -> Vec<&EmbeddedFile> {
+    let mut out: Vec<&EmbeddedFile> = Vec::new();
+    if let Some(d) = design.drawings.as_ref() {
+        out.extend(d.embedded.files.iter().filter(|f| !f.data.is_empty()));
+    }
+    for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
+        if let Some(list) = of_footprint(design, &fp.id) {
+            out.extend(list.files.iter().filter(|f| !f.data.is_empty()));
+        }
+    }
+    if let Some(lib) = design.footprint_library.as_ref() {
+        out.extend(lib.embedded.values().flat_map(|l| l.files.iter()).filter(|f| !f.data.is_empty()));
+    }
+    out
+}
+
 /// The files a footprint on the board lists as its own: what the Embedded Files tab of its Footprint Properties set, else what the board file listed inside the footprint.
 pub fn of_footprint<'a>(design: &'a crate::ir::Design, id: &str) -> Option<&'a EmbeddedFiles> {
     let drawings = design.drawings.as_ref()?;

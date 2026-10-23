@@ -21,6 +21,7 @@ import { registerPcbRouterSweep } from "./pcbRouterSweep";
 import { registerPcbSelectionSync } from "./pcbSelectionSync";
 import { registerPcbConvertSweep } from "./pcbConvertSweep";
 import { registerPcbGlobalEditSweep } from "./pcbGlobalEditSweep";
+import { registerEmbeddedActions } from "./embeddedActions";
 import { registerPcbPointEditSweep } from "./pcbPointEditSweep";
 import { registerPcbReferenceSweep } from "./pcbReferenceSweep";
 import { registerPcbItemActions } from "./pcbItemActions";
@@ -432,6 +433,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   registerPcbSelectionSync(m, ctx);
   registerPcbConvertSweep(m, ctx);
   registerPcbGlobalEditSweep(m, ctx);
+  registerEmbeddedActions(m, ctx);
   registerPcbPointEditSweep(m, ctx);
   registerPcbReferenceSweep(m, ctx);
   registerPcbAssignNetclass(m, ctx);

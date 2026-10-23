@@ -34,6 +34,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | P25 pad details (10-22) | Explode and recombine, padstacks, Remove Unused Pads, Swap Pad Nets and Swap Gate Nets |
 | P26 step 1 (10-22) | Embedded files: the IR and the four readers and writers. `zstd` is added, the one new dependency the user approved. |
 | P19b steps 1-2 (10-22) | Specctra: the DSN model with KiCad's writer, lexer and parser, plus `FromBOARD`. kicad-cli has no DSN, so this is our own exporter; the user approved it on 2026-10-21. |
+| P19b done (10-23) | Specctra: File > Export > Specctra DSN, File > Import > Specctra Session (`FromSESSION` as `Cmd::Specctra`, one undo step), `eda board export specctra` and `eda board import-ses`. The round trip leaves kicad-cli's DRC unchanged; `e2e/specctra.check.js` passes 5/5. PARITY-pcb.md section 46. No golden DSN exists in `qa/data`, and no outside router was run. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
@@ -42,8 +43,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-specctra-wip` (on `task-specctra`) | Specctra DSN export and SES import, P19b | The DSN model, the writer and `FromBOARD` are merged. The WIP commit holds the export's server side (`crates/cli/src/specctra_api.rs`, a route and CLI wiring), unverified. | File > Export > Specctra DSN; File > Import > Specctra Session (`specctra_import.cpp`'s `FromSESSION`: wires and vias onto the board, one undo step); `eda board export specctra` and `eda board import-ses`; tests (writer units, golden DSN if `qa/data` has one, an SES round trip with no new kicad-cli DRC violation, `web/studio/e2e/specctra.check.js`) |
-| `task-embedded-files-wip` (on `task-embedded-files`) | Embedded files, P26 | Step 1 is merged. The WIP commit holds steps 2-3, unverified: the verbs, routes and library handling. | The Embedded Files panel (Board Setup, Schematic Setup, Footprint Properties: add by upload, remove, extract, embed fonts); `kicad-embed://` paths for 3D models; Collect and Embed 3D Models; tests (byte-for-byte round trips, a STEP/GLB export with an embedded model, `e2e/embedded-files.check.js`) |
+| `task-embedded-files-wip` (on `task-embedded-files`) | Embedded files, P26 | **Done, ready to merge (2026-10-23).** Step 1 is on main; the branch has steps 2-3 verified and finished: the verbs, routes and library handling, the Embedded Files panel (Board Setup > Board Data, Schematic Setup > Schematic Data, Footprint Properties on the board and in the Footprint Editor), `kicad-embed://` models served from the board, Collect and Embed 3D Models (one undo step), the four actions wired (`PARITY-pcb.md` section 47). Gates on the box (2026-10-23): `cargo check --workspace --tests` no warnings; `tools/check.sh fast` Rust 3400 passed, 0 failed, 24 ignored, web typecheck ok, 2352 unit tests; slow `embedded_files_kicad` 9/9 (kicad-cli `pcb export step` and `glb` with an embedded STEP); the 12-board re-export 12/12 (0 differing findings); `e2e/embedded-files.check.js` 9/9 in headless Chromium | Nothing for P26; left by design: embedding the fonts the text uses (no outline fonts), the Symbol Editor's tab |
 | `task-pad-details-wip` (on `task-pad-details`) | A review fix for Remove Unused Pads (layer depth), its test and a PARITY line | Small, unverified | Run the `eda-ops` unused-pads tests, then merge |
 
 Gates for any of them:
@@ -55,7 +55,7 @@ Gates for any of them:
 
 ## Next tasks, in order (the user's decisions of 2026-10-21)
 
-1. **Finish Specctra** (`task-specctra-wip`, above).
+1. ~~**Finish Specctra**~~ merged 2026-10-23 (`9cd36d7`).
 2. **Finish embedded files** (`task-embedded-files-wip`, above). Then merge `task-pad-details-wip`.
 3. **The simulator** (P21; 32 rows of `ui-parity-missing.json`): `kicad-cli sch export netlist --format spice`, then ngspice (`ngspice -b`, or libngspice), parsed into a Simulation panel. ngspice is a separate program, not a crate. KiCad bundles libngspice; on the box, `sudo apt-get install ngspice`. Port the panels from `eeschema/sim/`.
 4. **The graphical rule editor** (P9b, `pcbnew.DRETool.drcRuleEditor`), after the simulator. Custom Rules is edited as text today.
@@ -97,9 +97,10 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
 - **New required fields break other branches' literals.** Two examples: `Group` has `design_block`, and `LibraryPad` has `stack` (padstacks). A merge can leave a literal without one; `cargo check` finds it, and `Default::default()` fixes it.
 - **`studio_import_foreign` failed once under load:** the server exited before printing its port. The test now prints the server's output and exit status, so the next failure explains itself.
 - **Linux box vs the Mac** (fixed 10-23, `task-linux-gate`): KiCad's libraries are found under `$KICAD_PATH` or `/usr/share/kicad-nightly` (`eda_kicad::kicad_shared_dir`), not only the macOS bundle. Without them the studio falls back to built-in symbols and packages, a path the Mac never ran; `EDA_KICAD_SYMBOLS=/nonexistent` exercises it. Node 22's `node --test` takes files or globs, not a directory.
+- **`._*` files in the box's KiCad source** (AppleDouble files from the Mac copy, e.g. `qa/data/pcbnew/._api_kitchen_sink.kicad_pcb`): the re-export harness takes the first 12 boards by name, which are these, and kicad-cli cannot load them (0/12 and a ratchet failure). Run Part 3 with `EDA_PARITY_REEXPORT_CAP=500 EDA_PARITY_REEXPORT_ONLY=<the 12 names of docs/parity/raw/roundtrip.json>` (a partial run, it writes nothing), or delete the `._*` files; `KICAD_QA_DATA` must point at `$KICAD_SRC_DIR/qa/data`.
 - **Disk:** a debug `target/` is 20-40 GB per worktree, and `CARGO_INCREMENTAL=0` keeps it smaller.
 - **Never commit `web/studio/node_modules`:** it can be a symlink to another checkout. Add files by explicit path.
-- **Browser checks** need a browser on a served board (`target/debug/eda board serve -C <dir> --port <p> --ui web/studio/dist`, after `npm run build`). The box has no browser; forward the port, or run Playwright if it is installed.
+- **Browser checks** need a browser on a served board (`target/debug/eda board serve -C <dir> --port <p> --ui web/studio/dist`, after `npm run build`). On the box, Playwright and Chromium are installed outside the repo (`~/tools/pw`, 2026-10-23): `PLAYWRIGHT_MODULE=~/tools/pw/node_modules/playwright/index.mjs node web/studio/e2e/run-check.mjs http://localhost:<p>/ web/studio/e2e/<name>.check.js [minutes]` runs one check and exits 0 when it passes (pad-details: 10/10).
 
 ## Not in git (what a fresh session may need)
 

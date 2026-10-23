@@ -10,6 +10,8 @@
 //                        to the derived project's `erc.rule_severities` for kicad-cli
 //   Pin Conflicts Map    eeschema/dialogs/panel_setup_pinmap.cpp over eeschema/erc/erc_settings.cpp
 //
+// Schematic Data > Embedded Files is the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the schematic's list (the root sheet's, `SCHEMATIC`'s).
+//
 // The real dialog's other pages (annotation, field name templates, net classes, text
 // variables, ...) are not ported -- see PARITY-sch.md -- so they are not shown as dead tabs.
 // General > Formatting has the one setting of its panel the design keeps, the connection grid
@@ -35,9 +37,12 @@ import { getCheckerView, setErcView } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { ErcSeveritiesPage } from "./schematicSetup/ErcSeveritiesPage";
 import { FormattingPage } from "./schematicSetup/FormattingPage";
+import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
 import "../styles/boardSetup.css";
 
-type Page = "formatting" | "severities" | "pinmap";
+type Page = "formatting" | "severities" | "pinmap" | "embedded_files";
+
+const SCHEMATIC_OWNER = { kind: "schematic" } as const;
 
 /** KiCad's page tree (`DIALOG_SCHEMATIC_SETUP`'s treebook), with its page names; the pages that are not here have nothing in the model to edit. */
 const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; label: string }> }> = [
@@ -49,6 +54,7 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
       { id: "pinmap", label: "Pin Conflicts Map" },
     ],
   },
+  { title: "Schematic Data", pages: [{ id: "embedded_files", label: "Embedded Files" }] },
 ];
 
 const LEVEL_COLORS = ["#2e9e57", "#d9a21b", "#d64545"];
@@ -146,6 +152,7 @@ export function SchematicSetupDialog() {
 
           <FormattingPage hidden={page !== "formatting"} onDirty={setFormattingUnapplied} />
           <ErcSeveritiesPage hidden={page !== "severities"} onDirty={setUnapplied} />
+          <EmbeddedFilesPanel owner={SCHEMATIC_OWNER} run={api.cmd} hidden={page !== "embedded_files"} version={state.version} />
 
           <section className="bs-page" hidden={page !== "pinmap"} aria-label="Pin Conflicts Map">
             <h3 className="bs-title">Pin Conflicts Map</h3>

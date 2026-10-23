@@ -229,6 +229,11 @@ impl<'a> Board<'a> {
         let lib = self.footprint_library_mut();
         lib.footprints.retain(|f| f.name != new_name);
         lib.by_name_mut(name).expect("checked above").name = new_name.to_string();
+        // the files it embeds go with it, and the ones the footprint it replaced had are gone
+        if let Some(l) = self.design.footprint_library.as_mut() {
+            l.embedded.remove(new_name);
+        }
+        self.move_library_footprint_embedded(name, new_name);
         Ok(())
     }
 
@@ -328,6 +333,10 @@ impl<'a> Board<'a> {
         let lib = self.symbol_library_mut();
         lib.symbols.retain(|s| s.lib_id != new_lib_id);
         lib.by_lib_id_mut(lib_id).expect("checked above").lib_id = new_lib_id.to_string();
+        if let Some(l) = self.design.symbol_library.as_mut() {
+            l.embedded.remove(new_lib_id);
+        }
+        self.move_library_symbol_embedded(lib_id, new_lib_id);
         // the symbols derived from it follow (KiCad links by pointer, this project by name), and a Value that was its name
         self.follow_symbol_rename(lib_id, new_lib_id);
         Ok(())

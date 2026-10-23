@@ -84,6 +84,7 @@ mod pcb_global_edit;
 mod pcb_groups;
 mod sch_groups;
 mod pcb_paste;
+mod specctra;
 mod pcb_paste_special;
 mod design_blocks;
 mod multichannel;
@@ -91,6 +92,8 @@ mod multichannel_copy;
 mod multichannel_facts;
 mod multichannel_geom;
 pub use multichannel::{AreaKind, AreaPick, MultichannelCmd, PlacementSources, PotentialArea, RepeatOptions, RepeatPlan, TargetCompat};
+pub mod embedded;
+pub use embedded::{CollectedModel, EmbeddedCmd, EmbeddedOwner};
 pub mod pcb_items;
 mod pcb_props;
 mod pcb_table_builders;
@@ -699,12 +702,24 @@ pub enum Cmd {
     /// The board items the IR gained with GAPS.md item 24 (package P16): text boxes, reference images, points and the hatch fill of shapes -- one verb family, see
     /// [`pcb_items::PcbItemCmd`]. On the wire: `{"op": "pcb_item", "verb": "add_text_box", "text_box": {..}}`.
     PcbItem(pcb_items::PcbItemCmd),
+    /// The files embedded in a board, a schematic, a footprint or a symbol (GAPS.md items 24 and 30): the Embedded Files panel's Add, Remove and Embed fonts, the tool actions
+    /// `common.Embed.embededFile` and `removeFile`, and Collect and Embed 3D Models -- one verb family, see [`embedded::EmbeddedCmd`]. On the wire:
+    /// `{"op": "embedded", "verb": "add", "owner": {"kind": "board"}, "name": "part.step", "data": "<base64>"}`.
+    Embedded(embedded::EmbeddedCmd),
     /// The microwave tools (`pcbnew.MicrowaveTool.*`, GAPS.md item 9, package P19): a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own, one verb family, see
     /// [`microwave::MicrowaveCmd`]. On the wire: `{"op": "microwave", "verb": "gap", "at": {..}, "size_um": 500, "track_width_um": 250}`.
     Microwave(microwave::MicrowaveCmd),
     /// The multichannel tool (GAPS.md items 24 and 32, package P24): Generate Placement Rule Areas, Repeat Layout and Apply Design Block Layout -- one verb family, see
     /// [`multichannel::MultichannelCmd`]. On the wire: `{"op": "multichannel", "verb": "repeat_layout", "reference": "zone_..", "targets": [..]}`.
     Multichannel(multichannel::MultichannelCmd),
+    /// File > Import > Specctra Session... (`pcbnew.EditorControl.importSpecctraSession`, `PCB_EDIT_FRAME::ImportSpecctraSession`, `SPECCTRA_DB::FromSESSION`): the wires and
+    /// vias of a Specctra session file (`session`, its text; `name`, the file it came from, for messages) in place of the board's tracks and vias that are not locked, and
+    /// the footprints moved where its placement puts them. One undo step; see [`specctra`](crate::specctra). On the wire: `{"op": "specctra", "session": "(session ..)"}`.
+    Specctra {
+        session: String,
+        #[serde(default)]
+        name: String,
+    },
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -1950,6 +1965,7 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.first().map_or(Domain::Pcb, Cmd::domain),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.domain(),
             Cmd::ReorganizeSheets => Domain::Schematic,
+            Cmd::Embedded(c) => c.domain(),
             Cmd::MoveSymbol { .. }
             | Cmd::DragSymbol { .. }
             | Cmd::RotateSymbol { .. }
@@ -2075,6 +2091,8 @@ impl Cmd {
             Cmd::SchEdit(c) => c.edits_connectivity(),
             // A table is drawn text and lines: nothing it covers is connected to it.
             Cmd::SchTable(_) => false,
+            // A file kept inside the schematic is no part of the drawing.
+            Cmd::Embedded(_) => false,
             // A definition kept with the schematic changes no connection.
             Cmd::EmbedLibSymbol { .. } => false,
             // Drawn lines, shapes and text are not wires: nothing they cross is connected to them.
@@ -2089,6 +2107,12 @@ impl Cmd {
     /// that refuse a move that makes the board worse do not refuse it, and what it replaces is not traced against -- the server reads the new drawing on its own.
     pub fn replaces_board(&self) -> bool {
         matches!(self, Cmd::ReplaceBoard { .. })
+    }
+
+    /// Is this File > Import > Specctra Session (`Cmd::Specctra`)? The routing is what the outside router made of the board: the gates that refuse a move that makes the
+    /// board worse do not judge it, as they do not judge an import of a board.
+    pub fn imports_session(&self) -> bool {
+        matches!(self, Cmd::Specctra { .. })
     }
 
     pub fn replaces_schematic(&self) -> bool {
@@ -2259,7 +2283,9 @@ impl Cmd {
             Cmd::SchEdit(c) => c.ids(),
             Cmd::SchMove(c) => c.ids(),
             Cmd::PcbItem(c) => c.ids(),
+            Cmd::Embedded(c) => c.ids(),
             Cmd::Microwave(c) => c.ids(),
+            Cmd::Specctra { name, .. } => vec![name.as_str()],
             Cmd::Multichannel(c) => c.ids(),
             Cmd::Table(c) | Cmd::SchTable(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
@@ -2858,7 +2884,9 @@ impl<'a> Board<'a> {
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
+            Cmd::Embedded(c) => self.apply_embedded(c),
             Cmd::Microwave(c) => self.apply_microwave(c),
+            Cmd::Specctra { session, name } => self.import_specctra_session(session, name),
             Cmd::Multichannel(c) => self.apply_multichannel(c),
             Cmd::Table(c) => self.apply_table(c),
             Cmd::SchTable(c) => self.apply_sch_table(c),
@@ -5204,6 +5232,7 @@ impl<'a> Board<'a> {
         if lib.footprints.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_footprint", name, "no footprint with this name in the library")]);
         }
+        lib.embedded.remove(name);
         Ok(())
     }
 
@@ -5577,6 +5606,7 @@ impl<'a> Board<'a> {
         if lib.symbols.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the library")]);
         }
+        lib.embedded.retain(|k, _| !gone.contains(k));
         Ok(())
     }
 
@@ -5935,6 +5965,8 @@ mod import_graphics_sch_tests;
 mod pcb_groups_tests;
 #[cfg(test)]
 mod pcb_items_tests;
+#[cfg(test)]
+mod embedded_tests;
 #[cfg(test)]
 mod microwave_tests;
 #[cfg(test)]

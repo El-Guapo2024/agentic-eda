@@ -13,6 +13,7 @@ import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
 import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
 import type { MicrowaveCmd } from "./microwaveTypes";
+import type { EmbeddedCmd } from "./embeddedTypes";
 import type { TableCmdWire } from "./tableTypes";
 import type { TuningPattern } from "./tuneTypes";
 
@@ -1659,6 +1660,8 @@ export type Cmd =
   | { op: "replace_board"; text: string; name?: string; keep_kicad_layer_names?: boolean; project?: string }
   /** File > Import > Non-KiCad Schematic File... (`SCH_EDIT_FRAME::OnImportProject`): the schematic replaced by `content`, the sheet file `POST /api/import_foreign` answered. One undo step. */
   | { op: "replace_schematic"; content: unknown; name?: string }
+  /** File > Import > Specctra Session... (`PCB_EDIT_FRAME::ImportSpecctraSession`, `SPECCTRA_DB::FromSESSION`): the session's wires and vias in place of the board's unlocked tracks and vias, and the footprints where its placement puts them. `session` is the file's text. One undo step; see crates/ops/src/specctra.rs. */
+  | { op: "specctra"; session: string; name?: string }
   /** Paste Special... (`DIALOG_PASTE_SPECIAL`, crates/ops/src/pcb_paste_special.rs): a paste with the dialog's two answers -- what happens to the reference designators of the pasted footprints (`PASTE_MODE`; "keep" is what a plain paste does) and "Clear net assignments". */
   | { op: "paste_special"; text: string; at: PointXY; mode?: PcbPasteMode; clear_nets?: boolean }
   /** Run `cmd` with the board editor in the group `group` (the entered one): what it adds joins the group (`BOARD_COMMIT::Push`; crates/ops/src/pcb_groups.rs `Cmd::InGroup`). */
@@ -1784,6 +1787,7 @@ export type Cmd =
   | ({ op: "pcb_item" } & PcbItemCmd)
   /** The microwave tools: a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own (crates/ops/src/microwave.rs) -- see api/microwaveTypes.ts. */
   | ({ op: "microwave" } & MicrowaveCmd)
+  | ({ op: "embedded" } & EmbeddedCmd)
   /** The board's tables (crates/ops/src/pcb_tables.rs): Draw Table, the Table Properties and Table Cell Properties dialogs, rows, columns, merged cells -- see api/tableTypes.ts. */
   | ({ op: "table" } & TableCmdWire)
   | ({ op: "sch_table" } & TableCmdWire)

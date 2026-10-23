@@ -126,7 +126,7 @@ All in `tools/ui-parity-missing.json`; each is a subsystem the studio does not h
 | Calculator Tools | a separate program in KiCad |
 | Undo / Redo Zoom, Zoom In / Out Horizontally / Vertically | the simulator plot's zoom history and axes; there is no simulator (`GAPS.md`: Simulator, last) |
 | Select Rows / Columns / Table, the Table Editor (add / delete rows and columns, merge, unmerge, export CSV) | the design IR has no table type |
-| Embed File, Extract File, Remove File | the IR has no embedded-file list (KiCad stores them zstd-compressed, base64-encoded and checksummed) |
+| Embed File, Extract File, Remove File | wired 2026-10-23 (P26): Embedded Files opens the editor's setup on its Embedded Files page, Remove File and Extract File act on the rows selected in the panel that is showing (`PARITY-pcb.md` section 47) |
 | Paste Special | **Schematic tab: identical** (`DIALOG_PASTE_SPECIAL`'s reference-designator choices; `PARITY-sch.md` section 15). PCB tab: nothing to special-case yet (the copper it holds must name a net; the studio says so) |
 
 ## 12. Offered by KiCad in an editor, not by the studio there

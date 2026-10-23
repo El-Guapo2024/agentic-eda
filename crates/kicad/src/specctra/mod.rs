@@ -9,7 +9,8 @@
 //! - [`format`]  `OUTPUTFORMATTER` and the number formats;
 //! - [`model`]   the element tree of `specctra.h` with its `Format` functions (the writer);
 //! - [`lexer`]   `DSNLEXER` in Specctra mode;
-//! - [`parse`]   `doPCB`, `doSESSION` and the `do..` functions below them (`LoadPCB`, `LoadSESSION`).
+//! - [`parse`]   `doPCB`, `doSESSION` and the `do..` functions below them (`LoadPCB`, `LoadSESSION`);
+//! - [`export`]  `FromBOARD`, and [`session`] `FromSESSION` (`specctra_import.cpp`), which `eda_ops`' `Cmd::Specctra` applies to the design.
 
 pub mod board;
 pub mod export;
@@ -18,6 +19,7 @@ pub mod geom;
 pub mod lexer;
 pub mod model;
 pub mod parse;
+pub mod session;
 
 #[cfg(test)]
 mod tests;

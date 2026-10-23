@@ -369,14 +369,19 @@ pub fn cache_file_name(name: &str, checksum: &str) -> String {
     }
 }
 
-/// The file's content written under `dir` (`EMBEDDED_FILES::GetTemporaryFileName`: created once, found again by the name its checksum gives), and its path.
+/// The file's content written under `dir` (`EMBEDDED_FILES::GetTemporaryFileName`: created once, found again by the name its checksum gives), and its path. The name is made from the
+/// checksum the file has, so that finding the file again costs no decompression; the content is checked when it is written, and written whole or not at all.
 pub fn materialize(dir: &std::path::Path, file: &EmbeddedFile) -> Result<std::path::PathBuf, String> {
-    let decoded = decode(file).map_err(|e| format!("{}: {e}", file.name))?;
-    let path = dir.join(cache_file_name(&file.name, &decoded.checksum));
-    if !path.is_file() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        std::fs::write(&path, &decoded.bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    let stored = if file.checksum.is_empty() { checksum_of(file.data.as_bytes()) } else { file.checksum.clone() };
+    let path = dir.join(cache_file_name(&file.name, &stored));
+    if path.is_file() {
+        return Ok(path);
     }
+    let decoded = decode(file).map_err(|e| format!("{}: {e}", file.name))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let part = dir.join(format!(".{}.{}.part", std::process::id(), path.file_name().and_then(|n| n.to_str()).unwrap_or("file")));
+    std::fs::write(&part, &decoded.bytes).map_err(|e| format!("{}: {e}", part.display()))?;
+    std::fs::rename(&part, &path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path)
 }
 

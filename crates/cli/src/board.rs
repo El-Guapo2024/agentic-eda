@@ -67,6 +67,9 @@ mod fp_library_tests;
 #[path = "fp_models_tests.rs"]
 mod fp_models_tests;
 #[cfg(test)]
+#[path = "embedded_api_tests.rs"]
+mod embedded_api_tests;
+#[cfg(test)]
 #[path = "lib_editors_tests.rs"]
 mod lib_editors_tests;
 #[cfg(test)]
@@ -1029,6 +1032,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // A schematic file imported as a sheet is read here, into the command (`crate::sheet_import`).
     let with_file = crate::sheet_import::with_loaded_file(cmd, dir)?;
     let cmd = with_file.as_ref().unwrap_or(cmd);
+    // Collect and Embed 3D Models: the model files the footprints name are read here, into the command (`crate::embedded_api`).
+    let with_models = crate::embedded_api::with_collected_models(cmd, dir, &design, &model)?;
+    let cmd = with_models.as_ref().unwrap_or(cmd);
     // A board imported from another EDA format brings a model of its own: the file the command names is written before it runs (`crate::import_foreign`).
     crate::import_foreign::prepare_board(cmd, dir)?;
     // The studio shows a board with no stored schematic as the one derived
@@ -1096,7 +1102,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
     // An import (File > Import > Non-KiCad ...) is not a move: the file is what it is, and the gates do not refuse it.
-    if strictness != Strictness::Off && after > before && !cmd.replaces_board() && !cmd.replaces_schematic() && !cmd.adds_only_rule_areas() {
+    if strictness != Strictness::Off && after > before && !cmd.replaces_board() && !cmd.replaces_schematic() && !cmd.adds_only_rule_areas() && !cmd.imports_session() {
         let new: Vec<String> = all_checks(&board, judged)
             .iter()
             .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
@@ -1109,7 +1115,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
             format!("that move takes the board from {before} failure(s) to {after} ({}); refused because --strict", new.join("; ")),
         ));
     }
-    if strictness == Strictness::Judged && !cmd.replaces_board() && !cmd.replaces_schematic() && !cmd.adds_only_rule_areas() {
+    if strictness == Strictness::Judged && !cmd.replaces_board() && !cmd.replaces_schematic() && !cmd.adds_only_rule_areas() && !cmd.imports_session() {
         // `--strict` from the CLI also judges with KiCad's own gates: one
         // kicad-cli run on each side of the move.
         if eda_kicad_engine::find_cli().is_none() {
@@ -1384,6 +1390,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteSchLine { id } => format!("schematic delete-line {id}"),
         Cmd::AddSheet { name, file, at, .. } => format!("schematic sheet {name:?} --file {file:?} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::ReplaceBoard { name, text, .. } => format!("import-board {name:?} ({} bytes of .kicad_pcb)", text.len()),
+        Cmd::Specctra { name, session } => format!("import-ses {name:?} ({} bytes of session)", session.len()),
         Cmd::ReplaceSchematic { name, content } => format!("import-schematic {name:?} ({} sheet(s))", 1 + content.screens.len()),
         Cmd::ImportSheet { source, as_sheet, name, file, at, keep_annotations, as_group, group_name, block, .. } => format!(
             "schematic import-sheet {source:?} {} --name {name:?} --file {file:?} --at {},{}{}{}{}{}",
@@ -1400,6 +1407,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
         Cmd::PcbItem(c) => c.describe(),
+        Cmd::Embedded(c) => c.describe(),
         Cmd::Microwave(c) => c.describe(),
         Cmd::Multichannel(c) => c.describe(),
         Cmd::Table(c) => c.describe(),
@@ -1667,12 +1675,14 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSheet { .. } => "schematic-sheet",
         Cmd::ImportSheet { .. } => "schematic-import-sheet",
         Cmd::ReplaceBoard { .. } => "import-board",
+        Cmd::Specctra { .. } => "import-ses",
         Cmd::ReplaceSchematic { .. } => "import-schematic",
         Cmd::SwapSchItems { .. } => "schematic-swap",
         Cmd::PasteSch { .. } => "schematic-paste",
         Cmd::SchEdit(c) => c.kind(),
         Cmd::SchMove(c) => c.kind(),
         Cmd::PcbItem(c) => c.kind(),
+        Cmd::Embedded(c) => c.kind(),
         Cmd::Microwave(c) => c.kind(),
         Cmd::Multichannel(c) => c.kind(),
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
@@ -2064,6 +2074,22 @@ pub fn run(
         // `eda board export --kicad gerbers [-- kicad-cli args...]` (a `pcb
         // export` kind), `eda board export --kicad-sch netlist` (a `sch
         // export` kind).
+        "import-ses" => {
+            // `eda board import-ses FILE.ses`: File > Import > Specctra Session..., `Cmd::Specctra` (one undo step), the session's text in the command as the studio sends it.
+            let file = rest.get(1).filter(|a| !a.starts_with('-')).map(PathBuf::from).ok_or_else(|| fail("board_usage", "import-ses", "usage: eda board import-ses <file.ses> [-C dir]"))?;
+            let cmd = crate::specctra_api::import_cmd(&file)?;
+            step_with(&dir, cmd, strict, &actor()).map(|s| eprintln!("{s}\nSession file imported and merged OK."))
+        }
+        "export" if rest.get(1).map(String::as_str) == Some("specctra") => {
+            // `eda board export specctra -o FILE.dsn`: the Specctra DSN of the board, written by our own exporter (kicad-cli has none).
+            let out = flag(rest, "-o").map(PathBuf::from).ok_or_else(|| fail("board_usage", "export specctra", "usage: eda board export specctra -o <file.dsn> [-C dir]"))?;
+            let warnings = crate::specctra_api::export_to(&dir, &out)?;
+            for w in &warnings {
+                eprintln!("warning: {w}");
+            }
+            eprintln!("BOARD exported OK: {}", out.display());
+            Ok(())
+        }
         "export" => {
             let pass: Vec<String> = rest.iter().skip_while(|a| *a != "--").skip(1).cloned().collect();
             let usage = || fail("board_usage", "export", "usage: eda board export --kicad <gerbers|drill|pos|step|glb|pdf|svg|ipc2581|odb|...> | --kicad-sch <netlist|bom|pdf|svg|...> [-- args]");
