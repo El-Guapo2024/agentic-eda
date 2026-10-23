@@ -55,6 +55,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-p20-browser-checks` | P20: `tools/run-all-checks.sh` (every browser check headless, on the boards their headers name); five new checks (board-edit, sch-edit, lib-edit, board-setup-rules, plot-exports); eight fixes they found (item edits off the placement grid, the junction of a T, the library editors' E / R / Del actions, Pre-defined Sizes in one undo step, Escape on a popup menu, a CSV placement file's name, the parity DRC on a board with no stored schematic); stale checks brought up to date | done; gates: cargo check 0 warnings, check.sh fast Rust 3552/0, web 2414; run-all-checks 40/41 then the one left (embedded-files, a fixed sleep) 1/1 | what GAPS.md item 33 lists |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -111,7 +112,7 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
 - **`._*` files in the box's KiCad source** (AppleDouble files from the Mac copy, e.g. `qa/data/pcbnew/._api_kitchen_sink.kicad_pcb`): the re-export harness takes the first 12 boards by name, which are these, and kicad-cli cannot load them (0/12 and a ratchet failure). Run Part 3 with `EDA_PARITY_REEXPORT_CAP=500 EDA_PARITY_REEXPORT_ONLY=<the 12 names of docs/parity/raw/roundtrip.json>` (a partial run, it writes nothing), or delete the `._*` files; `KICAD_QA_DATA` must point at `$KICAD_SRC_DIR/qa/data`.
 - **Disk:** a debug `target/` is 20-40 GB per worktree, and `CARGO_INCREMENTAL=0` keeps it smaller.
 - **Never commit `web/studio/node_modules`:** it can be a symlink to another checkout. Add files by explicit path.
-- **Browser checks** need a browser on a served board (`target/debug/eda board serve -C <dir> --port <p> --ui web/studio/dist`, after `npm run build`). On the box, Playwright and Chromium are installed outside the repo (`~/tools/pw`, 2026-10-23): `PLAYWRIGHT_MODULE=~/tools/pw/node_modules/playwright/index.mjs node web/studio/e2e/run-check.mjs http://localhost:<p>/ web/studio/e2e/<name>.check.js [minutes]` runs one check and exits 0 when it passes (pad-details: 10/10).
+- **Browser checks** need a browser on a served board (`target/debug/eda board serve -C <dir> --port <p> --ui web/studio/dist`, after `npm run build`). On the box, Playwright and Chromium are installed outside the repo (`~/tools/pw`, 2026-10-23): `PLAYWRIGHT_MODULE=~/tools/pw/node_modules/playwright/index.mjs node web/studio/e2e/run-check.mjs http://localhost:<p>/ web/studio/e2e/<name>.check.js [minutes]` runs one check and exits 0 when it passes (pad-details: 10/10). `tools/run-all-checks.sh [-j N] [name ...]` runs all of them (or some), each on a fresh copy of the board its header names (`// run-all-checks: board=...`), on ports 8810-8814. A board copied in by hand (`cp design.json`) is an undoable "changed outside a command" step: clear its `.history` first, or a check's undo-until-clean loop unplaces the board.
 
 ## Not in git (what a fresh session may need)
 
