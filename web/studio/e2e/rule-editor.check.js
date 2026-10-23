@@ -165,11 +165,12 @@
     t(!tid("re-conditions") && !tid("re-layer"), "no condition rows and no layer for a Custom rule");
     await click("re-check-syntax");
     await sleep(400);
-    t(tid("re-syntax-tip")?.textContent === "Syntax OK", `Check Syntax: ${tid("re-syntax-tip")?.textContent}`);
+    // KiCad's parser tells its reporter "No errors found.", so the tip says it under "Syntax check passed with warnings:".
+    t(tid("re-syntax-tip")?.textContent === "Syntax check passed with warnings:\nNo errors found.\n", `Check Syntax: ${JSON.stringify(tid("re-syntax-tip")?.textContent)}`);
     await type("re-custom-text", "(constraint nonsense)");
     await click("re-check-syntax");
     await sleep(400);
-    t((tid("re-syntax-tip")?.textContent ?? "").startsWith("ERROR at line"), `an error: ${tid("re-syntax-tip")?.textContent}`);
+    t((tid("re-syntax-tip")?.textContent ?? "").startsWith("ERROR: <a href='3:13'>Unrecognized item 'nonsense'.</a>"), `an error: ${tid("re-syntax-tip")?.textContent}`);
   });
 
   await scenario("the filter, and Close with a new rule and with unsaved changes", async (t) => {

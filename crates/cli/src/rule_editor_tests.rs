@@ -65,7 +65,7 @@ fn the_rule_editors_verb_writes_the_rules_file_one_undo_step_at_a_time() {
     let checked = crate::rule_editor_api::check(&dir, body.as_bytes());
     assert_eq!((checked["valid"].as_bool(), checked["message"].as_str()), (Some(false), Some("1. Rule name must be unique.\n2. Value must be greater than 0.\n")));
     let syntax = crate::rule_editor_api::check(&dir, serde_json::json!({ "syntax": { "name": "x", "body": "(constraint clearance (min 1mm))" } }).to_string().as_bytes());
-    assert_eq!(syntax["message"], "Syntax OK");
+    assert_eq!(syntax["message"], "Syntax check passed with warnings:\nNo errors found.\n");
     // Delete, then each step undoes on its own.
     step(&dir, Cmd::EditDrcRule { action: DrcRuleAction::Delete, entry: Some(0), name: "narrow".into(), rule: None }, false, "ui").unwrap();
     assert_eq!(rules(&dir), "(version 1)\n(rule wide\n\t(layer \"F.Cu\")\n\t(constraint clearance (min 1mm))\n)\n");
@@ -116,4 +116,149 @@ fn kicad_cli_judges_the_board_by_the_rule_the_editor_saved() {
     step(&dir, save_rule(Some(0), "pads apart", e), false, "ui").unwrap();
     let relaxed = crate::kicad_engine::drc(&dir, false).expect("kicad-cli ran");
     assert!(clearance_findings(&relaxed).is_empty(), "{relaxed:#}");
+}
+
+/// What `GetLayerName`, `CuStack` and `UIOrder` give for a `.kicad_pcb`: the layers of its `(layers ...)` table, a user name when it has one.
+fn qa_board(pcb: &str) -> eda_drc::rule_editor::EditorBoard {
+    let mut b = eda_drc::rule_editor::EditorBoard::default();
+    let Some(start) = pcb.find("\n\t(layers") else { return eda_drc::rule_editor::EditorBoard::two_layer() };
+    for line in pcb[start + 1..].lines().skip(1) {
+        let t = line.trim();
+        if t == ")" {
+            break;
+        }
+        let q: Vec<&str> = t.split('"').collect();
+        let Some(name) = q.get(1) else { continue };
+        b.enabled.push(name.to_string());
+        if name.ends_with(".Cu") {
+            b.copper.push(name.to_string());
+        }
+        if let Some(user) = q.get(3) {
+            b.names.insert(name.to_string(), user.to_string());
+        }
+    }
+    // `CuStack`: F.Cu, the inner layers in order, B.Cu.
+    b.copper.sort_by_key(|l| match l.as_str() {
+        "F.Cu" => 0,
+        "B.Cu" => 1000,
+        l => l.trim_start_matches("In").trim_end_matches(".Cu").parse::<i32>().unwrap_or(999),
+    });
+    b
+}
+
+/// kicad-cli's findings on a QA board, without the report's date and paths; `None` when kicad-cli refuses the rules.
+fn qa_findings(cli: &Path, dir: &Path, name: &str) -> Option<Vec<String>> {
+    let out = dir.join("drc.json");
+    let _ = std::fs::remove_file(&out);
+    let st = std::process::Command::new(cli)
+        .args(["pcb", "drc", "--format", "json", "--severity-all", "-o"])
+        .arg(&out)
+        .arg(dir.join(format!("{name}.kicad_pcb")))
+        .output()
+        .unwrap();
+    if !st.status.success() && !out.exists() {
+        eprintln!("{name}: kicad-cli: {}", String::from_utf8_lossy(&st.stdout));
+        return None;
+    }
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(&out).ok()?).ok()?;
+    // (A marker on the board itself gets a new id each run.)
+    let mut f: Vec<String> = ["violations", "unconnected_items"]
+        .iter()
+        .flat_map(|k| v[*k].as_array().cloned().unwrap_or_default())
+        .map(|mut x| {
+            for item in x["items"].as_array_mut().into_iter().flatten() {
+                if item["description"] == "PCB" {
+                    item["uuid"] = Value::Null;
+                }
+            }
+            x.to_string()
+        })
+        .collect();
+    f.sort();
+    Some(f)
+}
+
+/// The slow tier, on KiCad's own QA boards (`qa/data/pcbnew/*.kicad_dru` and the boards beside them): each judged by kicad-cli with its rules
+/// file, then with the file the editor writes back unedited -- the findings are the same, item for item -- and then, for each panel kind the file
+/// has, with its first rule saved once through its panel with a comment added (`TransferDataFromWindow`, the rule generated from the panel): kicad-cli
+/// takes the file and finds the same. Where Save refuses, it is for KiCad's own reasons, in KiCad's words (`onSaveButtonClicked`'s numbered list:
+/// the other panel of a two-panel rule has the name, a value of 0, a layer assertion with no side).
+#[test]
+fn kicad_cli_judges_kicads_qa_boards_alike_by_the_rules_the_editor_wrote_back() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let (Some(cli), Some(src)) = (eda_kicad_engine::find_cli(), std::env::var_os("KICAD_SRC_DIR")) else {
+        eprintln!("kicad-cli or KICAD_SRC_DIR missing; skipping");
+        return;
+    };
+    use eda_drc::rule_editor::{apply_edit, load, save, selected_token};
+    let qa = Path::new(&src).join("qa/data/pcbnew");
+    let mut names: Vec<String> = std::fs::read_dir(&qa)
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".kicad_dru")).map(str::to_string))
+        .filter(|n| !n.starts_with("._") && qa.join(format!("{n}.kicad_pcb")).exists())
+        .collect();
+    names.sort();
+    assert!(names.len() >= 20, "{names:?}");
+    let (mut saved, mut refused) = (0, Vec::new());
+    for name in &names {
+        let dir = scratch(&format!("re_qa_{name}"));
+        for ext in ["kicad_pcb", "kicad_pro", "kicad_dru"] {
+            let from = qa.join(format!("{name}.{ext}"));
+            if from.exists() {
+                std::fs::copy(&from, dir.join(format!("{name}.{ext}"))).unwrap();
+            }
+        }
+        let dru = dir.join(format!("{name}.kicad_dru"));
+        let text = std::fs::read_to_string(&dru).unwrap();
+        let board = qa_board(&std::fs::read_to_string(dir.join(format!("{name}.kicad_pcb"))).unwrap());
+        let base = qa_findings(&cli, &dir, name).unwrap_or_else(|| panic!("{name}: kicad-cli refused KiCad's own rules"));
+        let entries = load(&text, &board.env()).unwrap_or_else(|e| panic!("{name}: {e}"));
+
+        let unedited = save(&entries, &board);
+        std::fs::write(&dru, &unedited).unwrap();
+        assert_eq!(qa_findings(&cli, &dir, name).as_ref(), Some(&base), "{name}: written back unedited, the rules judge the board otherwise\n{unedited}");
+
+        let mut kinds = std::collections::BTreeSet::new();
+        for (i, e) in entries.iter().enumerate() {
+            if !kinds.insert(e.panel) {
+                continue;
+            }
+            let edit = RuleEdit {
+                panel: e.panel,
+                name: e.rule_name.clone(),
+                comment: if e.comment.is_empty() { "saved by the editor".to_string() } else { format!("{}\nsaved by the editor", e.comment) },
+                condition: e.rule_condition.clone(),
+                layer: selected_token(e.panel, &e.layers, &e.layer_source, &board),
+                fields: e.fields.clone(),
+                value_text: None,
+                taken_names: Vec::new(),
+                severity: None,
+                constraint_code: None,
+            };
+            let mut list = entries.clone();
+            if let Err(m) = apply_edit(&mut list, Some(i), &edit, &board) {
+                assert!(m.starts_with("1. "), "{name}: {m}");
+                refused.push(format!("{name} {:?} {:?}: {}", e.panel, e.rule_name, m.trim_end().replace('\n', " ")));
+                continue;
+            }
+            let written = save(&list, &board);
+            assert!(written.contains("# saved by the editor"), "{name}:\n{written}");
+            std::fs::write(&dru, &written).unwrap();
+            assert_eq!(
+                qa_findings(&cli, &dir, name).as_ref(),
+                Some(&base),
+                "{name}: rule {i} ({:?}) saved through its panel judges the board otherwise\n--- read\n{}\n--- written\n{}",
+                e.panel,
+                e.original_text,
+                list[i].generated_rule
+            );
+            saved += 1;
+        }
+    }
+    eprintln!("{} QA rule files; {saved} rules saved through their panels; Save refused, as KiCad does:\n  {}", names.len(), refused.join("\n  "));
+    assert!(saved >= 25, "{saved}");
 }
