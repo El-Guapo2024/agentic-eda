@@ -46,6 +46,8 @@
   };
   /** Type or pick `value` in the row's editor the way a user does, and wait for the command the grid sent. */
   const edit = async (name, value) => {
+    // a row that the last edit makes editable (Hatch Orientation once the fill is a hatch) comes with the panel's next look at the board: wait for it
+    for (let i = 0; i < 25 && !input(name); i++) await sleep(200);
     const el = input(name);
     if (!el) return `no editable row ${name}`;
     const before = await lastAct();

@@ -14,6 +14,7 @@
 //   6  the menus and the toolbar: Place > Add Drill Chart, Add Drill Map, Place Sub-grid; the Via tools group's Draw Via Stitch area
 //
 // It answers through `window.__kicad10Check`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
+// run-all-checks: board=kicad10-stitch minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__kicad10Check = { results, done: false, ok: false, wait: null });

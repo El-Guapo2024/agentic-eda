@@ -20,7 +20,7 @@
 #
 # and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
 # mcu30-routed (`eda place` then `eda route`), mcu30-zones (routed, with a GND pour on F.Cu and B.Cu), opamp-routed (`eda pipeline
-# examples/opamp_filter.yaml`), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), multichannel and
+# examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), multichannel and
 # simulator (web/studio/e2e/*-board.yaml). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
 # copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR).
 #
@@ -118,6 +118,21 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
                 && "$eda" board track add --net PA1 --layer F.Cu --width 0.2 --pts "4,8 30,8" -C "$d" \
                 && "$eda" board track add --net USB_DP --layer F.Cu --width 0.2 --pts "4,20 30,20" -C "$d" \
                 && "$eda" board track add --net USB_DN --layer F.Cu --width 0.2 --pts "4,20.5 30,20.5" -C "$d" ;;
+        kicad10-stitch) # kicad10-items.check.js: KiCad 25ec2335's qa/data/pcbnew/stitch_fp_rulearea.kicad_pcb brought in with `replace_board` (which keeps its zone fills)
+            local f="${KICAD10_SRC_DIR:-$HOME/src/kicad-src-25ec2335}/qa/data/pcbnew/stitch_fp_rulearea.kicad_pcb" sp
+            [ -f "$f" ] || { echo "no $f (set KICAD10_SRC_DIR to a KiCad 10 source)"; return 1; }
+            "$eda" board new "$yaml_mcu" -o "$d" || return 1
+            # the board is brought in through the studio's own verb: a server on this worker's port (free until its check is served), one POST, stopped
+            "$eda" board serve -C "$d" --port "$port" --ui "$repo/web/studio/dist" > "$t/serve.log" 2>&1 &
+            sp=$!
+            local url=""
+            for _ in $(seq 1 100); do url="$(grep -oE 'http://[0-9.]+:[0-9]+/' "$t/serve.log" | head -1)"; [ -n "$url" ] && break; sleep 0.2; done
+            python3 -c 'import json,sys; print(json.dumps({"cmd": {"op": "replace_board", "text": open(sys.argv[1]).read()}, "strict": False}))' "$f" > "$t/replace.json"
+            local reply
+            reply="$(curl -s -H 'Content-Type: application/json' --data-binary @"$t/replace.json" "${url}api/cmd")"
+            kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+            echo "replace_board: $reply" | cut -c1-300
+            grep -q '"ok":true' <<< "$reply" ;;
         multichannel)
             "$eda" board new "$e2e/multichannel-board.yaml" -o "$d" ;;
         simulator)

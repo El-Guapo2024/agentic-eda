@@ -153,11 +153,13 @@
     tid("embedded-files-remove", panel()).click();
     await until(async () => !(await names("owner=board")).includes("a.txt"), 8000);
     t(!(await names("owner=board")).includes("a.txt") && (await names("owner=board")).includes("b.txt"), "the selected row is removed, the other stays");
+    // the panel draws its list again after the first removal: click the row it shows now, and wait for it to be the one selected
+    await until(() => !panel().querySelector('tr[data-name="a.txt"]') && !!panel().querySelector('tr[data-name="b.txt"]'), 8000);
     panel().querySelector('tr[data-name="b.txt"]').click();
-    await sleep(200);
-    await __eda.run("common.Embed.removeFile");
-    await until(async () => !(await names("owner=board")).includes("b.txt"), 8000);
-    t(!(await names("owner=board")).includes("b.txt"), "Remove File removes the selected row of the panel showing");
+    await until(() => panel().querySelector('tr[data-name="b.txt"]')?.getAttribute("aria-selected") === "true", 5000);
+    const removed = await __eda.run("common.Embed.removeFile");
+    await until(async () => !(await names("owner=board")).includes("b.txt"), 10000);
+    t(!(await names("owner=board")).includes("b.txt"), `Remove File removes the selected row of the panel showing (${JSON.stringify(removed)})`);
     await closeDialogs();
     for (let i = 0; i < 4; i++) await undo();
     t(JSON.stringify(await names("owner=board")) === JSON.stringify(before.board), "four undos: the board's list as it was");
