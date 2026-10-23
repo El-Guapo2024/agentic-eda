@@ -45,6 +45,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | Router leftovers (10-23) | Springback, the four corner modes, virtual vias and copper text as an obstacle, reviewed against `pcbnew/router/`. Left: springback in the dragger (~200 lines) and the pair placer, the mark-obstacles hull snap, and keeping the previous head when the head cannot be resolved. |
 | Schematic details (10-23) | A pasted sheet shares its screen, buses across sheets, a label's own fields; reviewed against eeschema's code; 18 of KiCad's QA hierarchies trace as kicad-cli reads them. Left: a shared screen inside a shared screen (needs references keyed by the whole path), two buses joined by a shared member name, `${#}` per placement, 20 of 371 nets of `netlists/video`. PARITY-sch.md section 39. |
 | Router via actions (10-23) | Blind/buried and micro vias, Select Layer and Place, Custom Track/Via Size, Switch Posture, in the router's context. The nightly's DRC adds `microvia_crosses_core`, which KiCad 8303b2ad lacks: a microvia from an outer layer fails on KiCad's default 4-layer stackup. |
+| KiCad 10 items (10-23) | Line endings, grid items, via stitching, drill charts and maps, ported from KiCad 25ec2335 (`~/src/kicad-src-25ec2335`, the box kicad-cli's commit; 8303b2ad predates them) and reviewed against it. Drill charts match kicad-cli's rebuild exactly. Left: imperial drills (needs drills in nm), a footprint's copper fields as stitch obstacles, undoing a chart placement keeps its profile marks. PARITY-pcb.md section 50. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
@@ -55,8 +56,6 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-kicad10-items` | KiCad 10's line endings, grid items, via stitching, drill charts, drill maps and drill symbol profile read, written, drawn and edited (HANDOFF "Next tasks" 5, third bullet), ported from KiCad 25ec2335 (`~/src/kicad-src-25ec2335`, the commit of the box's kicad-cli) | done: 4 commits, slow proofs on 7 QA boards and a fixture, 3 chart builds held to kicad-cli's, e2e `kicad10-items.check.js` 6/6 | grid items as routing/placement roles; the Drill Chart Properties and Drill Groups dialogs; backdrills and post-machining in the drill model; microvia stack generators and custom user properties (PARITY-pcb.md section 50) |
-| `task-kicad10-review` | Adversarial parity review of `task-kicad10-items` against KiCad 25ec2335's code (cut from its 397d53f): line endings, grid items, via stitching, drill charts and maps | done: 5 commits of fixes with failing tests first; slow `kicad10_items` 6/6 (2 boards of the downgrade corpus added), `drill_charts_kicad_cli` 4/4, chart geometry to the micrometre | merge after `task-kicad10-items`; left: the `IfConnected` shortcut, a footprint's fields on copper, imperial drills (PARITY-pcb.md section 50 "Review") |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -74,7 +73,7 @@ Gates for any of them:
 5. **Details** listed in `GAPS.md`:
    - the router: ~~springback, rounded corners, virtual vias~~ on `task-router-details` (springback for the line placer only);
    - the schematic: copying and pasting whole sheets, buses across sheets, a label's own fields;
-   - KiCad 10 items the reader skips: line endings, grid items, via stitching, drill charts;
+   - ~~KiCad 10 items the reader skips~~ merged 2026-10-23;
    - browser checks for the older areas (P20);
    - re-running `tools/parity_report.py` (connectivity is at 84%). On the box (2026-10-23) it needs `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data`, and its connectivity part evaluates 56 boards, against a floor of 58 set on the Mac, which fails the ratchet. The two boards are the user's `work/` boards that exist only on the Mac (`work/l1-order`; a worktree has no `work/mcu30` either), so the floor counts boards the box does not have. That is a machine difference, not a regression. A floor that counts only `qa/data` and `examples/` would fix it.
 
