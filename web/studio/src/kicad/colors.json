@@ -89,6 +89,8 @@
     "LAYER_PAD_NETNAMES": "#ffffffe6",
     "LAYER_VIA_NETNAMES": "#323232e6",
     "LAYER_POINTS": "#ff26e2ff",
+    "LAYER_SUBGRIDS": "#c2c200ff",
+    "LAYER_VIA_STITCHING": "#4dccb2ff",
     "F_Cu": "#c83434ff",
     "In1_Cu": "#7fc87fff",
     "In2_Cu": "#ce7d2cff",

@@ -20,6 +20,7 @@ import type { ConstructionBatch, ConstructionItem, Drawable } from "./constructi
 import { queryScene, type FootprintItem, type PadItem, type SnapItem, type SnapScene } from "./snapScene";
 import { arcStart, arcEnd, arcThrough, box, distanceTo, dist, half, intersections, line, nearestOfAny, PT, type ArcG, type Box, type Geom, type Pt } from "./snapGeom";
 import type { GridCategory } from "./gridOverrides";
+import { alignWithGridItems } from "./gridItem";
 import { GridHelper, SNAP_HYSTERESIS_PX, SNAP_RANGE_PX, kiRound, layersOverlap, samePos, type GridEnv, type LayerSel, type SnapOverlay, type Visibility } from "./gridHelperBase";
 
 export { GridHelper, SNAP_HYSTERESIS_PX, SNAP_RANGE_PX, kiRound };
@@ -72,6 +73,8 @@ export class PcbGridHelper extends GridHelper {
     const { layerVisible, highContrastLayers } = this.visibility;
     // `PCB_POINT::ViewGetLOD`: "All points hidden"
     if (item.type === "point" && this.visibility.pointsVisible === false) return false;
+    // A grid item is on no layer: it is there while Grids is shown.
+    if (item.type === "grid") return this.visibility.gridItemsVisible !== false;
     if (!item.layers.some(layerVisible)) return false;
     if (highContrastLayers && !item.layers.some((l) => highContrastLayers.has(l))) return false;
     return true;
@@ -348,6 +351,20 @@ export class PcbGridHelper extends GridHelper {
       if (minDist > lineSnapMinCornerDistance && d < minDist) best = outline;
     }
     return best ? best.pos : mouse;
+  }
+
+
+  /**
+   * `PCB_GRID_HELPER::Align` (KiCad 10): with the grid on and Grids shown, a grid item that affects the cursor and covers the point owns the snap; otherwise the editor's grid point,
+   * unless a cursor grid nearby has a point within the snap range (25 px, never more than the visible grid) -- `alignWithGridItems`.
+   */
+  override align(p: Pt, category: GridCategory = "current"): Pt {
+    const grids = this.scene.gridItems ?? [];
+    if (!this.canUseGrid() || grids.length === 0 || this.visibility.gridItemsVisible === false) return super.align(p, category);
+    const gridAligned = super.align(p, category);
+    const snapRange = kiRound(Math.min(SNAP_RANGE_PX / this.env.scale, this.getVisibleGrid()));
+    // `FindActiveGridAt` / `Align` skip the grids that are selected (the one being moved is), whatever asked for the point.
+    return alignWithGridItems(grids, p, gridAligned, snapRange, this.visibility.selected ?? new Set());
   }
 
   // ---- BestSnapAnchor

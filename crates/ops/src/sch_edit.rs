@@ -728,10 +728,9 @@ fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shap
     if name.is_some_and(|n| n.trim().is_empty()) {
         return Err(vec![CheckResult::fail("ops_bad_sheet_pin", id, "a sheet pin needs a name")]);
     }
-    // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear" (the limits of a label's)
-    if look.size_um.is_some_and(|size| !(10..=1_000_000).contains(&size)) {
-        return Err(vec![CheckResult::fail("ops_bad_text_size", id, "The text size must be between 0.01 and 1000 mm.")]);
-    }
+    // `DIALOG_SHEET_PIN_PROPERTIES::TransferDataFromWindow` validates no size: `EDA_TEXT::SetTextSize` clamps it to `TEXT_MIN_SIZE_MM` .. `TEXT_MAX_SIZE_MM`
+    // (0.001 .. 250 mm)
+    let look = SheetPinLookEdit { size_um: look.size_um.map(|size| size.clamp(1, 250_000)), ..look };
     let (s, i) = find_sheet_pin(sch, id)?;
     if let Some(p) = at {
         if !on_sheet_border(s, p) {

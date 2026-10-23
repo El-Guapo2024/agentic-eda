@@ -264,12 +264,14 @@ test("text: position, layer, lock, orientation, then its Text Properties", () =>
 test("a shape shows the geometry its kind has", () => {
   const b = board();
   const shape = (id: string) => names(b, [id]).find(([g]) => g === "Shape Properties")![1];
-  assert.deepEqual(shape("shp_seg"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width"]);
+  // KiCad 10's line endings, on the open shapes only (`isOpenShape`).
+  const ENDINGS = ["Start Shape", "Start Length", "Start Width", "Start Stroke Width", "End Shape", "End Length", "End Width", "End Stroke Width"];
+  assert.deepEqual(shape("shp_seg"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width", ...ENDINGS]);
   assert.deepEqual(shape("shp_rect"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Width", "Height", "Line Width", "Fill"]);
-  assert.deepEqual(shape("shp_arc"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width", "Angle"]);
+  assert.deepEqual(shape("shp_arc"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width", "Angle", ...ENDINGS]);
   assert.deepEqual(shape("shp_circle"), ["Shape", "Center X", "Center Y", "Radius", "Line Width", "Fill"]);
   assert.deepEqual(shape("shp_poly"), ["Shape", "Line Width", "Fill"]);
-  assert.deepEqual(shape("shp_bez"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width"], "a Bezier is not filled");
+  assert.deepEqual(shape("shp_bez"), ["Shape", "Start X", "Start Y", "End X", "End Y", "Line Width", ...ENDINGS], "a Bezier is not filled");
   // Position is the polygon's alone; every shape has a layer and a lock; none has a net.
   assert.deepEqual(names(b, ["shp_poly"])[0], ["Basic Properties", ["Position X", "Position Y", "Locked", "Layer"]]);
   assert.deepEqual(names(b, ["shp_seg"])[0], ["Basic Properties", ["Locked", "Layer"]]);
@@ -524,6 +526,23 @@ test("the Fill row offers the five fills of UI_FILL_MODE and sends one set_shape
   assert.deepEqual(edit(hatched, ["shp_rect"], "Fill", 0), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_rect"], fill: "none" }]);
   // A line has no fill row.
   assert.equal(rowOf(b, ["shp_seg"], "Fill"), undefined);
+});
+
+test("the line ending rows of an open shape: Start Shape in ENUM_MAP order, the sizes, and one set_shape_style each; the value already there sends nothing", () => {
+  const b = board();
+  const choices = rowOf(b, ["shp_seg"], "Start Shape")!.choices!.map((c) => c.label);
+  assert.deepEqual(choices, ["None", "Arrow", "Circle", "Square", "Open Arrow"]);
+  assert.equal(rowOf(b, ["shp_seg"], "Start Shape")!.value, 0);
+  assert.deepEqual(edit(b, ["shp_seg"], "Start Shape", 1), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_seg"], start_ending: { style: "arrow", length_um: 0, width_um: 0, stroke_width_um: 0 } }]);
+  assert.equal(edit(b, ["shp_seg"], "End Shape", 0).length, 0, "none already");
+  const arrowed = board();
+  Object.assign(arrowed.drawings!.shapes[0]!, { end_ending: { style: "arrow_open", length: 3_000, width: 3_000, stroke_width: 600 } });
+  assert.equal(rowOf(arrowed, ["shp_seg"], "End Shape")!.value, 4);
+  assert.equal(rowOf(arrowed, ["shp_seg"], "End Stroke Width")!.value, 600);
+  assert.deepEqual(edit(arrowed, ["shp_seg"], "End Length", 2_000), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_seg"], end_ending: { style: "arrow_open", length_um: 2_000, width_um: 3_000, stroke_width_um: 600 } }]);
+  assert.equal(edit(arrowed, ["shp_seg"], "End Width", 3_000).length, 0);
+  // A closed shape has none of the rows.
+  assert.equal(rowOf(b, ["shp_rect"], "Start Shape"), undefined);
 });
 
 test("a dimension: an edit_dimension that keeps everything else, the label's pen included", () => {

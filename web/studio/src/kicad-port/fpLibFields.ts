@@ -1,7 +1,8 @@
 // The fields grid of the Footprint Editor's Footprint Properties (`DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR`, pcbnew/dialogs/dialog_footprint_properties_fp_editor.cpp): the rows it
 // starts with (the Reference, the Value and the user fields of the footprint in the library), what OK sends back and what it refuses.
 //
-// The Reference's text is `REF**` and the Value's the footprint's name until the file says otherwise; their layouts default to 1 mm text above and below the origin. A user field
+// The Reference's text is `REF**` and the Value's the footprint's name until the file says otherwise; their layouts default to 1 mm text above and below the origin. The Datasheet
+// and the Description are the third and fourth mandatory rows (hidden, empty, at the origin on the fabrication layer until the file says otherwise). A user field
 // starts as `OnAddField` makes it: hidden, at the origin, on the fabrication layer, named `Field<n>`. The rules of a row are the board dialog's (kicad-port/fpFields.ts
 // `checkFieldRow`) and `Validate`'s for the names: every user field has one, none is a mandatory field's, none repeats another's (compared without case here, as KiCad's grid does).
 //
@@ -27,19 +28,26 @@ export const defaultReferenceLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: -2
 export const defaultValueLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 2000 }, size: [1000, 1000], thickness: 150, layer: "F.Fab", visible: true });
 /** `OnAddField`: hidden, at the origin, on the fabrication layer. */
 export const newFieldLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 0 }, size: [1000, 1000], thickness: 150, layer: "F.Fab", visible: false });
+/** The Datasheet and Description fields of a footprint that has none of its own (`FOOTPRINT::FOOTPRINT`'s `addField( FIELD_T::DATASHEET, F_Fab, false )`): hidden, at the origin,
+ * on the fabrication layer, in `EDA_TEXT`'s default 1.27 mm with the automatic pen (`fp_edit::default_library_datasheet_layout`). */
+export const defaultInfoFieldLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 0 }, size: [1270, 1270], thickness: 0, layer: "F.Fab", visible: false });
 
-/** The two mandatory rows come first: they are never moved, renamed or deleted. */
-export const MANDATORY_ROWS = 2;
+/** The four mandatory rows come first -- Reference, Value, Datasheet, Description (`PCB_FIELDS_GRID_TABLE::GetMandatoryRowCount`, a footprint's mandatory fields): they are never
+ * moved, renamed or deleted. */
+export const MANDATORY_ROWS = 4;
 
 /** The rows the grid starts with. A field's `visible` is its Show check box (a layout carries it too, but the footprint's flags are the ones the file is written from). */
-export function rowsOfFootprint(fp: Pick<LibraryFootprint, "name" | "reference" | "value" | "reference_visible" | "value_visible" | "fields">): LibFieldRow[] {
+export function rowsOfFootprint(fp: Pick<LibraryFootprint, "name" | "reference" | "value" | "reference_visible" | "value_visible" | "fields" | "datasheet" | "description_field">): LibFieldRow[] {
   const reference: FieldLayoutCmd = { ...defaultReferenceLayout(), ...(fp.reference ?? {}), visible: fp.reference_visible !== false };
   const value: FieldLayoutCmd = { ...defaultValueLayout(), ...(fp.value ?? {}), visible: fp.value_visible !== false };
+  const info = (l: FieldLayoutCmd | null | undefined): FieldLayoutCmd => ({ ...defaultInfoFieldLayout(), ...(l ?? {}), text: undefined });
   const rows: LibFieldRow[] = [
     { key: 1, name: "Reference", text: fp.reference?.text ?? LIBRARY_REFERENCE_TEXT, layout: { ...reference, text: undefined } },
     { key: 2, name: "Value", text: fp.value?.text ?? fp.name, layout: { ...value, text: undefined } },
+    { key: 3, name: "Datasheet", text: fp.datasheet?.text ?? "", layout: info(fp.datasheet) },
+    { key: 4, name: "Description", text: fp.description_field?.text ?? "", layout: info(fp.description_field) },
   ];
-  (fp.fields ?? []).forEach((f, i) => rows.push({ key: 3 + i, name: f.name, text: f.value, layout: { ...newFieldLayout(), ...(f.layout ?? {}), visible: f.visible !== false } }));
+  (fp.fields ?? []).forEach((f, i) => rows.push({ key: 5 + i, name: f.name, text: f.value, layout: { ...newFieldLayout(), ...(f.layout ?? {}), visible: f.visible !== false } }));
   return rows;
 }
 
@@ -68,9 +76,14 @@ export function gridProblem(rows: readonly LibFieldRow[], fmt: (um: Um) => strin
   return null;
 }
 
-/** What OK sends: the Reference's and the Value's layout (with their text when it is not the default), the Show flags and the user fields. */
-export function panelOfRows(rows: readonly LibFieldRow[], footprintName: string): { reference: FieldLayoutCmd; value: FieldLayoutCmd; reference_visible: boolean; value_visible: boolean; fields: FootprintField[] } {
-  const [ref, val, ...users] = rows;
+/** What OK sends: the Reference's and the Value's layout (with their text when it is not the default), the Show flags, the Datasheet's and the Description's layout with their
+ * text, and the user fields. */
+export function panelOfRows(
+  rows: readonly LibFieldRow[],
+  footprintName: string,
+): { reference: FieldLayoutCmd; value: FieldLayoutCmd; reference_visible: boolean; value_visible: boolean; datasheet: FieldLayoutCmd; description_field: FieldLayoutCmd; fields: FootprintField[] } {
+  const [ref, val, datasheet, description, ...users] = rows;
+  const info = (r: LibFieldRow | undefined): FieldLayoutCmd => ({ ...(r?.layout ?? defaultInfoFieldLayout()), text: r?.text ?? "" });
   const own = (r: LibFieldRow | undefined, text: string, fallback: FieldLayoutCmd): FieldLayoutCmd => {
     const l = r?.layout ?? fallback;
     // the layout's `text` is the text shown when it is not the field's own (`REF**`, the name)
@@ -83,11 +96,13 @@ export function panelOfRows(rows: readonly LibFieldRow[], footprintName: string)
     value,
     reference_visible: ref?.layout.visible !== false,
     value_visible: val?.layout.visible !== false,
+    datasheet: info(datasheet),
+    description_field: info(description),
     fields: users.map((r) => ({ name: r.name.trim(), value: r.text, visible: r.layout.visible !== false, layout: { ...r.layout, visible: r.layout.visible !== false } })),
   };
 }
 
-/** `OnMoveUp` / `OnMoveDown`: a user row swaps with its neighbour, never into the two mandatory rows. */
+/** `OnMoveUp` / `OnMoveDown`: a user row swaps with its neighbour, never into the mandatory rows. */
 export function moveRow<T>(rows: readonly T[], index: number, dir: -1 | 1): readonly T[] {
   const to = index + dir;
   if (index < MANDATORY_ROWS || to < MANDATORY_ROWS || to >= rows.length) return rows;

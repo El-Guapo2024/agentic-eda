@@ -9,7 +9,7 @@ import type { SchHAlign, SchVAlign } from "../api/schEditTypes";
 export type LabelSpinName = "right" | "up" | "left" | "bottom";
 
 export interface LastPlaced {
-  /** A label's spin; "" is none chosen yet, which reads off the wire the label ends at as every label did before a spin could be picked. */
+  /** A label's spin (`m_lastTextOrientation`, constructed as `SPIN_STYLE::RIGHT`); "" is "From the wire", the spin read off the wire the label ends at, sent as such. */
   spin: LabelSpinName | "";
   bold: boolean;
   italic: boolean;
@@ -23,7 +23,7 @@ export interface LastPlaced {
   textVertical: boolean;
 }
 
-const INITIAL: LastPlaced = { spin: "", bold: false, italic: false, shape: "input", autoRotate: false, textH: "center", textV: "center", textVertical: false };
+const INITIAL: LastPlaced = { spin: "right", bold: false, italic: false, shape: "input", autoRotate: false, textH: "center", textV: "center", textVertical: false };
 
 let last: LastPlaced = { ...INITIAL };
 

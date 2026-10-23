@@ -679,6 +679,96 @@ impl<'a> RuleBoard<'a> {
     }
 
     /// `checkFootprint` of `reportClearance`: a footprint whose pads are all one logical pad stands for that pad, a footprint with several is itself, a footprint with none too.
+    /// The rule item of the `idx`th pad of the board (`DrcBoard::pads`).
+    pub fn pad_item_at(&self, idx: usize) -> Option<Rc<RuleItem>> {
+        let (pid, i) = self.pad_ids.iter().find(|(_, i)| *i == idx).cloned()?;
+        Some(Rc::new(self.pad_item(&pid, i)))
+    }
+
+    /// The rule item of the `idx`th track segment of the board (`DrcBoard::tracks`).
+    pub fn segment_item_at(&self, idx: usize) -> Rc<RuleItem> {
+        Rc::new(self.track_item(idx))
+    }
+
+    /// The rule item of the `idx`th via of the board (`DrcBoard::vias`).
+    pub fn via_item_at(&self, idx: usize) -> Rc<RuleItem> {
+        Rc::new(self.via_item(idx))
+    }
+
+    /// A via that is not on the board, as the rules see it -- `PCB_VIA_STITCH::buildPlacementCells`' probe, "it must carry the stitch net because clearance rules can key off
+    /// the net class": the via item of a board with it on.
+    pub fn probe_via(&self, net: &str, at: Point, diameter: Um, drill: Um, from_layer: &str, to_layer: &str) -> Rc<RuleItem> {
+        let v = crate::board::DrcVia { id: "via_probe".into(), net: (!net.is_empty()).then(|| net.to_string()), at, drill, diameter, from_layer: from_layer.to_string(), to_layer: to_layer.to_string() };
+        let copper = self.copper_layers();
+        let (i0, i1) = (copper.iter().position(|l| *l == v.from_layer), copper.iter().position(|l| *l == v.to_layer));
+        let (lo, hi) = match (i0, i1) {
+            (Some(a), Some(b)) => (a.min(b), a.max(b)),
+            _ => (0, copper.len().saturating_sub(1)),
+        };
+        let layers: Vec<String> = copper[lo..=hi].to_vec();
+        let mut it = RuleItem::new(v.id.clone(), Class::Via);
+        it.net = net.to_string();
+        it.layer = layers.first().cloned();
+        it.layers = layers.clone();
+        it.shapes = vec![v.shape()];
+        it.hole = Some(v.hole());
+        it.has_hole = true;
+        it.has_drilled_hole = true;
+        it.plated = true;
+        it.position = at;
+        it.via_type = Some(if lo == 0 && hi + 1 == copper.len() { "Through" } else if lo == 0 || hi + 1 == copper.len() { "Blind" } else { "Buried" });
+        it.drill = nm(drill);
+        it.flashed = layers;
+        it.set("Diameter", Prop::Int(nm(diameter)));
+        it.set("Hole", Prop::Int(nm(drill)));
+        it.set("Net", Prop::Enum(net.to_string()));
+        Rc::new(it)
+    }
+
+    /// The rule item of a zone of the board.
+    pub fn zone_item_of(&self, z: &eda_model::ir::Zone) -> Rc<RuleItem> {
+        Rc::new(self.zone_item(z))
+    }
+
+    /// The rule item of a graphic of the board.
+    pub fn shape_item_of(&self, s: &eda_model::ir::Shape) -> Rc<RuleItem> {
+        Rc::new(self.shape_item(s))
+    }
+
+    /// The rule item of a text on a copper layer that is not a board `Text` of the IR (an imported board text, a footprint's text): a `PCB_TEXT` of no net with its text,
+    /// layer, size and pen.
+    pub fn text_item_of(&self, id: &str, t: &eda_model::ir::FootprintText) -> Rc<RuleItem> {
+        let mut it = RuleItem::new(id.to_string(), Class::Text);
+        it.layers = vec![t.layer.clone()];
+        it.layer = Some(t.layer.clone());
+        it.position = t.at;
+        it.text_height = nm(t.size.1);
+        it.text_thickness = nm(t.thickness);
+        it.set("Text", Prop::Str(t.text.clone()));
+        it.set("Layer", Prop::Layer(t.layer.clone()));
+        it.set("Text Height", Prop::Int(nm(t.size.1)));
+        it.set("Text Thickness", Prop::Int(nm(t.thickness)));
+        it.set("Position X", Prop::Int(nm(t.at.x)));
+        it.set("Position Y", Prop::Int(nm(t.at.y)));
+        it.description = format!("PCB text '{}' on {}", t.text, self.rules.layer_setup.display_name(&t.layer));
+        Rc::new(it)
+    }
+
+    /// The rule item of a board text (`Text`) of the IR.
+    pub fn board_text_item_of(&self, t: &eda_model::ir::Text) -> Rc<RuleItem> {
+        Rc::new(self.text_item(t))
+    }
+
+    /// The engine the items are judged by (`DRC_ENGINE::EvalRules`).
+    pub fn engine(&self) -> &RuleEngine {
+        &self.engine
+    }
+
+    /// The board's copper layers, front to back.
+    pub fn copper_layer_names(&self) -> Vec<String> {
+        self.copper_layers()
+    }
+
     pub fn footprint_stand_in(&self, fp: &Rc<RuleItem>) -> Rc<RuleItem> {
         let pads: Vec<&(String, usize)> = self.pad_ids.iter().filter(|(_, i)| self.board.pads[*i].footprint_ref == fp.id).collect();
         let Some((first_id, first_idx)) = pads.first().map(|p| (*p).clone()) else { return fp.clone() };

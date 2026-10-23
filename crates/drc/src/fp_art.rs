@@ -259,3 +259,46 @@ mod tests {
         assert!(b.mask.silk.iter().all(|s| !s.desc.starts_with("Footprint text")), "{:?}", b.mask.silk.iter().map(|s| &s.desc).collect::<Vec<_>>());
     }
 }
+
+/// One piece of a footprint's own copper that is not a pad: a graphic (in board space, on the one copper layer it is drawn on) or a text.
+pub enum FpCopper {
+    Shape(eda_model::ir::Shape),
+    Text(FootprintText),
+}
+
+/// The footprints' graphics and texts on copper layers (`FOOTPRINT::GraphicalItems()` and its texts, in the board's copper R-tree as `PCB_SHAPE` and `PCB_TEXT` of no net), placed
+/// where the footprint is: from its art, or what the importer kept in board space for a design that has no art. A graphic that belongs to a custom pad is the pad's.
+pub fn footprint_copper(design: &Design, model: &eda_model::ConstraintModel) -> Vec<FpCopper> {
+    let copper = |l: &str| l.ends_with(".Cu");
+    let mut out = Vec::new();
+    let Some(pl) = &design.placement else { return out };
+    for fp in &pl.footprints {
+        let Some(part) = model.part(&fp.id) else { continue };
+        let Some(footprint) = model.footprint_of(part) else { continue };
+        let extra = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id));
+        if legacy(design, fp, &footprint, extra) {
+            let Some(e) = extra else { continue };
+            out.extend(e.graphics.iter().filter(|g| g.pad_number.is_none() && copper(g.shape.layer())).map(|g| FpCopper::Shape(g.shape.clone())));
+            out.extend(e.texts.iter().filter(|t| copper(&t.layer)).map(|t| FpCopper::Text(t.clone())));
+            continue;
+        }
+        for s in &footprint.art.shapes {
+            let placed = s.placed(fp);
+            for layer in placed.all_layers().into_iter().filter(|l| copper(l)) {
+                let mut shape = placed.shape.clone();
+                shape.set_layer(layer.to_string());
+                out.push(FpCopper::Shape(shape));
+            }
+        }
+        let value = part.value.as_deref().unwrap_or(&fp.id);
+        let vars = TextVars { reference: &fp.id, value, footprint: part.footprint.as_deref().or(part.package.as_deref()).unwrap_or("") };
+        for t in &footprint.art.texts {
+            let p = t.placed(fp, &vars);
+            if p.text.is_empty() || !t.layout.visible || !copper(&p.layer) {
+                continue;
+            }
+            out.push(FpCopper::Text(FootprintText { text: p.text, layer: p.layer, at: p.at, angle_file_mdeg: p.angle, size: p.size, thickness: p.thickness, halign: p.halign, valign: p.valign, mirror: p.mirror, keep_upright: p.keep_upright, bold: p.bold }));
+        }
+    }
+    out
+}

@@ -98,6 +98,10 @@ fn a_symbol_with_several_body_styles_takes_no_alternates() {
         unit_count: 1,
         has_alternate_body_style: true,
         footprint_filters: vec![],
+        units_locked: None,
+        power_local: None,
+        exclude_from_sim: None,
+        exclude_from_pos_files: None,
     };
     b.apply(&props).unwrap();
     let said = refusal(&mut b, Cmd::AddSymbolPin { lib_id: "Lib:Mcu".into(), pin: pin("2", vec![alt("A", "input", "line")]) });

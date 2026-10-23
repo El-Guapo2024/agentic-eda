@@ -22,7 +22,7 @@ export function CleanupPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, {
   };
   return (
     <SchDialogShell title="Cleanup Sheet Pins" onCancel={close} onOk={submit} okLabel="Delete pins">
-      <p style={{ marginTop: 0 }}>Do you wish to delete the unreferenced pins from sheet &ldquo;{dialog.sheetName}&rdquo;?</p>
+      <p style={{ marginTop: 0 }}>Do you wish to delete the unreferenced pins from this sheet?</p>
       <ul style={{ margin: 0, paddingLeft: 18 }}>
         {dialog.pins.map((p) => (
           <li key={p.id}>{p.name}</li>

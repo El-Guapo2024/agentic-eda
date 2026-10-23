@@ -55,8 +55,8 @@ export function LabelDialog() {
 
   const [text, setText] = useState("");
   const [shape, setShape] = useState<LabelShape>("input");
-  // "" is no spin chosen: the label reads off the wire it ends at, as every label did before a spin could be picked
-  const [spin, setSpin] = useState<LabelSpinName | "">("");
+  // "" is "From the wire": the spin is read off the wire the label ends at when it is placed, and kept (KiCad's label always has a spin of its own)
+  const [spin, setSpin] = useState<LabelSpinName | "">("right");
   const [auto, setAuto] = useState(false);
   const [size, setSize] = useState(umToMm(1270));
   const [bold, setBold] = useState(false);
@@ -104,7 +104,7 @@ export function LabelDialog() {
       net: text,
       at: { x: pending.at[0], y: pending.at[1] },
       kind,
-      ...(spin ? { spin } : {}),
+      ...(spin || plainSpin ? { spin: (spin || plainSpin) as LabelSpinName } : {}),
       ...(sizeUm !== null && sizeUm !== 1270 ? { size_um: sizeUm } : {}),
       ...(bold ? { bold: true } : {}),
       ...(italic ? { italic: true } : {}),

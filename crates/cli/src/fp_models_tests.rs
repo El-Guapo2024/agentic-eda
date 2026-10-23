@@ -194,6 +194,8 @@ fn a_list_set_in_the_footprint_editor_reaches_the_board_with_the_footprint_and_a
             reference: None,
             value: None,
             fields: None,
+            datasheet: None,
+            description_field: None,
         },
         false,
         "test",
@@ -245,6 +247,7 @@ fn a_footprint_placed_from_the_project_library_brings_its_models() {
         zone_connection: None,
         thermal_spoke_angle_mdeg: None,
         stack: Default::default(),
+        kicad: Default::default(),
     });
     fp.models3d = two_models();
     fp.model = Some(fp.models3d[0].path.clone());

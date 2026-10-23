@@ -726,6 +726,22 @@ fn a_symbol_turned_while_it_is_held_turns_about_the_point_it_is_held_at() {
     assert_eq!((two.symbols[0].rot, two.symbols[0].mirrored, two.symbols[0].mirror_y), (270_000, false, true));
 }
 
+/// `SCH_EDIT_TOOL::Mirror` never reads the held selection's reference point (only Rotate does): two symbols held with the cursor on the first and
+/// mirrored left-right flip about the half-grid point nearest the selection's centre, so they trade places, and not about the cursor.
+#[test]
+fn a_held_selection_mirrors_about_its_centre_not_the_point_it_is_held_at() {
+    let mut s = section();
+    s.symbols.push(sym("R1", p(0, 25_400)));
+    s.symbols.push(sym("R2", p(25_400, 25_400)));
+    let cmd = SchMoveCmd::Move { ids: ids(&["R1", "R2"]), dx: 0, dy: 0, turns: vec![crate::sch_move::Turn::MirrorH], about: Some(p(0, 25_400)) };
+    let held = run_on(s.clone(), cmd);
+    let still = run_on(s, mirror(&["R1", "R2"], false));
+    let at = |sec: &eda_model::ir::SchematicSection| sec.symbols.iter().map(|x| (x.id.clone(), x.at)).collect::<Vec<_>>();
+    assert_eq!(at(&held), at(&still), "the same mirror whether held or not");
+    let r2 = held.symbols.iter().find(|x| x.id == "R2").unwrap();
+    assert!(r2.at.x < 25_400, "R2 crossed the centre: {:?}", r2.at);
+}
+
 #[test]
 fn a_drag_turned_while_it_is_held_turns_the_wires_it_brought_along() {
     let mut s = section();
@@ -925,4 +941,37 @@ fn an_image_moves_by_its_centre_and_turns_about_its_own() {
     assert_eq!(image_at(&turned), p(101_600, 63_500), "about its own centre");
     // the pixels and the scale stay
     assert_eq!(turned.extras.graphics[0].shape, s.extras.graphics[0].shape);
+}
+
+/// On a sheet this project drew (a symbol placed by the corner of its box), the editor's pins of a turned or mirrored symbol (`Scene::pins_of`: KiCad's
+/// `TRANSFORM` of the orientation) are where the writer bakes them and the tracer finds them (`eda_engine::placed::pin_points_in`), in every one of
+/// KiCad's orientations: what the user wires to is what kicad-cli connects.
+#[test]
+fn the_editor_s_pins_of_a_turned_symbol_are_the_writer_s_in_every_orientation() {
+    use eda_model::{Part, Pin, PinKind};
+    let part = |r: &str, n: usize| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("x".into()), package: None, footprint: None, symbol: None, datasheet: None, pins: (1..=n).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(), body_um: None, edge: None };
+    let mut m = ConstraintModel { parts: vec![part("R1", 2), part("U1", 6)], ..Default::default() };
+    m.parts[0].symbol = Some("Device:R".into());
+    let mut bad = Vec::new();
+    for (id, lib_id) in [("R1", "Device:R"), ("U1", "")] {
+        for rot in [0, 90_000, 180_000, 270_000] {
+            for (mirrored, mirror_y) in [(false, false), (true, false), (false, true)] {
+                let mut s = eda_model::ir::SchematicSection::default();
+                let mut x = sym(id, p(50_800, 50_800));
+                (x.lib_id, x.rot, x.mirrored, x.mirror_y) = (lib_id.into(), rot, mirrored, mirror_y);
+                s.symbols.push(x.clone());
+                let scene = Scene::new(&s, &m);
+                let mut editor = scene.pins_of(0);
+                editor.sort();
+                let pt = m.part(id).unwrap();
+                let resolved = m.real_symbol_of_instance(&s, &x, pt);
+                let mut writer = eda_engine::placed::pin_points_in(&s, &x, pt, resolved.as_ref());
+                writer.sort();
+                if editor != writer {
+                    bad.push(format!("{id} rot {rot} mirrored {mirrored} mirror_y {mirror_y}: editor {editor:?} writer {writer:?}"));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }

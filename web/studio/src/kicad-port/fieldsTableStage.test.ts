@@ -81,10 +81,10 @@ test("spec column ops mirror the staged ops", () => {
 
 test("field name validation and editability", () => {
   const s = spec();
-  assert.equal(validNewFieldName(s, "  "), "A field needs a name.");
-  assert.match(validNewFieldName(s, "Value") ?? "", /built-in/);
+  assert.equal(validNewFieldName(s, "  "), "Field must have a name.");
+  assert.equal(validNewFieldName(s, "Value"), "Field name 'Value' already in use.");
   assert.match(validNewFieldName(s, "${QUANTITY}") ?? "", /built-in/);
-  assert.match(validNewFieldName(s, "mpn") ?? "", /already exists/);
+  assert.equal(validNewFieldName(s, "mpn"), "Field name 'mpn' already in use.");
   assert.equal(validNewFieldName(s, "Tolerance"), null);
   assert.equal(isEditableColumn("Reference"), false);
   assert.equal(isEditableColumn("${QUANTITY}"), false);

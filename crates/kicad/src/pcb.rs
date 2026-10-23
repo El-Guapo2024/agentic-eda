@@ -111,6 +111,10 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
     for token in design.drawings.iter().flat_map(|d| d.setup_tokens.iter()) {
         writeln!(out, "\t\t{token}").unwrap();
     }
+    // KiCad 10's drill symbol profile (`formatDrillSymbolProfile`), when the board has one other than the default.
+    if let Some(p) = design.drawings.as_ref().and_then(|d| d.board_items.drill_profile.as_ref()) {
+        crate::drill_chart_io::write_profile(&mut out, p);
+    }
     // Zone Hatch Offsets (`formatSetup`'s `(zone_defaults (property (layer ..) (hatch_position (xy x y))))`), in `PCB_LAYER_ID` order, for the copper layers the board has.
     {
         let mut offsets: Vec<(&String, &eda_model::setup_pages::HatchOffset)> = model.board.hatch_offsets.iter().filter(|(l, o)| !o.is_zero() && model.board.layers.contains(l)).collect();
@@ -362,6 +366,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
 
         let mut vias: Vec<&Via> = routing.vias.iter().collect();
         vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
+        // Two vias of a net at one point (a microvia stack's, `PCB_VIA_STACK`) would mint one uuid: the second takes its layers into the seed.
+        let mut via_seeds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for v in &vias {
             let n = net_of("a via", &format!("{} at ({}, {})", v.net, v.at.x, v.at.y), &v.net);
             let x = mm(v.at.x);
@@ -369,7 +375,12 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
             let dia = mm(v.diameter);
             let drill = mm(v.drill);
             let lock = if is_locked(&v.id) { " (locked yes)" } else { "" };
-            let uuid = crate::duid_for(&format!("via:{}:{}:{}", v.net, v.at.x, v.at.y), &v.id);
+            let mut seed = format!("via:{}:{}:{}", v.net, v.at.x, v.at.y);
+            if !via_seeds.insert(seed.clone()) {
+                seed = format!("{seed}:{}:{}", v.from_layer, v.to_layer);
+                via_seeds.insert(seed.clone());
+            }
+            let uuid = crate::duid_for(&seed, &v.id);
             written.entry(v.id.clone()).or_default().push(uuid.clone());
             // The via's type and the tokens after its layers (`remove_unused_layers`, `tenting`, `padstack`, ..) as the file had them.
             let (kind, tokens) = crate::via_io::words(design.drawings.as_ref().and_then(|d| d.via_extra(&v.id)));
@@ -398,7 +409,12 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         let mut shapes: Vec<&Shape> = drawings.shapes.iter().collect();
         shapes.sort_by(|a, b| a.id().cmp(b.id()));
         for s in &shapes {
-            let uuid = write_shape(&mut out, s, is_locked(s.id()), drawings.board_items.hatch_of(s.id()));
+            let style = drawings.board_items.style_of(s.id());
+            let net = match style.and_then(|st| st.net.as_deref()) {
+                Some(name) => net_of("a copper shape", &format!("{name} on {}", s.layer()), name),
+                None => 0,
+            };
+            let uuid = write_shape(&mut out, s, is_locked(s.id()), style, net);
             written.entry(s.id().to_string()).or_default().push(uuid);
         }
         let mut texts: Vec<&Text> = drawings.texts.iter().collect();
@@ -419,7 +435,11 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         let mut tables: Vec<&eda_model::table::Table> = drawings.tables.iter().collect();
         tables.sort_by(|a, b| a.id.cmp(&b.id));
         for t in &tables {
-            let uuid = crate::pcb_table::write(&mut out, t, is_locked(&t.id));
+            // A table that is a drill chart is written as one (`format( const PCB_GENERATED_TABLE* )`).
+            let uuid = match drawings.board_items.drill_charts.iter().find(|c| c.table_id == t.id) {
+                Some(c) => crate::drill_chart_io::write_chart(&mut out, t, c, is_locked(&t.id)),
+                None => crate::pcb_table::write(&mut out, t, is_locked(&t.id)),
+            };
             written.entry(t.id.clone()).or_default().push(uuid);
         }
         // `PCB_DIMENSION_BASE`: the geometry and the text are worked out in one place
@@ -465,6 +485,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         write_groups(&mut out, &groups, &written, &|g| crate::duid_for(&format!("group:{}", g.id), &g.id), &is_locked);
         // ... and the generators after them (`PCB_IO_KICAD_SEXPR::format( BOARD )` writes them last): the tuning patterns.
         crate::pcb_generated::write_generated(&mut out, &drawings.tuning_patterns, &written, &|p| crate::duid_for(&format!("generated:{}", p.id), &p.id), &is_locked);
+        // KiCad 10's via stitchings, generators too.
+        crate::via_stitch_io::write_all(&mut out, &drawings.board_items.via_stitches, &written, &|v| crate::duid_for(&format!("generated:{}", v.id), &v.id), &is_locked);
     }
 
     // The items nothing reads (a text box, a reference image, a target ..), as the file had them.
@@ -1347,10 +1369,16 @@ pub(crate) fn write_footprint(
 /// PCB_SHAPE*)`: stroke width and type first, `fill` only for the three
 /// shapes KiCad actually fills (rect/circle/poly -- a line or an arc has no
 /// interior, and KiCad's own writer never emits `fill` for either).
-pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: Option<eda_model::pcb_items::HatchKind>) -> String {
+///
+/// `style` is what the board keeps of the shape beyond `Shape` ([`eda_model::pcb_items::ShapeStyle`]): its hatch, its line endings (`(start_shape ..)` and `(end_shape ..)`
+/// after the stroke, `LINE_ENDING::Format`; an open shape's only) and its net, which `net` has already turned into the file's number (0 is none: `GetNetCode() > 0`).
+pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: Option<&eda_model::pcb_items::ShapeStyle>, net: usize) -> String {
     let sw = |w: Um| mm(w.max(0));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
-    let layer = sexpr_str(shape.layer());
+    let hatch = style.and_then(|st| st.hatch);
+    let ends = style.map(|st| crate::line_ending_io::words(&st.endings, matches!(shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. }))).unwrap_or_default();
+    // `(net ..)` after the layer, before the uuid.
+    let layer = if net > 0 { format!("(layer {}) (net {net})", sexpr_str(shape.layer())) } else { format!("(layer {})", sexpr_str(shape.layer())) };
     // `(fill yes)`, `(fill no)` or `(fill hatch)`, `(fill reverse_hatch)`, `(fill cross_hatch)`: a solid fill wins over a hatch.
     let fill = |filled: bool| match (filled, hatch) {
         (true, _) => "yes",
@@ -1362,7 +1390,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: 
         Shape::Segment { stroke_width, start, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)){lock} (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -1370,7 +1398,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: 
         Shape::Arc { stroke_width, start, mid, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)){lock} (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(mid.x), mm(mid.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -1378,7 +1406,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: 
         Shape::Rect { stroke_width, filled, start, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -1386,7 +1414,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: 
         Shape::Circle { stroke_width, filled, center, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
                 mm(center.x), mm(center.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -1396,13 +1424,13 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: 
             for p in pts {
                 write!(out, " (xy {} {})", mm(p.x), mm(p.y)).unwrap();
             }
-            writeln!(out, ") (stroke (width {}) (type solid)) (fill {}){lock} (layer {layer}) (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
+            writeln!(out, ") (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
         }
         // `case SHAPE_T::BEZIER:` -- `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)) ...)`; like a line, never filled.
         Shape::Bezier { stroke_width, start, c1, c2, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type solid)){lock} (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(c1.x), mm(c1.y), mm(c2.x), mm(c2.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -3389,6 +3417,24 @@ mod tests {
         let (made, made_model) = fixture();
         let plain = export_kicad_pcb(&made, &made_model, &meta()).unwrap();
         assert!(plain.contains("(layers \"F.Cu\" \"F.Paste\" \"F.Mask\")") && plain.contains("(layers \"B.Cu\" \"B.Paste\" \"B.Mask\")"), "{plain}");
+    }
+
+    /// A microvia stack (`PCB_VIA_STACK`) puts two vias of one net at one point: each is written with a uuid of its own (KiCad's `via_generators` QA board came back
+    /// with one uuid for both, and the stack's members named the wrong via).
+    #[test]
+    fn two_vias_of_a_net_at_one_point_get_two_uuids() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (via micro (at 20 10) (size 0.3) (drill 0.15) (layers "F.Cu" "In1.Cu") (net "GND") (uuid "00000000-0000-0000-0000-000000000001"))
+  (via micro (at 20 10) (size 0.3) (drill 0.15) (layers "In1.Cu" "In2.Cu") (net "GND") (uuid "00000000-0000-0000-0000-000000000002"))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let uuids: Vec<&str> = out.lines().filter(|l| l.contains("(via micro")).filter_map(|l| l.split("(uuid \"").nth(1)).collect();
+        assert_eq!(uuids.len(), 2, "{out}");
+        assert_ne!(uuids[0], uuids[1], "{out}");
     }
 
     /// A via keeps what its tokens say beyond its position, size, drill, layers and net: its type, the mode of the layers it does not connect, `free`, the zone layer

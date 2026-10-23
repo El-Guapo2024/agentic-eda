@@ -6,7 +6,7 @@
 // angle it stores, which a turned symbol's own transform turns again; the position is the sheet's, as KiCad's `m_field->GetPosition()` is). No font face and no colour:
 // the drawing model has no place for either. The text of a sheet's file is edited from Sheet Properties, as KiCad's dialog disables it too.
 import { useState } from "react";
-import { fieldSizeUm, fieldEditCmd, findField, isStandardSymbolField, FIELD_SIZE_MAX_UM, FIELD_SIZE_MIN_UM, type FieldChanges } from "../kicad-port/schFieldEdit";
+import { fieldDialogCaption, fieldSizeUm, fieldEditCmd, findField, isStandardSymbolField, FIELD_SIZE_MAX_UM, FIELD_SIZE_MIN_UM, type FieldChanges } from "../kicad-port/schFieldEdit";
 import { mmToUm, umToMm } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
@@ -52,7 +52,8 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
   const sizeOk = sizeUm !== null && sizeUm >= FIELD_SIZE_MIN_UM && sizeUm <= FIELD_SIZE_MAX_UM;
   const textFixed = field.name === "Sheetfile" || (owner === "power" && field.name === "Reference");
   // A reference, a value, a sheet's name cannot be emptied (`FIELD_VALIDATOR`); a footprint, a datasheet and a user-defined field of a symbol can
-  const textOk = textFixed || field.name === "Footprint" || field.name === "Datasheet" || (owner === "symbol" && !isStandardSymbolField(field.name)) || text.trim().length > 0;
+  // a symbol's Value has no validator in `DIALOG_FIELD_PROPERTIES::init`, like its Footprint, Datasheet and user fields: only the Reference must not be empty
+  const textOk = textFixed || field.name === "Footprint" || field.name === "Datasheet" || (owner === "symbol" && (field.name === "Value" || !isStandardSymbolField(field.name))) || text.trim().length > 0;
   const canOk = sizeOk && xUm !== null && yUm !== null && textOk;
   const submit = () => {
     if (!canOk) return;
@@ -74,7 +75,7 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
     void api.cmd(cmd).then((ok) => ok && close());
   };
   return (
-    <SchDialogShell title={`Edit ${field.name} Field`} width={440} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
+    <SchDialogShell title={fieldDialogCaption(field.name, owner === "sheet")} width={440} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <div className="kv-grid" style={{ gridTemplateColumns: "130px 1fr" }}>
         <span>{field.name}:</span>
         <input autoFocus disabled={textFixed} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} title={textFixed ? "Edited from the properties of the item" : undefined} />

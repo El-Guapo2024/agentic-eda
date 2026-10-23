@@ -87,12 +87,24 @@ pub(crate) fn point_json(p: &PcbPoint) -> Value {
     json!({ "id": p.id, "layer": p.layer, "x": p.at.x, "y": p.at.y, "size": p.size_um })
 }
 
-/// Add the new item kinds to the `drawings` object of the state, and the hatch of the shapes `drawings["shapes"]` already lists.
+/// Add the new item kinds to the `drawings` object of the state, and the hatch, line endings and net of the shapes `drawings["shapes"]` already lists.
 pub(crate) fn extend(drawings: &mut Value, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, d: &DrawingsSection, tv: &PcbShown) {
     drawings["text_boxes"] = Value::Array(d.board_items.text_boxes.iter().map(|t| text_box_json(t, tv)).collect());
     drawings["images"] = Value::Array(d.board_items.images.iter().map(image_json).collect());
     drawings["points"] = Value::Array(d.board_items.points.iter().map(point_json).collect());
     drawings["barcodes"] = Value::Array(d.barcodes.iter().map(|b| barcode_json(b, tv)).collect());
+    drawings["grid_items"] = Value::Array(d.board_items.grid_items.iter().map(grid_item_json).collect());
+    // KiCad 10's via stitchings, as the model has them (what `set_via_stitch` takes back): the outline as `{x, y}` points, micrometres.
+    drawings["via_stitches"] = Value::Array(d.board_items.via_stitches.iter().map(|v| serde_json::to_value(v).unwrap_or(Value::Null)).collect());
+    // KiCad 10's drill charts (what makes a table one), drill maps and drill symbol profile, as the model has them; and, when the board has a map, the mark of every hole
+    // (`ResolveDrillSymbolsByItem`) and the spans a map can show (`EnumerateDrillSpans`), which the canvas draws and the Properties panel offers.
+    drawings["drill_charts"] = serde_json::to_value(&d.board_items.drill_charts).unwrap_or(Value::Null);
+    drawings["drill_maps"] = serde_json::to_value(&d.board_items.drill_maps).unwrap_or(Value::Null);
+    drawings["drill_profile"] = serde_json::to_value(d.board_items.drill_profile.clone().unwrap_or_default()).unwrap_or(Value::Null);
+    if !d.board_items.drill_maps.is_empty() {
+        drawings["drill_marks"] = serde_json::to_value(eda_ops::drill_chart::marks(design, model)).unwrap_or(Value::Null);
+        drawings["drill_spans"] = serde_json::to_value(eda_ops::drill_chart::spans(design, model)).unwrap_or(Value::Null);
+    }
     hatch_json(drawings, design, model, d);
 }
 
@@ -131,10 +143,53 @@ fn hatch_json(drawings: &mut Value, design: &eda_model::ir::Design, model: &eda_
     }
     let Some(Value::Array(shapes)) = drawings.get_mut("shapes") else { return };
     for (json, shape) in shapes.iter_mut().zip(&d.shapes) {
+        endings_json(json, shape, &d.board_items);
         let Some(kind) = d.board_items.hatch_of(shape.id()).filter(|_| !shape.is_filled()) else { continue };
         let hatching = eda_drc::hatch::hatching(design, Some(model), shape, kind);
         json["fill"] = json!(kind.token());
         json["hatch_width"] = json!(hatching.width);
         json["hatch_lines"] = Value::Array(hatching.lines.iter().map(|(a, b)| json!([a.x, a.y, b.x, b.y])).collect());
+    }
+}
+
+/// One grid item (KiCad 10's `PCB_GRID_ITEM`) as the canvas, the dialog and the Properties panel read it: its centre, its half-extent and pitch (micrometres; for a polar grid `x` is
+/// the radius and the radial pitch), its orientation and polar angles in degrees, its priority, major-tick interval and what it affects.
+pub(crate) fn grid_item_json(g: &eda_model::grid_item::GridItem) -> Value {
+    json!({
+        "id": g.id,
+        "kind": match g.kind { eda_model::grid_item::GridKind::Cartesian => "cartesian", eda_model::grid_item::GridKind::Polar => "polar" },
+        "x": g.at.x,
+        "y": g.at.y,
+        "extent": [g.extent.x, g.extent.y],
+        "spacing": [g.spacing.x, g.spacing.y],
+        "angle": g.angle,
+        "phi_extent": g.phi_extent_deg,
+        "phi_spacing": g.phi_spacing_deg,
+        "priority": g.priority,
+        "tick_interval": g.tick_interval,
+        "affects": { "cursor": g.affects.cursor, "routing": g.affects.routing, "placement": g.affects.placement },
+        "custom_properties": g.custom_properties,
+    })
+}
+
+/// One line ending as the canvas, the shape dialog and the Properties panel read it: `{ "style", "length", "width", "stroke_width" }` (micrometres; 0 is automatic).
+pub(crate) fn line_ending_json(e: &eda_model::line_ending::LineEnding) -> Value {
+    json!({ "style": e.style.token(), "length": e.length_um, "width": e.width_um, "stroke_width": e.stroke_width_um })
+}
+
+/// The line endings of an open shape (`start_ending`, `end_ending`, present when not none) and the net of a shape on copper (`net`). A closed shape's endings are not
+/// there: `EDA_SHAPE::GetStartEnding` gives a closed shape the blank one.
+fn endings_json(json: &mut Value, shape: &eda_model::ir::Shape, items: &eda_model::pcb_items::BoardItems) {
+    let Some(st) = items.style_of(shape.id()) else { return };
+    if !matches!(shape, eda_model::ir::Shape::Rect { .. } | eda_model::ir::Shape::Circle { .. } | eda_model::ir::Shape::Polygon { .. }) {
+        if !st.endings.start.is_none() {
+            json["start_ending"] = line_ending_json(&st.endings.start);
+        }
+        if !st.endings.end.is_none() {
+            json["end_ending"] = line_ending_json(&st.endings.end);
+        }
+    }
+    if let Some(net) = &st.net {
+        json["net"] = json!(net);
     }
 }

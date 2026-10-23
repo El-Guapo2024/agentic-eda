@@ -29,7 +29,11 @@ export function SymbolShapePropertiesDialog() {
   const close = () => dispatch({ type: "SET_SHAPE_DIALOG_ID", id: null });
   const ok = async () => {
     const edit = shapeEditOf(form, { unit: state.activeUnit, bodyStyle: state.activeBodyStyle });
-    if (await api.editGraphic(id, edit.strokeMm, edit.fill, { unit: edit.unit, bodyStyle: edit.bodyStyle })) close();
+    if (await api.editGraphic(id, edit.strokeMm, edit.fill, { unit: edit.unit, bodyStyle: edit.bodyStyle })) {
+      // `editShapeProperties`: `SetDrawSpecificBodyStyle( !dlg.GetApplyToAllConversions() )`, `SetDrawSpecificUnit( !dlg.GetApplyToAllUnits() )`
+      dispatch({ type: "SET_DRAW_SPECIFIC", unit: !form.commonUnits, bodyStyle: !form.commonBodyStyles });
+      close();
+    }
   };
   return (
     <div className="dialog-backdrop" onClick={close}>

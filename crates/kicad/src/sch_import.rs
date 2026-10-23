@@ -1942,10 +1942,14 @@ mod tests {
         assert_eq!(joined.junctions.len(), 1);
         assert_eq!(joined.junctions[0].at, cross);
 
-        assert!(text.contains("(polyline"), "{text}");
-        assert_eq!(joined.lines.len(), 1);
-        assert_eq!(joined.lines[0].pts, vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }]);
-        assert_eq!(joined.lines[0].width_um, 254);
+        // a line of three points is written as KiCad's line tool saves it, a polyline of two points per segment (KiCad reads a longer one as a polygon shape),
+        // and read back as those two lines
+        assert_eq!(text.matches("(polyline").count(), 2, "{text}");
+        assert_eq!(joined.lines.len(), 2);
+        let mut segs: Vec<Vec<Point>> = joined.lines.iter().map(|l| l.pts.clone()).collect();
+        segs.sort();
+        assert_eq!(segs, vec![vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }], vec![Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }]]);
+        assert!(joined.lines.iter().all(|l| l.width_um == 254));
         assert_eq!(joined.wires.len(), 2, "a graphic line is never read back as a wire");
     }
 

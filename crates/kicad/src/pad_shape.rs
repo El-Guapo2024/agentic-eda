@@ -9,7 +9,7 @@
 
 use crate::import::{graphic_shape, mm_to_um};
 use crate::sexpr::{self, Sexpr};
-use crate::{fmt_mm_f, mm};
+use crate::mm;
 use eda_model::footprint::{CustomZoneMode, PadAnchor, PadCustom, PadPrimitive, PadShape, PadShapeExt};
 use eda_model::ir::{ChamferCorners, Point, Shape, Side, Um};
 use std::fmt::Write as _;
@@ -173,11 +173,12 @@ pub(crate) fn write_pad_shape(shape: PadShape, roundrect_ratio: Option<f64>, ext
     }
     t.offset = ext.offset.filter(|o| *o != (0, 0)).map(|(x, y)| (if side == Side::Bottom { -x } else { x }, y));
     if matches!(shape, PadShape::RoundRect | PadShape::ChamferedRect) {
-        write!(t.corners, " (roundrect_rratio {})", fmt_mm_f(roundrect_ratio.unwrap_or(0.25))).unwrap();
+        // a ratio is `FormatDouble2Str`'s, not a length: 0.038462 stays 0.038462
+        write!(t.corners, " (roundrect_rratio {})", crate::fmt_double_2_str(roundrect_ratio.unwrap_or(0.25))).unwrap();
     }
     if shape == PadShape::ChamferedRect {
         // `PADSTACK` defaults: a chamfer of 0.2 of the shorter side.
-        write!(t.corners, " (chamfer_ratio {})", fmt_mm_f(ext.chamfer_ratio.unwrap_or(0.2))).unwrap();
+        write!(t.corners, " (chamfer_ratio {})", crate::fmt_double_2_str(ext.chamfer_ratio.unwrap_or(0.2))).unwrap();
         let c = if side == Side::Bottom { ext.chamfer_corners.mirrored_x() } else { ext.chamfer_corners };
         t.corners.push_str(" (chamfer");
         for (on, name) in [(c.top_left, "top_left"), (c.top_right, "top_right"), (c.bottom_left, "bottom_left"), (c.bottom_right, "bottom_right")] {

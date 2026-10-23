@@ -568,6 +568,17 @@ pub fn default_library_value_layout() -> FieldLayout {
     FieldLayout::new(Point { x: 0, y: 2000 }, "F.Fab")
 }
 
+/// Where a library footprint's Datasheet and Description fields are when the file has none of their own: `FOOTPRINT::FOOTPRINT`'s `addField( FIELD_T::DATASHEET,
+/// F_Fab, false )` -- hidden, at the origin, on the fabrication layer, in `EDA_TEXT`'s default size (1.27 mm) and its automatic pen (no thickness), which is what
+/// kicad-cli writes for them.
+pub fn default_library_datasheet_layout() -> FieldLayout {
+    let mut l = FieldLayout::new(Point { x: 0, y: 0 }, "F.Fab");
+    l.visible = false;
+    l.size = (1270, 1270);
+    l.thickness = 0;
+    l
+}
+
 /// The layout a new user field of a library footprint starts from (`DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnAddField`): hidden, at the origin, on the fabrication layer.
 pub fn new_library_field_layout() -> FieldLayout {
     let mut l = FieldLayout::new(Point { x: 0, y: 0 }, "F.Fab");

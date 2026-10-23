@@ -274,6 +274,23 @@ fn the_final_check_names_a_unit_the_library_symbol_does_not_have() {
     assert!(!report.messages.iter().any(|m| m.text == "Annotation complete."));
 }
 
+/// `CheckAnnotate` in the Selection scope looks at the selected symbols as the numbering left them (`getInferredSymbols`: the same objects), not at the references
+/// they had: a selected unit 3 of a two-unit part, numbered again, is still found and named by its new reference.
+#[test]
+fn the_final_check_of_a_selection_follows_the_symbols_it_renumbered() {
+    let m = ConstraintModel::default();
+    let mut d = two_chips();
+    d.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap().symbols.push(symbol("U7", "Test:Dual", "TL072", 3, p(0, 50)));
+    let b = Board::new(d, &m, 100, 300);
+    let opts = AnnotateOptions { scope: Some(AnnotateScope::Selection), ..Default::default() };
+    let report = b.annotate_report("sa", true, AnnotateOrder::YThenX, Some(&["U7".to_string()]), &opts).unwrap();
+    assert!(report.changed > 0, "U7 was numbered again: {:?}", report.messages);
+    let errors: Vec<&str> = report.messages.iter().filter(|m| m.severity == "error").map(|m| m.text.as_str()).collect();
+    assert_eq!(errors.len(), 1, "{:?}", report.messages);
+    assert!(errors[0].ends_with("(unit 3) exceeds units defined (2)") && !errors[0].contains("U7"), "{errors:?}");
+    assert!(!report.messages.iter().any(|m| m.text == "Annotation complete."));
+}
+
 #[test]
 fn power_symbols_are_numbered_with_the_schematic_and_a_leading_zero() {
     let m = ConstraintModel::default();

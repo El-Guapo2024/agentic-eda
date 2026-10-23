@@ -10,6 +10,8 @@ import { useEffect, useState } from "react";
 import type { Cmd } from "../api/types";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { canFill, fillOf, fillWidthError, SHAPE_FILL_CHOICES, type ShapeFill } from "../kicad-port/shapeFill";
+import { LINE_ENDING_CHOICES, LINE_ENDING_HELP, NO_ENDING, type LineEnding, type LineEndingStyle } from "../kicad-port/lineEnding";
+import type { CmdLineEnding } from "../api/pcbItemTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, formatXY, umFrom, umTo } from "../state/units";
 
@@ -32,6 +34,9 @@ export function ItemPropertiesDialog() {
   const [shapeWidth, setShapeWidth] = useState(0);
   const [shapeFill, setShapeFill] = useState<ShapeFill>("none");
   const [shapeError, setShapeError] = useState("");
+  // The line endings of a line, an arc or a curve (KiCad 10's Start and End rows of DIALOG_SHAPE_PROPERTIES): the style and the three sizes, in the dialog's units.
+  const [startEnding, setStartEnding] = useState<EndingFields>(endingFields(NO_ENDING, units));
+  const [endEnding, setEndEnding] = useState<EndingFields>(endingFields(NO_ENDING, units));
 
   // Populate the editable copies whenever the dialog opens on a
   // (possibly different) item -- not every render, or a mid-edit
@@ -46,6 +51,8 @@ export function ItemPropertiesDialog() {
       setShapeWidth(umTo(shape.stroke_width, units));
       setShapeFill(fillOf(shape));
       setShapeError("");
+      setStartEnding(endingFields(shape.start_ending ?? NO_ENDING, units));
+      setEndEnding(endingFields(shape.end_ending ?? NO_ENDING, units));
     }
     setWidth("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -117,6 +124,12 @@ export function ItemPropertiesDialog() {
                 <span>
                   <input type="number" step="any" value={shapeWidth} onChange={(e) => setShapeWidth(Number(e.target.value) || 0)} style={{ width: 90 }} /> {units}
                 </span>
+                {isOpenKind(shape.kind) && (
+                  <>
+                    <EndingRows label="Start" value={startEnding} onChange={setStartEnding} units={units} testid="start" />
+                    <EndingRows label="End" value={endEnding} onChange={setEndEnding} units={units} testid="end" />
+                  </>
+                )}
                 {canFill(shape.kind) && (
                   <>
                     <span>Fill</span>
@@ -134,6 +147,7 @@ export function ItemPropertiesDialog() {
               </>
             )}
           </div>
+          {shape && isOpenKind(shape.kind) && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, fontStyle: "italic", marginTop: 10 }}>{LINE_ENDING_HELP}</p>}
           {shape && shapeError && (
             <p style={{ color: "var(--chrome-error, #d33)", fontSize: 11, marginTop: 10 }} data-testid="shape-error">
               {shapeError}
@@ -179,6 +193,13 @@ export function ItemPropertiesDialog() {
                 // The layer and the line width as before, then the fill as one of the five choices: one undo step.
                 const cmds: Cmd[] = [{ op: "edit_shape", id, layer: shapeLayer, stroke_width, filled: shapeFill === "solid" }];
                 if (canFill(shape.kind) && shapeFill !== fillOf(shape)) cmds.push({ op: "pcb_item", verb: "set_shape_style", ids: [id], fill: shapeFill });
+                // The endings of an open shape, as `TransferDataFromWindow` sets them (`SetStartEndingStyle`, the sizes at 0 or more), when they changed.
+                if (isOpenKind(shape.kind)) {
+                  const start = endingCmd(startEnding, units);
+                  const end = endingCmd(endEnding, units);
+                  const changed = (a: CmdLineEnding, b: LineEnding | undefined) => JSON.stringify(a) !== JSON.stringify(endingCmd(endingFields(b ?? NO_ENDING, units), units));
+                  if (changed(start, shape.start_ending) || changed(end, shape.end_ending)) cmds.push({ op: "pcb_item", verb: "set_shape_style", ids: [id], start_ending: start, end_ending: end });
+                }
                 if (await api.cmdBatch(cmds)) close();
               }}
             >
@@ -199,5 +220,57 @@ export function ItemPropertiesDialog() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** The kinds a line ending goes on (`isOpenShape`: a line, an arc, a curve; this board's polygons are closed). */
+function isOpenKind(kind: string): boolean {
+  return kind === "segment" || kind === "arc" || kind === "bezier";
+}
+
+/** One side's controls as the dialog holds them: the style choice and Length, Width and Thickness in the dialog's units. */
+interface EndingFields {
+  style: LineEndingStyle;
+  length: number;
+  width: number;
+  thickness: number;
+}
+
+function endingFields(e: LineEnding, units: Parameters<typeof umTo>[1]): EndingFields {
+  return { style: e.style, length: umTo(e.length, units), width: umTo(e.width, units), thickness: umTo(e.stroke_width, units) };
+}
+
+/** `TransferDataFromWindow`: the style, and each size at 0 or more (`std::max( 0, .. )`). */
+function endingCmd(f: EndingFields, units: Parameters<typeof umFrom>[1]): CmdLineEnding {
+  const um = (v: number) => Math.max(0, Math.round(umFrom(v, units)));
+  return { style: f.style, length_um: um(f.length), width_um: um(f.width), stroke_width_um: um(f.thickness) };
+}
+
+/** The Start (or End) shape choice and its Length, Width and Thickness (`DIALOG_SHAPE_PROPERTIES::createLineEndingControls`). */
+function EndingRows({ label, value, onChange, units, testid }: { label: string; value: EndingFields; onChange: (f: EndingFields) => void; units: string; testid: string }) {
+  const num = (k: "length" | "width" | "thickness", caption: string) => (
+    <>
+      <span>{caption}</span>
+      <span>
+        <input type="number" step="any" min={0} value={value[k]} onChange={(e) => onChange({ ...value, [k]: Number(e.target.value) || 0 })} style={{ width: 90 }} data-testid={`${testid}-ending-${k}`} /> {units}
+      </span>
+    </>
+  );
+  return (
+    <>
+      <span>{label} Shape:</span>
+      <span>
+        <select value={value.style} onChange={(e) => onChange({ ...value, style: e.target.value as LineEndingStyle })} data-testid={`${testid}-ending-style`}>
+          {LINE_ENDING_CHOICES.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+      </span>
+      {num("length", "Length:")}
+      {num("width", "Width:")}
+      {num("thickness", "Thickness:")}
+    </>
   );
 }

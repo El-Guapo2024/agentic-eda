@@ -5,6 +5,7 @@ import { DEFAULT_PCB_MAGNETIC, type PcbMagnetic } from "./snapAnchors";
 import { buildScene, type SceneBoard } from "./snapScene";
 import { PT, type Pt } from "./snapGeom";
 import type { GridCategory } from "./gridOverrides";
+import { newGridItem } from "./gridItem";
 
 // View: 0.1 px per um, so 25 px is 250 um; a 1 mm grid, so the snap range is 250 um (the visible grid is larger) and the hysteresis of 5 px is 50 um:
 // an anchor is taken within 200 um (snapIn) and kept up to 300 um (snapOut).
@@ -297,4 +298,14 @@ test("a point is an anchor of its own: the cursor near it lands on it, off the g
   const { h: off } = make(board);
   off.visibility = { layerVisible: (l) => l !== "F.SilkS", highContrastLayers: null };
   near(off.bestSnapAnchor([10_200, 9_800], new Set(["B.SilkS"])), [10_000, 10_000]);
+});
+
+test("Align leaves a selected grid item out (FindActiveGridAt's grid->IsSelected()), not the ids an earlier move skipped", () => {
+  const g = { ...newGridItem(0, 0), id: "grd_a", extent: [5_000, 5_000] as [number, number], spacing: [300, 300] as [number, number] };
+  const { h } = make({ drawings: { shapes: [], texts: [], dimensions: [], grid_items: [g] } as never });
+  assert.deepEqual(h.align([610, 0]), [600, 0], "the grid item owns the snap");
+  h.bestSnapAnchor([610, 0], ACTIVE, "current", new Set(["grd_a"]));
+  assert.deepEqual(h.align([610, 0]), [600, 0], "a skip set of an earlier move is not remembered");
+  h.visibility = { ...visible, selected: new Set(["grd_a"]) };
+  assert.deepEqual(h.align([610, 0]), [1_000, 0], "selected: the editor grid");
 });

@@ -41,8 +41,8 @@ export function padCanHaveNumber(pad: Pick<LibraryPad, "kind">): boolean {
  *
  * so several selected pads are numbered consecutively, each continuing from the one
  * before. `existing` is the footprint's current pads (collision check), `lastPadNumber`
- * the pad tool's `m_lastPadNumber` (this editor seeds it from the highest-numbered
- * pad, see padNumbering.ts's header). Returns the new pads (no `id` -- the backend
+ * the pad tool's `m_lastPadNumber` ("1" until a pad is placed, see padNumbering.ts's
+ * header). Returns the new pads (no `id` -- the backend
  * assigns it) in selection order, plus the new last pad number.
  */
 export function duplicatePads(existing: readonly LibraryPad[], selected: readonly LibraryPad[], increment: boolean, lastPadNumber: string): { pads: LibraryPad[]; lastPadNumber: string } {

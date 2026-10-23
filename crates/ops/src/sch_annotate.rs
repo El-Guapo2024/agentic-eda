@@ -496,7 +496,23 @@ impl<'a> Board<'a> {
         let (_, renames, mut messages) = board.annotate_plan(reset, order, ids, opts);
         let changed = renames.len();
         board.annotate_apply(&renames, true);
-        let problems = board.annotation_problems(scope, ids, opts);
+        // `CheckAnnotate` looks again at the symbols of the selection (`getInferredSymbols`), the same objects the numbering renamed: the selection's
+        // references as they are now
+        let ids_after: Option<Vec<String>> = ids.map(|ids| {
+            let mut out: Vec<String> = Vec::new();
+            for id in ids {
+                let news: Vec<&String> = renames.iter().filter(|r| &r.old == id).map(|r| &r.new).collect();
+                if news.is_empty() {
+                    out.push(id.clone());
+                } else {
+                    out.extend(news.into_iter().cloned());
+                }
+            }
+            out.sort();
+            out.dedup();
+            out
+        });
+        let problems = board.annotation_problems(scope, ids_after.as_deref(), opts);
         for p in &problems {
             messages.push(AnnotateMessage { severity: "error", text: p.message.trim_end().to_string() });
         }

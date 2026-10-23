@@ -228,6 +228,33 @@ Tests: `crates/ops/src/sym_graphic_tests.rs` 4 (the scope boxes, a text box adde
 The proof against kicad-cli (`EDA_SLOW_TESTS=1`): a text box with no text plots exactly as the rectangle of its two corners (the start, the size and the Y-up mm are the file's own), three boxes of different looks (bold with a line break, vertical and italic with no border and a background fill, right-aligned with a margin of its own) load, `kicad-cli sym upgrade` keeps every one (text, corners, angle, size, bold, italic, alignment, margin, border, fill) and the plot of the file this studio wrote is the plot of KiCad's rewrite of it.
 **Left:** a placed symbol gets a text box as what the engine's symbol type can hold -- its border and fill as a rectangle -- but not its text (`SymbolGraphic` has no text box, and the `.kicad_sch` writer bakes each graphic through the instance's transform); a text box of a library file read for a placed symbol (`symbol_lib::parse_symbol_library`) is not read; the wrapping of the text differs from KiCad's by the stroke font's metrics in places.
 
+## P17 review: the Symbol Editor against KiCad's code and KiCad's own libraries (2026-10-23, `task-p17-review`)
+
+An adversarial review of the sections above against KiCad 8303b2ad, with a practical check: symbols of the installed libraries (`/usr/share/kicad-nightly/symbols`; each with the
+symbols it extends, as one library) read by the editor's reader (`parse_library_symbols`), written back by its writer (`export_kicad_sym_library_with`), and both re-saved by
+`kicad-cli sym upgrade --force`; KiCad's two writes are compared node by node (`crates/kicad/tests/library_roundtrip.rs`, slow tier). Before the fixes, of 92 symbols (37 derived,
+12 of several units) 78 were identical and 14 differed; after them, of 243 symbols (93 derived, 23 of several units, and the ones of known shapes: beziers, unit names, a private
+field, a power symbol, a symbol excluded from the position files) all 243 are identical.
+
+| Divergence found | Now | KiCad file:function |
+|---|---|---|
+| `ki_locked` (the units are not interchangeable) was read and dropped: 10 of the 92 symbols came back with interchangeable units | `LibrarySymbol::units_locked`, written after the fields; Symbol Properties' "All units are interchangeable" (on for several units only, `LockUnits( GetUnitCount() > 1 && !interchangeable )`); Synchronized Pins Mode starts off and stays off for such a symbol (`SynchronizePins`, `m_SyncPinEdit = IsMultiUnit() && !UnitsLocked()`); a new graphic is on the unit being edited only for it | `SaveSymbol`, `DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow`, `SYMBOL_EDIT_FRAME::SynchronizePins`, `SetDrawSpecificUnit` |
+| An item common to every body style (`Name_1_0`) was written into `Name_1_1` (and copied into `Name_1_2`) | one sub-symbol per unit and body style that has items, as `GetUnitDrawItems` sorts them | `SaveSymbol` |
+| `(power local)` was read as a power symbol and written `(power)`, a global one | `power_local`, written `(power local)` / `(power global)`; "Define as local power symbol" | `parseSymbol` (`T_power`), `SaveSymbol`, `SetLocalPower` |
+| `(exclude_from_sim ..)`, `(in_pos_files ..)`, `(duplicate_pin_numbers_are_jumpers ..)`, `(jumper_pin_groups ..)`, a unit's `(unit_name ..)` were dropped | kept and written; "Exclude from simulation" and "Exclude from position files" in Symbol Properties (checked and disabled for a power symbol, `onPowerCheckBox`); the jumpers and unit names are kept but not edited | `SaveSymbol`, `onPowerCheckBox` |
+| `(property private ..)` lost its flag; a graphic's stroke style (`solid` 830 times, `dash` 23 times in the libraries) became `default`; a text's pen, bold, italic, justification and hidden flag were dropped; a `(bezier ..)` was left out (98 in Auxiliary_Items, 4 in Device:Thermal_Jumper) | kept (`LibrarySymbolField::private`, `LibrarySymbolKeep::stroke_types`, `text_styles`, `items`) and written back; a bezier is not drawn or edited, and Move Symbol Anchor does not move it | `saveField`, `STROKE_PARAMS::Format`, `EDA_TEXT::Format` |
+| The writer's `(version 20231120)` reads a `~` as an empty text (before 20250318), so a datasheet `~` became empty; the reader took a pin name `~` for an empty one in any file | the writer's version is 20250324 and an empty pin name is `""`; the reader reads `~` as empty only in a file before 20250318 (a property's value, a pin's name and number) | `SCH_IO_KICAD_SEXPR_PARSER::parseProperty`, `parseSymbol` |
+| Symbol Properties' lower panel had its own words ("In BOM", "On board", "Show pin numbers", "Pin name offset (mm)", "Has alternate body style (DeMorgan)") and no "Place pin names inside" | KiCad's groups and words: General, Attributes (the four "Exclude from" boxes), Pin Text Options ("Show pin number", "Show pin name", "Place pin names inside" -- an offset of 0 is outside, and inside with 0 is 20 mils -- "Position offset:"), Symbol Units ("Number of units:", "All units are interchangeable"), Body Styles (single, De Morgan) | `DIALOG_LIB_SYMBOL_PROPERTIES_BASE`, `TransferDataToWindow`, `TransferDataFromWindow` |
+| Flatten took the excluded-from-BOM and -board flags of the nearest parent but not the simulation and position-file ones | all four | `LIB_SYMBOL::Flatten` |
+
+Left: the unit display names grid, the Pin Connections tab (jumpers) and custom body style names are not in the dialog (their values are kept in the file); a graphic's `private`
+flag and a stroke or fill colour are not kept; the order of a flattened symbol's fields is the parent's with the derived symbol's in place (KiCad removes the parent's field and appends
+the derived one, ordered by ordinal). The schematic's own files are `(version 20250114)`, where a `~` is still an empty text.
+
+Tests: `crates/kicad/tests/library_keep.rs` (the symbol cases), `crates/kicad/src/symbol_import.rs` `a_tilde_is_an_empty_text_in_a_file_before_20250318_and_itself_after`,
+`crates/ops/src/lib_keep_tests.rs` (`LockUnits`, the local power, `Flatten`'s flags), `kicad-port/symPinSync.test.ts`, the slow `crates/kicad/tests/library_roundtrip.rs`, and the scenario
+"Symbol Properties: All units are interchangeable ..." of `e2e/lib-editors.check.js`.
+
 ## Known gaps (not fixed, scope-bounded)
 
 - DeMorgan alternate body style: authorable, exported to `.kicad_sym`, and (since the schematic item 12 work) shown by a placed symbol.
@@ -241,8 +268,8 @@ The proof against kicad-cli (`EDA_SLOW_TESTS=1`): a text box with no text plots 
 - ~~Pin name offset (`pin_name_offset_mm`) is stored and exported but the canvas draws at the shared 0.508 mm~~ -- the Symbol Editor's canvas follows the symbol's offset since 2026-10-15 (names inside
   the body from the offset on, over the pin line at 0); the schematic's placed-instance renderer reads it from the symbol too.
 - "Push Pin Properties" has its entry points now (tool and right-click menu, section above).
-- A new graphic or text is always on the unit being edited (KiCad draws it on every unit unless the symbol's units are locked, `m_drawSpecificUnit`):
-  the library model has no "units interchangeable" flag.
+- ~~A new graphic or text is always on the unit being edited~~ -- since the P17 review (section "P17 review" below) it is on unit 0, common to all units, unless the
+  symbol's units are locked (`m_drawSpecificUnit = UnitsLocked()` when a symbol is loaded and after Symbol Properties) or Shape Properties last said "not common".
 - No live ghost/preview while a pin/shape tool is armed, before the first
   click -- same documented adaptation PARITY-sch.md's labels/power-symbol
   section already accepts for this app's "small-dialog-last" tool shape.

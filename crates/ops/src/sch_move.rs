@@ -638,10 +638,12 @@ fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um,
             if all.len() + scene.fields.len() == 1 {
                 match scene.fields.first().cloned() {
                     Some(f) => scene.mirror_field(&f, vertical),
-                    None => mirror_single(scene, all[0], vertical, about, grid),
+                    None => mirror_single(scene, all[0], vertical, grid),
                 }
             } else {
-                let center = about.unwrap_or_else(|| half_grid(selection_center(scene, &all, &scene.fields), grid));
+                // "VECTOR2I mirrorPoint = m_frame->GetNearestHalfGridPosition( selection.GetCenter() )": Mirror, unlike Rotate, never reads the reference
+                // point a held selection has, so a mirror while moving is about the selection's centre too
+                let center = half_grid(selection_center(scene, &all, &scene.fields), grid);
                 for &it in &all {
                     if let Item::SheetPin(s, _) = it {
                         if sheets.contains(&s) {
@@ -856,7 +858,8 @@ pub(crate) fn effective_spin(scene: &Scene, label: usize) -> LabelSpin {
     scene.sch.extras.label_spins.get(&l.id).copied().unwrap_or_else(|| inferred_spin(&scene.segs, l.at))
 }
 
-fn mirror_single(scene: &mut Scene, head: Item, vertical: bool, about: Option<Point>, grid: Um) {
+/// `SCH_EDIT_TOOL::Mirror`'s single-item switch: each kind about its own anchor or centre, never the held selection's reference point.
+fn mirror_single(scene: &mut Scene, head: Item, vertical: bool, grid: Um) {
     match head {
         Item::Symbol(i) => {
             // `SetOrientation( SYM_MIRROR_x )`, then `SetFieldsAutoplaced( AUTOPLACE_NONE )`
@@ -882,20 +885,18 @@ fn mirror_single(scene: &mut Scene, head: Item, vertical: bool, about: Option<Po
         Item::Sheet(i) => {
             // "Mirror the sheet on itself. Sheets do not have a anchor point."
             let s = &scene.sch.sheets[i];
-            let c = about.unwrap_or_else(|| half_grid(box_center((s.at, Point { x: s.at.x + s.size.0, y: s.at.y + s.size.1 })), grid));
+            let c = half_grid(box_center((s.at, Point { x: s.at.x + s.size.0, y: s.at.y + s.size.1 })), grid);
             mirror_item(scene, head, c, vertical, grid);
         }
         other => {
             // a line mirrors about its first point, anything else about its own anchor
-            let p = about.unwrap_or_else(|| {
-                if let Item::Seg(i) = other {
-                    let s = &mut scene.segs[i];
-                    if s.has(F_START) == s.has(F_END) {
-                        s.flags |= F_START | F_END;
-                    }
+            if let Item::Seg(i) = other {
+                let s = &mut scene.segs[i];
+                if s.has(F_START) == s.has(F_END) {
+                    s.flags |= F_START | F_END;
                 }
-                scene.position(other)
-            });
+            }
+            let p = scene.position(other);
             mirror_item(scene, other, p, vertical, grid);
         }
     }

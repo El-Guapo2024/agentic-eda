@@ -83,7 +83,8 @@ test("a pin moved along its border stays on it; one dragged past a corner goes t
 test("what the dialog sends: the name and the shape that changed, one verb", () => {
   const pin = { id: "shpin_l", name: "IN", shape: "input" as const };
   assert.equal(sheetPinEditCmd(pin, { name: "IN", shape: "input" }), null);
-  assert.equal(sheetPinEditCmd(pin, { name: "  IN  ", shape: "input" }), null, "the name is trimmed");
+  // `SetText( EscapeString( m_comboName->GetValue() ) )`: the name as typed, spaces and all
+  assert.deepEqual(sheetPinEditCmd(pin, { name: " IN", shape: "input" }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", name: " IN" });
   assert.deepEqual(sheetPinEditCmd(pin, { name: "SCL", shape: "input" }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", name: "SCL" });
   assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "bidirectional" }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", shape: "bidirectional" });
   assert.deepEqual(sheetPinEditCmd(pin, { name: "SCL", shape: "output" }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", name: "SCL", shape: "output" });
@@ -95,6 +96,9 @@ test("a pin's text look is set by Sheet Pin Properties: only what changed goes, 
   assert.equal(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeUm: 1270, bold: false, italic: false }), null, "the look it has is no change");
   assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeUm: 2000, bold: false, italic: false }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", size_um: 2000 });
   assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeUm: 1270, bold: true, italic: true }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", bold: true, italic: true });
+  // no size is refused: `SetTextSize` clamps it to 0.001 .. 250 mm
+  assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeUm: 500_000 }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", size_um: 250_000 });
+  assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeUm: 0.4 }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", size_um: 1 });
   const styled = { ...pin, size_um: 2000, bold: true };
   assert.equal(sheetPinEditCmd(styled, { name: "IN", shape: "input", sizeUm: 2000, bold: true, italic: false }), null);
   assert.deepEqual(sheetPinEditCmd(styled, { name: "IN", shape: "input", sizeUm: 1270, bold: false, italic: false }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", size_um: 1270, bold: false });

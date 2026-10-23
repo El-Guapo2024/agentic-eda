@@ -51,6 +51,29 @@ impl Board<'_> {
         Ok(())
     }
 
+    /// The Datasheet and Description rows of the grid: a layout the board's rules take (the rows' names are fixed).
+    pub(crate) fn check_library_info_fields(&self, footprint: &str, datasheet: Option<&FieldLayout>, description: Option<&FieldLayout>) -> Result<(), Vec<CheckResult>> {
+        if let Some(l) = datasheet {
+            self.check_layout(&format!("{footprint} Datasheet"), l)?;
+        }
+        if let Some(l) = description {
+            self.check_layout(&format!("{footprint} Description"), l)?;
+        }
+        Ok(())
+    }
+
+    /// Take the Datasheet and Description rows into the footprint (judged by [`Board::check_library_info_fields`]); a row left out stays as it is.
+    pub(crate) fn apply_library_info_fields(&mut self, name: &str, datasheet: Option<&FieldLayout>, description: Option<&FieldLayout>) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(name)?;
+        if let Some(l) = datasheet {
+            fp.datasheet = Some(l.clone());
+        }
+        if let Some(l) = description {
+            fp.description_field = Some(l.clone());
+        }
+        Ok(())
+    }
+
     /// Take the grid into the footprint (judged by [`Board::check_library_fields`]). The Reference's and the Value's visibility is the footprint's own
     /// (`reference_visible`, `value_visible`: the Show check boxes), a user field's its `visible`: the layouts say the same.
     pub(crate) fn apply_library_fields(&mut self, name: &str, reference: Option<&FieldLayout>, value: Option<&FieldLayout>, fields: Option<&[FootprintField]>) -> Result<(), Vec<CheckResult>> {

@@ -25,6 +25,10 @@ pub mod embedded;
 mod barcode_io;
 mod pcb_image;
 mod pcb_items_io;
+mod line_ending_io;
+mod grid_item_io;
+mod via_stitch_io;
+mod drill_chart_io;
 mod pcb_point;
 mod pcb_textbox;
 mod board_text_io;
@@ -281,6 +285,44 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         *n += 1;
         cache_names.insert((sym.id.clone(), sym.unit), format!("{bare}_{n}"));
     }
+    // Every symbol is written at angle 0 with its library symbol baked through its own turn and mirror, and the cache holds one entry per
+    // `lib_id`, baked through the first reference that uses it: another reference of that `lib_id` turned or mirrored otherwise would be drawn
+    // (and connected, by kicad-cli) the first one's way. Such a reference gets a copy of its own in the cache, baked through its own units, as a
+    // symbol whose pins Swap Pins moved does (KiCad's `SCH_SCREEN::Append` names a cache copy `<symbol>_<n>` and points the instance at it with
+    // `(lib_name ...)`); references that are turned alike share one copy.
+    let transform = |s: &SymbolInstance| (s.rot % 360_000, s.mirrored, s.mirror_y);
+    let mut representative_of: BTreeMap<String, &str> = BTreeMap::new();
+    for sym in &symbols {
+        representative_of.entry(sym_lib_id(sym)).or_insert(sym.id.as_str());
+    }
+    let mut shared_copies: BTreeMap<(String, Vec<(u32, (u32, bool, bool))>), String> = BTreeMap::new();
+    let mut references: Vec<&str> = symbols.iter().map(|s| s.id.as_str()).collect();
+    references.dedup();
+    for reference in references {
+        let units: Vec<&SymbolInstance> = symbols.iter().filter(|s| s.id == reference).copied().collect();
+        let lib_id = sym_lib_id(units[0]);
+        let rep = representative_of[&lib_id];
+        if rep == reference || units.iter().any(|u| cache_names.contains_key(&(u.id.clone(), u.unit))) {
+            continue;
+        }
+        let rep_units: Vec<&SymbolInstance> = symbols.iter().filter(|s| s.id == rep).copied().collect();
+        let default_baker = rep_units.iter().find(|s| s.unit == 1).copied().unwrap_or(rep_units[0]);
+        let baker = |unit: u32| rep_units.iter().find(|s| s.unit == unit).copied().unwrap_or(default_baker);
+        if units.iter().all(|u| transform(u) == transform(baker(u.unit))) {
+            continue;
+        }
+        let mut signature: Vec<(u32, (u32, bool, bool))> = units.iter().map(|u| (u.unit, transform(u))).collect();
+        signature.sort();
+        let name = shared_copies.entry((lib_id.clone(), signature)).or_insert_with(|| {
+            let bare = lib_id.rsplit(':').next().unwrap_or(&lib_id).to_string();
+            let n = cache_counts.entry(bare.clone()).or_insert(0);
+            *n += 1;
+            format!("{bare}_{n}")
+        });
+        for u in &units {
+            cache_names.insert((u.id.clone(), u.unit), name.clone());
+        }
+    }
 
     // ---- lib_symbols ----
     writeln!(out, "\t(lib_symbols").unwrap();
@@ -305,8 +347,12 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             write_power_lib_symbol(&mut out, lib_id, &resolved);
         }
     }
+    let mut written_copies: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for sym in &symbols {
         let Some(name) = cache_names.get(&(sym.id.clone(), sym.unit)) else { continue };
+        if !written_copies.insert(name.as_str()) {
+            continue; // a copy references turned alike share, or one a multi-unit reference's other unit wrote
+        }
         let instances: Vec<&SymbolInstance> = symbols.iter().filter(|s| s.id == sym.id).copied().collect();
         write_lib_symbol_entry(&mut out, name, &sym_lib_id(sym), &instances, parts_by_ref[sym.id.as_str()], model, Some((sch, sym.id.as_str())));
     }
@@ -409,8 +455,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let x = mm(ps.at.x);
         let y = mm(ps.at.y);
         let uuid = duid_for(&format!("pwr:{}", ps.id), &ps.id);
-        // KiCad turns counter-clockwise; the engine's `rot` runs the other way round
-        let angle = (360 - (ps.rot / 1000) as i64 % 360) % 360;
+        // `rot` is KiCad's angle (counter-clockwise on the sheet), as the reader reads it, the editor (`Matrix::of`) turns it and the painter draws it
+        let angle = (ps.rot / 1000) % 360;
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} {angle}) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
         writeln!(out, "\t\t(exclude_from_sim no) (in_bom no) (on_board no) (dnp no)").unwrap();
         if sch.extras.is_locked(&ps.id) {
@@ -541,20 +587,26 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         }
         writeln!(out, "\t)").unwrap();
     }
-    // Graphic lines on the notes layer (`I`, `SchLine`): `(polyline ...)`, decoration with no net.
+    // Graphic lines on the notes layer (`I`, `SchLine`): `(polyline ...)`, decoration with no net. One polyline of two points per segment, as KiCad's
+    // line tool saves its `SCH_LINE`s: the parser makes a line of a two-point polyline only (`else if( poly->GetPointCount() > 2 ) screen->Append( poly )`
+    // keeps a longer one as a polygon shape, which KiCad then selects, edits and reads for a label's spin as one shape).
     let mut lines: Vec<&eda_model::ir::SchLine> = sch.lines.iter().filter(|l| l.pts.len() >= 2).collect();
     lines.sort_by(|a, b| a.pts.cmp(&b.pts));
     for l in lines {
-        let pts: String = l.pts.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect();
-        let uuid = duid_for(&format!("sch_line:{pts}"), &l.id);
-        writeln!(out, "\t(polyline").unwrap();
-        writeln!(out, "\t\t(pts{pts})").unwrap();
-        writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(l.width_um, sch.extras.strokes.get(&l.id))).unwrap();
-        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
-        if sch.extras.is_locked(&l.id) {
-            writeln!(out, "\t\t(locked yes)").unwrap();
+        for (k, seg) in l.pts.windows(2).enumerate() {
+            let pts: String = seg.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect();
+            // the first segment keeps the uuid the whole line had
+            let seed = if k == 0 { format!("sch_line:{}", l.pts.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect::<String>()) } else { format!("sch_line:{pts}:{k}") };
+            let uuid = duid_for(&seed, &l.id);
+            writeln!(out, "\t(polyline").unwrap();
+            writeln!(out, "\t\t(pts{pts})").unwrap();
+            writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(l.width_um, sch.extras.strokes.get(&l.id))).unwrap();
+            writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+            if sch.extras.is_locked(&l.id) {
+                writeln!(out, "\t\t(locked yes)").unwrap();
+            }
+            writeln!(out, "\t)").unwrap();
         }
-        writeln!(out, "\t)").unwrap();
     }
 
     // Shapes, text boxes, rule areas and directive labels (`SchGraphic`).
@@ -1005,9 +1057,11 @@ fn baked_real_point(sym: &SymbolInstance, width_um: f64, x0: f64, y1: f64, p: ed
 /// turn adds its own angle (a symbol turned half a turn has every pin pointing
 /// the other way: a pin line that ran in from the left runs in from the right).
 fn baked_real_angle(sym: &SymbolInstance, angle_deg: f64) -> f64 {
-    let mirrored = if sym.mirrored { 180.0 - angle_deg } else { angle_deg };
-    // the instance's turn is clockwise on the sheet, which the library's y-up frame reads as the opposite sense
-    (mirrored - sym.rot as f64 / 1000.0).rem_euclid(360.0)
+    // KiCad's `TRANSFORM`: the turn (counter-clockwise on the sheet, so an angle of the library's y-up frame grows by it), then the left-right mirror
+    // (`angle -> 180 - angle`); a top-bottom mirror is folded into a half turn and a left-right one (`symgeom::kicad_turn`)
+    let (rot, mirrored) = eda_engine::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
+    let turned = angle_deg + rot as f64 / 1000.0;
+    (if mirrored { 180.0 - turned } else { turned }).rem_euclid(360.0)
 }
 
 /// [`write_symbol_graphic`]'s input, but with every point run through
@@ -1445,10 +1499,9 @@ fn local_stub_tip(port: &Port, lx: f64, ly: f64) -> (f64, f64) {
 /// `power_pin_not_driven` too) even though the wire in the file terminates
 /// at exactly the un-negated point -- KiCad is looking for it at `-y`.
 fn baked_local(sym: &SymbolInstance, width: f64, lx: f64, ly: f64) -> (f64, f64) {
-    let lx = if sym.mirrored { width - lx } else { lx };
-    let theta = (sym.rot as f64 / 1000.0) * std::f64::consts::PI / 180.0;
-    let rx = lx * theta.cos() - ly * theta.sin();
-    let ry = lx * theta.sin() + ly * theta.cos();
+    // the editor's and the painter's turn and mirror (KiCad's `TRANSFORM` about `at`): `eda_engine::symgeom::bake`
+    let (rot, mirrored) = eda_engine::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
+    let (rx, ry) = eda_engine::symgeom::bake(rot, mirrored, width, lx, ly);
     (rx / 1000.0, -ry / 1000.0)
 }
 

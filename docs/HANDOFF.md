@@ -45,6 +45,9 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | Router leftovers (10-23) | Springback, the four corner modes, virtual vias and copper text as an obstacle, reviewed against `pcbnew/router/`. Left: springback in the dragger (~200 lines) and the pair placer, the mark-obstacles hull snap, and keeping the previous head when the head cannot be resolved. |
 | Schematic details (10-23) | A pasted sheet shares its screen, buses across sheets, a label's own fields; reviewed against eeschema's code; 18 of KiCad's QA hierarchies trace as kicad-cli reads them. Left: a shared screen inside a shared screen (needs references keyed by the whole path), two buses joined by a shared member name, `${#}` per placement, 20 of 371 nets of `netlists/video`. PARITY-sch.md section 39. |
 | Router via actions (10-23) | Blind/buried and micro vias, Select Layer and Place, Custom Track/Via Size, Switch Posture, in the router's context. The nightly's DRC adds `microvia_crosses_core`, which KiCad 8303b2ad lacks: a microvia from an outer layer fails on KiCad's default 4-layer stackup. |
+| KiCad 10 items (10-23) | Line endings, grid items, via stitching, drill charts and maps, ported from KiCad 25ec2335 (`~/src/kicad-src-25ec2335`, the box kicad-cli's commit; 8303b2ad predates them) and reviewed against it. Drill charts match kicad-cli's rebuild exactly. Left: imperial drills (needs drills in nm), a footprint's copper fields as stitch obstacles, undoing a chart placement keeps its profile marks. PARITY-pcb.md section 50. |
+| Library editors review (10-23) | P3 and P17 against KiCad's code; KiCad's installed libraries round-trip through our readers and writers (164 footprints, 243 symbols, none differing beyond sub-µm rounding). `LibraryPad` has a new `kicad` field: older branches' literals need `Default::default()`. Left: the IR's µm (70 of 164 footprints round by up to 0.5 µm), a hidden fp_text, colours, `.kicad_mod` still written as 20240108. |
+| Schematic core review (10-23) | P4, P10 and P10b against eeschema's code. Turned and mirrored symbols now go through KiCad's TRANSFORM in the engine, the tracer and the writer; before, their pins were not where they were drawn. 87 of KiCad's 130 QA schematics written back are judged alike by kicad-cli's ERC and netlist (a ratchet). Left: sheet naming (kept together), nested shared screens, `${#}`. PARITY-sch.md section 40. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
@@ -55,7 +58,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-connectivity-parity` | The connectivity measure of `tools/parity_report.py` on a fixed set (no `work/` boards), kicad-cli on a copy with ignored checks turned on, counts capped at its error limits; arcs as one item, turned pads by their copper, unflashed pads and vias as their hole | Done: 546/558 (97.8%), floors reset to 186 boards and 97.8% | Sub-micrometre geometry (the IR is in micrometres), pads that share a number but not a net, copper graphics with a net, teardrops rebuilt by kicad-cli's Fill All (PARITY-pcb.md section 50) |
+| `task-connectivity-parity` | The connectivity measure of `tools/parity_report.py` on a fixed set (no `work/` boards), kicad-cli on a copy with ignored checks turned on, counts capped at its error limits; arcs as one item, turned pads by their copper, unflashed pads and vias as their hole | Done: 546/558 (97.8%), floors reset to 186 boards and 97.8% | Sub-micrometre geometry (the IR is in micrometres), pads that share a number but not a net, copper graphics with a net, teardrops rebuilt by kicad-cli's Fill All (PARITY-pcb.md section 51) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -73,9 +76,9 @@ Gates for any of them:
 5. **Details** listed in `GAPS.md`:
    - the router: ~~springback, rounded corners, virtual vias~~ on `task-router-details` (springback for the line placer only);
    - the schematic: copying and pasting whole sheets, buses across sheets, a label's own fields;
-   - KiCad 10 items the reader skips: line endings, grid items, via stitching, drill charts;
+   - ~~KiCad 10 items the reader skips~~ merged 2026-10-23;
    - browser checks for the older areas (P20);
-   - ~~re-running `tools/parity_report.py`~~ on `task-connectivity-parity`: the connectivity set is fixed (the examples and every `qa/data/pcbnew` board, never `work/`; 186 boards), and the port matches kicad-cli on 546 of 558 counts (97.8%; 96.6% on the new set before the fixes). It needs `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data` (or `KICAD_SRC_DIR`). `PARITY-pcb.md` section 50 lists the 12 left.
+   - ~~re-running `tools/parity_report.py`~~ on `task-connectivity-parity`: the connectivity set is fixed (the examples and every `qa/data/pcbnew` board, never `work/`; 186 boards), and the port matches kicad-cli on 546 of 558 counts (97.8%; 96.6% on the new set before the fixes). It needs `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data` (or `KICAD_SRC_DIR`). `PARITY-pcb.md` section 51 lists the 12 left.
 
 Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Python plugins, the autoplacer and the viewer windows (see `STALE-REASONS.md`); Hyperlynx and footprint-report export (no kicad-cli exporter, not even in the box's nightly; ask the user before porting them as was done for Specctra). IDFv3 and GenCAD are kicad-cli's (user, 2026-10-23: `task-cli-exports`), offered where the kicad-cli in use has the command and disabled with the reason where it has not.
 
