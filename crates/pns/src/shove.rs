@@ -35,10 +35,13 @@
 //!
 //! What differs, on purpose:
 //!
-//! - **No springback stack.** KiCad keeps the branches of
-//!   earlier shoves so an interactive drag can un-shove cheaply; this port is
-//!   driven one HTTP request per mouse sample and re-runs from the committed
-//!   world every time, so there is nothing to pop. The loop is bounded as
+//! - **The springback stack is the line placer's** ([`crate::springback`]):
+//!   KiCad's `SHOVE` keeps it (`m_nodeStack`) and `Run` starts from it; here a
+//!   shove is one call on a world, and the line placer keeps the frames,
+//!   reduces them before the call ([`shove_line_after`], [`shove_heads_after`]:
+//!   the frame's world and its area) and pushes the world the call left. The
+//!   dragger and the pair placer still shove from the world their gesture
+//!   started in (or the last fix left) on every move. The loop is bounded as
 //!   KiCad's is: the 250-iteration cap (`ShoveIterationLimit`) and the
 //!   one-second clock (`ShoveTimeLimit`, [`crate::time_limit::TimeLimit`]).
 //! - **Widths survive.** `SHOVE::assembleLine` calls `AssembleLine` with the
@@ -108,6 +111,9 @@ pub struct ShoveOutcome {
     /// The world the shove left, with the head removed (`SHOVE::CurrentNode()`
     /// after `removeHeads`) -- what the head is optimized against.
     pub world: Node,
+    /// `m_affectedArea`: the box round everything this shove changed (`replaceLine`, `replaceItems`), which `pushSpringback` merges into
+    /// the area of the frame it pushes ([`crate::springback`]).
+    pub area: Option<Area>,
 }
 
 /// One head of a multi-head shove (`SHOVE::AddHeads( aHead )`): the line, and the via it ends in if it does (`LINE::EndsWithVia`).
@@ -126,7 +132,7 @@ enum Status {
     TryWalk,
 }
 
-type Area = (Um, Um, Um, Um);
+pub(crate) type Area = (Um, Um, Um, Um);
 
 /// `SHOVE::Run`: `head.SetRank( 100000 )`.
 const HEAD_RANK: i32 = 100_000;
@@ -356,12 +362,16 @@ fn via_pushout_from(rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> 
 /// `max_iterations` is `ROUTING_SETTINGS::ViaForcePropIterationLimit`. `None` when it does not come free within that many
 /// steps, or an obstacle's MTV is zero ("force propagation has failed").
 pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, direction: (i64, i64), mask: u8, max_iterations: i32, exclude: &[ItemId]) -> Option<(i64, i64)> {
+    // `VIA::PushoutForce` asks `CheckColliding( this )`, and a virtual via collides with nothing
+    if via.is_virtual {
+        return Some((0, 0));
+    }
     let threshold = via.diameter / 4;
     let (mut pos, mut total) = (via.pos, (0i64, 0i64));
     let mut iter = 0;
     while iter < max_iterations {
         let circle = Shape::Circle { c: pos, r: via.diameter / 2 };
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false, box_hull: false };
         let obstacles = node.colliding_with(&circle, &via.net, via.layers, rules, exclude, opts);
         let Some(first) = obstacles.first() else { break };
         let force = via_pushout_from(rules, via, pos, node.get(first.id)?);
@@ -522,11 +532,14 @@ struct Shove<'a> {
     /// `SHOVE::ForceClearance( true, aClearance )` (`m_forceClearance`): the clearance every hull is built at, whatever the rules say.
     /// The pair placer shoves one line of a pair away from the other at the pair's gap.
     force_clearance: Option<Um>,
+    /// The area of the springback frame this shove starts from (`m_nodeStack.back().m_affectedArea`): `totalAffectedArea()` is it
+    /// merged with this shove's own, and that is where `runOptimizer` may straighten the shoved lines.
+    prior_area: Option<Area>,
 }
 
 impl<'a> Shove<'a> {
     fn new(world: &'a Node, rules: &'a BoardRules, settings: &'a RoutingSettings) -> Self {
-        Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new(), force_clearance: None }
+        Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new(), force_clearance: None, prior_area: None }
     }
 
     fn clearance(&self, a: &Net, b: &Net) -> Um {
@@ -580,7 +593,8 @@ impl<'a> Shove<'a> {
 
     /// `SHOVE::assembleLine`: a line of one width, stopping in front of a locked segment.
     fn assemble(&self, seg: ItemId) -> Option<SLine> {
-        let mut line = self.node.assemble_line_with(seg, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false })?;
+        // `m_currentNode->AssembleLine( aSeg, aIndex, true )`: stopping at a locked joint (the ends of the line placer's head, `LockJoint`)
+        let mut line = self.node.assemble_line_with(seg, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: true })?;
         // `NODE::AssembleLine` does not link vias: a line ends in a via only when
         // a push made it a tadpole.
         line.via_at_start = None;
@@ -758,6 +772,10 @@ impl<'a> Shove<'a> {
 
     /// Does the via collide with the line (its tracks and its own via)?
     fn via_vs_line(&self, v: &Via, l: &SLine) -> bool {
+        // "virtual items cannot collide" (`NODE::Collide`)
+        if v.is_virtual {
+            return false;
+        }
         let circle = Shape::Circle { c: v.pos, r: v.diameter / 2 };
         if !same_net(&v.net, &l.line.net) && l.line.layer >= v.layers.start() && l.line.layer <= v.layers.end() {
             let clearance = self.clearance(&v.net, &l.line.net);
@@ -765,7 +783,7 @@ impl<'a> Shove<'a> {
                 return true;
             }
         }
-        if let Some(lv) = &l.via {
+        if let Some(lv) = l.via.as_ref().filter(|lv| !lv.data.is_virtual) {
             if !same_net(&v.net, &lv.data.net) {
                 let clearance = self.clearance(&v.net, &lv.data.net);
                 if (Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }).collides(&circle, clearance).is_some() {
@@ -802,7 +820,7 @@ impl<'a> Shove<'a> {
     /// `ITEM::Collide` between two items of the node (different nets, shapes within clearance).
     fn items_collide(&self, a: ItemId, b: ItemId) -> bool {
         let (Some(ia), Some(ib)) = (self.node.get(a), self.node.get(b)) else { return false };
-        if same_net(ia.net(), ib.net()) || !ia.layers().overlaps(&ib.layers()) {
+        if ia.is_virtual() || ib.is_virtual() || same_net(ia.net(), ib.net()) || !ia.layers().overlaps(&ib.layers()) {
             return false;
         }
         // An Edge.Cuts graphic on either side asks for the board's edge clearance, not a net class's.
@@ -1067,6 +1085,7 @@ impl<'a> Shove<'a> {
         let walked: Option<(SLine, i32)> = {
             let cluster = self.node.assemble_cluster(obstacle, cur.line.layer, 10.0, None, &|id| skip.contains(&id));
             let mut walker = Walker::new(&self.node, self.rules);
+            walker.corner_mode = self.settings.corner_mode;
             walker.arcs = cur.line.arcs.clone();
             walker.restrict_to_cluster(&cluster);
             walker.skip_items(skip.iter().copied());
@@ -1257,7 +1276,7 @@ impl<'a> Shove<'a> {
         let Some(obstacle_via) = self.via_item(via_id) else { return Status::Incomplete };
         if let Some(lv) = &cur.via {
             let clearance = self.get_clearance(&lv.data.net, &obstacle_via.net);
-            let hit = !same_net(&lv.data.net, &obstacle_via.net) && Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }.collides(&Shape::Circle { c: obstacle_via.pos, r: obstacle_via.diameter / 2 }, clearance).is_some();
+            let hit = !lv.data.is_virtual && !same_net(&lv.data.net, &obstacle_via.net) && Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }.collides(&Shape::Circle { c: obstacle_via.pos, r: obstacle_via.diameter / 2 }, clearance).is_some();
             if hit {
                 let next = self.line_rank(cur) - 1;
                 return self.on_colliding_via(Pusher::Line(cur), via_id, info, next);
@@ -1323,6 +1342,9 @@ impl<'a> Shove<'a> {
     /// `m_currentNode->CheckColliding( viaEnd )`.
     fn via_colliding_world(&self, via_id: ItemId) -> bool {
         let Some(Item::Via(v)) = self.node.get(via_id) else { return false };
+        if v.is_virtual {
+            return false;
+        }
         let shape = Shape::Circle { c: v.pos, r: v.diameter / 2 };
         self.node.first_colliding(&shape, &v.net, v.layers, self.rules, &[via_id]).is_some()
     }
@@ -1376,7 +1398,8 @@ impl<'a> Shove<'a> {
 
     fn nearest_for(&self, cur: &SLine, mask: u8) -> Option<NearestHit> {
         let exclude = cur.links();
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true };
+        // `NODE::NearestObstacle` reads the router's corner mode itself: box hulls in a 90-degree mode
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: self.settings.corner_mode.is_90() };
         self.node.nearest_obstacle(&cur.line, cur.via.as_ref().map(|v| &v.data), self.rules, &exclude, opts)
     }
 
@@ -1412,7 +1435,7 @@ impl<'a> Shove<'a> {
                     let mut vias_collide = false;
                     if let (Some(lv), Some(Item::Via(nv))) = (&current.via, self.node.get(ni)) {
                         let clearance = self.clearance(&nv.net, &lv.data.net);
-                        vias_collide = !same_net(&nv.net, &lv.data.net) && Shape::Circle { c: nv.pos, r: nv.diameter / 2 }.collides(&Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }, clearance).is_some();
+                        vias_collide = !lv.data.is_virtual && !same_net(&nv.net, &lv.data.net) && Shape::Circle { c: nv.pos, r: nv.diameter / 2 }.collides(&Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }, clearance).is_some();
                     }
                     if vias_collide {
                         self.on_colliding_via(Pusher::Line(&current), ni, &info, ni_rank + 1)
@@ -1515,12 +1538,17 @@ impl<'a> Shove<'a> {
             OptEffort::Low => (effort::MERGE_OBTUSE, 1),
             OptEffort::Medium | OptEffort::Full => (effort::MERGE_SEGMENTS, 2),
         };
-        // Smart pads need the 45-degree corner mode, the only one this router places in.
-        if self.settings.smart_pads {
+        // "Smart Pads is incompatible with 90-degree mode for now": `MITERED_45` or `ROUNDED_45`
+        if self.settings.smart_pads && !self.settings.corner_mode.is_90() {
             flags |= effort::SMART_PADS;
         }
         let max_width = self.optimizer_queue.iter().map(|l| l.line.width).max().unwrap_or(0);
-        let area = self.affected.map(|(x0, y0, x1, y1)| (x0 - max_width, y0 - max_width, x1 + max_width, y1 + max_width));
+        // `totalAffectedArea()`: the springback frame's area merged with this shove's
+        let total = match (self.prior_area, self.affected) {
+            (Some(p), Some(a)) => merge_area(Some(p), a),
+            (p, a) => p.or(a),
+        };
+        let area = total.map(|(x0, y0, x1, y1)| (x0 - max_width, y0 - max_width, x1 + max_width, y1 + max_width));
         for _ in 0..passes {
             self.optimizer_queue.reverse();
             for i in 0..self.optimizer_queue.len() {
@@ -1529,7 +1557,8 @@ impl<'a> Shove<'a> {
                 if root.is_some_and(|r| self.roots[r].is_head) || line.line.pts.len() < 2 {
                     continue;
                 }
-                let optimized = crate::optimizer::optimize_in_area(&line.line, &self.node, self.rules, &line.links(), flags, area);
+                let constraints = crate::optimizer::Constraints { area, corner_mode: self.settings.corner_mode, ..Default::default() };
+                let optimized = crate::optimizer::optimize_constrained(&line.line, &self.node, self.rules, &line.links(), flags, &constraints);
                 if optimized.pts != line.line.pts {
                     let mut new = SLine { line: optimized, via: line.via.clone(), rank: self.line_rank(&line) };
                     new.clear_links();
@@ -1546,7 +1575,7 @@ impl<'a> Shove<'a> {
         let raw = head.pts.clone();
         let ids = self.node.add_line(&head, None, false);
         if ids.is_empty() {
-            return Some(ShoveOutcome { head: raw.clone(), heads: vec![raw], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: self.node });
+            return Some(ShoveOutcome { head: raw.clone(), heads: vec![raw], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: self.node, area: None });
         }
         head.segment_ids = ids.clone();
         let mut head_line = SLine::new(head);
@@ -1703,7 +1732,7 @@ impl<'a> Shove<'a> {
                 }
             }
         }
-        ShoveOutcome { head, heads, displaced_lines, displaced_vias, world: self.node }
+        ShoveOutcome { head, heads, displaced_lines, displaced_vias, world: self.node, area: self.affected }
     }
 
     /// The IR tracks a set of the original world's segments belong to.
@@ -1744,7 +1773,7 @@ pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: 
 #[allow(clippy::too_many_arguments)]
 fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
     if raw.len() < 2 {
-        return Some(ShoveOutcome { head: raw.to_vec(), heads: vec![raw.to_vec()], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone() });
+        return Some(ShoveOutcome { head: raw.to_vec(), heads: vec![raw.to_vec()], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone(), area: None });
     }
     let mut head = Line::from_points(net.clone(), layer, width, raw.to_vec());
     head.arcs = arcs.to_vec();
@@ -1772,6 +1801,29 @@ pub fn shove_via(node: &Node, via_id: ItemId, to: Point, rules: &BoardRules, set
 /// empty, a pad it could not walk around, a track it could not push, or the iteration limit.
 pub fn shove_heads(node: &Node, heads: Vec<ShoveHead>, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
     Shove::new(node, rules, settings).run_heads(heads)
+}
+
+/// [`shove_line`] from a springback frame (`SHOVE::Run` after `reduceSpringback`: `m_currentNode = parent->Branch()`): `node` is the frame's
+/// world and `prior_area` its area, which the optimizer's restriction area takes in (`totalAffectedArea`). The outcome's displacement is
+/// against `node`; [`crate::springback::World::merge_shove`] makes it the frame's against the session's world.
+#[allow(clippy::too_many_arguments)] // `shove_line`'s query context plus the frame's area
+/// `head` may hold arcs (a rounded corner): they are kept where the shove leaves the head's points alone.
+pub fn shove_line_after(node: &Node, head: &Line, rules: &BoardRules, settings: &RoutingSettings, prior_area: Option<Area>) -> Option<ShoveOutcome> {
+    if head.pts.len() < 2 {
+        return shove_line(node, &head.pts, &head.net, head.layer, head.width, rules, settings);
+    }
+    let mut shove = Shove::new(node, rules, settings);
+    shove.prior_area = prior_area;
+    let mut head = head.clone();
+    head.clear_links();
+    shove.run(head)
+}
+
+/// [`shove_heads`] from a springback frame: see [`shove_line_after`].
+pub fn shove_heads_after(node: &Node, heads: Vec<ShoveHead>, rules: &BoardRules, settings: &RoutingSettings, prior_area: Option<Area>) -> Option<ShoveOutcome> {
+    let mut shove = Shove::new(node, rules, settings);
+    shove.prior_area = prior_area;
+    shove.run_heads(heads)
 }
 
 /// `SHOVE::ShoveObstacleLine( aCurLine, aObstacleLine, aResultLine )` after `ForceClearance( forced.is_some(), forced )`: the line
@@ -1963,7 +2015,7 @@ mod tests {
     fn a_locked_via_is_walked_around() {
         use crate::item::Via;
         let mut node = Node::new();
-        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: true }));
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: true, is_virtual: false }));
         let (rules, settings) = (rules(), RoutingSettings::default());
         let raw = vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];
         let out = shove_line(&node, &raw, &net_of("SIG"), 0, 200, &rules, &settings).expect("walks around");
@@ -1975,7 +2027,7 @@ mod tests {
     fn pushes_a_stitching_via_aside() {
         use crate::item::Via;
         let mut node = Node::new();
-        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: false }));
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: false, is_virtual: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
         let raw = vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];

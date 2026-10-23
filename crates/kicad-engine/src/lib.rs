@@ -362,6 +362,44 @@ pub fn cli_version(cli: &Path) -> String {
     })
 }
 
+/// The kinds `kicad-cli <scope> export` has, as its `--help` lists them: the choices in braces on the usage line (`Usage: pcb export [--help]
+/// {3dpdf,bom,...,specctra,...}`), else the first word of each line under "Subcommands:" (the help of an argparse without the brace list). A
+/// kicad-cli that does not answer has none.
+pub fn parse_export_kinds(help: &str) -> Vec<String> {
+    let usage = help.lines().find(|l| l.trim_start().starts_with("Usage:")).unwrap_or("");
+    if let (Some(a), Some(z)) = (usage.find('{'), usage.rfind('}')) {
+        if a < z {
+            return usage[a + 1..z].split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect();
+        }
+    }
+    help.lines()
+        .skip_while(|l| l.trim() != "Subcommands:")
+        .skip(1)
+        .take_while(|l| !l.trim().is_empty())
+        .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+        .collect()
+}
+
+/// Whether `kicad-cli <scope> export <kind>` exists in the kicad-cli at `cli`: one `kicad-cli <scope> export --help` per binary and scope per run
+/// of this program, its answer kept like [`cli_version`]'s. Not every kicad-cli has every exporter (`pcb export specctra` came into the 10.99
+/// nightlies after 10.99.0-5334), so a caller with a fallback of its own asks first.
+pub fn cli_has_export(cli: &Path, scope: &str, kind: &str) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), Vec<String>>>> = OnceLock::new();
+    let m = CACHE.get_or_init(Default::default);
+    let key = (cli.to_path_buf(), scope.to_string());
+    let cached = m.lock().ok().and_then(|g| g.get(&key).cloned());
+    let kinds = cached.unwrap_or_else(|| {
+        let mut cmd = cli_command(cli, None);
+        cmd.args([scope, "export", "--help"]);
+        let kinds = output_within(cmd, limit(VERSION_TIMEOUT)).map(|o| parse_export_kinds(&format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))).unwrap_or_default();
+        if let Ok(mut g) = m.lock() {
+            g.insert(key, kinds.clone());
+        }
+        kinds
+    });
+    kinds.iter().any(|k| k == kind)
+}
+
 // ----------------------------------------------------------- the derived files
 
 fn work_dir(work: &Path) -> Result<(), Vec<CheckResult>> {
@@ -438,6 +476,15 @@ fn write_project_with(work: &Path, stem: &str, design: &Design, model: &Constrai
         Some(local) => write_file(&prl, format!("{}\n", serde_json::to_string_pretty(&local).unwrap_or_default()))?,
         None => {
             let _ = std::fs::remove_file(&prl);
+        }
+    }
+    // The simulator's workbook, under the name the project's `schematic.ngspice.workbook_filename` gives it (`SIMULATOR_FRAME_UI::InitWorkbook` reads it from there).
+    if let Some(sch) = design.schematic.as_ref() {
+        if let (Some(text), Some(ng)) = (sch.extras.sim_workbook.as_ref(), sch.extras.ngspice.as_ref()) {
+            let name = Path::new(&ng.workbook_filename);
+            if !ng.workbook_filename.is_empty() && name.is_relative() && name.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+                write_file(&work.join(name), text)?;
+            }
         }
     }
     let dru = work.join(format!("{stem}.kicad_dru"));
@@ -1581,6 +1628,37 @@ pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &
     run_export(&cli, "pcb", kind, args, &pcb, &out_dir, DIR_KINDS.contains(&kind), pcb_ext_for(kind, args), &stem, root)
 }
 
+/// What kicad-cli prints on a Specctra export that worked: not a warning. (Read off kicad-cli 10.99 nightly 25ec2335f2; its Specctra job is later than the
+/// KiCad source this port follows, 8303b2ad, which has none.)
+const SPECCTRA_OK: &str = "Successfully created Specctra DSN file";
+
+/// `kicad-cli pcb export specctra -o <output> <board>` (File > Export > Specctra DSN..., `DSN::ExportBoardToSpecctraFile`) on `design`: the derived board
+/// written into `work` as for [`export_pcb`] (named `name`), kicad-cli run in `cwd`. `output` is passed as it is given, because KiCad names the design in
+/// the file by it (`(pcb <output>`, `m_pcbname = aFilename`): the studio's export runs in the folder of the file with the bare file name, `eda board
+/// export specctra -o FILE` in the caller's folder with FILE. The options are the ones `kicad-cli pcb export specctra --help` lists: `--output` and
+/// `--define-var`, which the derived project has no use for.
+///
+/// Returns the lines kicad-cli printed besides its success line: the warnings of `ExportBoardToSpecctraFile` (`wxLogWarning`, such as "Board outline is
+/// malformed. Run DRC for a full analysis."). A failure is kicad-cli's own words ("Failed to create output directory", the `IO_ERROR` text of `FromBOARD`).
+pub fn export_specctra(design: &Design, model: &ConstraintModel, work: &Path, name: &str, cwd: &Path, output: &str) -> Result<Vec<String>, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let (pcb, _) = export_board(design, model, work, &file_stem(name))?;
+    // kicad-cli runs in `cwd`, so the board it reads is named absolutely.
+    let pcb = std::fs::canonicalize(&pcb).unwrap_or(pcb);
+    let target = cwd.join(output);
+    // A file an earlier export left must not pass for this one's.
+    let _ = std::fs::remove_file(&target);
+    let mut cmd = cli_command(&cli, None);
+    cmd.current_dir(cwd).args(["pcb", "export", "specctra", "-o", output]).arg(&pcb);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+    let said: Vec<String> = [&out.stdout, &out.stderr].iter().flat_map(|b| String::from_utf8_lossy(b).lines().map(|l| l.trim().to_string()).collect::<Vec<_>>()).filter(|l| !l.is_empty()).collect();
+    if !out.status.success() || !target.is_file() {
+        let words = said.join("\n");
+        return Err(fail("kicad_cli_export", "specctra", if words.is_empty() { format!("kicad-cli pcb export specctra failed ({})", out.status) } else { words }));
+    }
+    Ok(said.into_iter().filter(|l| l != SPECCTRA_OK).collect())
+}
+
 /// `kicad-cli sch export <kind> [args...]` on `design`'s schematic, into
 /// `<root>/export/kicad/sch-<kind>/` (kinds: `netlist`, `bom`, `pdf`, `svg`,
 /// `dxf`, `ps`, `png`), named after the project like [`export_pcb`].
@@ -1591,6 +1669,44 @@ pub fn export_sch(design: &Design, model: &ConstraintModel, work: &Path, root: &
     let (sch, _) = export_schematic(design, model, work, &stem)?;
     let out_dir = root.join("export").join("kicad").join(format!("sch-{kind}"));
     run_export(&cli, "sch", kind, args, &sch, &out_dir, SCH_DIR_KINDS.contains(&kind), sch_ext(kind), &stem, root)
+}
+
+/// kicad-cli's two netlists the simulator reads (`crates/sim`): `--format spice` (the circuit, `NETLIST_EXPORTER_SPICE` with
+/// `OPTION_SIM_COMMAND`) and `--format kicadxml` (the symbols' fields and the nets' pins), of `design`'s schematic, in `<work>/sim/`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SimNetlists {
+    pub spice: String,
+    pub xml: String,
+    /// What kicad-cli said making the SPICE netlist (the exporter's reporter: a symbol without a model, a library not found).
+    pub messages: Vec<String>,
+}
+
+pub fn sim_netlists(design: &Design, model: &ConstraintModel, work: &Path, name: &str) -> Result<SimNetlists, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let stem = file_stem(name);
+    let (sch, _) = export_schematic(design, model, work, &stem)?;
+    let dir = work.join("sim");
+    std::fs::create_dir_all(&dir).map_err(|e| fail("kicad_engine_dir", "sim", e.to_string()))?;
+    let mut messages = Vec::new();
+    let mut texts = Vec::new();
+    for (format, ext) in [("spice", "cir"), ("kicadxml", "xml")] {
+        let out = dir.join(format!("{stem}.{ext}"));
+        let _ = std::fs::remove_file(&out);
+        let mut cmd = cli_command(&cli, None);
+        cmd.args(["sch", "export", "netlist", "--format", format, "-o"]).arg(&out).arg(&sch);
+        let run = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+        let text = std::fs::read_to_string(&out).map_err(|_| {
+            fail("kicad_cli_export", "netlist", format!("kicad-cli sch export netlist --format {format} failed: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr)))
+        })?;
+        if format == "spice" {
+            let said = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+            messages.extend(said.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string));
+        }
+        texts.push(text);
+    }
+    let xml = texts.pop().unwrap_or_default();
+    let spice = texts.pop().unwrap_or_default();
+    Ok(SimNetlists { spice, xml, messages })
 }
 
 /// Puts a BOM preset and a BOM format preset (the JSON KiCad keeps in a project's `schematic.bom_presets` / `schematic.bom_fmt_presets`) into the derived
@@ -1690,6 +1806,32 @@ pub fn bom_plugins_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_export_kinds_are_read_from_the_usage_line_or_the_subcommand_list() {
+        let nightly = "Usage: pcb export [--help] {3dpdf,bom,drill,specctra,step}\n\nExport utilities\n\nSubcommands:\n  3dpdf  Export PDF\n";
+        assert_eq!(parse_export_kinds(nightly), ["3dpdf", "bom", "drill", "specctra", "step"]);
+        let listed = "Usage: pcb export [-h] VAR\n\nSubcommands:\n  drill      Generate Drill Files\n  gerbers    Plot Gerbers\n\nOther\n";
+        assert_eq!(parse_export_kinds(listed), ["drill", "gerbers"]);
+        assert!(parse_export_kinds("").is_empty());
+        assert!(!parse_export_kinds(listed).iter().any(|k| k == "specctra"));
+    }
+
+    #[test]
+    fn the_export_probe_asks_each_kicad_cli_once_per_scope() {
+        let dir = std::env::temp_dir().join(format!("eda_kicad_engine_export_probe_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut env = Env::take();
+        // A kicad-cli without IDF (an older one) that counts how often it is asked.
+        let count = dir.join("asked");
+        env.set("FAKE_KICAD_ASKED", &count);
+        let cli = script(&dir, "no_idf.sh", "echo x >> \"$FAKE_KICAD_ASKED\"\necho 'Usage: pcb export [--help] {drill,gencad,gerbers,step}'");
+        assert!(!cli_has_export(&cli, "pcb", "idf"));
+        assert!(cli_has_export(&cli, "pcb", "gencad"));
+        assert_eq!(std::fs::read_to_string(&count).unwrap().lines().count(), 1, "one probe per binary and scope");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn top_level_forms_are_found_past_strings_and_comments_and_unbalanced_text_is_refused() {

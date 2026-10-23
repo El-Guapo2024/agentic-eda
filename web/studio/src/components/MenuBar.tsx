@@ -19,6 +19,8 @@ import { useActionRunner } from "../actions/useActionRunner";
 import { useChecked } from "../actions/useChecked";
 import { useStudioState } from "../state/store";
 import { HELP_MENU } from "../kicad-port/helpMenu";
+import { useCliExporters } from "../state/cliExporters";
+import { cliExporterReason } from "../kicad-port/cliExporters";
 
 const menusFile = menusData as MenusFile;
 /** The schematic editor's menus with this studio's own entries appended (kicad/menuExtras.ts). */
@@ -35,6 +37,7 @@ const actionsByName = new Map<string, KicadAction>(actionsFile.actions.map((a) =
 export function MenuNodeView({ node }: { node: MenuNode }) {
   const { run, isEnabled } = useActionRunner();
   const isChecked = useChecked();
+  const cliExporters = useCliExporters();
   if (node.type === "separator") return <div className="menu-separator" role="separator" />;
   if (node.type === "submenu") {
     return (
@@ -55,7 +58,9 @@ export function MenuNodeView({ node }: { node: MenuNode }) {
   // `node.disabled`: the menu's own condition for this entry (a context menu's Group when fewer than two items are selected).
   const enabled = isEnabled(node.action) && !node.disabled;
   const label = node.label ?? action?.label ?? node.action;
-  const tooltip = enabled ? action?.tooltip : `${action?.tooltip ?? ""}${isEnabled(node.action) ? "" : " (not ported yet)"}`.trim();
+  // An exporter the server's kicad-cli lacks says so (File > Export > IDFv3... on an older kicad-cli).
+  const missingExporter = cliExporterReason(node.action, cliExporters);
+  const tooltip = enabled ? action?.tooltip : (missingExporter ?? `${action?.tooltip ?? ""}${isEnabled(node.action) ? "" : " (not ported yet)"}`.trim());
   const hotkey = action ? effectiveHotkey(action).hotkey : null;
   // A toggle (View > Show Hidden Pins, Edit > Attributes > Do not Populate, the panes under View > Panels, Units ...) shows its state as a check mark; so does a
   // check item a context menu builds from data (the grids, the zoom presets, the router's corner mode).

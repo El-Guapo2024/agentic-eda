@@ -23,6 +23,12 @@
 //   tuner on arc  a track that is an arc is picked by the tuner (the line's length along the arc), a pattern is started on it and tuned to 24 mm through the arc, which stays an arc;
 //   delay        a net whose class names a tuning profile with the time domain on is tuned in picoseconds: the status box reads "current delay", the Tuning Pattern dialog has the Delay
 //                radio button and a target delay, the pattern is tuned to it within 0.2 ps and stored as a time domain one.
+//   corner mode  (Stage 10) the Track Corner Mode actions: arc 45 rounds the head's corner and commits it as an arc track, 90 routes axis legs,
+//                Ctrl+/ steps through the modes and the running route takes the new one;
+//   virtual via  (Stage 10) D at the end of a segment where three tracks meet drags the junction (its virtual via, `DRAGGER::checkVirtualVia`): every track
+//                follows, no via is drawn or committed, one Undo puts it back; in the middle the segment slides;
+//   springback   (Stage 10) in Shove mode a track the head pushed stays pushed, is pushed on from where it was left, and springs back once the head draws back off it; a click keeps the
+//                push and the next leg pushes on from it, Backspace takes the leg and its push back, and the finished route commits the track where the session left it in one undo step;
 //
 // It answers through `window.__routerLeftoversCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. Read it with `await __routerLeftoversCheck.wait(60000)` until
 // `.done`. In a hidden pane the browser stops timers; the script waits with a fetch loop. A run takes four or five minutes (a debug build of the server), longer than the Browser pane's javascript
@@ -601,6 +607,163 @@
     await E.run("common.Interactive.undo");
     await sleep(600);
     t(arcsOf(await state()).length === 1 && tracksOf(await state()).length === 3, "one Undo takes the pattern away and the fillet is as it was");
+  });
+
+  await scenario("springback: a pushed track stays pushed, is pushed on, springs back as the head draws back; a click keeps the push, Backspace takes it back", async (t) => {
+    // a PA4 stub ending at (21, 30) mm and a GND track across its way down x = 24 mm
+    await commit([line("PA4", "F.Cu", [[20000, 30000], [21000, 30000]]), line("GND", "F.Cu", [[24000, 27000], [24000, 33000]])]);
+    await E.run("pcbnew.InteractiveRouter.SingleTrack");
+    await E.run("pcbnew.InteractiveRouter.ShoveMode");
+    await sleep(300);
+    let n = replies.length;
+    await clickAt(21000, 30000);
+    const s = await waitReply("start", n);
+    t(s && s.body.ok === true && s.body.net === "PA4", `the route starts on the PA4 stub: ${s && JSON.stringify([s.body.ok, s.body.net])}`);
+    const pushedOf = (m) => (m ? m.body.displaced.filter((d) => d.pts.length > 0) : []);
+    const reach = (m) => Math.max(24000, ...pushedOf(m).flatMap((d) => d.pts.map((p) => p[0])));
+    const first = await moveTo(22000, 30000);
+    t(first && pushedOf(first).length === 0, `a short head touches nothing: ${first && JSON.stringify(first.body.displaced)}`);
+    const pushed = await moveTo(25000, 30000);
+    t(pushed && pushed.body.colliding === false && pushedOf(pushed).length === 1 && pushedOf(pushed)[0].layer === "F.Cu", `the head pushes the GND track: ${pushed && JSON.stringify(pushedOf(pushed).map((d) => d.pts.length))}`);
+    const gap = 100 + rules.clearance + 100;
+    t(reach(pushed) >= 25000 + gap - 2, `round the head's end, a clearance off it: ${reach(pushed)}`);
+    const further = await moveTo(26000, 30000);
+    t(further && reach(further) >= 26000 + gap - 2 && pushedOf(further).length === 1, `the head goes on and pushes it on from where it was: ${further && reach(further)}`);
+    const back = await moveTo(22000, 30000);
+    t(back && back.body.colliding === false && pushedOf(back).length === 0, `drawn back off it, the track springs back to where it was: ${back && JSON.stringify(back.body.displaced)}`);
+    const again = await moveTo(25000, 30000);
+    t(again && pushedOf(again).length === 1, "pushed again");
+    n = replies.length;
+    await clickAt(25000, 30000);
+    const fx = await waitReply("fix", n);
+    t(fx && fx.body.ok === true && fx.body.blocked === false, `a click fixes the leg: ${fx && JSON.stringify([fx.body.ok, fx.body.blocked])}`);
+    // the next leg down x = 25 mm runs into the track where the first leg left it: it is pushed on from there, and what the click kept is still pushed
+    let leg = null;
+    for (const y of [31000, 32000]) leg = await moveTo(25000, y);
+    t(leg && leg.body.colliding === false && pushedOf(leg).length === 1 && reach(leg) >= 25000 + gap - 2, `the second leg pushes the track on from the world the click left: ${leg && reach(leg)}`);
+    n = replies.length;
+    await E.run("pcbnew.InteractiveRouter.UndoLastSegment");
+    const un = await waitReply("undo_segment", n);
+    t(un && un.body.ok === true && un.body.popped === true, `Backspace takes the first leg back: ${un && JSON.stringify(un.body)}`);
+    const after = await moveTo(22000, 30000);
+    t(after && pushedOf(after).length === 0, `and its push with it: ${after && JSON.stringify(after.body.displaced)}`);
+    await moveTo(25000, 30000);
+    n = replies.length;
+    await clickAt(25000, 30000);
+    await waitReply("fix", n);
+    for (const y of [31000, 32000]) await moveTo(25000, y);
+    n = replies.length;
+    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await waitReply("finish", n);
+    await sleep(700);
+    const st = await state();
+    const gnd = tracksOf(st).filter((q) => q.net === "GND");
+    t(gnd.length >= 1 && gnd.some((q) => q.pts.some((p) => p[0] >= 25000 + gap - 2)), `the GND track is committed where the session left it: ${JSON.stringify(gnd.map((q) => q.pts))}`);
+    t(tracksOf(st).some((q) => q.net === "PA4" && q.pts.some((p) => p[0] === 25000 && p[1] === 32000)), "the route ends where the cursor was");
+    t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), `the gates find no clearance failure: ${JSON.stringify((st.checks ?? []).filter((c) => c.fail).map((c) => c.check))}`);
+    await E.run("common.Interactive.undo");
+    await sleep(600);
+    t(tracksOf(await state()).length === 2, "one Undo takes the route and the push away");
+  });
+
+  await scenario("Track Corner Mode: arc 45 rounds the head's corner and commits it as an arc track, 90 routes axis legs, Ctrl+/ steps through the four", async (t) => {
+    await commit([line("PA5", "F.Cu", [[5000, 30000], [6000, 30000]])]);
+    await E.run("pcbnew.InteractiveRouter.SingleTrack");
+    await E.run("pcbnew.InteractiveRouter.WalkaroundMode");
+    await sleep(300);
+    const route = async (corner, to) => {
+      // the Track Corner Mode actions are the router tool's (`AS_CONTEXT`): live only while it is active
+      if (E.state().tool !== "route") { await E.run("pcbnew.InteractiveRouter.SingleTrack"); await sleep(300); }
+      await E.run(corner);
+      await sleep(300);
+      const n = replies.length;
+      await clickAt(6000, 30000);
+      const s = await waitReply("start", n);
+      // along the row first, so the posture is straight-first
+      for (const [x, y] of [[7000, 30000], [8000, 30000], [9000, 29000], to]) await moveTo(x, y);
+      return { start: s, head: lastReply("move", n) };
+    };
+    const arc45 = await route("pcbnew.InteractiveRouter.SwitchRoundingArc45", [11000, 28000]);
+    t(arc45.start && arc45.start.req.settings && arc45.start.req.settings.corner_mode === "rounded_45", `the route starts with the corner mode: ${arc45.start && JSON.stringify(arc45.start.req.settings && arc45.start.req.settings.corner_mode)}`);
+    const pts = arc45.head && arc45.head.body.head;
+    t(!!pts && pts.length > 4 && nearPt(pts[0], [6000, 30000], 0) && nearPt(pts[pts.length - 1], [11000, 28000], 0), `the head's corner is an arc (the points of its polyline): ${pts && pts.length} points`);
+    let n = replies.length;
+    await clickAt(11000, 28000);
+    await waitReply("fix", n);
+    n = replies.length;
+    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await waitReply("finish", n);
+    await sleep(700);
+    let st = await state();
+    const arcs = arcsOf(st).filter((q) => q.net === "PA5");
+    t(arcs.length === 1 && nearPt(arcs[0].pts[arcs[0].pts.length - 1], [11000, 28000], 1), `the corner is committed as an arc track: ${JSON.stringify(arcs.map((q) => [q.pts[0], q.arc_mid, q.pts[q.pts.length - 1]]))}`);
+    t(tracksOf(st).some((q) => q.net === "PA5" && !q.arc_mid && nearPt(q.pts[0], [6000, 30000], 0)), "and the straight leg before it as a track");
+    t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), "the gates find no clearance failure");
+    await E.run("common.Interactive.undo");
+    await sleep(600);
+    t(tracksOf(await state()).length === 1, "one Undo takes the route away");
+    await leaveTool();
+    const ninety = await route("pcbnew.InteractiveRouter.SwitchRounding90", [11000, 28000]);
+    const p90 = ninety.head && ninety.head.body.head;
+    t(!!p90 && p90.length === 3 && p90.every((q, i) => i === 0 || q[0] === p90[i - 1][0] || q[1] === p90[i - 1][1]), `90 routes two axis legs: ${JSON.stringify(p90)}`);
+    // Ctrl+/ (SwitchRoundingToNext) from 90 is arc 90, then 45, the default again
+    const container = document.querySelector(".pcb-canvas-container");
+    const ctrlSlash = async () => { container.dispatchEvent(new KeyboardEvent("keydown", { key: "/", code: "Slash", ctrlKey: true, bubbles: true, cancelable: true })); await sleep(500); await quiet(); };
+    n = replies.length;
+    await ctrlSlash();
+    const set1 = replies.slice(n).find((r) => r.name === "settings");
+    t(!!set1 && set1.req.settings.corner_mode === "rounded_90", `Ctrl+/ steps 90 to arc 90 and the running route takes it: ${set1 && JSON.stringify(set1.req.settings.corner_mode)}`);
+    const again = lastReply("move", n);
+    t(!!again && again.body.head.length > 3, `the head is refreshed with a rounded corner: ${again && again.body.head.length} points`);
+    n = replies.length;
+    await ctrlSlash();
+    const set2 = replies.slice(n).find((r) => r.name === "settings");
+    t(!!set2 && set2.req.settings.corner_mode === "mitered_45", `and again to 45, the default: ${set2 && JSON.stringify(set2.req.settings.corner_mode)}`);
+    // `AS_CONTEXT`: outside the router tool the actions (and so their hotkeys, now in the action catalog) do nothing
+    await leaveTool();
+    const outside = await E.run("pcbnew.InteractiveRouter.SwitchRoundingArc90");
+    t(!!outside && outside.ok === false, `not in the selection tool: ${JSON.stringify(outside)}`);
+  });
+
+  await scenario("virtual vias: D at the end of a segment where tracks of two widths meet drags the junction, every track follows, no via is drawn or committed", async (t) => {
+    // a T of PA6 at (30, 10) mm whose stem is wider: no pad or via there and the width changes, so the router's world has a virtual via at it
+    // (`NODE::FixupVirtualVias`; a T of one width has none -- KiCad never counts `n_seg`)
+    await commit([line("PA6", "F.Cu", [[27000, 10000], [30000, 10000]]), line("PA6", "F.Cu", [[30000, 10000], [33000, 10000]]), { ...line("PA6", "F.Cu", [[30000, 10000], [30000, 13000]]), width: 300 }]);
+    for (const mode of ["pcbnew.InteractiveRouter.WalkaroundMode", "pcbnew.InteractiveRouter.ShoveMode"]) {
+      await E.run(mode);
+      await pointerTo(30000, 10000);
+      let n = replies.length;
+      await E.run("pcbnew.InteractiveRouter.Drag45Degree");
+      const s = await waitReply("drag_start", n);
+      t(s && s.body.ok === true && s.body.drag === "via" && s.body.virtual_via === true, `${mode}: D at the junction takes hold of its virtual via: ${s && JSON.stringify([s.body.ok, s.body.drag, s.body.virtual_via, s.body.message])}`);
+      const m = await moveTo(32000, 12000, "drag_move");
+      // the cursor as the studio's snapping put it
+      const to = m ? [Math.round(m.req.x), Math.round(m.req.y)] : [32000, 12000];
+      const legs = m && m.body.fanout;
+      t(!!legs && legs.length === 3 && legs.every((l) => nearPt(l.pts[0], to, 0) || nearPt(l.pts[l.pts.length - 1], to, 0)), `${mode}: the three tracks follow the cursor: ${legs && JSON.stringify(legs.map((l) => [l.pts[0], l.pts[l.pts.length - 1]]))}`);
+      t(m && m.body.colliding === false, `${mode}: and fit`);
+      n = replies.length;
+      await clickAt(...to);
+      await waitReply("drag_finish", n);
+      await quiet();
+      await sleep(400);
+      const st = await state();
+      const pa6 = tracksOf(st).filter((q) => q.net === "PA6");
+      const ends = pa6.flatMap((q) => [q.pts[0], q.pts[q.pts.length - 1]]);
+      t(ends.filter((p) => nearPt(p, to, 0)).length === 3 && [[27000, 10000], [33000, 10000], [30000, 13000]].every((p) => ends.some((e) => nearPt(e, p, 0))), `${mode}: the junction is at the cursor and the far ends where they were: ${JSON.stringify(pa6.map((q) => q.pts))}`);
+      t(viasOf(st).length === 0, `${mode}: no via is committed: ${viasOf(st).length}`);
+      t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), `${mode}: the gates find no clearance failure`);
+      await E.run("common.Interactive.undo");
+      await sleep(600);
+      t(tracksOf(await state()).filter((q) => q.net === "PA6").every((q) => q.pts.every((p) => !nearPt(p, to, 0))), `${mode}: one Undo puts the junction back`);
+      await settle();
+    }
+    // taken hold of in the middle, a segment of the T slides as a segment
+    await pointerTo(28500, 10000);
+    const n = replies.length;
+    await E.run("pcbnew.InteractiveRouter.Drag45Degree");
+    const s = await waitReply("drag_start", n);
+    t(s && s.body.ok === true && s.body.drag === "segment" && s.body.virtual_via === false, `the middle of a segment is a segment drag: ${s && JSON.stringify([s.body.drag, s.body.virtual_via])}`);
   });
 
   await scenario("the board is as it was, and the studio reported no error", async (t) => {

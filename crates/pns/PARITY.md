@@ -47,9 +47,8 @@ exists rather than letting you rediscover it.
    first `Append( vertex )` of `LINE::Walkaround`; here a walked line keeps the arcs it did not
    touch. Where a
    KiCad pass branches on "does this line contain an arc" (the optimizer skips such a
-   line, `Simplify` keeps an arc's points) the same branch is taken. Not ported: the
-   rounded corners of `CORNER_MODE` (`SwitchRounding*`, `BuildInitialTrace( ROUNDED_45 )`:
-   the router makes no arc of its own; the tuner's meanders do, Stage 8).
+   line, `Simplify` keeps an arc's points) the same branch is taken. The router makes
+   arcs of its own since Stage 10 step 2: the rounded corners of `CORNER_MODE`.
 4. **No component dragger, no multi-selection drag.** Single-item
    (segment/via) drag only. Diff pairs (Stage 7) and length tuning
    (Stage 8: single track, pair and skew, KiCad's placers and tool) are
@@ -76,7 +75,7 @@ exists rather than letting you rediscover it.
 | `pns_node.{h,cpp}` | `src/node.rs` | Done, modulo the branching simplification (#1 above) and: no `m_override`/root-fallback machinery (unneeded once branching is a full clone); dangling joints *are* pruned on empty (KiCad leaves them, per its own `// fixme: remove dangling joints`) since pruning is free with a plain `HashMap`; no edge exclusions, no `RULE_RESOLVER` net-tie/keepout hooks (nothing in this project's model to resolve yet); `NearestObstacle`'s true path-length-global nearest search is narrowed to "first leg that collides, nearest hit on that leg" (see `walkaround.rs`/`shove.rs`'s own notes) -- cheaper and almost always the same answer at these board sizes. |
 | `pns_utils.cpp` (`OctagonalHull`/`SegmentHull`/`ConvexHull`) | `src/hull.rs` | Done, via a different construction (circumscribing-octagon samples + a shared convex-hull routine) that is always *at least* as generous as KiCad's own chamfer -- see that file's doc comment for the exact argument. |
 | `pns_routing_settings.h`, `pns_sizes_settings.h` | `src/settings.rs` | Done. Defaults cross-checked against `pns_routing_settings.cpp`'s real constructor (including the non-obvious default `RM_Walkaround`, not `RM_Shove`). `SizesSettings::for_net` pulls from this project's own `BoardRules` net-class resolution instead of a live KiCad dialog. `free_angle_mode` is live since 2026-10-08 (Highlight collisions only: `build_head` draws the head as one free-angle segment, as `buildInitialLine` does). |
-| `geometry/direction45.h` | `src/direction45.rs` | `CORNER_MODE` narrowed to `Mitered45`/`Mitered90` (no arcs to fillet a rounded corner with -- see decision #3). `BuildInitialTrace`'s "only honor `start_diagonal` when direction is `Undefined`" subtlety preserved. |
+| `geometry/direction45.h`, `direction_45.cpp` | `src/direction45.rs` | `CORNER_MODE`'s four modes and `BuildInitialTrace` in each (Stage 10 step 2: on the nanometre grid, checked against KiCad's own compiled `direction_45.cpp`, 100 000 random cases). `BuildInitialTrace`'s "only honor `start_diagonal` when direction is `Undefined`" subtlety preserved. |
 
 ## Stage 2 -- LINE_PLACER + WALKAROUND
 
@@ -732,6 +731,144 @@ scenarios through `window.__eda` -- the two router-setting rows, the mouse path 
 a locked track (refused, Drag Anyway, walked round), `V` shoving the track under a head's via, a tuning pattern on an arc track and a target in picoseconds -- and a Ctrl+E scenario in
 `diff-pairs.check.js`. It found two bugs the unit tests did not: Drag Anyway had no dialog host on the PCB tab, and the clean-up after a walk dropped the vertex a tangent arc starts at.
 
+## Stage 10 -- the router's details (springback, rounded corners, virtual vias; 2026-10-23)
+
+`docs/parity/GAPS.md` item 7's three leftovers of the interactive router, in this order (branch `task-router-details`, one commit each).
+
+1. **Springback** (`src/springback.rs`; `pns_shove.cpp`: `SPRINGBACK_TAG`, `reduceSpringback`, `pushSpringback`, `AddLockedSpringbackNode`,
+   `RewindSpringbackTo`, `RewindToLastLockedNode`; `pns_line_placer.cpp`: `rhShoveOnly`, `FixRoute`, `UnfixRoute`). In Shove mode every `Move`
+   pops the frames, newest first, whose world the head (as the pad walk left it, with its via) no longer collides with -- never a locked one, never
+   the last one -- shoves from the newest frame left (`m_currentNode = parent->Branch()`), and pushes the world the shove left with its area merged
+   into the frame below's (the optimizer's restriction area is that merged area and the shove's own: `totalAffectedArea`, `shove_line_after` /
+   `shove_heads_after`). A shove that fails is walked in the parent frame's world (`rhWalkOnly` in `m_currentNode`). A click pushes a locked frame
+   with the fixed run (and a placed via) in it; Backspace erases the stack from the frame the undone run was fixed in (`RewindSpringbackTo(
+   st.commit )`). The other modes resolve the head in the world the last click left. The commit replaces what the newest frame has moved against
+   the session's world: every shove of the session that is still in it, the earlier legs' included (`LinePlacer::displaced_tracks`), and the
+   preview reports the same (`Preview::displaced_lines` is the frame's, not only this move's). **Differences:** a frame is a diff against the
+   session's world (the IR tracks and vias it moved, by id, and the fixed runs), not a `NODE` -- a `Node` is a full clone here (decision 1) and a
+   route pushes a frame per mouse move; the frame's world is made from it when a shove starts there, and `reduceSpringback`'s `CheckColliding`
+   asks the session's world without what the frame moved plus a small node of what it moved to. The fixed runs were **locked** in the frame (until the review below: now they are tracks a later shove may push, as KiCad's). When the stage's `commit` node is not a frame (no shove had succeeded before the click),
+   KiCad's `RewindSpringbackTo` finds nothing and keeps the undone run's locked frame; here it is erased. `SetSpringbackDoNotTouchNode` has no
+   counterpart (the end item is picked from the session's world, never a frame). Not ported here: the dragger's and the pair placer's use of the
+   stack (`DRAGGER::dragShove`, `DIFF_PAIR_PLACER::tryShove`: they still shove from the world their gesture or last fix started from).
+   **Before:** every move shoved from the session's world as it was when the route started, and the fixed legs' shoves were merged by IR id
+   afterwards, so a second leg could push a track back over the first. **Proof:** KiCad's recorded sessions match better --
+   `simple-shove-1` reproduces 24 of the 28 segments KiCad committed (12 before), `issue22749-shove-weird-drag-track-end` all 11 (4 before;
+   `tests/qa_regressions.rs`); units in `springback.rs` (4) and `line_placer.rs` (a pushed track pushed on and sprung back; the next leg shoving
+   from the click's world, a clean commit, Backspace taking the push back); kicad-cli
+   (`gate_vs_kicad::tests::springback_sessions_add_no_violation_to_kicad_clis_drc`, `EDA_SLOW_TESTS=1`): the `issue22749` session replayed and
+   routes on `pic_programmer` that push, draw back, push again, click, Backspace and go on add no copper violation to kicad-cli's report.
+   The browser check (`router-leftovers.check.js`, the springback scenario) found a bug of the route API: a cursor that is not a whole
+   micrometre (the studio sends `32000.000000000004` after Backspace, and on `/`) was read as missing, and the head went to 0 -- `route_api::num`
+   rounds it now.
+
+2. **Rounded corners** (`CORNER_MODE`; `libs/kimath/src/geometry/direction_45.cpp`: `BuildInitialTrace`; `pns_routing_settings.cpp`: `m_cornerMode`,
+   `corner_mode`; `pns_router.cpp`: `ToggleCornerMode`; `router_tool.cpp`: `ACT_SwitchCornerMode*`, `handlePnSCornerModeChange`, the Track Corner Mode
+   submenu; `pns_line_placer.cpp`: `buildInitialLine`, the smart-pads condition of `rhWalkOnly` / `rhShoveOnly`, `FixRoute`'s "act as though we are in
+   fix-all mode" with arcs; `pns_optimizer.cpp`: `mergeStep`'s bypass in the corner mode, the arc segments it skips; `pns_shove.cpp`: `runOptimizer`'s
+   smart-pads condition). `CornerMode` has KiCad's four modes; `Direction45::build_initial_line` is `BuildInitialTrace` in each, computed on the
+   nanometre grid (`ConstructFromStartEndAngle`, `ConstructFromStartEndCenter`, the centre-and-angle constructor, the `MIN_PRECISION_IU` endpoint fix,
+   `Simplify`) and rounded to micrometres where it becomes points; an arc whose polyline is one segment is its chord, as
+   `SHAPE_LINE_CHAIN::Append( SHAPE_ARC )` makes it. The mitered 90 mode also had a bug, fixed: the leg it started with was chosen by `w >= h`, where
+   KiCad's is `startDiagonal == ( h >= w )`. `RoutingSettings::corner_mode` is read by the line placer (the head is built in it; a rounded corner is an
+   arc of the head, `Line::arcs`, through the pad walk, the shove, the walk and the optimizer, and of the fixed run, which the commit writes as an
+   `(arc ..)` track), by the optimizer (`Constraints::corner_mode`: `mergeStep`'s bypasses, which in a rounded mode are arcs; KiCad's optimizer reads
+   the router's settings itself) through the placer, the walk (`walkaround::walk_base_line`), the shove and the dragger, and for smart pads (45-degree
+   modes only). The studio: the five actions (`pcbnew.InteractiveRouter.SwitchRoundingToNext`, `SwitchRounding45`, `SwitchRoundingArc45`,
+   `SwitchRounding90`, `SwitchRoundingArc90`) in `pcbEditSweep.ts`, the submenu's check items from the setting, the hotkeys (Ctrl+/, Ctrl+W, Ctrl+Shift+W,
+   Ctrl+Alt+W, Alt+W) in the router tool (they are static `TOOL_ACTION`s of `router_tool.cpp` that the action catalog does not list; a browser keeps
+   Ctrl+W), and `corner_mode` on the wire (`routerSettings.ts`, `route_api::settings_over`); a running route takes a new mode at once and redraws the
+   head. **Differences:** `m_orthoMode` is not ported (nothing sets it); the arcs of a rounded corner are held on the micrometre grid, so an arc of a few
+   micrometres that the grid cannot curve is its chord; the end of a fix in the middle of an arc is not possible (KiCad's `FixRoute` turns fix-all on
+   when the head has arcs, and so does `fix`). **Proof:** `tests/direction45_oracle.rs` against KiCad's `direction_45.cpp` compiled over the real
+   kimath (`oracle/build_direction.sh`, g++ on Linux): 100 000 random cases of all four modes and both postures agree (the points exactly, an arc's ends
+   exactly and its middle to 1 um), 160 baked in; units in `line_placer.rs` (every mode in each routing mode, the fixed run keeps its arc, a rounded head
+   shoves what its arc meets and commits clean), `optimizer.rs` (an arc bypass), `router.rs` (the corner committed as an arc track), `route_api.rs`;
+   kicad-cli (`gate_vs_kicad::tests::routes_in_every_corner_mode_add_no_violation_to_kicad_clis_drc`, `EDA_SLOW_TESTS=1`): 16 two-leg routes on
+   `pic_programmer`, four modes by Shove and Walk around, add no copper violation and their arcs are `(arc ..)` of the file -- but for violations with
+   a board text on copper, which this router does not see (`syncTextItem` is not ported: four of them, two in a mitered mode; a gap of its own); the browser check's Track Corner Mode
+   scenario.
+
+3. **Virtual vias** (`pns_node.cpp`: `NODE::FixupVirtualVias`, run by `ROUTER::SyncWorld`; `pns_via.h`: `VVIA`; `pns_item.h`: `m_isVirtual`;
+   `pns_node.cpp:148, :273`: virtual items never collide; `pns_joint.h`: `NextSegment` with `aAllowLockedSegs`; `pns_dragger.cpp`: `checkVirtualVia`,
+   `DRAGGER::Start`; `router_preview_item.cpp` and `pns_router.cpp::CommitRouting`: a virtual item is neither drawn nor committed). **What KiCad means
+   by it:** a via the router itself puts in its world at every joint on one layer with no pad and no via where the track width changes or
+   where a locked segment ends (not where three segments meet: the review below) (and at that segment's other end), so that the point is a joint with a via in it. It has no hole,
+   collides with nothing, is not drawn and not committed. **What the person sees:** `D` on a segment within half its width of such an end drags that
+   point as a via (`DM_VIA`): every track meeting there follows, in each mode, and no via appears or is committed -- before, the drag took the corner of
+   one line and tore it off the others. And a line ends at such a joint (`NextSegment` stops at a via, unless locked segments are followed). Ported:
+   `Via::is_virtual`, `Node::fixup_virtual_vias` (called by `from_ir::build_node`, as `SyncWorld` does), a virtual item in the joints but not in the
+   spatial index nor in `Node::iter` / the anchor and unconnected-item searches (nothing finds it but its joint), never an obstacle (`via_vs_line`,
+   `items_collide`, `via_colliding_world`, `nearest_obstacle`'s via, `VIA::PushoutForce`, the dragger's own via check), `check_virtual_via` in
+   `Dragger::start_checked`, `Dragger::via_virtual` (no via in the commit), `virtual_via` on the drag reply and no via ghost in the studio's drag
+   preview. **Differences:** `PNS_HULL_MARGIN` (10 nm) is below the micrometre grid, so the virtual via is as wide as the widest track; the solder mask
+   KiCad compares besides the width is not in the model. **Proof:** units in `dragger.rs` (a T dragged as its virtual via in all three modes, three tracks
+   follow, no via committed; the middle of a segment still slides; where the width changes and the ends of a locked segment get one, a real via's joint
+   none), the joint counts in `router.rs`; kicad-cli (`gate_vs_kicad::tests::dragging_a_junction_as_a_virtual_via_adds_no_violation_to_kicad_clis_drc`,
+   `EDA_SLOW_TESTS=1`): six of `pic_programmer`'s 27 junctions dragged 0.3 mm in Shove, Walk around and Highlight collisions add no copper violation
+   and no dangling track; the browser check's virtual via scenario. All of `tests/qa_regressions.rs` replays agree as before with the virtual vias in the
+   world.
+
+## Stage 10 review -- the three ports held to KiCad's code (branch `task-router-review`, 2026-10-23)
+
+An adversarial review, function by function against KiCad 8303b2ad (not against the doc comments above), of springback, the four corner
+modes and virtual vias. Each divergence found has a failing test that the fix makes pass.
+
+**Fixed.**
+1. *The route's own tail could not be pushed* (decision 2 of Stage 10). `FixRoute` adds the fixed segments to `m_lastNode` as ordinary
+   tracks, so in KiCad a later leg's head that pushes another net's track into the route's tail pushes the tail on. The port locked the
+   runs: in `a_later_leg_pushes_the_routes_own_tail_as_kicads_shove_does` (three legs, then a fourth pushing GND's track into the first leg)
+   the head stopped 150 um short of the cursor. Now a run is a track of the frame's world with a tag of its own (`springback::run_tag`); what a
+   shove made of it is in the frame's `World::tracks` under the tag and the preview and the commit draw the runs from there
+   (`World::placed_runs`, `LinePlacer::placed_runs`). Its ends are locked joints: `NODE::LockJoint` / `JOINT::m_locked` and `AssembleLine`'s
+   `aStopAtLockedJoints` are ported (`Joint::locked`, `Node::lock_joint`, `AssembleOpts::stop_at_locked_joints`, set by the shove's own
+   `assemble`); `SHOVE::Run` locks each head's start and end, and the frames inherit the locks, so every leg's start stays one. Left: the
+   vias the clicks place stay locked (KiCad's are ordinary vias, a shove could push one not at the head's start; the commit here puts a via
+   where two runs on different layers meet).
+2. *Backspace after a leg none of whose shoves succeeded.* That stage's `commit` is the locked frame of the click before (`Run` fell back to
+   its parent), and `RewindSpringbackTo` erases it too: the earlier leg leaves the world while it is still fixed, and `CommitPlacement`
+   (`RewindToLastLockedNode`) then commits a frame without it. A bug of KiCad's; here the locked frame stays (`Springback::rewind_to`,
+   `backspace_after_a_leg_whose_shoves_all_failed_keeps_the_leg_before`).
+3. *The 90-degree modes walked round octagons.* `WALKAROUND::processCluster` and `NODE::NearestObstacle` read the corner mode themselves and,
+   in `MITERED_90` / `ROUNDED_90`, use the bounding box of every hull (`cachedHull.BBox()`, `simplifyHull`). Ported (`Walker::corner_mode`,
+   `QueryOpts::box_hull`, `hull::bbox_hull`), set by the head's walks, the shove (nearest obstacle and walk), the dragger's walk and the
+   pair's walk: a walk in a 90-degree mode goes round a pad in axis legs (`a_walk_in_a_90_degree_mode_goes_round_the_box_of_the_hull`).
+4. *A virtual via at every T.* `FixupVirtualVias` tests `n_seg >= 3`, but its loop never counts a segment into `n_seg`: KiCad's world has a
+   virtual via only where the width changes and at the ends of a locked segment. The port counted them, so `D` at a T of one width took hold
+   of a via KiCad does not have (KiCad drags the corner of the one line). Fixed; the units, the kicad-cli proof (now 18 width-change
+   junctions on `pic_programmer`, six dragged) and the browser check use width changes. `checkVirtualVia` compares the distance as a double.
+5. *Copper board text was no obstacle* (`syncTextItem`, the leftover the corner-mode proof found): ported in `from_ir::add_copper_texts` --
+   a solid of no net on the text's layer, not routable (`Solid::routable`, `ITEM::IsRoutable`), the text's bounding hull
+   (`TransformShapeToPolygon`: `buildBoundingHull` of the glyphs with the pen and `GetMaxError()`, 5 um), for the imported copper texts and a
+   plain `Text` on copper. The kicad-cli proofs no longer leave the "PCB text" violations out (the corner-mode one had four; none now). Not
+   here: a footprint's copper texts, tables, a knockout's margin.
+6. *The Track Corner Mode actions were not in the action catalog*: the extractor read `TOOL_ACTION X::y( .. )` only; router_tool.cpp's
+   `static const TOOL_ACTION ACT_..` (13 of them) are read now. With their hotkeys in the catalog the global listener would have fired them
+   anywhere, so the five are registered only while the router tool is active (`AS_CONTEXT`).
+
+**Checked, no divergence.** `reduceSpringback` (pop while unlocked and not colliding, never the last; the head set is the head before the
+shove with its via), `pushSpringback`'s area merge, a failed shove leaving `m_currentNode = parent` with the stack already reduced, the
+stage's `commit` (the newest frame when the click came) and `RewindSpringbackTo`'s erase from it, `CommitPlacement`; `direction45.rs` (the
+oracle of 100 000 cases); `mergeStep`'s bypass in the corner mode (`orig_start` / `orig_end` are computed but unused in KiCad); the smart-pads
+conditions; `ToggleCornerMode` / `handlePnSCornerModeChange`'s order and its refresh `Move`; `VVIA`'s single layer and `aDiameter / 2` drill;
+virtual items neither drawn nor committed; `JOINT::NextSegment`'s skip of a virtual via when locked segments are followed.
+
+**Decisions of Stage 10, judged.** (1) *Frames as diffs*: equivalent for the line placer -- everything a shove can change there is a track
+with an IR id, a via with one, or (now) a run with its tag, and the collision question `reduceSpringback` asks is the same world's; what is
+not carried is KiCad's per-item state that outlives a frame (ranks are cleared every `Run`; the root-line history only steers which line is
+the root of a shove). (2) *Locked runs*: wrong, fixed (1 above). (3) *Virtual vias in every world*: right -- `ROUTER::SyncWorld` (tool reset,
+undo/redo, model change, before a footprint drag; the tuner's proxy too) is the only way KiCad builds its world, and it calls
+`FixupVirtualVias`; KiCad does not recompute them after a commit inside one tool session (the port rebuilds its world from the IR, so a
+junction made by the last commit has its virtual via at once: a staleness of KiCad's not reproduced). (4) *`SwitchRounding*` and the
+catalog*: fixed (6 above).
+
+**Left, with sizes.** Springback in the dragger (`DRAGGER::dragShove` / `dragViaShove`: one `SHOVE` per gesture, a frame per move, and
+`m_draggedVias` restored when a frame is popped -- about the size of the line placer's use, 150-250 lines and a commit built from the newest
+frame) and in the pair placer (`DIFF_PAIR_PLACER::tryShove`: a frame per move of the leg, a fresh `SHOVE` at each fix, no locked frames --
+somewhat smaller). The mark-obstacles hull snap (`rhMarkObstacles`, with its 90-degree box) as before. And a pre-existing difference met on
+the way: when the head cannot be resolved KiCad keeps the previous head (`routeStep`: `m_head = prevHead`) and `FixRoute` in Shove mode is
+refused only by a solid, where the port shows the straight line flagged colliding and refuses the click.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
@@ -776,17 +913,16 @@ a locked track (refused, Drag Anyway, walked round), `V` shoving the track under
 - ~~`KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints~~
   **Ported 2026-10-20** (Stage 9 step 4: `optimizer.rs`'s constraints, used by
   "Optimize entire track being dragged").
-- ~~Arcs as router items~~ **Ported 2026-10-20** (Stage 9 step 1). Still missing: rounded (arc-filleted)
-  corners made by the router itself (`CORNER_MODE`: `SwitchRounding*`,
-  `BuildInitialTrace( ROUNDED_45 / ROUNDED_90 )`): the tuner is the only maker of arcs.
+- ~~Arcs as router items~~ **Ported 2026-10-20** (Stage 9 step 1). ~~Rounded corners~~ **Ported 2026-10-23**
+  (Stage 10 step 2: `CORNER_MODE`, `SwitchRounding*`). Not ported: `m_orthoMode` (`SetOrthoMode`, which
+  forces `MITERED_45` in `buildInitialLine`; nothing here sets it), and the 90-degree hull box of
+  `rhMarkObstacles` (the mark-obstacles hull snap is not ported at all).
 - ~~`VIA::PushoutForce`~~ is ported (2026-10-08, `shove::via_pushout_force`); the
   second lead KiCad tries (`m_last_p_end`) is not kept.
-- ~~`MOUSE_TRAIL_TRACER`~~ **Ported 2026-10-20** (Stage 9 step 4). Springback
-  (an incremental undo stack so backing the cursor up reverts
-  shove/walkaround decisions instead of recomputing from scratch) --
-  still not implemented; see `line_placer.rs`'s own module doc comment
-  (point 1) and `shove.rs`'s Stage 3 doc comment above for why, and
-  `docs/parity/GAPS.md` item 7 for what is left in gap #7: springback, `LockJoint`, virtual vias,
+- ~~`MOUSE_TRAIL_TRACER`~~ **Ported 2026-10-20** (Stage 9 step 4). ~~Springback~~
+  **Ported 2026-10-23** for the line placer (Stage 10 step 1; the dragger and the pair
+  placer do not keep the stack). See
+  `docs/parity/GAPS.md` item 7 for what is left in gap #7: `LockJoint`, ~~virtual vias~~ (Stage 10 step 3),
   the walkaround cluster timeout, the pad-to-die length and delay, time-domain rules as the tuner's
   target, the rounding of corners, the merged outline of a pair's pattern, a pattern moved, turned
   or flipped, the tuner's world branched at every move, two walk attempts of a pair where KiCad makes

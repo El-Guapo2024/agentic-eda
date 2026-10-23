@@ -298,6 +298,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         edited_models: Default::default(),
         installed_art: Default::default(),
         symbols: vec![],
+        symbol_sim_fields: Default::default(),
         board,
         allow: Default::default(),
         solver: Default::default(),

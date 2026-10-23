@@ -1825,6 +1825,8 @@ export type Cmd =
   | { op: "clear_erc_exclusions" }
   | { op: "set_connection_grid"; mils: number }
   | { op: "set_intersheet_refs"; settings: IntersheetRefs }
+  // The SPICE simulator's settings (`NGSPICE_SETTINGS`, the project's `schematic.ngspice`) and the workbook's text (crates/ops/src/simulator.rs).
+  | { op: "set_simulator"; ngspice: { workbook_filename: string; fix_include_paths: boolean; model_mode: number } | null; workbook: string | null }
   /** Symbol Fields Table's Apply (dialog_symbol_fields_table.cpp) -- ONE verb for the whole staged batch so a single undo reverts it all. Applied remove -> rename -> add -> edits; edits address the FINAL field names. */
   | { op: "set_symbol_fields"; edits: SymbolFieldEdit[]; add_fields?: string[]; rename_fields?: SymbolFieldRename[]; remove_fields?: string[] }
   /** Find and Replace's Replace / Replace All (sch_find_replace_tool.cpp): `items` = `FindMatch.key`s to restrict to (one = "Replace"), omitted/null = "Replace All". */
@@ -2050,6 +2052,8 @@ export interface DragPreview {
   /** What `DRAGGER::Start` grabbed: the whole segment (`DM_SEGMENT`, it slides sideways, its neighbours following at 45 degrees), one
    * vertex (`DM_CORNER`), a via (`DM_VIA`) or an arc track (`DM_ARC`: its curvature follows the cursor, tangent to the tracks next to it). */
   drag?: "segment" | "corner" | "via" | "arc";
+  /** A `"via"` drag of a virtual via (`DRAGGER::checkVirtualVia`): the end of a segment where tracks meet with no pad or via -- the junction moves, no via is drawn or committed. */
+  virtual_via?: boolean;
   colliding: boolean;
   /** The cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last
    * solution"), and letting go commits that one. */

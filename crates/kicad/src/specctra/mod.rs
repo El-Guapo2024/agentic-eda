@@ -1,9 +1,10 @@
 //! Specctra DSN export and SES import (`pcbnew/specctra_import_export`), File > Export > Specctra DSN... and File > Import > Specctra Session...
 //! (`pcbnew.EditorControl.exportSpecctraDSN`, `pcbnew.EditorControl.importSpecctraSession`).
 //!
-//! This is an exporter of our own, next to kicad-cli's, and an approved exception to "kicad-cli is the only exporter" (docs/ARCHITECTURE.md): kicad-cli has no DSN or SES
-//! command, and the studio's autorouter (`crates/freeroute`) works on `design.json` directly and is left alone -- the DSN and the session are for outside autorouters such
-//! as FreeRouting.
+//! The session import is ours, an approved exception to "kicad-cli is the only engine" (docs/ARCHITECTURE.md): kicad-cli has no SES command. The DSN export is
+//! kicad-cli's (`kicad-cli pcb export specctra`) where the kicad-cli found has the command; [`export_dsn`] is the fallback for one that has not, deprecated and
+//! to be deleted once every machine has it (see its doc for what goes with it). The studio's autorouter (`crates/freeroute`) works on `design.json` directly and
+//! is left alone -- the DSN and the session are for outside autorouters such as FreeRouting.
 //!
 //! The port is `SPECCTRA_DB`'s, file by file:
 //! - [`format`]  `OUTPUTFORMATTER` and the number formats;
@@ -40,6 +41,11 @@ pub const HOST_VERSION: &str = "10.99.0";
 /// `PCB_EDIT_FRAME::ExportSpecctraFile` for a design: the board file the studio derives from it (`export_kicad_pcb`), read as KiCad reads a board, written as `FromBOARD`
 /// and `ExportPCB` write it. `pcb_name` is the file's name, the design's name in the file (`aNameChange`). An error is what KiCad's dialog shows after "Unable to export,
 /// please fix and try again".
+///
+/// DEPRECATED (fallback for kicad-cli without pcb export specctra; delete once every machine has it). The studio and `eda board export specctra` take
+/// `kicad-cli pcb export specctra` where the kicad-cli found has it (`crates/cli/src/specctra_api.rs`); this is what a machine whose kicad-cli has not (10.99.0-5334
+/// and older) gets instead. Deleting it takes [`export`], [`DsnExport`], [`shape_in_nm`] and the writer's tests with it; the session import keeps [`lexer`],
+/// [`parse`], [`model`], [`format`], [`geom`], [`board`] and [`session`].
 pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> Result<DsnExport, Vec<CheckResult>> {
     let meta = crate::ExportMeta { date: "", title: "" };
     let pcb_text = crate::export_kicad_pcb(design, model, &meta)?;

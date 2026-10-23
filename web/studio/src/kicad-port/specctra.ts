@@ -1,7 +1,7 @@
 // File > Export > Specctra DSN... and File > Import > Specctra Session... (`pcbnew.EditorControl.exportSpecctraDSN`, `importSpecctraSession`), the rules of
 // pcbnew/tools/board_editor_control.cpp's `ExportSpecctraDSN` / `ImportSpecctraSession` and of `PCB_EDIT_FRAME::ExportSpecctraFile` / `ImportSpecctraSession`
-// (pcbnew/specctra_import_export/). The DSN is written by the studio's server (`POST /api/specctra/export`, crates/cli/src/specctra_api.rs: `FromBOARD`, ported in
-// crates/kicad/src/specctra); the session is read by the `specctra` command (crates/ops/src/specctra.rs: `FromSESSION`), one undo step.
+// (pcbnew/specctra_import_export/). The DSN is written by the studio's server (`POST /api/specctra/export`, crates/cli/src/specctra_api.rs: `kicad-cli pcb export
+// specctra`, or, where kicad-cli has no such command, the port of `FromBOARD` in crates/kicad/src/specctra); the session is read by the `specctra` command (crates/ops/src/specctra.rs: `FromSESSION`), one undo step.
 //
 // A browser has no Save or Open dialog that hands back a path: the DSN is a download named as KiCad's file selector names it (the board's name, `.dsn`), and the
 // session file is chosen with the browser's file chooser, its text sent in the command.
@@ -28,6 +28,8 @@ export interface SpecctraExportReply {
   warnings?: string[];
   name?: string;
   text?: string;
+  /** Which engine wrote the file: kicad-cli, or our own exporter where kicad-cli has no `pcb export specctra`. The page shows the same either way. */
+  engine?: "kicad-cli" | "eda";
 }
 
 /** The status line after an export (`SetStatusText( _( "BOARD exported OK." ) )`), or the error dialog's two lines in one ("Unable to export, please fix and try again" and why). */

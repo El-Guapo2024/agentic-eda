@@ -33,6 +33,7 @@
 //! vertex under the cursor of a drag stays on the line) and `KEEP_TOPOLOGY` (a shortcut may not leave a pad of another net on the other side of
 //! the line from where it was), see [`Constraints`]. `RESTRICT_VERTEX_RANGE` is a stub upstream (`Check` returns true) and is not here.
 
+use crate::arcs::ArcPts;
 use crate::direction45::{AngleType, CornerMode, Direction45};
 use crate::item::ItemId;
 use crate::line::Line;
@@ -74,21 +75,30 @@ use eda_model::ir::Um;
 /// One `mergeStep`: try every start position at shortcut span `step`
 /// (segments `n` and `n+step`), accept the first collision-free candidate
 /// that strictly lowers corner cost. Returns the new point list on success.
+/// The bypass is `BuildInitialTrace( s1.A, s2.B, i, cornerMode )` in the router's corner mode (`ROUTER::GetInstance()->Settings().GetCornerMode()`,
+/// [`Constraints::corner_mode`]): in a rounded mode it is an arc, which the path then holds (`arcs`); a segment of an arc is never the start or end
+/// of a merge ("Do not attempt to merge false segments that are part of an arc").
 #[allow(clippy::too_many_arguments)] // mirrors the collision query's own (node, net, layer, width, rules, exclude) parameter set, threaded straight through.
-fn merge_step(pts: &[eda_model::ir::Point], origin: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], constraints: &Constraints) -> Option<Vec<eda_model::ir::Point>> {
+fn merge_step(pts: &[eda_model::ir::Point], arcs: &[ArcPts], origin: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], constraints: &Constraints) -> Option<(Vec<eda_model::ir::Point>, Vec<ArcPts>)> {
     if pts.len() < step + 3 {
         return None;
     }
     let seg_count = pts.len() - 1;
     let cost_orig = corner_cost(pts);
+    let runs = crate::line::arc_runs_in(arcs, pts);
+    let is_arc_segment = |i: usize| runs.iter().any(|r| i >= r.first && i < r.last);
     for n in 0..=(seg_count - step - 1) {
+        if is_arc_segment(n) || is_arc_segment(n + step) {
+            continue;
+        }
         let (p_a, p_b) = (pts[n], pts[n + step + 1]);
         // KiCad `mergeStep`: cost[i] = INT_MAX unless the bypass is valid;
         // each valid candidate is `Simplify2`d before `CornerCost`.
-        let mut path: [Option<Vec<eda_model::ir::Point>>; 2] = [None, None];
+        let mut path: [Option<(Vec<eda_model::ir::Point>, Vec<ArcPts>)>; 2] = [None, None];
         let mut cost = [i64::MAX; 2];
         for (i, start_diagonal) in [false, true].into_iter().enumerate() {
-            let bypass = Direction45::Undefined.build_initial_trace(p_a, p_b, start_diagonal, CornerMode::Mitered45);
+            let trace = Direction45::Undefined.build_initial_line(p_a, p_b, start_diagonal, constraints.corner_mode);
+            let bypass = trace.pts;
             // `checkColliding( aLine, bypass )`: only the replacement is tested -- the
             // rest of the line is what it already was (and may already violate
             // something, which must not block every merge).
@@ -103,9 +113,11 @@ fn merge_step(pts: &[eda_model::ir::Point], origin: &[eda_model::ir::Point], ste
             candidate.extend(bypass);
             candidate.extend(pts[(n + step + 2)..].to_vec());
             let mut l = Line::from_points(net.clone(), layer, width, candidate);
+            l.arcs = arcs.iter().copied().chain(trace.arcs).collect();
             l.simplify(); // `Simplify2`
             cost[i] = corner_cost(&l.pts);
-            path[i] = Some(l.pts);
+            let kept: Vec<ArcPts> = l.arc_runs().into_iter().map(|r| l.arcs[r.arc]).collect();
+            path[i] = Some((l.pts, kept));
         }
         // `cost[0] < cost_orig && cost[0] < cost[1]`, else `cost[1] < cost_orig`.
         if cost[0] < cost_orig && cost[0] < cost[1] {
@@ -205,16 +217,17 @@ fn merge_obtuse(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: 
 
 /// `mergeFull`: the outer shrinking-span loop around [`merge_step`].
 #[allow(clippy::too_many_arguments)] // same query-context parameter set every other pass in this module threads through unchanged.
-fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], constraints: &Constraints) -> Vec<eda_model::ir::Point> {
+fn merge_full(pts: Vec<eda_model::ir::Point>, arcs: Vec<ArcPts>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], constraints: &Constraints) -> (Vec<eda_model::ir::Point>, Vec<ArcPts>) {
     if pts.len() < 3 {
-        return pts;
+        return (pts, arcs);
     }
     // KiCad `mergeFull`: `line.Simplify2()` before the search.
     let mut simplified = Line::from_points(net.clone(), layer, width, pts);
+    simplified.arcs = arcs;
     simplified.simplify();
-    let mut pts = simplified.pts;
+    let (mut pts, mut arcs) = (simplified.pts, simplified.arcs);
     if pts.len() < 3 {
-        return pts;
+        return (pts, arcs);
     }
     // `aLine` keeps this shape while `current_path` is rewritten: it is what `KEEP_TOPOLOGY_CONSTRAINT` slices (`aOriginLine->CLine()`)
     let origin = pts.clone();
@@ -225,12 +238,12 @@ fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um
         if step < 1 || pts.len() < 3 {
             break;
         }
-        match merge_step(&pts, &origin, step, node, layer, width, net, rules, exclude, constraints) {
-            Some(new_pts) => pts = new_pts, // success: retry at the same (large) span
-            None => step -= 1,              // failure: shrink the search radius
+        match merge_step(&pts, &arcs, &origin, step, node, layer, width, net, rules, exclude, constraints) {
+            Some((new_pts, new_arcs)) => (pts, arcs) = (new_pts, new_arcs), // success: retry at the same (large) span
+            None => step -= 1,                                                // failure: shrink the search radius
         }
     }
-    pts
+    (pts, arcs)
 }
 
 /// Runs `MERGE_SEGMENTS`, then `MERGE_OBTUSE`, then `MERGE_COLINEAR` on
@@ -277,6 +290,9 @@ pub struct Constraints {
     pub preserve_vertex: Option<Point>,
     /// `KEEP_TOPOLOGY_CONSTRAINT`: no pad of another net may be inside the polygon the shortcut and the stretch it replaces enclose.
     pub keep_topology: bool,
+    /// The router's corner mode (`ROUTER::GetInstance()->Settings().GetCornerMode()`, which KiCad's optimizer reads from the router itself): the mode
+    /// `mergeStep` builds its bypasses in.
+    pub corner_mode: CornerMode,
 }
 
 impl Constraints {
@@ -420,7 +436,8 @@ pub fn optimize_constrained(line: &Line, node: &Node, rules: &BoardRules, exclud
     // and not fanout-cleaned; only its collinear points go, the ones on an arc excepted
     let has_arcs = out.arc_count() > 0;
     if !has_arcs && flags & effort::MERGE_SEGMENTS != 0 {
-        out.pts = merge_full(out.pts, node, out.layer, out.width, &out.net, rules, exclude, &constraints);
+        let (pts, arcs) = merge_full(std::mem::take(&mut out.pts), std::mem::take(&mut out.arcs), node, out.layer, out.width, &out.net, rules, exclude, &constraints);
+        (out.pts, out.arcs) = (pts, arcs);
     }
     if !has_arcs && flags & effort::MERGE_OBTUSE != 0 {
         out.pts = merge_obtuse(out.pts, node, out.layer, out.width, &out.net, rules, exclude);
@@ -911,10 +928,25 @@ mod tests {
     /// D11: mergeFull Simplify2s its input, so collinear points are gone
     /// from the result even when nothing else can be merged.
     #[test]
+    fn merge_full_in_a_rounded_mode_makes_its_bypass_an_arc() {
+        // `mergeStep`: `DIRECTION_45().BuildInitialTrace( s1.A, s2.B, i, cornerMode )` -- in arc 45 the shortcut of a staircase is an arc
+        let node = Node::new();
+        let pt = |x, y| Point { x, y };
+        let stairs = vec![pt(0, 0), pt(3000, 0), pt(3000, 300), pt(2000, 300), pt(2000, 600), pt(6000, 600)];
+        let line = Line::from_points(net_of("SIG"), 0, 200, stairs);
+        let mitered = optimize_with(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS);
+        assert_eq!(mitered.arc_count(), 0);
+        let rounded = optimize_constrained(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS, &Constraints { corner_mode: CornerMode::Rounded45, ..Constraints::default() });
+        assert!(rounded.arc_count() >= 1, "{rounded:?} cost {} vs {}", corner_cost(&rounded.pts), corner_cost(&line.pts));
+        assert!(corner_cost(&rounded.pts) < corner_cost(&line.pts));
+        assert_eq!((rounded.first(), rounded.last()), (Some(pt(0, 0)), Some(pt(6000, 600))));
+    }
+
+    #[test]
     fn merge_full_simplifies_collinear_points() {
         let node = Node::new();
         let pt = |x, y| Point { x, y };
-        let out = merge_full(vec![pt(0, 0), pt(500, 0), pt(1000, 0), pt(1000, 1000)], &node, 0, 200, &net_of("SIG"), &rules(), &[], &Constraints::default());
+        let (out, _) = merge_full(vec![pt(0, 0), pt(500, 0), pt(1000, 0), pt(1000, 1000)], Vec::new(), &node, 0, 200, &net_of("SIG"), &rules(), &[], &Constraints::default());
         assert_eq!(out, vec![pt(0, 0), pt(1000, 0), pt(1000, 1000)]);
     }
 

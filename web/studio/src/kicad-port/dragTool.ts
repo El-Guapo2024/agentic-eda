@@ -50,6 +50,8 @@ export interface DragDrawState {
   /** Via drag only -- the via's own diameter, for drawing it at its live
    * position (DragPreview carries no size of its own, see that type's doc). */
   viaDiameter?: number;
+  /** A via drag of a virtual via (`VVIA`: where tracks meet with no pad or via, `DRAGGER::checkVirtualVia`): the junction is dragged, and no via is drawn. */
+  virtualVia?: boolean;
   pts: [number, number][];
   colliding?: boolean;
   displaced?: { layer: string; pts: [number, number][] }[];

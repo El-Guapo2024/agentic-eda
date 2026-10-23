@@ -1560,6 +1560,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::ClearErcExclusions => "schematic erc-unexclude --all".to_string(),
         Cmd::SetConnectionGrid { mils } => format!("schematic connection-grid {mils}"),
         Cmd::SetIntersheetRefs { settings } => format!("schematic intersheet-refs {}", if settings.show { "shown" } else { "hidden" }),
+        Cmd::SetSimulator { workbook, .. } => format!("schematic simulator{}", if workbook.is_some() { " (workbook)" } else { "" }),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
         Cmd::AddSchText { content, at, .. } => format!("schematic text add --content {content:?} --at {},{}", mm(at.x), mm(at.y)),
@@ -1833,6 +1834,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
         Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
         Cmd::SetIntersheetRefs { .. } => "schematic-intersheet-refs",
+        Cmd::SetSimulator { .. } => "schematic-simulator",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
@@ -2227,13 +2229,14 @@ pub fn run(
             step_with(&dir, cmd, strict, &actor()).map(|s| eprintln!("{s}\nSession file imported and merged OK."))
         }
         "export" if rest.get(1).map(String::as_str) == Some("specctra") => {
-            // `eda board export specctra -o FILE.dsn`: the Specctra DSN of the board, written by our own exporter (kicad-cli has none).
+            // `eda board export specctra -o FILE.dsn`: the Specctra DSN of the board, written by kicad-cli (`pcb export specctra`), or by our own exporter where
+            // this machine's kicad-cli has no such command (`specctra_api::engine`).
             let out = flag(rest, "-o").map(PathBuf::from).ok_or_else(|| fail("board_usage", "export specctra", "usage: eda board export specctra -o <file.dsn> [-C dir]"))?;
-            let warnings = crate::specctra_api::export_to(&dir, &out)?;
+            let (warnings, engine) = crate::specctra_api::export_to(&dir, &out)?;
             for w in &warnings {
                 eprintln!("warning: {w}");
             }
-            eprintln!("BOARD exported OK: {}", out.display());
+            eprintln!("BOARD exported OK: {} (engine: {engine})", out.display());
             Ok(())
         }
         "export" => {

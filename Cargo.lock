@@ -510,6 +510,7 @@ dependencies = [
  "eda-ops",
  "eda-pns",
  "eda-shape-poly-set",
+ "eda-sim",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -766,6 +767,13 @@ name = "eda-shape-poly-set"
 version = "0.1.0"
 dependencies = [
  "eda-clipper2",
+]
+
+[[package]]
+name = "eda-sim"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

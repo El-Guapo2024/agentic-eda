@@ -131,6 +131,54 @@ pub struct SchExtras {
     /// read and edited by `crate::groups` (`GroupTree`, `GroupHost`), the same code as the board's groups.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<crate::ir::Group>,
+    /// The SPICE simulator's project settings (`NGSPICE_SETTINGS`, `spice_settings.cpp`: the `.kicad_pro`'s `schematic.ngspice`): the workbook file, whether include paths
+    /// are made absolute and ngspice's compatibility mode. Written to the derived project as KiCad writes them. `None`: KiCad's defaults. Only the root sheet's extras hold it.
+    /// Additive. (Counts in `writes_nothing`, not in `is_empty`: it is a project setting, no part of the drawing.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ngspice: Option<NgspiceSettings>,
+    /// The simulator's workbook (`SIMULATOR_FRAME_UI::SaveWorkbook`): the text of the `.wbk` file -- KiCad's JSON, version 7 -- as Save Workbook last wrote it, byte for byte.
+    /// The derived project gets it as the file `ngspice.workbook_filename` names. `None`: no workbook was saved. Only the root sheet's extras hold it. Additive. (Counts in
+    /// `writes_nothing`, not in `is_empty`.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sim_workbook: Option<String>,
+}
+
+/// `NGSPICE_SETTINGS` (`eeschema/sim/spice_settings.cpp`), the `.kicad_pro`'s `schematic.ngspice` object: `workbook_filename` (relative to the project), `fix_include_paths`
+/// (`SPICE_SETTINGS::m_fixIncludePaths`, default true) and `model_mode` (`NGSPICE_COMPATIBILITY_MODE`: 0 user config, 1 ngspice, 2 PSpice, 3 LTspice, 4 LTspice and PSpice --
+/// the default -- 5 HSpice).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NgspiceSettings {
+    #[serde(default)]
+    pub workbook_filename: String,
+    #[serde(default = "default_true")]
+    pub fix_include_paths: bool,
+    #[serde(default = "default_model_mode")]
+    pub model_mode: u32,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// `NGSPICE_COMPATIBILITY_MODE::LT_PSPICE`, the `PARAM_ENUM` default of `model_mode`.
+fn default_model_mode() -> u32 {
+    NgspiceSettings::LT_PSPICE
+}
+
+impl NgspiceSettings {
+    pub const USER_CONFIG: u32 = 0;
+    pub const NGSPICE: u32 = 1;
+    pub const PSPICE: u32 = 2;
+    pub const LTSPICE: u32 = 3;
+    pub const LT_PSPICE: u32 = 4;
+    pub const HSPICE: u32 = 5;
+}
+
+impl Default for NgspiceSettings {
+    fn default() -> Self {
+        NgspiceSettings { workbook_filename: String::new(), fix_include_paths: true, model_mode: NgspiceSettings::LT_PSPICE }
+    }
 }
 
 /// How a free-standing text sits on its anchor: the horizontal and the vertical justification of its `EDA_TEXT`, in the text's own axes (a text turned
@@ -415,7 +463,7 @@ impl SchExtras {
     /// Whether design.json has nothing to say for `extras` (it is then not written): [`is_empty`](Self::is_empty), no table of ERC severities and no connection grid. The
     /// severities and the grid are no part of the schematic KiCad's files draw -- they go to the derived project -- so they are not in `is_empty`.
     pub fn writes_nothing(&self) -> bool {
-        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none()
+        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none() && self.ngspice.is_none() && self.sim_workbook.is_none()
     }
 
     /// The net class a label's fields give its net (`SCH_LABEL_BASE`'s `Netclass` field; the first that is not empty), if any.

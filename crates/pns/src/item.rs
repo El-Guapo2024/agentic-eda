@@ -68,6 +68,22 @@ pub struct Solid {
     pub edge: bool,
 }
 
+impl Solid {
+    /// The `source` prefix of a board text on copper ([`crate::from_ir`]'s `syncTextItem`).
+    pub const TEXT_SOURCE: &'static str = "text:";
+
+    /// A board text on copper (`syncTextItem`): an obstacle with the ordinary copper clearance, not routable.
+    pub fn is_text(&self) -> bool {
+        self.source.starts_with(Self::TEXT_SOURCE)
+    }
+
+    /// `ITEM::IsRoutable()`: a pad is; the board outline (`syncGraphicalItem`) and a copper text (`syncTextItem`: `SetRoutable( false )`) are
+    /// not -- nothing joins to them, nothing starts or ends a route on them, nothing picks them.
+    pub fn routable(&self) -> bool {
+        !self.edge && !self.is_text()
+    }
+}
+
 /// `PNS::SEGMENT` -- one straight copper segment of a track. A multi-point
 /// `Track` in our IR becomes one `Segment` per `pts` window, exactly how
 /// `eda_drc::board::build` already flattens tracks for DRC.
@@ -153,6 +169,12 @@ pub struct Via {
     pub drill: Um,
     pub source_via: Option<String>,
     pub locked: bool,
+    /// `ITEM::m_isVirtual` (`VVIA`, `NODE::FixupVirtualVias`): a via the router puts where tracks meet with no pad or via -- three or more segments,
+    /// a change of width, the ends of a locked segment -- so that the meeting point is a joint with a via in it. It has no hole (`HasHole()` false),
+    /// collides with nothing (`NODE::Collide`, `QueryColliding`: "virtual items cannot collide"), is not drawn and not committed; what it is for is
+    /// the dragger, which drags it as a via when a segment is taken hold of at such an end (`DRAGGER::checkVirtualVia`), and the joints, which end a line
+    /// there.
+    pub is_virtual: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +194,11 @@ pub enum Item {
 }
 
 impl Item {
+    /// `ITEM::IsVirtual`: a virtual via ([`Via::is_virtual`]).
+    pub fn is_virtual(&self) -> bool {
+        matches!(self, Item::Via(v) if v.is_virtual)
+    }
+
     pub fn kind(&self) -> Kind {
         match self {
             Item::Solid(_) => Kind::Solid,
@@ -275,7 +302,7 @@ impl Item {
     /// ends).
     pub fn anchors(&self) -> Vec<Point> {
         match self {
-            Item::Solid(s) if s.edge => Vec::new(),
+            Item::Solid(s) if !s.routable() => Vec::new(),
             Item::Solid(s) => vec![s.pos],
             Item::Segment(s) => vec![s.a, s.b],
             Item::Arc(a) => vec![a.arc.start, a.arc.end],

@@ -54,8 +54,7 @@ pub enum OptEffort {
 ///
 /// `auto_posture` is read by the line placer's mouse trail (`MOUSE_TRAIL_TRACER`), `optimize_entire_dragged_track` by the dragger. KiCad's other
 /// settings are not here because nothing here could read them: `m_suggestFinish` (KiCad hides it: "not implemented"),
-/// `m_followMouse`, `m_snapToPads`, `m_cornerMode` (only the mitered 45-degree
-/// corner is built) and the walkaround's time limit
+/// `m_followMouse`, `m_snapToPads` and the walkaround's time limit
 /// (`m_walkaroundTimeLimit`: KiCad declares it and nothing reads it).
 #[derive(Debug, Clone)]
 pub struct RoutingSettings {
@@ -114,6 +113,10 @@ pub struct RoutingSettings {
     /// leg first or a diagonal one -- is read from how the cursor has moved since the route (or the last fixed leg) started (`MOUSE_TRAIL_TRACER`);
     /// off, it is the posture the route started with, or the one `/` flipped it to. Default `true`.
     pub auto_posture: bool,
+    /// `GetCornerMode()` (`corner_mode`; the Track Corner Mode actions, `SwitchRounding*`): how the head's corner is built -- mitered or rounded (an
+    /// arc), 45 or 90 degrees (`DIRECTION_45::BuildInitialTrace`). Also read by the optimizer's merge (its bypasses are built in this mode) and
+    /// for smart pads (45-degree modes only). Default `MITERED_45`.
+    pub corner_mode: crate::direction45::CornerMode,
 }
 
 impl RoutingSettings {
@@ -149,6 +152,7 @@ impl Default for RoutingSettings {
             snap_to_tracks: true,
             optimize_entire_dragged_track: false,
             auto_posture: true,
+            corner_mode: crate::direction45::CornerMode::Mitered45,
         }
     }
 }

@@ -520,4 +520,286 @@ mod tests {
         }
         assert!(judged == 0 || judged >= 6, "{judged} edits judged by kicad-cli");
     }
+
+    /// Springback (`SHOVE::reduceSpringback` / `pushSpringback`, `FixRoute`'s locked frame, `UnfixRoute`'s rewind) against kicad-cli's DRC
+    /// (slow tier): KiCad's own recorded session `issue22749-shove-weird-drag-track-end` replayed through the router, and routes on
+    /// `pic_programmer` whose cursor pushes into the tracks, draws back, pushes again, clicks, goes on and Backspaces -- each commit,
+    /// with every track the session's shoves left moved, adds no copper violation to kicad-cli's report of the board.
+    #[test]
+    fn springback_sessions_add_no_violation_to_kicad_clis_drc() {
+        use eda_model::ir::Point;
+        use eda_pns::item::Item;
+        use eda_pns::router::Router;
+        use eda_pns::settings::Mode;
+        if !kicad_available() {
+            return;
+        }
+        let kinds = ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width"];
+        let Some((design, model)) = qa_board("pic_programmer") else {
+            eprintln!("KiCad's QA corpus not found; skipping");
+            return;
+        };
+        let dir = scratch("springback");
+        let before = all_track_report(&design, &model, &dir, &kinds);
+        let baseline = counts_of(&before);
+        let judge = |label: &str, commit: &eda_pns::router::RouteCommit| {
+            let after = apply_commit(&design, commit);
+            let now = all_track_report(&after, &model, &dir, &kinds);
+            let counts = counts_of(&now);
+            eprintln!("pic_programmer {label}: {} tracks put, {} taken, {} vias moved: {counts:?} (before {baseline:?})", commit.tracks.len(), commit.remove_track_ids.len(), commit.remove_via_ids.len());
+            if counts != baseline {
+                eprintln!("    new: {:?}", now.iter().filter(|v| !before.contains(v)).collect::<Vec<_>>());
+            }
+            for kind in kinds {
+                let (was, got) = (baseline.get(kind).copied().unwrap_or(0), counts.get(kind).copied().unwrap_or(0));
+                assert!(got <= was, "{label}: kicad-cli reports {got} {kind} (the board had {was})");
+            }
+        };
+        let mut judged = 0;
+
+        // KiCad's recorded session: a route from a track end on B.Cu, pushing its neighbour round the head
+        let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data")).join("pcbnew/pns_regressions/issue22749-shove-weird-drag-track-end");
+        if let Ok(text) = std::fs::read_to_string(root.join("pns.log")) {
+            let log: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let pt = |v: &serde_json::Value| Point { x: (v["x"].as_f64().unwrap() / 1000.0).round() as i64, y: (v["y"].as_f64().unwrap() / 1000.0).round() as i64 };
+            let events = log["events"].as_array().unwrap();
+            let mut router = Router::new(&design, &model);
+            router.settings.mode = Mode::Shove;
+            let start = pt(&events[0]["position"]);
+            let (node, _) = eda_pns::from_ir::build_node(&design, &model);
+            let net = node.nearest_anchor(start, eda_pns::layer::LayerRange::single(1), 500, None).and_then(|(id, _)| node.get(id).and_then(|i| i.net().clone())).expect("a track end with a net");
+            router.start(start, "B.Cu", model.board.width_of(&net)).expect("starts on the track end");
+            for e in &events[1..] {
+                router.preview(pt(&e["position"]));
+            }
+            let commit = router.finish(pt(&events.last().unwrap()["position"])).expect("the recorded route finishes");
+            assert!(!commit.remove_track_ids.is_empty(), "the session pushed tracks");
+            judge("issue22749 replayed", &commit);
+            judged += 1;
+        }
+
+        // pushing into the tracks east of a pad, drawing back, pushing again, a click, a second leg, a Backspace and the leg again
+        let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+        let mut pads: Vec<(Point, String, i32)> = node
+            .iter()
+            .filter_map(|(_, it)| match it {
+                Item::Solid(s) if !s.edge && s.net.is_some() && s.layers.overlaps_layer(0) => Some((s.pos, s.source.clone(), 0)),
+                _ => None,
+            })
+            .collect();
+        pads.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut sessions = 0;
+        for (pad, name, layer) in &pads {
+            if sessions >= 4 {
+                break;
+            }
+            let layer_name = layers.name_of(*layer).to_string();
+            let at = |dx: i64, dy: i64| Point { x: pad.x + dx, y: pad.y + dy };
+            let mut router = Router::new(&design, &model);
+            router.settings.mode = Mode::Shove;
+            router.settings.fix_all_segments = true;
+            if router.start(*pad, &layer_name, model.board.track_width).is_err() {
+                continue;
+            }
+            let mut pushed = false;
+            for step in [600, 1500, 2500, 3500, 2000, 800, 2000, 3500, 4500] {
+                if let Some(pv) = router.preview(at(step, 0)) {
+                    pushed |= !pv.displaced_lines.is_empty();
+                }
+            }
+            if !pushed || !router.preview(at(4500, 0)).is_some_and(|pv| !pv.colliding) {
+                continue;
+            }
+            if !matches!(router.fix(at(4500, 0)), Some(eda_pns::line_placer::FixOutcome::Fixed { real_end: false })) {
+                continue;
+            }
+            for step in [500, 1500, 2500] {
+                router.preview(at(4500, -step));
+            }
+            router.undo_last_segment();
+            for step in [600, 1500, 2500, 3500, 4500] {
+                router.preview(at(4500 + step / 2, step));
+            }
+            let end = at(6750, 4500);
+            if !router.preview(end).is_some_and(|pv| !pv.colliding) {
+                continue;
+            }
+            let Some(commit) = router.finish(end) else { continue };
+            if commit.remove_track_ids.is_empty() {
+                continue;
+            }
+            judge(&format!("session from {name}"), &commit);
+            sessions += 1;
+            judged += 1;
+        }
+        eprintln!("{judged} springback sessions judged ({sessions} on pic_programmer's pads)");
+        assert!(judged >= 3, "{judged} sessions judged by kicad-cli");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Track Corner Mode (`CORNER_MODE`) against kicad-cli's DRC (slow tier): routes on `pic_programmer` in each of the four modes, in Shove and
+    /// Walk around, from pads out into the board with a click and a second leg -- each commit adds no copper violation to kicad-cli's report (those with
+    /// the board's text on copper included: four of them before the router saw copper text, `syncTextItem`), and in the two rounded modes the corners are `(arc ..)` tracks of the board file.
+    #[test]
+    fn routes_in_every_corner_mode_add_no_violation_to_kicad_clis_drc() {
+        use eda_model::ir::Point;
+        use eda_pns::direction45::CornerMode;
+        use eda_pns::item::Item;
+        use eda_pns::router::Router;
+        use eda_pns::settings::Mode;
+        if !kicad_available() {
+            return;
+        }
+        let kinds = ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width"];
+        let Some((design, model)) = qa_board("pic_programmer") else {
+            eprintln!("KiCad's QA corpus not found; skipping");
+            return;
+        };
+        let dir = scratch("corner_modes");
+        // a board text on copper is an obstacle of the router (`syncTextItem`): what a route does to the text of `pic_programmer` counts too
+        let before = all_track_report(&design, &model, &dir, &kinds);
+        let baseline = counts_of(&before);
+        let (node, _) = eda_pns::from_ir::build_node(&design, &model);
+        let mut pads: Vec<(Point, String)> = node
+            .iter()
+            .filter_map(|(_, it)| match it {
+                Item::Solid(s) if !s.edge && s.net.is_some() && s.layers.overlaps_layer(0) => Some((s.pos, s.source.clone())),
+                _ => None,
+            })
+            .collect();
+        pads.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut judged = 0;
+        let mut arcs_written = 0;
+        let mut pushed = 0;
+        for (c, corner) in [CornerMode::Mitered45, CornerMode::Rounded45, CornerMode::Mitered90, CornerMode::Rounded90].into_iter().enumerate() {
+            for (m, mode) in [Mode::Shove, Mode::Walkaround].into_iter().enumerate() {
+                let mut done = 0;
+                // each mode from pads of its own, round the board
+                let offset = (c * 2 + m) * pads.len() / 8;
+                for (pad, name) in pads.iter().cycle().skip(offset).take(pads.len()) {
+                    if done >= 2 {
+                        break;
+                    }
+                    let mut router = Router::new(&design, &model);
+                    router.settings.mode = mode;
+                    router.settings.corner_mode = corner;
+                    if router.start(*pad, "F.Cu", model.board.track_width).is_err() {
+                        continue;
+                    }
+                    let (mid, end) = (Point { x: pad.x + 3000, y: pad.y - 1300 }, Point { x: pad.x + 4300, y: pad.y - 4500 });
+                    for k in 1..=4 {
+                        router.preview(Point { x: pad.x + 750 * k, y: pad.y - 325 * k });
+                    }
+                    if !router.preview(mid).is_some_and(|pv| !pv.colliding) || !matches!(router.fix(mid), Some(eda_pns::line_placer::FixOutcome::Fixed { real_end: false })) {
+                        continue;
+                    }
+                    if !router.preview(end).is_some_and(|pv| !pv.colliding) {
+                        continue;
+                    }
+                    let Some(commit) = router.finish(end) else { continue };
+                    let arcs = commit.tracks.iter().filter(|t| t.arc().is_some() && t.net != "").count();
+                    let after = apply_commit(&design, &commit);
+                    let now = all_track_report(&after, &model, &dir, &kinds);
+                    let counts = counts_of(&now);
+                    eprintln!("pic_programmer {corner:?} {mode:?} from {name}: {} tracks put ({arcs} arcs), {} taken: {counts:?} (before {baseline:?})", commit.tracks.len(), commit.remove_track_ids.len());
+                    if counts != baseline {
+                        eprintln!("    new: {:?}", now.iter().filter(|v| !before.contains(v)).collect::<Vec<_>>());
+                    }
+                    for kind in kinds {
+                        let (was, got) = (baseline.get(kind).copied().unwrap_or(0), counts.get(kind).copied().unwrap_or(0));
+                        assert!(got <= was, "{corner:?} {mode:?} from {name}: kicad-cli reports {got} {kind} (the board had {was})");
+                    }
+                    if matches!(corner, CornerMode::Rounded45 | CornerMode::Rounded90) {
+                        assert!(arcs > 0, "{corner:?} {mode:?} from {name}: the corners are arcs");
+                        assert_eq!(arcs_in_file(&after, &model), arcs_in_file(&design, &model) + commit.tracks.iter().filter(|t| t.arc().is_some()).count(), "every arc is an (arc ..) of the board file");
+                        arcs_written += arcs;
+                    }
+                    pushed += usize::from(!commit.remove_track_ids.is_empty());
+                    done += 1;
+                    judged += 1;
+                }
+            }
+        }
+        eprintln!("{judged} routes judged by kicad-cli, {arcs_written} arcs written, {pushed} of them pushed tracks");
+        assert!(judged >= 12, "{judged} routes judged");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Virtual vias (`NODE::FixupVirtualVias`, `DRAGGER::checkVirtualVia`) against kicad-cli's DRC (slow tier): on `pic_programmer` and
+    /// `backspace1`, the joints where the width changes, with no pad or via (KiCad's `FixupVirtualVias` gives a T of one width none), taken hold of at the end of one of their
+    /// segments and dragged 0.3 mm in each mode -- every track there follows, no via is committed, and kicad-cli finds no new copper violation and no
+    /// new dangling track (the junction stays one joint).
+    #[test]
+    fn dragging_a_junction_as_a_virtual_via_adds_no_violation_to_kicad_clis_drc() {
+        use eda_model::ir::Point;
+        use eda_pns::item::Item;
+        use eda_pns::router::Router;
+        use eda_pns::settings::Mode;
+        if !kicad_available() {
+            return;
+        }
+        let kinds = ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width", "track_dangling", "unconnected_items"];
+        let mut judged = 0;
+        for board in ["pic_programmer", "backspace1"] {
+            let Some((design, model)) = qa_board(board) else {
+                eprintln!("KiCad's QA corpus not found; skipping");
+                return;
+            };
+            let dir = scratch(&format!("vvia_{board}"));
+            let before = all_track_report(&design, &model, &dir, &kinds);
+            let baseline = counts_of(&before);
+            let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+            // the junctions: segment ends whose joint has a virtual via
+            let mut junctions: Vec<(Point, i32, Point)> = Vec::new();
+            for (_, it) in node.iter() {
+                let Item::Segment(s) = it else { continue };
+                for (end, other) in [(s.a, s.b), (s.b, s.a)] {
+                    let has = node.joint_at(end, &s.net).is_some_and(|j| j.links.iter().any(|&id| node.get(id).is_some_and(Item::is_virtual)));
+                    if has && !junctions.iter().any(|(p, _, _)| *p == end) {
+                        // the grab point: on the segment, a micrometre from the end
+                        let len = (((other.x - end.x) as f64).hypot((other.y - end.y) as f64)).max(1.0);
+                        let at = Point { x: end.x + ((other.x - end.x) as f64 / len).round() as i64, y: end.y + ((other.y - end.y) as f64 / len).round() as i64 };
+                        junctions.push((end, s.layer, at));
+                    }
+                }
+            }
+            junctions.sort_by_key(|(p, _, _)| (p.x, p.y));
+            eprintln!("{board}: {} junctions with a virtual via", junctions.len());
+            let mut done = 0;
+            for (k, (end, layer, at)) in junctions.iter().enumerate() {
+                if done >= 6 {
+                    break;
+                }
+                let mode = [Mode::Shove, Mode::Walkaround, Mode::MarkObstacles][k % 3];
+                let mut router = Router::new(&design, &model);
+                router.settings.mode = mode;
+                if router.drag_start(*at, layers.name_of(*layer)).is_err() || !router.drag_virtual_via() {
+                    continue;
+                }
+                let to = Point { x: end.x + 300, y: end.y + 300 };
+                if !router.drag_preview(to).is_some_and(|pv| !pv.colliding) {
+                    continue;
+                }
+                let Some(commit) = router.drag_finish(to) else { continue };
+                assert!(commit.vias.iter().all(|v| v.at != to), "{board}: no via is committed at the junction");
+                let after = apply_commit(&design, &commit);
+                let now = all_track_report(&after, &model, &dir, &kinds);
+                let counts = counts_of(&now);
+                eprintln!("{board} {mode:?} junction {end:?}: {} tracks put, {} taken: {counts:?} (before {baseline:?})", commit.tracks.len(), commit.remove_track_ids.len());
+                if counts != baseline {
+                    eprintln!("    new: {:?}", now.iter().filter(|v| !before.contains(v)).collect::<Vec<_>>());
+                }
+                for kind in kinds {
+                    let (was, got) = (baseline.get(kind).copied().unwrap_or(0), counts.get(kind).copied().unwrap_or(0));
+                    assert!(got <= was, "{board} {mode:?} junction {end:?}: kicad-cli reports {got} {kind} (the board had {was})");
+                }
+                assert!(commit.remove_track_ids.len() >= 3 || commit.tracks.len() >= 2, "{board}: the tracks at the junction moved: {commit:?}");
+                done += 1;
+                judged += 1;
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        eprintln!("{judged} junction drags judged by kicad-cli");
+        assert!(judged >= 6, "{judged} junction drags judged");
+    }
 }
