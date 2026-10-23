@@ -41,6 +41,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | P9b (10-23) | The DRC Rule Editor (`pcbnew/drc/rule_editor/`), over the `.kicad_dru`; `Cmd::EditDrcRule`. PARITY-pcb.md section 48 lists where it keeps rules KiCad's editor would lose. Left: Show Matches, Syntax help, auto-completion, drag and drop, units. |
 | P21 (10-23) | The SPICE simulator: kicad-cli's SPICE netlist, `ngspice -b` (`EDA_NGSPICE` or PATH), the Simulation window, Probe and Tune, the exports, the `.wbk` workbook. Reviewed against `eeschema/sim/`; the vectors equal ngspice run by hand on kicad-cli's netlist. Left: plotting while it runs (no libngspice), S-parameter port numbers, potentiometer tuning, IBIS currents. PARITY-sch.md section 38. |
 | Specctra via kicad-cli (10-23) | DSN export through `kicad-cli pcb export specctra` when kicad-cli has it; our exporter is the DEPRECATED fallback (the user's decision). |
+| IDF via kicad-cli (10-23) | File > Export > IDFv3 through `kicad-cli pcb export idf`; GenCAD (already wired) gated the same way. Both are disabled, with the reason, on a kicad-cli without the command. kicad-cli reads `--user-origin-x/-y` in 1/25400 mm with `--units mils`, and `idf_args` compensates; the slow test `idf_takes_the_dialogs_reference_point_in_mils` fails if a later nightly fixes that. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
