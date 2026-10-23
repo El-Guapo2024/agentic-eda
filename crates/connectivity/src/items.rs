@@ -47,7 +47,7 @@ use eda_drc::zone_copper::ZoneCopper;
 pub enum ItemRef {
     Pad { reference: String, number: String },
     /// One segment of a (possibly multi-point) `Track`; `seg_index` is
-    /// this segment's position within that track's polyline.
+    /// this segment's position within that track's polyline. A track that is an arc is one item, `seg_index` 0 ([`ItemShape::Arc`]).
     TrackSeg { track_id: String, seg_index: usize },
     Via { via_id: String },
     ZoneOutline { zone_id: String },
@@ -59,6 +59,9 @@ pub enum ItemRef {
 pub enum ItemShape {
     Pad(PlacedPad),
     Segment { a: Point, b: Point, half_width: f64 },
+    /// A track arc (`PCB_ARC`), by its tessellation (`Track::pts`, start to end): one item, as `CN_LIST::Add( PCB_ARC* )` makes it, whose two
+    /// anchors are its ends. KiCad collides the true arc (`SHAPE_ARC`); the tessellation is within a micrometre or so of it.
+    Arc { pts: Vec<Point>, half_width: f64 },
     Via { center: Point, radius: f64 },
     Zone { outline: Vec<Point> },
 }
@@ -128,6 +131,17 @@ fn sorted_pads(model: &ConstraintModel, part: &Part) -> Vec<eda_model::footprint
     pads
 }
 
+/// A pad turned by other than a multiple of 90 degrees (its own rotation and its footprint's) is given its copper as pieces
+/// ([`eda_model::pad_geom::pad_pieces`], `PAD::buildEffectiveShape`), so a touch is measured to the shape KiCad collides
+/// (`PAD::GetEffectiveShape`) and not to the axis-aligned box round it, which [`PlacedPad`] is otherwise (exact only at a multiple of 90 degrees).
+fn exact_turned_copper(fp: &eda_model::ir::FootprintInstance, source: &eda_model::footprint::Pad, pad: &mut PlacedPad) {
+    if !pad.pieces.is_empty() || (fp.rot as i64 + source.rot as i64).rem_euclid(90_000) == 0 {
+        return;
+    }
+    let frame = eda_model::pad_geom::PadFrame::of(fp, source, pad.center);
+    pad.pieces = eda_model::pad_geom::pad_pieces(source).iter().map(|q| q.map(&|v| frame.to_board(v))).collect();
+}
+
 /// Build every [`CnItem`] on the board: pads (from the placement),
 /// track segments, vias and zone outlines (from the routing). `connected`
 /// is left empty; [`crate::algo::build_graph`] fills it in.
@@ -188,6 +202,10 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                 } else {
                     (b_cu, b_cu)
                 };
+                let mut pad = pad;
+                if let Some(source) = sources.get(i) {
+                    exact_turned_copper(fp, source, &mut pad);
+                }
                 let (hw, hh) = (pad.size.0 / 2, pad.size.1 / 2);
                 let bbox = (pad.center.x - hw, pad.center.y - hh, pad.center.x + hw, pad.center.y + hh);
                 let anchors = vec![pad.center];
@@ -201,6 +219,25 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
             let layer = layer_index(layers, &t.layer);
             let half_width = t.width as f64 / 2.0;
             let margin = (half_width.ceil() as Um).max(0);
+            // An arc is one item (`CN_LIST::Add( PCB_ARC* )`: `AddAnchor( GetStart() )`, `AddAnchor( GetEnd() )`), not the pieces of its tessellation:
+            // a piece in the middle is no end of anything, and the importer's rounding of a small arc to micrometres repeats points of it.
+            if t.arc().is_some() {
+                let (a, b) = (t.pts[0], t.pts[t.pts.len() - 1]);
+                let (x0, y0, x1, y1) = bbox_of(&t.pts);
+                items.push(CnItem {
+                    item: ItemRef::TrackSeg { track_id: t.id.clone(), seg_index: 0 },
+                    net: t.net.clone(),
+                    can_change_net: true,
+                    layer_lo: layer,
+                    layer_hi: layer,
+                    anchors: vec![a, b],
+                    shape: ItemShape::Arc { pts: t.pts.clone(), half_width },
+                    bbox: (x0 - margin, y0 - margin, x1 + margin, y1 + margin),
+                    connected: Vec::new(),
+                    pad_piece_of: None,
+                });
+                continue;
+            }
             for (seg_index, w) in t.pts.windows(2).enumerate() {
                 let (a, b) = (w[0], w[1]);
                 let bbox = (a.x.min(b.x) - margin, a.y.min(b.y) - margin, a.x.max(b.x) + margin, a.y.max(b.y) + margin);

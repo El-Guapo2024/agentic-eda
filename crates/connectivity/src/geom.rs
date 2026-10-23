@@ -17,7 +17,8 @@
 //! because this crate answers "does copper touch," not "how much
 //! clearance," which is `crates/drc`'s job.
 
-use eda_model::footprint::PlacedPad;
+use eda_model::footprint::{PadShape, PlacedPad};
+use eda_model::pad_geom::PadPiece;
 use eda_model::ir::{Point, Um};
 
 use crate::items::ItemShape;
@@ -169,6 +170,89 @@ pub fn pad_pad_distance(a: &PlacedPad, b: &PlacedPad) -> f64 {
     inset_sep - ra - rb
 }
 
+/// A pad's copper as pieces: its own ([`PlacedPad::pieces`]) or, for a plain pad, the pieces its shape and axis-aligned size make
+/// (`PAD::buildEffectiveShape`: a circle; an oval's stadium; a rectangle; a rounded rectangle's inner rectangle and the four stadiums along its edges).
+pub fn pad_pieces(pad: &PlacedPad) -> Vec<PadPiece> {
+    if !pad.pieces.is_empty() {
+        return pad.pieces.clone();
+    }
+    let (cx, cy) = (pad.center.x as f64, pad.center.y as f64);
+    let (hx, hy) = (pad.size.0 as f64 / 2.0, pad.size.1 as f64 / 2.0);
+    let rect = |hx: f64, hy: f64| PadPiece::Polygon(vec![(cx - hx, cy - hy), (cx + hx, cy - hy), (cx + hx, cy + hy), (cx - hx, cy + hy)]);
+    match pad.shape {
+        PadShape::Circle => vec![PadPiece::Circle { c: (cx, cy), r: hx.min(hy) }],
+        PadShape::Oval => {
+            let r = hx.min(hy);
+            vec![PadPiece::Stadium { a: (cx - (hx - r), cy - (hy - r)), b: (cx + (hx - r), cy + (hy - r)), r }]
+        }
+        PadShape::RoundRect => {
+            let r = pad.corner_radius();
+            let (ix, iy) = ((hx - r).max(0.0), (hy - r).max(0.0));
+            let c = [(cx - ix, cy - iy), (cx + ix, cy - iy), (cx + ix, cy + iy), (cx - ix, cy + iy)];
+            let mut v = vec![rect(ix, iy)];
+            v.extend((0..4).map(|i| PadPiece::Stadium { a: c[i], b: c[(i + 1) % 4], r }));
+            v
+        }
+        _ => vec![rect(hx, hy)],
+    }
+}
+
+type Fp = (f64, f64);
+
+fn fseg_point(p: Fp, a: Fp, b: Fp) -> f64 {
+    let c = closest_point_on_segment(p, a, b);
+    (p.0 - c.0).hypot(p.1 - c.1)
+}
+
+fn fseg_seg(a1: Fp, a2: Fp, b1: Fp, b2: Fp) -> f64 {
+    if segments_intersect(a1, a2, b1, b2) {
+        return 0.0;
+    }
+    fseg_point(a1, b1, b2).min(fseg_point(a2, b1, b2)).min(fseg_point(b1, a1, a2)).min(fseg_point(b2, a1, a2))
+}
+
+/// A piece as the segments its copper is round (a point is a segment of no length), their radius, and the polygon it fills, if one.
+fn piece_cores(p: &PadPiece) -> (Vec<(Fp, Fp)>, f64, Option<&[Fp]>) {
+    match p {
+        PadPiece::Circle { c, r } => (vec![(*c, *c)], *r, None),
+        PadPiece::Stadium { a, b, r } => (vec![(*a, *b)], *r, None),
+        PadPiece::Strokes { pts, r } => (pts.windows(2).map(|w| (w[0], w[1])).collect(), *r, None),
+        PadPiece::Polygon(pts) => ((0..pts.len()).map(|i| (pts[i], pts[(i + 1) % pts.len()])).collect(), 0.0, Some(pts.as_slice())),
+    }
+}
+
+fn in_polygon(p: Fp, poly: &[Fp]) -> bool {
+    let n = poly.len();
+    let mut inside = false;
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
+        if (a.1 > p.1) != (b.1 > p.1) && p.0 < a.0 + (p.1 - a.1) / (b.1 - a.1) * (b.0 - a.0) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// The distance between two sets of pieces, 0 or less where they overlap: `SHAPE::Collide` of the two compound shapes.
+pub fn pieces_distance(a: &[PadPiece], b: &[PadPiece]) -> f64 {
+    let mut best = f64::INFINITY;
+    for pa in a {
+        let (ca, ra, polya) = piece_cores(pa);
+        for pb in b {
+            let (cb, rb, polyb) = piece_cores(pb);
+            if polya.is_some_and(|poly| poly.len() >= 3 && cb.iter().any(|s| in_polygon(s.0, poly))) || polyb.is_some_and(|poly| poly.len() >= 3 && ca.iter().any(|s| in_polygon(s.0, poly))) {
+                return 0.0;
+            }
+            for s in &ca {
+                for t in &cb {
+                    best = best.min(fseg_seg(s.0, s.1, t.0, t.1) - ra - rb);
+                }
+            }
+        }
+    }
+    best
+}
+
 /// Axis-aligned bounding box, `(x0, y0, x1, y1)`, of a point set.
 pub fn bbox_of(points: &[Point]) -> (Um, Um, Um, Um) {
     let mut b = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
@@ -191,13 +275,26 @@ pub fn bbox_of(points: &[Point]) -> (Um, Um, Um, Um) {
 /// task's "zones connect items within their outline" approximation;
 /// everything else is a direct shape/shape distance test against 0.
 pub fn touches(a: &ItemShape, a_anchors: &[Point], b: &ItemShape, b_anchors: &[Point]) -> bool {
+    // An arc collides where one piece of its tessellation does (the anchors stay the arc's two ends).
+    if let ItemShape::Arc { pts, half_width } = a {
+        return pts.windows(2).any(|w| touches(&ItemShape::Segment { a: w[0], b: w[1], half_width: *half_width }, a_anchors, b, b_anchors));
+    }
+    if let ItemShape::Arc { pts, half_width } = b {
+        return pts.windows(2).any(|w| touches(a, a_anchors, &ItemShape::Segment { a: w[0], b: w[1], half_width: *half_width }, b_anchors));
+    }
     match (a, b) {
+        (ItemShape::Arc { .. }, _) | (_, ItemShape::Arc { .. }) => unreachable!("taken apart above"),
         (ItemShape::Zone { outline: oa }, ItemShape::Zone { outline: ob }) => polygons_overlap(oa, ob),
         (ItemShape::Zone { outline }, other) => zone_item_touch(outline, other, b_anchors),
         (other, ItemShape::Zone { outline }) => zone_item_touch(outline, other, a_anchors),
 
+        (ItemShape::Pad(pa), ItemShape::Pad(pb)) if !pa.pieces.is_empty() || !pb.pieces.is_empty() => pieces_distance(&pad_pieces(pa), &pad_pieces(pb)) <= 0.0,
         (ItemShape::Pad(pa), ItemShape::Pad(pb)) => pad_pad_distance(pa, pb) <= 0.0,
 
+        (ItemShape::Pad(pad), ItemShape::Segment { a, b, half_width }) | (ItemShape::Segment { a, b, half_width }, ItemShape::Pad(pad)) if !pad.pieces.is_empty() => {
+            let seg = PadPiece::Stadium { a: (a.x as f64, a.y as f64), b: (b.x as f64, b.y as f64), r: *half_width };
+            pieces_distance(&pad.pieces, std::slice::from_ref(&seg)) <= 0.0
+        }
         (ItemShape::Pad(pad), ItemShape::Segment { a, b, half_width }) | (ItemShape::Segment { a, b, half_width }, ItemShape::Pad(pad)) => {
             let c = closest_point_on_segment((pad.center.x as f64, pad.center.y as f64), (a.x as f64, a.y as f64), (b.x as f64, b.y as f64));
             let cp = Point { x: c.0.round() as Um, y: c.1.round() as Um };
@@ -241,9 +338,14 @@ fn zone_item_touch(poly: &[Point], item: &ItemShape, anchors: &[Point]) -> bool 
     let n = poly.len();
     match item {
         ItemShape::Zone { .. } => false,
+        ItemShape::Arc { pts, half_width } => pts.windows(2).any(|w| (0..n).any(|i| seg_seg_distance(w[0], w[1], poly[i], poly[(i + 1) % n]) <= *half_width)),
         ItemShape::Via { center, radius } => zone_hits_point(poly, *center, *radius),
         ItemShape::Segment { a, b, half_width } => {
             point_in_polygon(*a, poly) || point_in_polygon(*b, poly) || (0..n).any(|i| seg_seg_distance(*a, *b, poly[i], poly[(i + 1) % n]) <= *half_width)
+        }
+        ItemShape::Pad(pad) if !pad.pieces.is_empty() => {
+            let edges: Vec<PadPiece> = (0..n).map(|i| PadPiece::Stadium { a: (poly[i].x as f64, poly[i].y as f64), b: (poly[(i + 1) % n].x as f64, poly[(i + 1) % n].y as f64), r: 0.0 }).collect();
+            point_in_polygon(pad.center, poly) || pieces_distance(&pad.pieces, &edges) <= 0.0
         }
         ItemShape::Pad(pad) => {
             point_in_polygon(pad.center, poly)
@@ -275,6 +377,21 @@ mod tests {
         let sq = [Point { x: 0, y: 0 }, Point { x: 100, y: 0 }, Point { x: 100, y: 100 }, Point { x: 0, y: 100 }];
         assert!(zone_hits_point(&sq, Point { x: 50, y: 103 }, 5.0));
         assert!(!zone_hits_point(&sq, Point { x: 50, y: 110 }, 5.0));
+    }
+
+    /// A pad given as pieces (a 45-degree rectangle) touches a track that crosses its copper, not one that only crosses the corner of its box.
+    #[test]
+    fn a_track_touches_a_turned_pad_where_its_copper_is() {
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        // 1000 x 400 turned 45 degrees about (0, 0): its long axis is the diagonal y = x.
+        let corner = |u: f64, v: f64| (u * s - v * s, u * s + v * s);
+        let poly = PadPiece::Polygon(vec![corner(-500.0, -200.0), corner(500.0, -200.0), corner(500.0, 200.0), corner(-500.0, 200.0)]);
+        let pad = PlacedPad { number: "1".into(), center: Point { x: 0, y: 0 }, size: (990, 990), through_hole: false, shape: eda_model::footprint::PadShape::Rect, roundrect_ratio: None, pieces: vec![poly] };
+        let seg = |x0: Um, y0: Um, x1: Um, y1: Um| ItemShape::Segment { a: Point { x: x0, y: y0 }, b: Point { x: x1, y: y1 }, half_width: 25.0 };
+        // Across the box's corner at (450, -450), 0.45 mm off the long axis: no copper there.
+        assert!(!touches(&ItemShape::Pad(pad.clone()), &[], &seg(300, -480, 480, -300), &[]));
+        // Across the far end of the long axis.
+        assert!(touches(&ItemShape::Pad(pad), &[], &seg(200, 480, 480, 200), &[]));
     }
 
     #[test]

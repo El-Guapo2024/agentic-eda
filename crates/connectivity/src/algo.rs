@@ -232,6 +232,34 @@ mod tests {
         assert_eq!(clusters.len(), 1, "one pad, two tracks: one cluster");
     }
 
+    /// A pad turned by other than a multiple of 90 degrees is not its bounding box: KiCad collides its true shape (`PAD::GetEffectiveShape`), and a
+    /// via in a corner of the box but off the copper (as next to the 135-degree capacitors of `issue5093`) touches nothing.
+    #[test]
+    fn a_pad_turned_45_degrees_connects_where_its_copper_is_not_its_box() {
+        use eda_model::ir::{Point, Via};
+        use eda_model::{Footprint, Pad, PadKind, PadShape};
+        let (mut design, mut model) = two_pad_model();
+        let pad = Pad { number: "1".into(), at: (0, 0), size: (1000, 400), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        model.footprints.push(Footprint { name: "SKEW".into(), pads: vec![pad], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() });
+        model.parts[0].footprint = Some("SKEW".into());
+        model.parts[0].package = Some("SKEW".into());
+        let fp = &mut design.placement.as_mut().unwrap().footprints[0];
+        fp.rot = 45_000;
+        let c = fp.at;
+        // Along one diagonal is the pad's long axis (inside its copper), along the other 0.49 mm off it (outside the 0.2 mm half width); both in the box.
+        let rt = design.routing.as_mut().unwrap();
+        for (id, dx, dy) in [("v1", 350, 350), ("v2", 350, -350)] {
+            rt.vias.push(Via { id: id.into(), net: "N1".into(), at: Point { x: c.x + dx, y: c.y + dy }, drill: 100, diameter: 200, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        }
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
+        let pad_idx = graph.items.iter().position(|i| matches!(&i.item, ItemRef::Pad { reference, .. } if reference == "R1")).unwrap();
+        let touching: Vec<&str> = graph.items[pad_idx].connected.iter().filter_map(|&j| match &graph.items[j].item {
+            ItemRef::Via { via_id } => Some(via_id.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(touching.len(), 1, "one via is on the copper, the other off it: {touching:?}");
+    }
+
     #[test]
     fn different_nets_never_merge_even_when_pads_touch() {
         let (mut design, mut model) = two_pad_model();
