@@ -402,6 +402,10 @@
     await run("eeschema.Simulation.stopSimulation");
     await settle(20000);
     t(runButton() && !runButton().disabled, "the run is over");
+    // `onSimFinished` follows a Stop (`m_simFinished = true`): Probe and Tune stay enabled
+    t((await run("eeschema.Simulation.probe")).ok === true, "Probe is enabled after a Stop, as onSimFinished leaves it");
+    await E.run("common.Interactive.cancel");
+    await sleep(300);
     // close, discarding the new tab
     click(q('button[aria-label="Close"]'));
     await sleep(500);
