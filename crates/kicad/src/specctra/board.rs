@@ -496,9 +496,7 @@ fn parse_footprint(fp: &[Sexpr], copper: &[String], view: &BoardView) -> Fp {
                 }
             }
             Some(tag @ ("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly" | "fp_curve")) => {
-                let board_tag = tag.replacen("fp_", "gr_", 1);
-                let Some(shape) = crate::import::graphic_shape(child, &board_tag, |p| p) else { continue };
-                if let Some(mut g) = gfx_of(&shape) {
+                if let Some(mut g) = gfx_nm(child, &tag[3..]) {
                     // `shape->Rotate( VECTOR2I( 0, 0 ), footprint->GetOrientation() ); shape->Move( footprint->GetPosition() )`.
                     g.rotate(V::new(0, 0), out.orient);
                     g.translate(out.pos);
@@ -516,18 +514,38 @@ fn parse_footprint(fp: &[Sexpr], copper: &[String], view: &BoardView) -> Fp {
     out
 }
 
-/// A shape read by the importer (micrometres) as one of ours (nanometres).
-fn gfx_of(shape: &Shape) -> Option<Gfx> {
-    let v = |p: &Point| V::new(p.x * 1000, p.y * 1000);
-    let kind = match shape {
-        Shape::Segment { start, end, .. } => GfxShape::Segment(v(start), v(end)),
-        Shape::Arc { start, mid, end, .. } => GfxShape::Arc(v(start), v(mid), v(end)),
-        Shape::Rect { start, end, .. } => GfxShape::Rect(v(start), v(end)),
-        Shape::Circle { center, end, .. } => GfxShape::Circle(v(center), v(end)),
-        Shape::Polygon { pts, .. } => GfxShape::Poly(pts.iter().map(v).collect()),
-        Shape::Bezier { start, c1, c2, end, .. } => GfxShape::Bezier([v(start), v(c1), v(c2), v(end)]),
+/// A `PCB_SHAPE` of the file (`fp_line`, `gr_arc`, ..: `kind` is the name after the prefix) in nanometres, `parsePCB_SHAPE` reading every coordinate with
+/// `parseBoardUnits` -- a library footprint's graphics are often at fractions of a micrometre. The points of a polygon are its `(xy ..)`; a repeated one is dropped.
+fn gfx_nm(item: &[Sexpr], kind: &str) -> Option<Gfx> {
+    let pt = |name: &str| point(item, name);
+    let width = sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(nm).unwrap_or(0);
+    let layer = sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Cmts.User").to_string();
+    let filled = sexpr::find(item, "fill").and_then(|f| sexpr::txt(f, 1)).is_some_and(|t| t == "yes" || t == "solid");
+    let poly = || -> Vec<V> {
+        let mut out: Vec<V> = Vec::new();
+        if let Some(pts) = sexpr::find(item, "pts") {
+            for p in pts.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l) == Some("xy")).filter_map(xy_of) {
+                if out.last() != Some(&p) {
+                    out.push(p);
+                }
+            }
+        }
+        out
     };
-    Some(Gfx { shape: kind, layer: shape.layer().to_string(), width: shape.stroke_width() * 1000, filled: shape.is_filled() })
+    let shape = match kind {
+        "line" => GfxShape::Segment(pt("start")?, pt("end")?),
+        "arc" => GfxShape::Arc(pt("start")?, pt("mid")?, pt("end")?),
+        "rect" => GfxShape::Rect(pt("start")?, pt("end")?),
+        "circle" => GfxShape::Circle(pt("center")?, pt("end")?),
+        "poly" => GfxShape::Poly(poly()),
+        "curve" => {
+            let pts = poly();
+            let [a, c1, c2, b] = pts[..] else { return None };
+            GfxShape::Bezier([a, c1, c2, b])
+        }
+        _ => return None,
+    };
+    Some(Gfx { shape, layer, width, filled: filled && kind != "curve" })
 }
 
 fn parse_pad(pad: &[Sexpr], parent: &Fp, copper: &[String], view: &BoardView) -> Option<Pad> {
@@ -604,10 +622,8 @@ fn parse_pad(pad: &[Sexpr], parent: &Fp, copper: &[String], view: &BoardView) ->
                 if !matches!(tag, "gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly" | "gr_curve") {
                     continue;
                 }
-                if let Some(shape) = crate::import::graphic_shape(child, tag, |p| p) {
-                    if let Some(g) = gfx_of(&shape) {
-                        prims.push(g);
-                    }
+                if let Some(g) = gfx_nm(child, &tag[3..]) {
+                    prims.push(g);
                 }
             }
         }
@@ -647,6 +663,28 @@ mod tests {
         assert_eq!(fp.pads[0].layers, vec!["F.Cu".to_string(), "F.Mask".to_string()]);
         // (-1, -1) and (1, -1) turned by 90 degrees are (-1, 1) and (-1, -1), then moved.
         assert_eq!(fp.gfx[0].shape, GfxShape::Segment(V::new(9_000_000, 21_000_000), V::new(9_000_000, 19_000_000)));
+    }
+
+    /// A footprint's graphics and a custom pad's basic shapes are read to the nanometre, as `parseBoardUnits` reads them: a library footprint's courtyard at
+    /// -1.100577 mm stays there.
+    #[test]
+    fn graphics_are_read_to_the_nanometre() {
+        let b = BoardView::parse(&board(
+            r#"(footprint "lib:R" (layer "F.Cu") (at 10 20)
+                 (property "Reference" "R1") (property "Value" "10k")
+                 (pad "1" smd custom (at 0 0) (size 0.3 0.3) (layers "F.Cu") (options (anchor rect))
+                   (primitives (gr_poly (pts (xy -0.500001 -0.75) (xy 0.5 -0.750003) (xy 1 0)) (width 0.012345) (fill yes))))
+                 (fp_line (start -1.100577 -0.899717) (end 1.099423 -0.899717) (stroke (width 0.05) (type solid)) (layer "F.CrtYd"))
+                 (fp_arc (start -1 -1) (mid 0 -1.414214) (end 1 -1) (stroke (width 0.12) (type solid)) (layer "F.SilkS")))"#,
+        ))
+        .unwrap();
+        let fp = &b.footprints[0];
+        assert_eq!(fp.gfx[0].shape, GfxShape::Segment(V::new(10_000_000 - 1_100_577, 20_000_000 - 899_717), V::new(10_000_000 + 1_099_423, 20_000_000 - 899_717)));
+        assert_eq!(fp.gfx[0].width, 50_000);
+        assert_eq!(fp.gfx[1].shape, GfxShape::Arc(V::new(9_000_000, 19_000_000), V::new(10_000_000, 20_000_000 - 1_414_214), V::new(11_000_000, 19_000_000)));
+        let prim = &fp.pads[0].prims[0];
+        assert_eq!(prim.shape, GfxShape::Poly(vec![V::new(-500_001, -750_000), V::new(500_000, -750_003), V::new(1_000_000, 0)]));
+        assert_eq!((prim.width, prim.filled), (12_345, true));
     }
 
     #[test]

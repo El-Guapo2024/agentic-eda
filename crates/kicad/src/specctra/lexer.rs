@@ -4,7 +4,9 @@
 //! `<pin_reference>` (`"U2"-"14"`), or a bare word, which is a keyword to the parser when it is one it knows and a symbol when it is not. The parser tells the two apart by the
 //! word, and by the token: a quoted word is a string, never a keyword.
 //!
-//! Errors are KiCad's `PARSE_ERROR`s with the same words: `Expecting 'x'`, `Expecting a|b. Got 'y'`, `Unexpected 'x'`, followed by ` in 'file', line N, offset M.`.
+//! Errors are KiCad's `PARSE_ERROR`s with the same words, followed by ` in 'file', line N, offset M.`: `Expecting '%s'`, `Expecting %s. Got '%s'` and
+//! `Unexpected '%s'` put a token's `GetTokenString` -- already in single quotes -- in quotes again (`Expecting ''('' in ..`, as kicad-cli's own readers say it), and
+//! `Unexpected( CurText() )` gives the word bare.
 
 /// What a token is (`DSN_T`'s negative values, and a keyword or symbol for a bare word).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,6 +326,16 @@ impl<'a> Lexer<'a> {
 
     // -------------------------------------------------------------------------------------------------------------------- the errors
 
+    /// `GetTokenString( CurTok() )`: the current token as the errors name it -- a bare word that is one of the keywords (`specctra.keywords`) by its own spelling,
+    /// any other by its kind (`'symbol'`).
+    fn cur_token_string(&self) -> String {
+        if self.cur == Tok::Symbol && is_keyword(&self.cur_text) {
+            format!("'{}'", self.cur_text)
+        } else {
+            self.token_string(self.cur)
+        }
+    }
+
     fn token_string(&self, tok: Tok) -> String {
         let t = match tok {
             Tok::None => "NONE",
@@ -343,18 +355,17 @@ impl<'a> Lexer<'a> {
 
     /// `Expecting( int aTok )`.
     pub fn expecting_tok(&self, tok: Tok) -> ParseError {
-        self.err(format!("Expecting {}", self.token_string(tok)))
+        self.err(format!("Expecting '{}'", self.token_string(tok)))
     }
 
-    /// `Expecting( const char* )`: `Expecting a|b. Got 'x'`.
+    /// `Expecting( const char* )`: `Expecting a|b. Got ''x''`.
     pub fn expecting(&self, what: &str) -> ParseError {
-        let got = if self.cur == Tok::Symbol { format!("'{}'", self.cur_text) } else { self.token_string(self.cur) };
-        self.err(format!("Expecting {what}. Got {got}"))
+        self.err(format!("Expecting {what}. Got '{}'", self.cur_token_string()))
     }
 
-    /// `Expecting( T_xxx )` for a keyword.
+    /// `Expecting( T_xxx )` for a keyword: `Expecting ''kw''`.
     pub fn expecting_kw(&self, kw: &str) -> ParseError {
-        self.err(format!("Expecting '{kw}'"))
+        self.err(format!("Expecting ''{kw}''"))
     }
 
     /// `Unexpected( const char* text )`.
@@ -362,13 +373,15 @@ impl<'a> Lexer<'a> {
         self.err(format!("Unexpected {text}"))
     }
 
-    /// `Unexpected( T_xxx )` (the keyword in quotes) and `Unexpected( int aTok )` for a token.
+    /// `Unexpected( T_xxx )` for a keyword: `Unexpected ''kw''`.
     pub fn unexpected_kw(&self, kw: &str) -> ParseError {
-        self.err(format!("Unexpected '{kw}'"))
+        self.err(format!("Unexpected ''{kw}''"))
     }
 
+    /// `Unexpected( int aTok )`: the current token (a keyword by its name, another word as `'symbol'`), or the end of the input.
     pub fn unexpected_tok(&self, tok: Tok) -> ParseError {
-        self.err(format!("Unexpected {}", self.token_string(tok)))
+        let what = if tok == self.cur { self.cur_token_string() } else { self.token_string(tok) };
+        self.err(format!("Unexpected '{what}'"))
     }
 
     /// `NeedLEFT`.
@@ -409,6 +422,51 @@ impl<'a> Lexer<'a> {
     pub fn parse_double(&self) -> PResult<f64> {
         self.cur_text.trim().parse::<f64>().map_err(|_| self.err("Invalid floating point number"))
     }
+}
+
+/// The keywords of the Specctra lexer (`pcbnew/specctra_import_export/specctra.keywords`), sorted: a bare word spelled as one of them is that keyword's token
+/// (`DSNLEXER::findToken`, an exact match), any other is `DSN_SYMBOL`.
+const KEYWORDS: &[&str] = &[
+    "absolute", "add_group", "add_pins", "added", "allow_antenna", "allow_redundant_wiring", "amp", "ancestor", "antipad", "aperture_type", "array", "attach",
+    "attr", "average_pair_length", "back", "base_design", "bbv_ctr2ctr", "bend_keepout", "bond", "both", "bottom", "bottom_layer_sel", "boundary", "brickpat",
+    "bundle", "bus", "bypass", "capacitance_resolution", "capacitor", "case_sensitive", "cct1", "cct1a", "center_center", "checking_trim_by_pin", "circ",
+    "circle", "circuit", "class", "class_class", "classes", "clear", "clearance", "cluster", "cm", "color", "colors", "comment", "comp", "comp_edge_center",
+    "comp_order", "component", "composite", "conductance_resolution", "conductor", "conflict", "connect", "constant", "contact", "control", "corner", "corners",
+    "cost", "created_time", "cross", "crosstalk_model", "current_resolution", "deleted", "deleted_keepout", "delta", "diagonal", "direction", "directory",
+    "discrete", "effective_via_length", "elongate_keepout", "exclude", "expose", "extra_image_directory", "family", "family_family", "family_family_spacing",
+    "fanout", "farad", "file", "fit", "fix", "flip_style", "floor_plan", "footprint", "forbidden", "force_to_terminal_point", "forgotten", "free", "fromto",
+    "front", "front_only", "gap", "gate", "gates", "generated_by_freeroute", "global", "grid", "group", "group_set", "guide", "hard", "height", "high",
+    "history", "horizontal", "host_cad", "host_version", "image", "image_conductor", "image_image", "image_image_spacing", "image_outline_clearance",
+    "image_set", "image_type", "inch", "include", "include_pins_in_crosstalk", "inductance_resolution", "insert", "instcnfg", "inter_layer_clearance", "jumper",
+    "junction_type", "keepout", "kg", "kohm", "large", "large_large", "layer", "layer_depth", "layer_noise_weight", "layer_pair", "layer_rule", "length",
+    "length_amplitude", "length_factor", "length_gap", "library", "library_out", "limit", "limit_bends", "limit_crossing", "limit_vias", "limit_way", "linear",
+    "linear_interpolation", "load", "lock_type", "logical_part", "logical_part_mapping", "low", "match_fromto_delay", "match_fromto_length",
+    "match_group_delay", "match_group_length", "match_net_delay", "match_net_length", "max_delay", "max_len", "max_length", "max_noise",
+    "max_restricted_layer_length", "max_stagger", "max_stub", "max_total_delay", "max_total_length", "max_total_vias", "medium", "mhenry", "mho", "microvia",
+    "mid_driven", "mil", "min_gap", "mirror", "mirror_first", "mixed", "mm", "negative_diagonal", "net", "net_number", "net_out", "net_pin_changes", "nets",
+    "network", "network_out", "no", "noexpose", "noise_accumulation", "noise_calculation", "normal", "object_type", "off", "off_grid", "offset", "on", "open",
+    "opposite_side", "order", "orthogonal", "outline", "overlap", "pad", "pad_pad", "padstack", "pair", "parallel", "parallel_noise", "parallel_segment",
+    "parser", "part_library", "path", "pcb", "permit_orient", "permit_side", "physical", "physical_part_mapping", "piggyback", "pin", "pin_allow",
+    "pin_cap_via", "pin_via_cap", "pin_width_taper", "pins", "pintype", "place", "place_boundary", "place_control", "place_keepout", "place_rule", "placement",
+    "plan", "plane", "pn", "point", "polygon", "polyline_path", "position", "positive_diagonal", "power", "power_dissipation", "power_fanout", "prefix",
+    "primary", "priority", "property", "protect", "qarc", "quarter", "radius", "ratio", "ratio_tolerance", "rect", "reduced", "region", "region_class",
+    "region_class_class", "region_net", "relative_delay", "relative_group_delay", "relative_group_length", "relative_length", "reorder", "reroute_order_viols",
+    "resistance_resolution", "resistor", "resolution", "restricted_layer_length_factor", "room", "rotate", "rotate_first", "round", "roundoff_rotation",
+    "route", "route_to_fanout_only", "routes", "routes_include", "rule", "same_net_checking", "sample_window", "saturation_length", "sec", "secondary", "self",
+    "sequence_number", "session", "set_color", "set_pattern", "shape", "shield", "shield_gap", "shield_loop", "shield_tie_down_interval", "shield_width",
+    "side", "signal", "site", "small", "smd", "snap", "snap_angle", "soft", "source", "space_in_quoted_tokens", "spacing", "spare", "spiral_via", "square",
+    "stack_via", "stack_via_depth", "standard", "starburst", "status", "structure", "structure_out", "subgate", "subgates", "substituted", "such", "suffix",
+    "super_placement", "supply", "supply_pin", "swapping", "switch_window", "system", "tandem_noise", "tandem_segment", "tandem_shield_overhang", "term_only",
+    "terminal", "terminator", "test", "test_points", "testpoint", "threshold", "time_length_factor", "time_resolution", "tjunction", "tolerance", "top",
+    "topology", "total", "track_id", "turret", "type", "um", "unassigned", "unconnects", "unit", "up", "use_array", "use_layer", "use_net", "use_via", "value",
+    "vertical", "via", "via_array_template", "via_at_smd", "via_keepout", "via_number", "via_rotate_first", "via_site", "via_size", "virtual_pin", "volt",
+    "voltage_resolution", "was_is", "way", "weight", "width", "window", "wire", "wire_keepout", "wires", "wires_include", "wiring", "write_resolution",
+    "x               # test cmake script with indent and comment", "xy", "y",
+];
+
+/// `findToken( word ) != DSN_SYMBOL`.
+pub fn is_keyword(word: &str) -> bool {
+    KEYWORDS.binary_search(&word).is_ok()
 }
 
 #[cfg(test)]

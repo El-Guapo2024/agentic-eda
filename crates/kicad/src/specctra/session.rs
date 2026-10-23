@@ -143,7 +143,7 @@ impl Db<'_> {
         let circle_of = |s: &ShapeEl| -> Result<Circle, String> {
             match &s.shape {
                 Some(ShapeElem::Circle(c)) => Ok(c.clone()),
-                other => Err(format!("Unsupported via shape: {}", other.as_ref().map(shape_token).unwrap_or("none"))),
+                other => Err(format!("Unsupported via shape: {}", other.as_ref().map(shape_token).unwrap_or_else(|| "'NONE'".to_string()))),
             }
         };
         let pos = um_pt(map_pt(point, res));
@@ -153,7 +153,7 @@ impl Db<'_> {
             let circle = match &padstack.shapes[0].shape {
                 Some(ShapeElem::Circle(c)) => c.clone(),
                 // `makeVIA` words the one-shape case with a full stop, the all-layers case without.
-                other => return Err(format!("Unsupported via shape: {}{}", other.as_ref().map(shape_token).unwrap_or("none"), if shape_count == 1 { "." } else { "" })),
+                other => return Err(format!("Unsupported via shape: {}{}", other.as_ref().map(shape_token).unwrap_or_else(|| "'NONE'".to_string()), if shape_count == 1 { "." } else { "" })),
             };
             (ViaKind::Through, scale(circle.diameter, res), "F.Cu".to_string(), "B.Cu".to_string())
         } else {
@@ -190,14 +190,15 @@ impl Db<'_> {
     }
 }
 
-/// `GetTokenString( shape->Type() )`.
-fn shape_token(s: &ShapeElem) -> &'static str {
-    match s {
+/// `DSNLEXER::GetTokenString( shape->Type() )`: the keyword in single quotes.
+fn shape_token(s: &ShapeElem) -> String {
+    let t = match s {
         ShapeElem::Rect(_) => "rect",
         ShapeElem::Circle(_) => "circle",
         ShapeElem::Qarc(_) => "qarc",
         ShapeElem::Path(p) => p.name(),
-    }
+    };
+    format!("'{t}'")
 }
 
 /// `SPECCTRA_DB::FromSESSION` on a session already read (`LoadSESSION`), against `board`, the board as KiCad reads it. `via_drill_default` is the Default class's via

@@ -331,10 +331,12 @@ fn a_bad_session_is_refused_in_kicads_words() {
     assert_eq!(err("(session s (routes (resolution um 10)))"), "Session file is missing the \"library_out\" section");
     assert_eq!(err(&session_with("(net VIN (wire (path In9.Cu 10 0 0 1 1)))")), "Session file uses invalid layer id 'In9.Cu'.");
     assert_eq!(err(&session_with("(net VIN (via Nope 0 0))")), "A wire_via refers to missing padstack 'Nope'.");
-    assert_eq!(err(&session_with("(net VIN (via Sq 0 0))")), "Unsupported via shape: rect.");
+    // `GetTokenString( type )` puts the token in quotes.
+    assert_eq!(err(&session_with("(net VIN (via Sq 0 0))")), "Unsupported via shape: 'rect'.");
     assert_eq!(err("(session s (placement (component X (place Q9 0 0 front 0))) (routes (library_out)))"), "Reference 'Q9' not found.");
     // What the parser refuses is said as `PARSE_ERROR` says it.
-    assert!(err("(pcb x)").starts_with("Expecting 'session' in 's.ses', line 1"), "{}", err("(pcb x)"));
+    // `Expecting( T_session )` puts `GetTokenString`'s quoted token in quotes again, as kicad-cli's own board reader says it ("Expecting ''('' in ..").
+    assert!(err("(pcb x)").starts_with("Expecting ''session'' in 's.ses', line 1"), "{}", err("(pcb x)"));
 }
 
 /// The drill a via's padstack name holds is `UNDEFINED_DRILL_DIAMETER` when it is the Default class's, so the via takes its own net's class drill.
@@ -348,4 +350,155 @@ fn a_via_drill_equal_to_the_default_is_the_nets_own() {
     assert_eq!(got.vias[0].via.drill, 350);
     let got = from_session_db(&session, &board, 300_000, &|_| 0).unwrap();
     assert_eq!(got.vias[0].via.drill, 400);
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------- held to kicad-cli
+
+/// A board written by hand to hold what a plain design does not (`crates/kicad/tests/fixtures/specctra_parity.kicad_pcb`): a footprint turned by 30 degrees with arcs
+/// and a courtyard at nanometres, one on the back turned by -45 degrees with an arc and a rounded rectangle pad off its centre, two custom pads (one turned, with
+/// a filled polygon drawn wide, an arc, a circle, a line and a rectangle), and a footprint's rule area on an inner layer and the back with a hole.
+const PARITY_PCB: &str = include_str!("../../tests/fixtures/specctra_parity.kicad_pcb");
+/// What `kicad-cli pcb export specctra` (10.99, 25ec2335f2) wrote for it.
+const PARITY_DSN: &str = include_str!("../../tests/fixtures/specctra_parity.dsn");
+
+/// The element of a DSN text that starts with the line `head` (its indentation included), down to the line that closes it.
+fn block<'a>(text: &'a str, head: &str) -> &'a str {
+    let start = text.find(&format!("\n{head}")).map(|i| i + 1).unwrap_or_else(|| panic!("no {head:?} in\n{text}"));
+    let indent = head.len() - head.trim_start().len();
+    let close = format!("\n{})\n", " ".repeat(indent));
+    let end = text[start..].find(&close).map(|i| start + i + close.len()).unwrap_or(text.len());
+    &text[start..end]
+}
+
+/// `FromBOARD` on the hand-made board, read as KiCad reads it: the Default class at KiCad's defaults, the outline its Edge.Cuts rectangle.
+fn parity_export() -> String {
+    let mut board = BoardView::parse(PARITY_PCB).unwrap();
+    let edge = eda_model::ir::Shape::Rect { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 80_000_000, y: 40_000_000 } };
+    let mut outline = eda_drc::outline::build_board_polygon_outlines(&[edge], 5_000.0, 10_000, true);
+    outline.polys.simplify();
+    let default_class = super::export::ClassFacts { name: "Default".into(), track_width: 200_000, clearance: 200_000, via_diameter: 600_000, via_drill: 300_000 };
+    let class_of = |_: &str| default_class.clone();
+    let st = super::export::Settings {
+        pcb_name: "specctra_parity.dsn".into(),
+        host_version: super::HOST_VERSION.into(),
+        outline: &outline,
+        hole_clearance: 0,
+        max_error: 5_000,
+        default_class: default_class.clone(),
+        class_of_net: &class_of,
+    };
+    super::export::from_board(&mut board, &st).unwrap().0.to_text()
+}
+
+/// The courtyard of a turned footprint and its arcs (`TransformArcToPolygon`, drawn wide, on the front and turned over to the top from the back) come out as kicad-cli
+/// writes them, to the nanometre.
+#[test]
+fn the_outlines_of_turned_and_flipped_footprints_are_kicads() {
+    let ours = parity_export();
+    for head in ["    (image T:ARC", "    (image T:BACKARC"] {
+        let (want, got) = (block(PARITY_DSN, head), block(&ours, head));
+        assert!(want == got, "{head}: {}", first_difference(want, got));
+    }
+}
+
+/// The padstacks of a rounded rectangle off the pad's centre and of two custom pads (the convex hull of `MergePrimitivesAsPolygon`: the anchor and each basic shape as
+/// `TransformShapeToPolygon` makes it) are kicad-cli's shapes. The names of the custom ones end in a hash of KiCad's merged polygon, which is not made here.
+#[test]
+fn the_padstacks_of_rounded_and_custom_pads_are_kicads() {
+    let ours = parity_export();
+    let shapes = |text: &str, prefix: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = text;
+        while let Some(i) = rest.find(&format!("\n    (padstack {prefix}")) {
+            let b = block(rest, &format!("    (padstack {prefix}"));
+            out.push(b.lines().skip(1).collect::<Vec<_>>().join("\n"));
+            // The block ends with its newline, which the next one's search starts at.
+            rest = &rest[i + b.len()..];
+        }
+        out.sort();
+        out
+    };
+    for prefix in ["RoundRect", "Cust"] {
+        let (want, got) = (shapes(PARITY_DSN, prefix), shapes(&ours, prefix));
+        assert_eq!(want.len(), 2 - (prefix == "RoundRect") as usize);
+        assert!(want == got, "{prefix}:\nwant {want:#?}\ngot  {got:#?}");
+    }
+    // The name says the pad's size, its bounding box on the board (the turn included; KiCad's is that of the shapes `MakeEffectiveShapes` makes, kicad-cli's
+    // 10260 x 9770.001, here that of the hull, 10260 x 9764.944), the hull's corners and a hash in KiCad's form (`HASH_128::ToString`, 32 upper case digits).
+    let name = ours.split("(pin ").filter_map(|p| p.split(' ').next()).find(|n| n.starts_with("Cust[T]Pad_2000")).unwrap_or("");
+    assert!(name.starts_with("Cust[T]Pad_2000.000000x2000.000000_10260.000000x9764.944000_20_um_"), "{name}");
+    let hash = name.rsplit('_').next().unwrap();
+    assert!(hash.len() == 32 && hash.chars().all(|c| c.is_ascii_digit() || c.is_ascii_uppercase()), "{hash}");
+}
+
+/// A footprint's rule area on In1.Cu and B.Cu: a keepout per layer in the order of the stack (`CuStack`), relative to the footprint; its hole a window on the layer
+/// `zone->GetLayer()` gives -- for a zone on more than one layer `UNDEFINED_LAYER`, which `m_kicadLayer2pcb` takes for the first layer of the stack.
+#[test]
+fn a_footprints_rule_area_is_a_keepout_per_layer_of_the_stack() {
+    let ours = parity_export();
+    let image = block(&ours, "    (image T:KO");
+    let want = "    (image T:KO
+      (pin Round[A]Pad_1600.000000_um 1 0 0)
+      (keepout \"\" (polygon In1.Cu 0  -3000 3000  3000 3000  3000 -3000  -3000 -3000  -3000 3000)
+        (window (polygon F.Cu 0  -1000 1000  1000 1000  1000 -1000  -1000 -1000  -1000 1000))
+      )
+      (keepout \"\" (polygon B.Cu 0  -3000 3000  3000 3000  3000 -3000  -3000 -3000  -3000 3000)
+        (window (polygon F.Cu 0  -1000 1000  1000 1000  1000 -1000  -1000 -1000  -1000 1000))
+      )
+    )
+";
+    assert!(image == want, "{}", first_difference(want, image));
+}
+
+/// The placement and the network of the hand-made board are kicad-cli's, line for line.
+#[test]
+fn the_placement_and_network_of_the_hand_made_board_are_kicads() {
+    let ours = parity_export();
+    for head in ["  (placement", "  (network", "  (structure"] {
+        let (want, got) = (block(PARITY_DSN, head), block(&ours, head));
+        assert!(want == got, "{head}: {}", first_difference(want, got));
+    }
+}
+
+/// `BuiltBoardOutlines` is in nanometres: a round cutout of the board is a keepout whose corners are where KiCad's polygon of the circle puts them, not rounded to
+/// micrometres (kicad-cli's DSN of the same Edge.Cuts circle).
+#[test]
+fn a_round_cutout_is_kicads_polygon_to_the_nanometre() {
+    let (mut design, model) = sample_board();
+    design.drawings = Some(eda_model::ir::DrawingsSection {
+        shapes: vec![eda_model::ir::Shape::Circle { id: "shp_hole".into(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: Point { x: 15_000, y: 15_000 }, end: Point { x: 16_500, y: 15_000 } }],
+        ..Default::default()
+    });
+    let out = super::export_dsn(&design, &model, "t.dsn").unwrap();
+    let pcb = load_pcb(&out.text, "t.dsn").unwrap();
+    let keepouts = &pcb.structure.as_ref().unwrap().keepouts;
+    let Some(ShapeElem::Path(hole)) = &keepouts[0].shape else { panic!("{}", out.text) };
+    // kicad-cli 10.99's polygon of `(gr_circle (center 15 15) (end 16.5 15))`.
+    let kicad = "15247.3 -13517.9  15487.9 -13578.8  15715.1 -13678.5 15922.9 -13814.3  16105.5 -13982.3  16257.9 -14178.2  16376 -14396.4 \
+                 16456.6 -14631.1  16497.4 -14875.9  16500 -15000  16497.4 -15124.1 16456.6 -15368.9  16376 -15603.6  16257.9 -15821.8  16105.5 -16017.7 \
+                 15922.9 -16185.7  15715.1 -16321.5  15487.9 -16421.2  15247.3 -16482.1 15000 -16502.6  14752.7 -16482.1  14512.1 -16421.2  14284.9 -16321.5 \
+                 14077.1 -16185.7  13894.5 -16017.7  13742.1 -15821.8  13624 -15603.6 13543.4 -15368.9  13502.6 -15124.1  13502.6 -14875.9  13543.4 -14631.1 \
+                 13624 -14396.4  13742.1 -14178.2  13894.5 -13982.3  14077.1 -13814.3 14284.9 -13678.5  14512.1 -13578.8  14752.7 -13517.9  15000 -13497.4";
+    let nums: Vec<&str> = kicad.split_whitespace().collect();
+    let mut want: Vec<String> = nums.chunks(2).map(|c| format!("{} {}", c[0], c[1])).collect();
+    let mut got: Vec<String> = hole.points.iter().map(|p| format!("{} {}", super::format::g6(p.x), super::format::g6(p.y))).collect();
+    assert_eq!(got.first(), got.last(), "the polygon is closed");
+    got.pop();
+    want.sort();
+    got.sort();
+    assert_eq!(got, want);
+}
+
+/// `Expecting( "front|back" )` and `Unexpected( tok )` name the token they got as `GetTokenString` does -- a keyword by its spelling, any other bare word as
+/// `'symbol'` -- in a second pair of quotes, as kicad-cli 10.99's board reader words it (`Expecting start, end, .. or locked. Got ''symbol'' in ..`).
+/// `Unexpected( CurText() )` gives the word as it is.
+#[test]
+fn a_parse_error_names_a_keyword_by_its_spelling_and_another_word_as_a_symbol() {
+    let problem = |ses: &str| load_session(ses, "s.ses").unwrap_err().problem;
+    assert_eq!(problem("(session s (placement (component X (place R1 0 0 sideways 0))))"), "Expecting front|back. Got ''symbol''");
+    assert_eq!(problem("(session s (placement (component X (place R1 0 0 pins 0))))"), "Expecting front|back. Got ''pins''");
+    assert_eq!(problem("(session s (placement (component X (pins))))"), "Unexpected ''pins''");
+    assert_eq!(problem("(session s (placement (component X (wobble))))"), "Unexpected ''symbol''");
+    assert_eq!(problem("(session s (placement (component X (place R1 0 0 front 0 x))))"), "Expecting ''(''");
+    assert_eq!(problem("(session s (wobble))"), "Unexpected wobble");
 }

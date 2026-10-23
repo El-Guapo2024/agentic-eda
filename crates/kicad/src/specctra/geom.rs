@@ -1,7 +1,8 @@
 //! The pieces of KiCad's geometry library that `SPECCTRA_DB::FromBOARD` calls, ported in KiCad's own integer arithmetic (nanometres, `int` rounded with `KiROUND`):
 //! `RotatePoint` and `EDA_ANGLE` (`libs/kimath/src/trigo.cpp`, `geometry/eda_angle.h`), `VECTOR2I::Resize`, `SEG::ReflectPoint`, `GetArcToSegmentCount`,
-//! `ConvertArcToPolyline` for a circle, `CornerListToPolygon` / `TransformRoundChamferedRectToPolygon` (`convert_basic_shapes_to_polygon.cpp`, error inside) and
-//! `BuildConvexHull` (`geometry/convex_hull.cpp`).
+//! `ConvertArcToPolyline` (about a centre, and through three points with `ARC_CHORD_PARAMS`), `TransformArcToPolygon`, `CornerListToPolygon` /
+//! `TransformRoundChamferedRectToPolygon` (`convert_basic_shapes_to_polygon.cpp`) and `BuildConvexHull` (`geometry/convex_hull.cpp`); `TransformCircleToPolygon` and
+//! `TransformOvalToPolygon` are `eda_shape_poly_set::basic_shapes`'.
 //!
 //! The coordinates are `i64` so a product of two never overflows; KiCad's are `int`.
 
@@ -250,6 +251,308 @@ pub fn arc_to_polyline_inside(center: V, radius: i64, start: Angle, arc: Angle, 
         rot = Angle(rot.0 + delta.0);
     }
     out
+}
+
+pub use eda_shape_poly_set::basic_shapes::ErrorLoc;
+
+fn opposite(loc: ErrorLoc) -> ErrorLoc {
+    match loc {
+        ErrorLoc::Inside => ErrorLoc::Outside,
+        ErrorLoc::Outside => ErrorLoc::Inside,
+    }
+}
+
+/// `SHAPE_LINE_CHAIN::Append( aP )`: a point equal to the last one is not added.
+fn append(chain: &mut Vec<V>, p: V) {
+    if chain.last() != Some(&p) {
+        chain.push(p);
+    }
+}
+
+/// `EDA_ANGLE( const VECTOR2D& aVector )`: the direction of a vector, the axes and the diagonals exact.
+pub fn angle_of(x: f64, y: f64) -> Angle {
+    if x == 0.0 && y == 0.0 {
+        Angle(0.0)
+    } else if y == 0.0 {
+        Angle(if x >= 0.0 { 0.0 } else { -180.0 })
+    } else if x == 0.0 {
+        Angle(if y >= 0.0 { 90.0 } else { -90.0 })
+    } else if x == y {
+        Angle(if x >= 0.0 { 45.0 } else { -180.0 + 45.0 })
+    } else if x == -y {
+        Angle(if x >= 0.0 { -45.0 } else { 180.0 - 45.0 })
+    } else {
+        Angle(y.atan2(x) / (PI / 180.0))
+    }
+}
+
+/// `CircleToEndSegmentDeltaRadius( aRadius, aSegCount )`: how far outside the circle the ends of the segments of a `seg_count`-gon tangent to it are.
+pub fn circle_to_end_segment_delta_radius(radius: i64, seg_count: i64) -> i64 {
+    let seg_count = if seg_count <= 2 { 3 } else { seg_count };
+    let alpha = PI / seg_count as f64;
+    kiround((radius as f64 * (1.0 - 1.0 / alpha.cos())).abs())
+}
+
+/// `ARC_CHORD_PARAMS` (`libs/kimath/src/geometry/arc_chord_params.cpp`): an arc through three points told by its chord, the chord's unit vectors, its sagitta and radius.
+struct ArcChord {
+    half_chord: f64,
+    ux: f64,
+    uy: f64,
+    nx: f64,
+    ny: f64,
+    sagitta: f64,
+    radius: f64,
+    center_offset: f64,
+    midx: f64,
+    midy: f64,
+}
+
+impl ArcChord {
+    /// `ARC_CHORD_PARAMS::Compute`: `None` for a degenerate arc (no chord, or the middle on it).
+    fn compute(start: V, mid: V, end: V) -> Option<ArcChord> {
+        let dx = end.x as f64 - start.x as f64;
+        let dy = end.y as f64 - start.y as f64;
+        let chord_len = (dx * dx + dy * dy).sqrt();
+        if chord_len <= 0.0 {
+            return None;
+        }
+        let mx = mid.x as f64 - start.x as f64;
+        let my = mid.y as f64 - start.y as f64;
+        let cross = mx * dy - my * dx;
+        if cross == 0.0 {
+            return None;
+        }
+        let sagitta = cross.abs() / chord_len;
+        if sagitta <= 0.0 {
+            return None;
+        }
+        let half_chord = chord_len / 2.0;
+        let radius = (half_chord * half_chord + sagitta * sagitta) / (2.0 * sagitta);
+        if radius <= 0.0 {
+            return None;
+        }
+        let (ux, uy) = (dx / chord_len, dy / chord_len);
+        let (mut nx, mut ny) = (-uy, ux);
+        if cross < 0.0 {
+            nx = -nx;
+            ny = -ny;
+        }
+        Some(ArcChord {
+            half_chord,
+            ux,
+            uy,
+            nx,
+            ny,
+            sagitta,
+            radius,
+            center_offset: radius - sagitta,
+            midx: (start.x as f64 + end.x as f64) * 0.5,
+            midy: (start.y as f64 + end.y as f64) * 0.5,
+        })
+    }
+
+    /// `GetStartAngle`: the direction from the centre to the start.
+    fn start_angle(&self) -> Angle {
+        let sin_half = self.half_chord / self.radius;
+        let cos_half = self.center_offset / self.radius;
+        angle_of(-sin_half * self.ux - cos_half * self.nx, -sin_half * self.uy - cos_half * self.ny)
+    }
+
+    /// `GetEndAngle`.
+    fn end_angle(&self) -> Angle {
+        let sin_half = self.half_chord / self.radius;
+        let cos_half = self.center_offset / self.radius;
+        angle_of(sin_half * self.ux - cos_half * self.nx, sin_half * self.uy - cos_half * self.ny)
+    }
+
+    /// `GetArcAngle`, radians.
+    fn arc_angle(&self) -> f64 {
+        let ratio = (self.half_chord / self.radius).clamp(0.0, 1.0);
+        let base_angle = 2.0 * ratio.asin();
+        if self.sagitta > self.radius {
+            2.0 * PI - base_angle
+        } else {
+            base_angle
+        }
+    }
+}
+
+/// `ConvertArcToPolyline( aPolyline, aCenter, aRadius, aStartAngle, aArcAngle, aAccuracy, aErrorLoc )`: the points of an arc about a centre appended to `chain`.
+pub fn arc_to_polyline_about(chain: &mut Vec<V>, center: V, radius: i64, start: Angle, arc: Angle, accuracy: f64, loc: ErrorLoc) -> i64 {
+    let mut n = 2;
+    if radius as f64 >= accuracy {
+        n = arc_to_segment_count(radius, accuracy as i64, arc.0) + 1;
+    }
+    let delta = Angle(arc.0 / n as f64);
+    let at = |r: f64, rot: Angle| V::new(kiround(center.x as f64 + r * rot.cos()), kiround(center.y as f64 + r * rot.sin()));
+    match loc {
+        ErrorLoc::Inside => {
+            // With the error on the inside the end points of each segment are error-free.
+            let mut rot = start;
+            for _ in 0..=n {
+                append(chain, at(radius as f64, rot));
+                rot = rot + delta;
+            }
+        }
+        ErrorLoc::Outside => {
+            // With the error on the outside it is the middles of the segments that are error-free: a half segment at each end of the arc.
+            let seg360 = kiround(n as f64 * 360.0 / arc.0).abs();
+            let error_radius = radius + circle_to_end_segment_delta_radius(radius, seg360);
+            append(chain, at(radius as f64, start));
+            let mut rot = start + Angle(delta.0 / 2.0);
+            for _ in 0..n {
+                append(chain, at(error_radius as f64, rot));
+                rot = rot + delta;
+            }
+            append(chain, at(radius as f64, start + arc));
+        }
+    }
+    n
+}
+
+/// `ConvertArcToPolyline( aPolyline, aStart, aMid, aEnd, aAccuracy, aErrorLoc, aRadialOffset )`: the points of the arc through three points, `radial_offset` off it,
+/// appended to `chain`.
+pub fn arc_to_polyline_through(chain: &mut Vec<V>, start: V, mid: V, end: V, accuracy: f64, loc: ErrorLoc, radial_offset: f64) -> i64 {
+    let Some(params) = ArcChord::compute(start, mid, end) else {
+        append(chain, start);
+        if end != start {
+            append(chain, end);
+        }
+        return 0;
+    };
+    let arc_angle = params.arc_angle();
+    if arc_angle <= 0.0 {
+        append(chain, start);
+        append(chain, end);
+        return 0;
+    }
+    let max_coord = i32::MAX as f64;
+    let point = |alpha: f64, effective_radius: f64| -> Option<V> {
+        let u_offset = effective_radius * alpha.sin();
+        let n_offset = params.center_offset - effective_radius * alpha.cos();
+        let x = params.midx + params.ux * u_offset + params.nx * n_offset;
+        let y = params.midy + params.uy * u_offset + params.ny * n_offset;
+        (x.is_finite() && y.is_finite() && x.abs() <= max_coord && y.abs() <= max_coord).then(|| V::new(kiround(x), kiround(y)))
+    };
+    let effective_radius = params.radius + radial_offset;
+    let arc_angle_eda = Angle(arc_angle / (PI / 180.0));
+    let mut n = 2;
+    let radius_for_seg = kiround(effective_radius.abs().min(max_coord));
+    if radius_for_seg as f64 >= accuracy {
+        n = arc_to_segment_count(radius_for_seg, accuracy as i64, arc_angle_eda.0) + 1;
+    }
+    let half_angle = arc_angle / 2.0;
+    let delta = arc_angle / n as f64;
+    let mut alphas: Vec<(f64, f64)> = Vec::new();
+    let seg360 = kiround(n as f64 * 360.0 / arc_angle_eda.0).abs();
+    if loc == ErrorLoc::Inside || seg360 <= 0 {
+        alphas.extend((0..=n).map(|i| (-half_angle + delta * i as f64, effective_radius)));
+    } else {
+        let error_radius = effective_radius + circle_to_end_segment_delta_radius(radius_for_seg, seg360) as f64;
+        alphas.push((-half_angle, effective_radius));
+        alphas.extend((0..n).map(|i| (-half_angle + delta * (i as f64 + 0.5), error_radius)));
+        alphas.push((half_angle, effective_radius));
+    }
+    for (alpha, r) in alphas {
+        match point(alpha, r) {
+            Some(p) => append(chain, p),
+            None => {
+                // An overflow falls back to a straight segment.
+                chain.clear();
+                append(chain, start);
+                append(chain, end);
+                return 0;
+            }
+        }
+    }
+    n
+}
+
+/// `SEG( a, b ).Distance( p )`: `isqrt( SquaredDistance( p ) )`.
+fn seg_distance(a: V, b: V, p: V) -> i64 {
+    let (abx, aby) = ((b.x - a.x) as i128, (b.y - a.y) as i128);
+    let (apx, apy) = ((p.x - a.x) as i128, (p.y - a.y) as i128);
+    let e = apx * abx + apy * aby;
+    let sq: i128 = if e <= 0 {
+        apx * apx + apy * apy
+    } else {
+        let f = abx * abx + aby * aby;
+        if e >= f {
+            let (bpx, bpy) = ((p.x - b.x) as i128, (p.y - b.y) as i128);
+            bpx * bpx + bpy * bpy
+        } else {
+            let g = (apx * apx + apy * apy) as f64 - (e as f64 * e as f64) / f as f64;
+            if g < 0.0 {
+                0
+            } else {
+                kiround(g) as i128
+            }
+        }
+    };
+    let mut r = (sq as f64).sqrt() as i128;
+    while r * r < sq {
+        r += 1;
+    }
+    while r * r > sq {
+        r -= 1;
+    }
+    r as i64
+}
+
+fn p64(v: V) -> eda_clipper2::Point64 {
+    eda_clipper2::Point64::new(v.x, v.y)
+}
+
+fn from64(chain: &[eda_clipper2::Point64]) -> Vec<V> {
+    chain.iter().map(|p| V::new(p.x, p.y)).collect()
+}
+
+/// `TransformOvalToPolygon( aBuffer, aStart, aEnd, aWidth, aError, aErrorLoc )`.
+pub fn oval_polygon(start: V, end: V, width: i64, error: i64, loc: ErrorLoc) -> Vec<V> {
+    from64(&eda_shape_poly_set::basic_shapes::oval_polygon(p64(start), p64(end), width, error, loc, 0))
+}
+
+/// `TransformCircleToPolygon( aBuffer, aCenter, aRadius, aError, aErrorLoc )`.
+pub fn circle_polygon(center: V, radius: i64, error: i64, loc: ErrorLoc) -> Vec<V> {
+    from64(&eda_shape_poly_set::basic_shapes::circle_polygon(p64(center), radius, error, loc, 0))
+}
+
+/// `TransformArcToPolygon( aBuffer, aStart, aMid, aEnd, aWidth, aError, aErrorLoc )` (`convert_basic_shapes_to_polygon.cpp`): the outline of an arc drawn `width`
+/// wide -- the end cap at the start, the outside edge, the end cap at the end, the inside edge back -- always walked counter-clockwise.
+pub fn transform_arc_to_polygon(start: V, mid: V, end: V, width: i64, error: i64, loc: ErrorLoc) -> Vec<V> {
+    let distance_to_mid = seg_distance(start, end, mid);
+    if distance_to_mid <= 1 {
+        // Not an arc but essentially a straight line with a small error.
+        return oval_polygon(start, end, width + distance_to_mid, error, loc);
+    }
+    // For a consistent winding the arc is always processed counter-clockwise, its ends swapped if need be.
+    let (smx, smy) = ((mid.x - start.x) as i128, (mid.y - start.y) as i128);
+    let (sex, sey) = ((end.x - start.x) as i128, (end.y - start.y) as i128);
+    let cross = smx * sey - smy * sex;
+    let (mut p0, mut p1) = (start, end);
+    if cross < 0 {
+        std::mem::swap(&mut p0, &mut p1);
+    }
+    let Some(params) = ArcChord::compute(p0, mid, p1) else {
+        return oval_polygon(start, end, width, error, loc);
+    };
+    let start_angle = params.start_angle();
+    let end_angle = params.end_angle();
+    let radial_offset = width / 2;
+    let arc_inner_radius = params.radius - radial_offset as f64;
+    let accuracy = error as f64;
+    let mut outline = Vec::new();
+    // Starting end cap (a half circle at p0).
+    arc_to_polyline_about(&mut outline, p0, radial_offset, start_angle - Angle(180.0), Angle(180.0), accuracy, loc);
+    // Outside edge.
+    arc_to_polyline_through(&mut outline, p0, mid, p1, accuracy, loc, radial_offset as f64);
+    // Ending end cap (a half circle at p1).
+    arc_to_polyline_about(&mut outline, p1, radial_offset, end_angle, Angle(180.0), accuracy, loc);
+    // Inside edge, the other way.
+    if arc_inner_radius > 0.0 {
+        arc_to_polyline_through(&mut outline, p1, mid, p0, accuracy, opposite(loc), -(radial_offset as f64));
+    }
+    outline
 }
 
 /// `ROUNDED_CORNER`.

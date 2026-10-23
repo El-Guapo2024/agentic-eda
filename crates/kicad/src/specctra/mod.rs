@@ -45,7 +45,8 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
     let pcb_text = crate::export_kicad_pcb(design, model, &meta)?;
     let mut board = board::BoardView::parse(&pcb_text).map_err(|e| vec![CheckResult::fail("specctra.board", "board", e)])?;
 
-    // `BuiltBoardOutlines`: the Edge.Cuts items in the order the board file has them, chained into the outline and its cutouts.
+    // `BuiltBoardOutlines`: the Edge.Cuts items in the order the board file has them, chained into the outline and its cutouts -- in nanometres, at the board's
+    // `m_MaxError` and `GetOutlinesChainingEpsilon()` (`BOARD::GetBoardPolygonOutlines`), so a curve's corners are where KiCad puts them, not rounded to micrometres.
     let outline = {
         let mut shapes: Vec<Shape> = Vec::new();
         if let Some(d) = &design.drawings {
@@ -63,7 +64,12 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
                 }
             }
         }
-        eda_drc::outline::board_outline_of(&shapes, true)
+        let shapes: Vec<Shape> = shapes.iter().map(shape_in_nm).collect();
+        let max_error = model.board.max_error_um * 1000;
+        let mut outline = eda_drc::outline::build_board_polygon_outlines(&shapes, max_error as f64, eda_model::outline::CHAINING_EPSILON_UM * 1000, true);
+        // "Make polygon strictly simple to avoid issues (especially in 3D viewer)".
+        outline.polys.simplify();
+        outline
     };
 
     let b = &model.board;
@@ -88,6 +94,24 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
         class_of_net: &facts_of,
     };
     let (pcb, warnings) = export::from_board(&mut board, &settings).map_err(|e| vec![CheckResult::fail("specctra.export", "board", e.0)])?;
-    let _ = Point { x: 0, y: 0 };
     Ok(DsnExport { text: pcb.to_text(), warnings })
+}
+
+/// A shape of the design (micrometres) in the nanometres of the board KiCad reads: the derived file writes every coordinate and width of it exactly.
+fn shape_in_nm(s: &Shape) -> Shape {
+    let n = |p: &Point| Point { x: p.x * 1000, y: p.y * 1000 };
+    let mut s = s.clone();
+    match &mut s {
+        Shape::Segment { start, end, stroke_width, .. } | Shape::Rect { start, end, stroke_width, .. } => {
+            (*start, *end, *stroke_width) = (n(start), n(end), *stroke_width * 1000);
+        }
+        Shape::Circle { center, end, stroke_width, .. } => (*center, *end, *stroke_width) = (n(center), n(end), *stroke_width * 1000),
+        Shape::Arc { start, mid, end, stroke_width, .. } => (*start, *mid, *end, *stroke_width) = (n(start), n(mid), n(end), *stroke_width * 1000),
+        Shape::Polygon { pts, stroke_width, .. } => {
+            pts.iter_mut().for_each(|p| *p = n(p));
+            *stroke_width *= 1000;
+        }
+        Shape::Bezier { start, c1, c2, end, stroke_width, .. } => (*start, *c1, *c2, *end, *stroke_width) = (n(start), n(c1), n(c2), n(end), *stroke_width * 1000),
+    }
+    s
 }

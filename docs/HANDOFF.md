@@ -47,6 +47,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-specctra-review` | Parity review of P19b (Specctra) against KiCad 8303b2ad and the box's `kicad-cli pcb export specctra`: outline and footprint graphics at nanometres, `TransformArcToPolygon`, custom pads by `MergePrimitivesAsPolygon`'s shapes, a footprint's rule areas in stack order, KiCad's parse-error and via-shape words (`PARITY-pcb.md` section 46) | done 2026-10-23 | the inferred boundary of a board with no outline, KiCad's `HASH_128` in custom pad names; the box's kicad-cli now has `pcb export specctra` (decision: keep our exporter or use it) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
