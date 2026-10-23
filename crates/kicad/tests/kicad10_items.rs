@@ -145,7 +145,7 @@ fn reexport_judged_the_same(cli: &Path, src: &Path, rel: &str) -> (PathBuf, Stri
 }
 
 /// The QA boards of KiCad 25ec2335 with these items: line endings (`line_ending_drc`, `line_ending_zone_flood`), via stitching (`stitch_fp_rulearea`, `issue25265`, `issue25303`), a
-/// drill chart and two drill maps (`api_kitchen_sink`).
+/// drill chart and two drill maps (`api_kitchen_sink`), and the two boards of the downgrade corpus that have any (`via_generators`, `modern_metadata`).
 const BOARDS: &[&str] = &[
     "line_ending_drc/line_ending_drc_fail.kicad_pcb",
     "line_ending_drc/line_ending_drc_pass.kicad_pcb",
@@ -154,6 +154,9 @@ const BOARDS: &[&str] = &[
     "issue25265.kicad_pcb",
     "issue25303.kicad_pcb",
     "api_kitchen_sink.kicad_pcb",
+    // The downgrade corpus: a via stitching beside other generators, and a board of KiCad 10 metadata with line endings and a drill chart.
+    "../downgrade/regressions/via_generators/via_generators.kicad_pcb",
+    "../downgrade/golden/current/modern_metadata.kicad_pcb",
 ];
 
 /// Boards of our own, for the kinds no QA board has: grid items (cartesian and polar, turned, locked, with a custom property), as kicad-cli 10.99 (25ec2335) saved them.
@@ -313,10 +316,28 @@ fn kicad10_items(text: &str) -> Vec<String> {
     out
 }
 
-/// Two canonical items are one: the same text, numbers to the micrometre. A drill chart kicad-cli rebuilds from our file comes out to the micrometre as the original has it
-/// (its margins written as KiCad holds them, 1.0025 mm, and laid out in nanometres: `TableCell::margin_nm`).
+/// Two canonical items are one: the same text, numbers to the micrometre -- but for the corners of a table's cells. The IR holds a table's widths and heights to the
+/// micrometre and puts each cell where their sum puts it, so a cell of a file whose widths are not whole micrometres (`modern_metadata`'s 19.252718, 11.874622, ..) comes
+/// back up to half a micrometre a column or row off, the rounding of each width adding up: a cell's `(start ..)` and `(end ..)` are taken within 2 µm. A chart built
+/// here (kicad-cli's rebuild of ours) lays out to the micrometre: the widths, heights and margins are held exactly.
 fn same_item(a: &str, b: &str) -> bool {
-    a == b
+    if a == b {
+        return true;
+    }
+    if !(a.starts_with("(drill_chart") && b.starts_with("(drill_chart")) {
+        return false;
+    }
+    let words = |s: &str| s.replace(['(', ')'], " ").split_whitespace().map(str::to_string).collect::<Vec<_>>();
+    let (wa, wb) = (words(a), words(b));
+    if wa.len() != wb.len() {
+        return false;
+    }
+    let mut corner = 0u8;
+    wa.iter().zip(&wb).all(|(x, y)| {
+        let near = corner > 0 && matches!((x.parse::<f64>(), y.parse::<f64>()), (Ok(p), Ok(q)) if (p - q).abs() <= 0.002 + 1e-9);
+        corner = if x == "start" || x == "end" { 2 } else { corner.saturating_sub(1) };
+        x == y || near
+    })
 }
 
 fn same_items(a: &[String], b: &[String]) -> bool {

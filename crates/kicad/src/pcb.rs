@@ -366,6 +366,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
 
         let mut vias: Vec<&Via> = routing.vias.iter().collect();
         vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
+        // Two vias of a net at one point (a microvia stack's, `PCB_VIA_STACK`) would mint one uuid: the second takes its layers into the seed.
+        let mut via_seeds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for v in &vias {
             let n = net_of("a via", &format!("{} at ({}, {})", v.net, v.at.x, v.at.y), &v.net);
             let x = mm(v.at.x);
@@ -373,7 +375,12 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
             let dia = mm(v.diameter);
             let drill = mm(v.drill);
             let lock = if is_locked(&v.id) { " (locked yes)" } else { "" };
-            let uuid = crate::duid_for(&format!("via:{}:{}:{}", v.net, v.at.x, v.at.y), &v.id);
+            let mut seed = format!("via:{}:{}:{}", v.net, v.at.x, v.at.y);
+            if !via_seeds.insert(seed.clone()) {
+                seed = format!("{seed}:{}:{}", v.from_layer, v.to_layer);
+                via_seeds.insert(seed.clone());
+            }
+            let uuid = crate::duid_for(&seed, &v.id);
             written.entry(v.id.clone()).or_default().push(uuid.clone());
             // The via's type and the tokens after its layers (`remove_unused_layers`, `tenting`, `padstack`, ..) as the file had them.
             let (kind, tokens) = crate::via_io::words(design.drawings.as_ref().and_then(|d| d.via_extra(&v.id)));
@@ -3401,6 +3408,24 @@ mod tests {
         let (made, made_model) = fixture();
         let plain = export_kicad_pcb(&made, &made_model, &meta()).unwrap();
         assert!(plain.contains("(layers \"F.Cu\" \"F.Paste\" \"F.Mask\")") && plain.contains("(layers \"B.Cu\" \"B.Paste\" \"B.Mask\")"), "{plain}");
+    }
+
+    /// A microvia stack (`PCB_VIA_STACK`) puts two vias of one net at one point: each is written with a uuid of its own (KiCad's `via_generators` QA board came back
+    /// with one uuid for both, and the stack's members named the wrong via).
+    #[test]
+    fn two_vias_of_a_net_at_one_point_get_two_uuids() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (via micro (at 20 10) (size 0.3) (drill 0.15) (layers "F.Cu" "In1.Cu") (net "GND") (uuid "00000000-0000-0000-0000-000000000001"))
+  (via micro (at 20 10) (size 0.3) (drill 0.15) (layers "In1.Cu" "In2.Cu") (net "GND") (uuid "00000000-0000-0000-0000-000000000002"))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let uuids: Vec<&str> = out.lines().filter(|l| l.contains("(via micro")).filter_map(|l| l.split("(uuid \"").nth(1)).collect();
+        assert_eq!(uuids.len(), 2, "{out}");
+        assert_ne!(uuids[0], uuids[1], "{out}");
     }
 
     /// A via keeps what its tokens say beyond its position, size, drill, layers and net: its type, the mode of the layers it does not connect, `free`, the zone layer
