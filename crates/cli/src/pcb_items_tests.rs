@@ -884,3 +884,36 @@ fn a_replaced_boards_drill_chart_lists_its_footprints_holes_in_the_same_step() {
     let texts: Vec<&str> = t.cells.iter().map(|c| c.text.as_str()).collect();
     assert_eq!(texts, ["SYM", "Drill (mm)", "", "0.30", "", "1.14", "", "1.52"], "the pads' rows, as kicad-cli's upgrade has them");
 }
+
+/// Fill All regenerates a via stitching its fill made dirty (`ZONE_FILLER_TOOL::regenerateDirtyGenerators`, `PCB_VIA_STITCH::OnZoneFillChanged`), then refills round the
+/// vias (`refillAroundGenerators`): `stitch_fp_rulearea`'s stitching emptied, a fill brings KiCad's 73 vias back. Slow tier (kicad-cli fills).
+#[test]
+fn fill_all_regenerates_a_via_stitching_over_the_new_fill() {
+    if !slow() {
+        return;
+    }
+    let qa = std::path::PathBuf::from(std::env::var_os("KICAD10_QA_DATA").unwrap_or_else(|| "/home/team_braneboard_com/src/kicad-src-25ec2335/qa/data".into()));
+    let Ok(text) = std::fs::read_to_string(qa.join("pcbnew/stitch_fp_rulearea.kicad_pcb")) else {
+        eprintln!("skipped: needs KiCad 25ec2335's stitch_fp_rulearea.kicad_pcb (KICAD10_QA_DATA)");
+        return;
+    };
+    if eda_kicad_engine::find_cli().is_none() {
+        eprintln!("skipped: needs kicad-cli");
+        return;
+    }
+    let dir = scratch("stitch_fill");
+    setup(&dir);
+    step(&dir, Cmd::ReplaceBoard { text, name: "stitch_fp_rulearea.kicad_pcb".into(), keep_kicad_layer_names: false, project: None }, false, "test").unwrap();
+    let design = load(&dir).unwrap().1;
+    let v = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
+    let kicad: std::collections::BTreeSet<(i64, i64)> = design.routing.as_ref().unwrap().vias.iter().filter(|x| v.member_ids.contains(&x.id)).map(|x| (x.at.x, x.at.y)).collect();
+    assert_eq!(kicad.len(), 73);
+    step(&dir, Cmd::PcbItem(PcbItemCmd::SetViaStitch { id: Some(v.id.clone()), stitch: v.clone(), vias: Some(Vec::new()) }), false, "test").unwrap();
+    assert!(load(&dir).unwrap().1.drawings.unwrap().board_items.via_stitches[0].member_ids.is_empty());
+    let done = crate::fill_api::refill(&dir, None);
+    assert_eq!(done["ok"], true, "{done}");
+    let after = load(&dir).unwrap().1;
+    let v = &after.drawings.as_ref().unwrap().board_items.via_stitches[0];
+    let ours: std::collections::BTreeSet<(i64, i64)> = after.routing.as_ref().unwrap().vias.iter().filter(|x| v.member_ids.contains(&x.id)).map(|x| (x.at.x, x.at.y)).collect();
+    assert_eq!(ours, kicad, "the fill put the stitching's vias back where KiCad's Update put them");
+}

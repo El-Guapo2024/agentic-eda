@@ -218,6 +218,7 @@
       if (!tid("via-stitch-properties")) return;
       t((await stitches()).length === n0, "no stitching is made before OK");
       const net = tid("vst-net");
+      t(net.value === "", "a new stitching starts on no net (ZONE_CREATE_HELPER::commitZone gives it the outline only)");
       const gnd = [...net.options].map((o) => o.value).find((v) => /^GND$/i.test(v)) ?? [...net.options].map((o) => o.value).find((v) => v);
       setValue(net, gnd ?? "");
       setValue(tid("vst-pitch"), "2");

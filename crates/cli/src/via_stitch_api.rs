@@ -19,8 +19,9 @@ pub(crate) fn plan(dir: &Path, design: &Design, model: &ConstraintModel, stitch:
 
 /// `cmd` with the vias of every `set_via_stitch` that has none placed (inside a batch too); `None` when there is nothing to place.
 ///
-/// A Move, Rotate or Flip of a via stitching (`PCB_VIA_STITCH::Move` translates the outline and marks it dirty; the generator tool's `Update` at the end of the move makes the
-/// vias again) is followed, in the same step, by the regeneration of the stitching where the move left it: `snap` and `spacing` make the board the move is tried on.
+/// A Move of a via stitching (`PCB_VIA_STITCH::Move` translates the outline and its vias and marks it dirty; the move tool's `genUpdateEdit` / `genFinishEdit` make the
+/// vias again, the grid anchored where the moved vias now are) is followed, in the same step, by the regeneration of the stitching where the move left it: `snap` and
+/// `spacing` make the board the move is tried on. A Rotate or a Flip (`EDIT_TOOL::Rotate`, `Flip`) turns the vias with the outline and only marks it dirty: no regeneration.
 pub(crate) fn with_planned_vias(cmd: &Cmd, dir: &Path, design: &Design, model: &ConstraintModel, snap: i64, spacing: i64) -> Option<Cmd> {
     let stitch_ids = |ids: &[String]| -> Vec<String> { design.drawings.iter().flat_map(|d| d.board_items.via_stitches.iter()).filter(|v| ids.contains(&v.id)).map(|v| v.id.clone()).collect() };
     match cmd {
@@ -28,7 +29,7 @@ pub(crate) fn with_planned_vias(cmd: &Cmd, dir: &Path, design: &Design, model: &
             let p = plan(dir, design, model, stitch);
             Some(Cmd::PcbItem(PcbItemCmd::SetViaStitch { id: id.clone(), stitch: p.stitch, vias: Some(p.vias.into_iter().map(|(cell, at)| PlannedVia { cell, at }).collect()) }))
         }
-        Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => {
+        Cmd::MoveItems { ids, .. } => {
             let moved = stitch_ids(ids);
             if moved.is_empty() {
                 return None;

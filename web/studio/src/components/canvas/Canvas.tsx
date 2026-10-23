@@ -16,7 +16,7 @@
 //     same preview without holding the button, click commits, Esc cancels.
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
-import { newViaStitch, netForNewStitch } from "../../kicad-port/viaStitchTool";
+import { newViaStitch } from "../../kicad-port/viaStitchTool";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
@@ -622,7 +622,7 @@ export function Canvas() {
           void api.addZone(source.net, source.layer, draw.pts, zoneSettingsOf(source), { layers: [...zoneLayers(source)] });
         } else if (mode?.mode === "stitch") {
           // KiCad 10's `ZONE_MODE::STITCH` (zone_create_helper.cpp): a via stitching with the outline, its defaults filled in (`InitializeDefaults`), and its properties dialog before any via is made.
-          openViaStitchDialog(null, newViaStitch(draw.pts, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0, netForNewStitch(state, api)));
+          openViaStitchDialog(null, newViaStitch(draw.pts, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0));
         } else {
           dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
         }

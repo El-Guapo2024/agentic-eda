@@ -272,6 +272,46 @@ fn rect_set(x0: i64, y0: i64, x1: i64, y1: i64) -> ShapePolySet {
     ShapePolySet::from_outline(vec![Point64::new(x0, y0), Point64::new(x1, y0), Point64::new(x1, y1), Point64::new(x0, y1)])
 }
 
+/// `PAD::FlashLayer` of a non-plated hole on copper: a round pad with a round drill as wide as the pad, or an oval one with a slot as long and as wide, has no copper -- only
+/// its hole is an obstacle.
+fn npth_without_copper(pad: &crate::board::DrcPad) -> bool {
+    use eda_model::footprint::{PadKind, PadShape};
+    if pad.kind != PadKind::NonPlatedHole {
+        return false;
+    }
+    match (pad.shape, pad.drill_round, pad.drill_slot) {
+        (PadShape::Circle, Some(d), None) => d >= pad.size.0,
+        // The slot is held turned with the footprint, the pad's size not: their long and short sides compared.
+        (PadShape::Oval, _, Some((w, h))) => w.max(h) >= pad.size.0.max(pad.size.1) && w.min(h) >= pad.size.0.min(pad.size.1),
+        _ => false,
+    }
+}
+
+/// `PCB_TEXT::TransformShapeToPolygon` with a clearance: `buildBoundingHull` -- the glyph strokes (each `r` wide either side) turned back by the draw rotation `rot_deg`
+/// about `at`, their box grown by `margin` (nanometres; square corners), its corners turned forward again -- added to `out` when it is `near` the query.
+fn add_text_hull(out: &mut ShapePolySet, segs: &[crate::kimath::Seg], r: Um, at: Point, rot_deg: f64, margin: i64, near: &dyn Fn((i64, i64, i64, i64)) -> bool) {
+    if segs.is_empty() {
+        return;
+    }
+    let (sin, cos) = rot_deg.to_radians().sin_cos();
+    // `RotatePoint( p, centre, angle )`, y down: x' = x cos + y sin, y' = -x sin + y cos, relative to the centre.
+    let turn = |p: (f64, f64), s: f64| (p.0 * cos + p.1 * s, -p.0 * s + p.1 * cos);
+    let (ax, ay) = (nm(at.x) as f64, nm(at.y) as f64);
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for p in segs.iter().flat_map(|s| [s.a, s.b]) {
+        let q = turn((nm(p.x) as f64 - ax, nm(p.y) as f64 - ay), -sin);
+        (x0, y0, x1, y1) = (x0.min(q.0), y0.min(q.1), x1.max(q.0), y1.max(q.1));
+    }
+    let grow = (nm(r) + margin) as f64;
+    let corners = [(x0 - grow, y0 - grow), (x1 + grow, y0 - grow), (x1 + grow, y1 + grow), (x0 - grow, y1 + grow)];
+    let pts: Vec<Point64> = corners.iter().map(|&c| turn(c, sin)).map(|(x, y)| Point64::new((x + ax).round() as i64, (y + ay).round() as i64)).collect();
+    let (bx0, by0) = (pts.iter().map(|p| p.x).min().unwrap_or(0), pts.iter().map(|p| p.y).min().unwrap_or(0));
+    let (bx1, by1) = (pts.iter().map(|p| p.x).max().unwrap_or(0), pts.iter().map(|p| p.y).max().unwrap_or(0));
+    if near((bx0, by0, bx1, by1)) {
+        out.add_outline(pts);
+    }
+}
+
 fn ring_set(pts: &[Point]) -> ShapePolySet {
     ShapePolySet::from_outline(pts.iter().map(|p| p64(*p)).collect())
 }
@@ -429,14 +469,35 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
         v.pitch_um = default_pitch(v.via.size_um);
     }
     let pitch = nm(v.pitch_um);
+    // `childrenAreOnThisGrid = m_childGridConfig == currentConfig`: the vias were made on the layout, mode and pitch the board's stitching of this id has (the settings of
+    // its last `Update`; a Properties edit has not reached the board yet). On a new grid every via is off it, and the first one is no dragged via.
+    let effective_pitch = |s: &ViaStitch| -> Um {
+        if s.pitch_um > 0 {
+            s.pitch_um
+        } else {
+            let size = if s.via.size_um > 0 { s.via.size_um } else { default_via_size(inputs.current_via_size_um) };
+            default_pitch(size)
+        }
+    };
+    let on_this_grid = inputs
+        .design
+        .drawings
+        .iter()
+        .flat_map(|d| d.board_items.via_stitches.iter())
+        .find(|s| s.id == v.id)
+        .is_some_and(|s| (s.layout, s.mode, effective_pitch(s)) == (v.layout, v.mode, v.pitch_um));
     // The anchor a moved via defines (the vias are on the grid of this layout and pitch: their cells are what the stitching's own settings make them).
-    let members: Vec<(i64, i64)> = inputs
+    let members: Vec<(i64, i64)> = if !on_this_grid {
+        Vec::new()
+    } else {
+        inputs
         .design
         .routing
         .iter()
         .flat_map(|rt| v.member_ids.iter().filter_map(move |id| rt.vias.iter().find(|x| &x.id == id)))
         .map(|x| (nm(x.at.x), nm(x.at.y)))
-        .collect();
+        .collect()
+    };
     if let Some(offset) = detect_origin_offset(&v, pitch, &members) {
         v.origin_offset = offset;
     }
@@ -494,7 +555,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
     // The stitch net's copper on each layer, inside the outline's box (a guard takes the zones' outlines).
     let mut per_layer: HashMap<String, ShapePolySet> = HashMap::new();
     for z in &zones {
-        if z.is_rule_area || z.teardrop || z.net != v.net {
+        if z.is_rule_area || z.net != v.net {
             continue;
         }
         if !zone_box(z).is_some_and(|b| boxes_overlap(b, stitch_box)) {
@@ -572,6 +633,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
     };
 
     let mut obstacles = ShapePolySet::default();
+    let fp_copper = crate::fp_art::footprint_copper(design, inputs.model);
     let same_net = |net: &Option<String>| net.as_deref() == Some(v.net.as_str());
     // Holes, once each: half the drill and the hole-to-hole clearance, or half the via and the hole clearance for another net.
     let mut hole_seen: BTreeSet<String> = BTreeSet::new();
@@ -598,7 +660,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
                 add_hole(&mut obstacles, &pad.id, hole, &pad.net, &item, layer);
             }
             let Some(copper_shape) = pad.copper_on(layer) else { continue };
-            if pad.flash(layer, &first, &last) == eda_model::padstack::Flash::Never {
+            if pad.flash(layer, &first, &last) == eda_model::padstack::Flash::Never || npth_without_copper(pad) {
                 continue;
             }
             let mut margin = via_size / 2 + eval(CType::Clearance, &item, Some(layer));
@@ -627,6 +689,51 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
                 margin = margin.max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
             }
             shape_to_polygon(&mut obstacles, &via.shape(), margin);
+        }
+        // A footprint's own graphics and texts on copper (`PCB_SHAPE`, `PCB_TEXT` of no net), and the board's texts on copper: `TransformShapeToPolygon` of each, a text's
+        // bounding hull (`PCB_TEXT::buildBoundingHull`) grown by the margin.
+        for piece in &fp_copper {
+            match piece {
+                crate::fp_art::FpCopper::Shape(s) if s.layer() == layer => {
+                    let item = rb.shape_item_of(s);
+                    let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+                    for part in crate::board::effective_shapes(s) {
+                        if near(shape_box(&part)) {
+                            shape_to_polygon(&mut obstacles, &part, margin);
+                        }
+                    }
+                }
+                crate::fp_art::FpCopper::Text(t) if t.layer == *layer => {
+                    let item = rb.text_item_of("fp_text", t);
+                    let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+                    if let Some(Shape::Strokes { segs, r }) = crate::board::footprint_text_shape(t) {
+                        add_text_hull(&mut obstacles, &segs, r, t.at, crate::board::footprint_text_draw_rotation(t), margin, &near);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for t in design.drawings.iter().flat_map(|d| d.copper_texts.iter()).filter(|t| t.layer == *layer) {
+            let item = rb.text_item_of("copper_text", t);
+            let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+            if let Some(Shape::Strokes { segs, r }) = crate::board::footprint_text_shape(t) {
+                add_text_hull(&mut obstacles, &segs, r, t.at, crate::board::footprint_text_draw_rotation(t), margin, &near);
+            }
+        }
+        for t in design.drawings.iter().flat_map(|d| d.texts.iter()).filter(|t| t.layer == *layer) {
+            let item = rb.board_text_item_of(t);
+            let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+            // Laid out as the DRC lays out a plain text (`crate::board::build`): square glyphs, vertically centred.
+            let size = (t.size_um, t.size_um);
+            let pen = crate::stroke_font::effective_pen_width(t.stroke_width, size, false);
+            let halign = match t.justify {
+                eda_model::ir::TextJustify::Left => -1,
+                eda_model::ir::TextJustify::Center => 0,
+                eda_model::ir::TextJustify::Right => 1,
+            };
+            let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
+            let segs = crate::stroke_font::kicad_text_segments(&crate::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness: t.stroke_width, angle_deg: rot, mirror: t.mirror, halign, valign: 0 });
+            add_text_hull(&mut obstacles, &segs, pen / 2, t.at, rot, margin, &near);
         }
         // Graphics on copper (`PCB_SHAPE`), another net's or none.
         for s in design.drawings.iter().flat_map(|d| d.shapes.iter()) {
@@ -665,7 +772,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             }
             continue;
         }
-        if z.net == v.net || z.teardrop {
+        if z.net == v.net {
             continue;
         }
         // "A different-net zone only blocks near its fill outside its own outline."

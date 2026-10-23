@@ -687,6 +687,10 @@ pub(crate) fn transform_board_items(dr: &mut DrawingsSection, ids: &BTreeSet<Str
     }
     for v in dr.board_items.via_stitches.iter_mut().filter(|v| ids.contains(&v.id)) {
         crate::kicad10_items::transform_via_stitch(v, x);
+        // `PCB_GENERATOR::Flip`: `SetLayer( GetFlippedLayer( GetLayer() ) )`.
+        if matches!(x, Xform::Flip { .. }) {
+            v.layer = flip_layer(&v.layer, copper);
+        }
     }
     for m in dr.board_items.drill_maps.iter_mut().filter(|m| ids.contains(&m.id)) {
         crate::kicad10_items::transform_drill_map(m, x);

@@ -334,14 +334,17 @@ function ViaStitchDialog() {
     const pitch = u(form.pitch);
     const size = u(form.size);
     const drill = u(form.drill);
-    if (!(pitch > 0)) return setError("The pitch must be greater than zero.");
-    if (!(size > 0) || !(drill > 0) || drill >= size) return setError("The via needs a drill smaller than its size.");
+    // The dialog takes any pitch (0 is `defaultPitch`); the via's fields stand in for `DIALOG_TRACK_VIA_PROPERTIES`, whose `PCB_VIA::ValidateViaParameters` says why a via
+    // will not do (`GEOMETRY_MIN_SIZE`, 1 um).
+    if (!(size >= 1)) return setError("Via diameter is too small.");
+    if (!(drill >= 1)) return setError("Via drill is too small.");
+    if (size <= drill) return setError("Via hole size must be smaller than via diameter");
     // `ToULong`: a seed that is not a number leaves the seed as it was.
     const seed = /^\d+$/.test(form.seed.trim()) ? Number(form.seed.trim()) >>> 0 : (form.work.seed ?? 0);
     // "Position: translate the outline to land on the requested first vertex."
     const [x0, y0] = stitchPosition(form.work);
     const [nx, ny] = [u(form.x), u(form.y)];
-    let work: BoardViaStitch = { ...form.work, pitch_um: pitch, seed, via: { from_layer: "F.Cu", to_layer: "B.Cu", ...form.work.via, size_um: size, drill_um: drill } };
+    let work: BoardViaStitch = { ...form.work, pitch_um: Math.max(0, pitch || 0), seed, via: { from_layer: "F.Cu", to_layer: "B.Cu", ...form.work.via, size_um: size, drill_um: drill } };
     if (Number.isFinite(nx) && Number.isFinite(ny) && (nx !== x0 || ny !== y0)) work = movedStitch(work, nx - x0, ny - y0);
     const before = new Set((board.drawings?.via_stitches ?? []).map((v) => v.id));
     if (!(await api.cmdBatch([viaStitchCmd(req.id, work)]))) return setError("The board refused the via stitching.");
@@ -378,14 +381,6 @@ function ViaStitchDialog() {
             <input type="number" step="any" value={form.x} onChange={(e) => set({ x: e.target.value })} style={{ width: 100 }} data-testid="vst-x" />
             <span>Position Y: ({units})</span>
             <input type="number" step="any" value={form.y} onChange={(e) => set({ y: e.target.value })} style={{ width: 100 }} data-testid="vst-y" />
-            <span>Mode:</span>
-            <select value={mode} onChange={(e) => setWork(withLayoutAndMode(form.work, layout, e.target.value as StitchMode))} data-testid="vst-mode">
-              {MODE_CHOICES.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
             <span>Pattern:</span>
             <select value={layout} disabled={!stitching} onChange={(e) => setWork(withLayoutAndMode(form.work, e.target.value as StitchLayout, mode))} data-testid="vst-pattern">
               {PATTERN_CHOICES.map((c) => (
@@ -414,6 +409,14 @@ function ViaStitchDialog() {
                 ))}
               </select>
             </span>
+            <span>Mode:</span>
+            <select value={mode} onChange={(e) => setWork(withLayoutAndMode(form.work, layout, e.target.value as StitchMode))} data-testid="vst-mode">
+              {MODE_CHOICES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
             <span>Guard Net:</span>
             <select value={form.work.guarded_net ?? ""} disabled={stitching} onChange={(e) => setWork({ guarded_net: e.target.value })} data-testid="vst-guard-net">
               <option value="">&lt;no net&gt;</option>

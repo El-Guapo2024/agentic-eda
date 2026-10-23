@@ -83,7 +83,7 @@ impl<'a> Board<'a> {
             return Err(fail("ops_bad_via_stitch", what, "a via stitching needs an outline of three corners or more"));
         }
         if stitch.via.size_um <= 0 || stitch.via.drill_um <= 0 || stitch.via.drill_um >= stitch.via.size_um {
-            return Err(fail("ops_bad_via_stitch", what, "the via of a stitching needs a drill smaller than its size"));
+            return Err(fail("ops_bad_via_stitch", what, "Via hole size must be smaller than via diameter"));
         }
         self.known_layer(&stitch.via.from_layer)?;
         self.known_layer(&stitch.via.to_layer)?;
@@ -108,9 +108,10 @@ impl<'a> Board<'a> {
                 removed.push(v.id.clone());
             }
         }
-        // `matchesRef`: the template's size, drill, layers and net (the position aside).
+        // `matchesRef`: the template's size, drill, layers and net (the position aside). A new stitch net is no mismatch: `PCB_VIA_STITCH::SetNetCode` gave every member the
+        // net before `Update` (the dialog's `SetNetCode( newNetCode )`), so a kept via keeps its id and takes the net.
         let t = &stitch.via;
-        let matches = |v: &Via| v.diameter == t.size_um && v.drill == t.drill_um && v.from_layer == t.from_layer && v.to_layer == t.to_layer && v.net == stitch.net;
+        let matches = |v: &Via| v.diameter == t.size_um && v.drill == t.drill_um && v.from_layer == t.from_layer && v.to_layer == t.to_layer;
         let mut keep_ids: Vec<String> = Vec::new();
         let mut moves: Vec<(String, Point)> = Vec::new();
         let mut adds: Vec<Point> = Vec::new();
@@ -137,6 +138,9 @@ impl<'a> Board<'a> {
             if let Some(v) = rt.vias.iter_mut().find(|v| &v.id == vid) {
                 v.at = *at;
             }
+        }
+        for v in rt.vias.iter_mut().filter(|v| keep_ids.contains(&v.id)) {
+            v.net = stitch.net.clone();
         }
         let before: std::collections::BTreeSet<String> = rt.vias.iter().map(|v| v.id.clone()).collect();
         for at in &adds {
@@ -179,8 +183,9 @@ impl<'a> Board<'a> {
     }
 }
 
-/// `PCB_VIA_STITCH::Move` (the outline and the origin translated, the vias regenerated after: here they stay until the stitching is edited again) and what a turn and a flip do
-/// to the outline (`PCB_GENERATOR_POLY`'s `Rotate` and `Flip` of the polygon).
+/// `PCB_GENERATOR_POLY::Move`, `Rotate` and `Flip`: the outline and the origin (`m_origin`) moved, turned or mirrored. The vias go with them as a group's members do
+/// (`crate::pcb_transform`); a Move is followed by the regeneration in the same step (the board directory's `with_planned_vias`), a turn and a flip only mark the stitching
+/// dirty, so its vias stay where the turn put them until the next fill or edit.
 pub(crate) fn transform_via_stitch(v: &mut ViaStitch, x: Xform) {
     for p in v.outline.iter_mut() {
         *p = x.point(*p);

@@ -92,6 +92,10 @@ pub(crate) fn template_text(t: &ViaTemplate, uuid: &str) -> String {
         .map(|child| match child.as_list().and_then(sexpr::tag) {
             Some("size") => sexpr::parse(&format!("(size {})", mm(t.size_um))).unwrap_or_else(|_| child.clone()),
             Some("drill") => sexpr::parse(&format!("(drill {})", mm(t.drill_um))).unwrap_or_else(|_| child.clone()),
+            // The span the dialog's From / To set (`m_viaTemplate->SetLayerPair`), so the template and the vias made from it agree.
+            Some("layers") if child.as_list().is_some_and(|l| sexpr::txt(l, 1) != Some(t.from_layer.as_str()) || sexpr::txt(l, 2) != Some(t.to_layer.as_str())) => {
+                sexpr::parse(&format!("(layers {} {})", sexpr_str(&t.from_layer), sexpr_str(&t.to_layer))).unwrap_or_else(|_| child.clone())
+            }
             _ => child.clone(),
         })
         .collect();
@@ -178,6 +182,9 @@ mod tests {
         // An edited template keeps the rest of the file's via.
         let edited = ViaTemplate { size_um: 800, drill_um: 400, ..v.via.clone() };
         assert!(template_text(&edited, "x").contains("(size 0.8) (drill 0.4) (layers \"F.Cu\" \"B.Cu\") (free yes)"));
+        // and a new span is the template's too (the dialog's From / To).
+        let blind = ViaTemplate { from_layer: "F.Cu".into(), to_layer: "In1.Cu".into(), ..v.via.clone() };
+        assert!(template_text(&blind, "x").contains("(layers \"F.Cu\" \"In1.Cu\") (free yes)"), "{}", template_text(&blind, "x"));
         assert_eq!(template_text(&ViaTemplate { size_um: 600, drill_um: 300, ..Default::default() }, "t"), "(via (at 0 0) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (free yes) (net \"\") (uuid \"t\"))");
     }
 }

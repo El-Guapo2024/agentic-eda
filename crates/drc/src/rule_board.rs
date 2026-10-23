@@ -735,6 +735,30 @@ impl<'a> RuleBoard<'a> {
         Rc::new(self.shape_item(s))
     }
 
+    /// The rule item of a text on a copper layer that is not a board `Text` of the IR (an imported board text, a footprint's text): a `PCB_TEXT` of no net with its text,
+    /// layer, size and pen.
+    pub fn text_item_of(&self, id: &str, t: &eda_model::ir::FootprintText) -> Rc<RuleItem> {
+        let mut it = RuleItem::new(id.to_string(), Class::Text);
+        it.layers = vec![t.layer.clone()];
+        it.layer = Some(t.layer.clone());
+        it.position = t.at;
+        it.text_height = nm(t.size.1);
+        it.text_thickness = nm(t.thickness);
+        it.set("Text", Prop::Str(t.text.clone()));
+        it.set("Layer", Prop::Layer(t.layer.clone()));
+        it.set("Text Height", Prop::Int(nm(t.size.1)));
+        it.set("Text Thickness", Prop::Int(nm(t.thickness)));
+        it.set("Position X", Prop::Int(nm(t.at.x)));
+        it.set("Position Y", Prop::Int(nm(t.at.y)));
+        it.description = format!("PCB text '{}' on {}", t.text, self.rules.layer_setup.display_name(&t.layer));
+        Rc::new(it)
+    }
+
+    /// The rule item of a board text (`Text`) of the IR.
+    pub fn board_text_item_of(&self, t: &eda_model::ir::Text) -> Rc<RuleItem> {
+        Rc::new(self.text_item(t))
+    }
+
     /// The engine the items are judged by (`DRC_ENGINE::EvalRules`).
     pub fn engine(&self) -> &RuleEngine {
         &self.engine

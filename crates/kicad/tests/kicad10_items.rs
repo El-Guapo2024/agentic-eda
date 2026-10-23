@@ -374,6 +374,87 @@ fn a_via_stitching_regenerates_the_vias_kicad_made() {
     assert!(missing.is_empty() && extra.is_empty(), "KiCad's {} vias against our {}: missing {missing:?}, extra {extra:?}", kicad.len(), ours.len());
 }
 
+/// KiCad's `PitchChangeKeepsGridAnchored` and `LayoutRoundTripKeepsGridAnchored` (qa/tests/pcbnew/test_via_stitch.cpp) on `stitch_fp_rulearea`: a new pitch, or a layout
+/// that comes back from Poisson, leaves the grid where it was -- `Update` takes a new anchor from a via off its cell only when the vias were made on the grid it is
+/// updating (`childrenAreOnThisGrid`), and after a change of pitch or layout every via is off it.
+#[test]
+fn a_new_pitch_or_layout_keeps_the_grid_anchored() {
+    use eda_model::via_stitch::StitchLayout;
+    if slow_tests_off() {
+        return;
+    }
+    let Some(qa) = qa_data() else {
+        eprintln!("skipped: needs KiCad 25ec2335's QA boards (KICAD10_QA_DATA)");
+        return;
+    };
+    let text = std::fs::read_to_string(qa.join("pcbnew/stitch_fp_rulearea.kicad_pcb")).unwrap();
+    let (design, model, notes) = import_kicad_pcb(&text).unwrap();
+    let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
+    let fills = eda_kicad::zone_fills::KicadFills::new("file".into(), String::new(), 0, entries).fills_nm(&design);
+    let stitch = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
+    let plan = |d: &eda_model::ir::Design, v: &eda_model::via_stitch::ViaStitch| {
+        eda_drc::via_stitch::plan(&eda_drc::via_stitch::PlanInputs { design: d, model: &model, fills: &fills, current_via_size_um: 600, current_via_drill_um: 300 }, v)
+    };
+    let before: std::collections::BTreeSet<(i64, i64)> = plan(&design, &stitch).vias.iter().map(|(_, p)| (p.x, p.y)).collect();
+    assert!(before.len() > 10);
+
+    // A pitch of 2 mm: every via on the 2 mm lattice of the same anchor.
+    let mut coarse = stitch.clone();
+    coarse.pitch_um = 2 * stitch.pitch_um.max(1_000);
+    let p = plan(&design, &coarse);
+    assert_eq!(p.stitch.origin_offset, stitch.origin_offset, "the anchor is kept");
+    assert!(!p.vias.is_empty());
+    let off = stitch.origin_offset;
+    assert!(p.vias.iter().all(|(_, at)| (at.x - off.x).rem_euclid(coarse.pitch_um) == 0 && (at.y - off.y).rem_euclid(coarse.pitch_um) == 0), "on the {} um lattice", coarse.pitch_um);
+
+    // Out to Poisson (the board's vias where Poisson put them), and back.
+    let mut poisson = stitch.clone();
+    poisson.layout = StitchLayout::Poisson;
+    let scattered = plan(&design, &poisson);
+    let mut d = design.clone();
+    let dr = d.drawings.as_mut().unwrap();
+    let stored = &mut dr.board_items.via_stitches[0];
+    stored.layout = StitchLayout::Poisson;
+    let members: Vec<String> = stored.member_ids.iter().take(scattered.vias.len()).cloned().collect();
+    stored.member_ids = members.clone();
+    for (id, (_, at)) in members.iter().zip(&scattered.vias) {
+        if let Some(v) = d.routing.as_mut().unwrap().vias.iter_mut().find(|v| &v.id == id) {
+            v.at = *at;
+        }
+    }
+    let back = plan(&d, &stitch);
+    let after: std::collections::BTreeSet<(i64, i64)> = back.vias.iter().map(|(_, p)| (p.x, p.y)).collect();
+    assert_eq!(back.stitch.origin_offset, stitch.origin_offset, "a Poisson via is no dragged via");
+    assert_eq!(after, before, "the grid comes back where it was");
+}
+
+/// Text on copper is an obstacle (`buildPlacementCells` takes every item of the copper R-tree: a `PCB_TEXT`'s `TransformShapeToPolygon` is its bounding hull grown by the
+/// clearance): a text on F.Cu over one of `stitch_fp_rulearea`'s vias takes that via, and its neighbours within the clearance of its box, away.
+#[test]
+fn a_text_on_copper_keeps_the_stitching_off() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(qa) = qa_data() else {
+        eprintln!("skipped: needs KiCad 25ec2335's QA boards (KICAD10_QA_DATA)");
+        return;
+    };
+    let text = std::fs::read_to_string(qa.join("pcbnew/stitch_fp_rulearea.kicad_pcb")).unwrap();
+    let (mut design, model, notes) = import_kicad_pcb(&text).unwrap();
+    let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
+    let fills = eda_kicad::zone_fills::KicadFills::new("file".into(), String::new(), 0, entries).fills_nm(&design);
+    let stitch = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
+    let plan = |d: &eda_model::ir::Design| eda_drc::via_stitch::plan(&eda_drc::via_stitch::PlanInputs { design: d, model: &model, fills: &fills, current_via_size_um: 600, current_via_drill_um: 300 }, &stitch);
+    let before = plan(&design);
+    let at = before.vias[before.vias.len() / 2].1;
+    let t: eda_model::ir::Text = serde_json::from_value(serde_json::json!({ "content": "X", "at": { "x": at.x, "y": at.y }, "layer": "F.Cu", "size_um": 1000, "stroke_width": 150, "justify": "center" })).unwrap();
+    design.drawings.as_mut().unwrap().texts.push(t);
+    let after = plan(&design);
+    eprintln!("stitch_fp_rulearea with a text on F.Cu at {at:?}: {} vias, {} before", after.vias.len(), before.vias.len());
+    assert!(!after.vias.iter().any(|(_, p)| *p == at), "no via under the text");
+    assert!(after.vias.len() < before.vias.len());
+}
+
 /// The board `rel` with its zones filled by kicad-cli (`KI_TEST::FillZones`): `pcb drc --refill-zones --save-board` on a copy.
 fn refilled(cli: &Path, qa: &Path, rel: &str) -> String {
     let src = qa.join("pcbnew").join(rel);

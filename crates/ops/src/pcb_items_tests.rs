@@ -798,6 +798,15 @@ fn a_stitching_makes_its_vias_and_churns_as_few_as_update_does() {
     assert_eq!((after[0].0.as_str(), after[1].0.as_str()), (first[0].0.as_str(), first[1].0.as_str()));
     assert!(!after.iter().any(|(vid, _)| *vid == first[2].0), "the via of the cell that went is gone");
     assert_eq!(after[2].1, p(8_000, 2_000));
+    // A new stitch net keeps the vias (`SetNetCode` gives the members the net), ids and all.
+    let mut vcc = stitches(&b)[0].clone();
+    vcc.net = "VCC".into();
+    set_stitch(&mut b, Some(&id), vcc, &[(1, 1), (2, 1), (4, 1)]).unwrap();
+    assert_eq!(member_vias(&b), after, "the same vias");
+    assert!(b.design().routing.as_ref().unwrap().vias.iter().filter(|v| stitches(&b)[0].member_ids.contains(&v.id)).all(|v| v.net == "VCC"));
+    let mut gnd = stitches(&b)[0].clone();
+    gnd.net = "GND".into();
+    set_stitch(&mut b, Some(&id), gnd, &[(1, 1), (2, 1), (4, 1)]).unwrap();
     // A new via size makes them again.
     let mut bigger = stitches(&b)[0].clone();
     bigger.via.size_um = 800;
@@ -831,6 +840,25 @@ fn a_nudged_via_is_put_back_on_its_cell_and_a_stitching_without_a_plan_is_refuse
     let mut poisson = stitch();
     poisson.layout = StitchLayout::Poisson;
     assert!(set_stitch(&mut b, Some(&id), poisson, &[]).is_ok());
+}
+
+/// A via stitching is a group: Rotate and Flip take its vias along (`PCB_GROUP::Rotate`, `Flip`) and a Flip takes it to the other side (`PCB_GENERATOR::Flip`'s
+/// `SetLayer( GetFlippedLayer( GetLayer() ) )`); a Move moves them too, before the board directory regenerates the stitching.
+#[test]
+fn a_stitching_turns_and_flips_with_its_vias() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    set_stitch(&mut b, None, stitch(), &[(1, 1)]).unwrap();
+    let id = stitches(&b)[0].id.clone();
+    b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    let at = member_vias(&b)[0].1;
+    assert_eq!((at.x.abs(), at.y.abs()), (2_000, 2_000), "turned about the origin with the outline");
+    assert_ne!(at, p(2_000, 2_000));
+    b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!(stitches(&b)[0].layer, "B.Cu");
+    assert_eq!(member_vias(&b)[0].1.x, -at.x, "mirrored with it");
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: 500, dy: 0 }).unwrap();
+    assert_eq!(member_vias(&b)[0].1.x, -at.x + 500);
 }
 
 #[test]
