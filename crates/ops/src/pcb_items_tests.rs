@@ -898,3 +898,34 @@ fn a_drill_chart_is_refused_off_the_documentation_layers_and_lists_the_holes() {
     let t = dr.tables.iter().find(|t| t.id == dr.board_items.drill_charts[0].table_id).unwrap();
     assert_eq!(t.cells[6 + 4].text, (ops_before + 1).to_string(), "the OPS of the 0.3 mm row");
 }
+
+/// `PCB_DRILL_CHART::IsStale` is the drill generation, not the cells: a chart that was read (no generation) is rebuilt by the first command, a cell edited by hand keeps its
+/// text until the holes change, and the Properties panel's edit rebuilds the chart whatever its generation (`PCB_PROPERTIES_PANEL::valueChanged`'s `RebuildCells`).
+#[test]
+fn a_drill_chart_is_stale_by_the_drill_generation_not_by_its_text() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 10_000, y: 10_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "Dwgs.User".into(), at: p(5_000, 6_000) })).unwrap();
+    let id = drawings(&b).board_items.drill_charts[0].table_id.clone();
+    let cell = |b: &Board, i: usize| drawings(b).tables.iter().find(|t| t.id == id).unwrap().cells[i].text.clone();
+    b.apply(&Cmd::Table(crate::TableCmd::EditCells { id: id.clone(), cells: vec![(1, 1)], edit: eda_model::table_edit::CellEdit { text: Some("by hand".into()), ..Default::default() } })).unwrap();
+    assert!(!b.refresh_drill_charts(), "the holes are as they were: the chart is not stale");
+    assert_eq!(cell(&b, 6 + 1), "by hand");
+    // A chart as a file has it: no generation, stale.
+    let mut read = b.design().clone();
+    read.drawings.as_mut().unwrap().board_items.drill_charts[0].built_generation = None;
+    let mut b = Board::new(read, &m, 100, 300);
+    assert!(b.refresh_drill_charts(), "a chart that was read is rebuilt");
+    assert_eq!(cell(&b, 6 + 1), "0.300");
+    b.apply(&Cmd::Table(crate::TableCmd::EditCells { id: id.clone(), cells: vec![(1, 1)], edit: eda_model::table_edit::CellEdit { text: Some("by hand".into()), ..Default::default() } })).unwrap();
+    // The via moved: a via changed, the generation with it.
+    let via = b.design().routing.as_ref().unwrap().vias[0].id.clone();
+    b.apply(&Cmd::MoveItems { ids: ids(&[&via]), dx: 1_000, dy: 0 }).unwrap();
+    assert!(b.refresh_drill_charts(), "a via changed");
+    assert_eq!(cell(&b, 6 + 1), "0.300");
+    b.apply(&Cmd::Table(crate::TableCmd::EditCells { id: id.clone(), cells: vec![(1, 1)], edit: eda_model::table_edit::CellEdit { text: Some("by hand".into()), ..Default::default() } })).unwrap();
+    let c = drawings(&b).board_items.drill_charts[0].clone();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetDrillChart { id: id.clone(), units: c.units, precision: c.precision, show_totals: c.show_totals, filter: c.filter })).unwrap();
+    assert_eq!(cell(&b, 6 + 1), "0.300", "the Properties panel rebuilds its chart");
+}

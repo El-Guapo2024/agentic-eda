@@ -1081,9 +1081,6 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // asked whether this move is possible and the gates said no, with a
     // reason -- which is exactly the signal a decision layer needs.
     board.apply(cmd)?;
-    // KiCad 10's drill charts report the board, so a command that changed a hole has made them wrong: they are built again in the same step (`OnModify`'s
-    // `RefreshGeneratedTables`).
-    board.refresh_drill_charts();
 
     // A command that made footprints of its own (Duplicate, Paste) added parts the model loaded before it ran has not heard of;
     // the board that results is judged against a model that has them, as the next load will have.
@@ -1105,7 +1102,10 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
         })
     };
     let judged: &ConstraintModel = refolded.as_ref().unwrap_or(&model);
-    let board = if refolded.is_some() { Board::new(board.design().clone(), judged, meta.snap_um, meta.spacing_um) } else { board };
+    let mut board = if refolded.is_some() { Board::new(board.design().clone(), judged, meta.snap_um, meta.spacing_um) } else { board };
+    // KiCad 10's drill charts report the board, so a command that changed a hole has made them wrong: they are built again in the same step (`OnModify`'s
+    // `RefreshGeneratedTables`), against the board as the command left it -- the model with the footprints a Paste, a pad edit or a new board brought (`refolded`).
+    board.refresh_drill_charts();
 
     let after = all_failures(&board, judged);
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);

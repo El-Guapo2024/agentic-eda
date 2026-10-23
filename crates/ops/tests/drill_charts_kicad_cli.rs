@@ -57,16 +57,15 @@ fn chart_of(d: &Design) -> (Table, DrillChart) {
     (t, c)
 }
 
-/// The two charts are one: the same rows, cells (text, alignment, size and margins of the text), keys, marks and profile, the same corner, and widths and heights within 2 µm
-/// (KiCad lays them out from the margins in nanometres, 1.0025 mm, this port from the micrometre the IR holds them to, 1.003 mm).
+/// The two charts are one: the same rows, cells (text, alignment, size and margins of the text), keys, marks and profile, the same corner, and the same widths and heights to
+/// the micrometre the IR holds them in (KiCad lays them out in nanometres from margins of 1.0025 mm; so does `autosize`, `TableCell::margin_nm`).
 fn assert_same_chart(tag: &str, ours: &Design, kicad: &Design) {
     let ((t, c), (kt, kc)) = (chart_of(ours), chart_of(kicad));
     let cells = |t: &Table| t.cells.iter().map(|x| (x.text.clone(), x.style.h_align, x.style.height_um, x.margins)).collect::<Vec<_>>();
     assert_eq!(cells(&t), cells(&kt), "{tag}: the cells");
     assert_eq!((t.col_count(), t.row_count(), t.at), (kt.col_count(), kt.row_count(), kt.at), "{tag}: the grid");
-    let near = |a: &[i64], b: &[i64]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 2);
-    assert!(near(&t.col_widths, &kt.col_widths), "{tag}: column widths {:?} against kicad-cli's {:?}", t.col_widths, kt.col_widths);
-    assert!(near(&t.row_heights, &kt.row_heights), "{tag}: row heights {:?} against kicad-cli's {:?}", t.row_heights, kt.row_heights);
+    assert_eq!(t.col_widths, kt.col_widths, "{tag}: column widths against kicad-cli's");
+    assert_eq!(t.row_heights, kt.row_heights, "{tag}: row heights against kicad-cli's");
     assert_eq!((&c.row_keys, &c.row_shapes, c.symbol_column), (&kc.row_keys, &kc.row_shapes, kc.symbol_column), "{tag}: the keys and marks");
     let profile = |d: &Design| d.drawings.as_ref().unwrap().board_items.drill_profile.clone();
     assert_eq!(profile(ours), profile(kicad), "{tag}: the profile");
@@ -151,4 +150,28 @@ fn a_new_hole_size_gets_a_row_as_kicad_gives_it_one() {
     assert_eq!(t.cells.iter().skip(1).step_by(2).map(|c| c.text.as_str()).collect::<Vec<_>>(), ["Drill (mm)", "0.30", "0.80", "1.14", "1.52"]);
     assert_eq!(c.row_shapes.get(&2), Some(&3), "the lowest shape no group has");
     assert!(!b.refresh_drill_charts(), "a fresh chart is left be");
+}
+
+/// A chart that was read is stale whatever its cells say (`m_builtGeneration` 0 against the board's drill generation): one cell's margins changed by hand in the file, its text
+/// still right, the first refresh lays the chart out again (`Autosize`) as kicad-cli's `pcb upgrade` does, and then leaves it be.
+#[test]
+fn a_chart_that_was_read_is_rebuilt_even_when_its_text_is_right() {
+    if slow_tests_off() {
+        return;
+    }
+    let (Some(cli), Some(text)) = (kicad_cli(), kitchen_sink()) else {
+        eprintln!("skipped: needs kicad-cli and KiCad 25ec2335's api_kitchen_sink.kicad_pcb (KICAD10_QA_DATA)");
+        return;
+    };
+    let cell = "(table_cell \"0.30\"\n\t\t\t\t(start 41 57.639294)\n\t\t\t\t(end 57 59.764294)\n\t\t\t\t(margins 0.5 0.5 0.5 0.5)";
+    let edited = text.replacen(cell, &cell.replace("(margins 0.5 0.5 0.5 0.5)", "(margins 1.5 1.5 1.5 1.5)"), 1);
+    assert_ne!(edited, text, "the kitchen sink's chart has this cell");
+    let (kicad, _) = upgraded(&cli, &edited, "margins");
+    let (d, m, _) = import_kicad_pcb(&edited).unwrap();
+    let (before, _) = chart_of(&d);
+    let mut b = Board::new(d, &m, 100, 300);
+    assert!(b.refresh_drill_charts(), "a chart that was read is stale");
+    assert_same_chart("margins", b.design(), &kicad);
+    assert_ne!(chart_of(b.design()).0.row_heights, before.row_heights, "laid out again");
+    assert!(!b.refresh_drill_charts(), "built: fresh");
 }

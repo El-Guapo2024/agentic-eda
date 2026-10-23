@@ -579,8 +579,39 @@ fn justify_of(a: TableAlign) -> TextJustify {
     }
 }
 
-/// `PCB_GENERATED_TABLE::IsStale`: the cells no longer say what the board says (a column, a heading, a row's key or text, a totals line). KiCad's chart asks the board's drill
-/// generation instead; the answer is the same for every edit that changes what the chart prints.
+/// `BOARD::GetDrillModelGeneration`, as a digest (FNV-1a over the JSON) of what bumps it: every via (`PCB_VIA_T`), every footprint and its pads (`PCB_FOOTPRINT_T`,
+/// `PCB_PAD_T`: the placement, the footprint the part has, the extras and edits of its pads and holes), the copper layers (`SetCopperLayerCount`, `SetLayerName`,
+/// `SetEnabledLayers`) and the drill maps (`noteDrillModelChange` of a `PCB_DRILL_MAP_T`). KiCad counts commits; the digest changes on the same edits, except one that
+/// gives an item back exactly what it had (KiCad bumps, the digest does not).
+pub fn drill_generation(design: &Design, model: &ConstraintModel) -> String {
+    fn eat<T: serde::Serialize + ?Sized>(h: &mut u64, x: &T) {
+        for b in serde_json::to_string(x).unwrap_or_default().bytes().chain([0xff]) {
+            *h ^= u64::from(b);
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    eat(&mut h, &model.board.layers);
+    if let Some(r) = &design.routing {
+        eat(&mut h, &r.vias);
+    }
+    if let Some(pl) = &design.placement {
+        eat(&mut h, &pl.footprints);
+        for fp in &pl.footprints {
+            eat(&mut h, &model.part(&fp.id).and_then(|p| model.footprint_of(p)).map(|f| f.pads));
+        }
+    }
+    if let Some(dr) = design.drawings.as_ref() {
+        eat(&mut h, &dr.via_extras);
+        eat(&mut h, &dr.footprint_extras);
+        eat(&mut h, &dr.footprint_edits);
+        eat(&mut h, &dr.board_items.drill_maps.iter().map(|m| (&m.id, &m.layer)).collect::<Vec<_>>());
+    }
+    format!("{h:016x}")
+}
+
+/// `PCB_GENERATED_TABLE::IsStale` (the base class's test): the cells no longer say what the board says (a column, a heading, a row's key or text, a totals line). A drill chart
+/// overrides it with the drill generation (`PCB_DRILL_CHART::IsStale`, `DrillChart::built_generation`); `refresh_drill_charts` asks that.
 pub fn is_stale(t: &Table, chart: &DrillChart, c: &ChartContent) -> bool {
     let cols = chart.columns.len();
     let rows = 1 + c.rows.len() + c.trailer.len();
@@ -735,18 +766,19 @@ impl super::Board<'_> {
         let (_, stackup) = self.effective_stackup();
         let mut profile = profile_of(&self.design);
         let charts = dr.board_items.drill_charts.clone();
+        let generation = drill_generation(&self.design, self.model);
         let mut rebuilt: Vec<(Table, DrillChart)> = Vec::new();
         for chart in &charts {
             let Some(t) = dr.tables.iter().find(|t| t.id == chart.table_id) else { continue };
-            // The cheap test first, with a copy of the profile, so a chart that is fresh assigns nothing.
-            let mut probe = profile.clone();
-            let c = content(&self.design, self.model, &stackup, chart, &mut probe, true);
-            if !is_stale(t, chart, &c) {
+            // `PCB_DRILL_CHART::IsStale`: `m_builtGeneration != aBoard.GetDrillModelGeneration()`. A chart whose cells were edited by hand keeps them until the holes change.
+            if chart.built_generation.as_deref() == Some(generation.as_str()) {
                 continue;
             }
             let c = content(&self.design, self.model, &stackup, chart, &mut profile, true);
             let (mut t, mut chart) = (t.clone(), chart.clone());
             rebuild(&mut t, &mut chart, &c);
+            // `onRebuilt`: `m_builtGeneration = aBoard.GetDrillModelGeneration()`.
+            chart.built_generation = Some(generation.clone());
             rebuilt.push((t, chart));
         }
         if rebuilt.is_empty() {
@@ -777,6 +809,7 @@ impl super::Board<'_> {
         let mut chart = DrillChart::new("");
         let c = content(&self.design, self.model, &stackup, &chart, &mut profile, true);
         rebuild(&mut t, &mut chart, &c);
+        chart.built_generation = Some(drill_generation(&self.design, self.model));
         t.at = at;
         let dr = self.drawings_mut();
         let before: BTreeSet<String> = dr.tables.iter().map(|t| t.id.clone()).collect();
@@ -797,6 +830,8 @@ impl super::Board<'_> {
         chart.precision = precision.clamp(0, 6);
         chart.show_totals = show_totals;
         chart.filter = filter;
+        // `PCB_PROPERTIES_PANEL::valueChanged`: a generated table's edit is followed by `RebuildCells` of that table, whatever its generation.
+        chart.built_generation = None;
         self.refresh_drill_charts();
         Ok(())
     }

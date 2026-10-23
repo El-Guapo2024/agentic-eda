@@ -355,6 +355,11 @@ pub struct DrillChart {
     /// `m_rowShapes`: the table row -> the curated shape drawn in its symbol cell.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub row_shapes: BTreeMap<u32, i32>,
+    /// `m_builtGeneration`: the board's drill generation the chart was last built against (`eda_ops::drill_chart::drill_generation`, a digest of the pads, vias, footprints,
+    /// copper layers and drill maps, which is what bumps `BOARD::m_drillModelGeneration`). Not in the KiCad file: a chart that was read has none, so it is stale and the first
+    /// command rebuilds it, as KiCad's `m_builtGeneration( 0 )` against a board's generation of at least 1 makes the first `OnModify` do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_generation: Option<String>,
 }
 
 fn d_precision() -> i32 {
@@ -380,6 +385,7 @@ impl DrillChart {
             show_totals: true,
             symbol_column: -1,
             row_shapes: BTreeMap::new(),
+            built_generation: None,
         }
     }
 }

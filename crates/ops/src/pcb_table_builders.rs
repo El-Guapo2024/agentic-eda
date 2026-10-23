@@ -194,9 +194,10 @@ pub fn autosize(t: &mut Table) {
         let mut width: i64 = 0;
         for row in 0..rows {
             let cell = &t.cells[row * cols + col];
-            let margins = (cell.margins[0] + cell.margins[2]) as f64;
+            // `GetMarginLeft() + GetMarginRight()`, nanometres (a new cell's 1.0025 mm, not the IR's 1.003).
+            let margins_nm = (cell.margin_nm(0) + cell.margin_nm(2)) as f64;
             // `std::max<int>( colWidth, width + margins * 1.5 )`: the sum is cut to an integer, in nanometres.
-            width = width.max(((extents[row][col].0 + margins * 1.5) * 1000.0).trunc() as i64);
+            width = width.max((extents[row][col].0 * 1000.0 + margins_nm * 1.5).trunc() as i64);
         }
         t.col_widths[col] = ((width as f64) / 1000.0).round() as Um;
     }
@@ -204,8 +205,8 @@ pub fn autosize(t: &mut Table) {
         let mut height: i64 = 0;
         for col in 0..cols {
             let cell = &t.cells[row * cols + col];
-            let margins = (cell.margins[0] + cell.margins[2]) as f64;
-            height = height.max(((extents[row][col].1) * 1000.0).trunc() as i64 + (margins * 1000.0) as i64);
+            let margins_nm = cell.margin_nm(0) + cell.margin_nm(2);
+            height = height.max(((extents[row][col].1) * 1000.0).trunc() as i64 + margins_nm);
         }
         t.row_heights[row] = ((height as f64) / 1000.0).round() as Um;
     }

@@ -351,7 +351,9 @@ pub(crate) fn write_body(out: &mut String, t: &Table, knockout: bool) {
         } else {
             let _ = write!(out, " (pts {})", corners.iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect::<Vec<_>>().join(" "));
         }
-        let _ = write!(out, " (margins {} {} {} {}) (span {} {})", mm(c.margins[0]), mm(c.margins[1]), mm(c.margins[2]), mm(c.margins[3]), c.col_span, c.row_span);
+        // A new cell's legacy margin as KiCad writes it (1.0025, `TableCell::margin_nm`), any other to the micrometre.
+        let m = |i: usize| crate::fmt_mm_f(c.margin_nm(i) as f64 / 1_000_000.0);
+        let _ = write!(out, " (margins {} {} {} {}) (span {} {})", m(0), m(1), m(2), m(3), c.col_span, c.row_span);
         if t.angle != 0 {
             let _ = write!(out, " (angle {})", fmt_mm_f(t.angle as f64 / 1000.0));
         }
@@ -537,6 +539,22 @@ mod tests {
         assert_eq!(back_dr.groups.len(), 1);
         let again = crate::export_kicad_pcb(&back, &model, &crate::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
         assert_eq!(again, out, "and written again, the same text");
+    }
+
+    /// A new cell's legacy margin is written as KiCad holds it, `KiROUND( 0.1 mm / 2 ) + KiROUND( 1.27 mm * 0.75 )` = 1.0025 mm (the IR's 1.003 rounds it), and read back
+    /// as the same cell; a margin set to the micrometre stays what it is.
+    #[test]
+    fn a_new_cells_legacy_margin_is_written_to_the_nanometre() {
+        let mut t = Table::new_grid("F.SilkS", eda_model::ir::Point { x: 0, y: 0 }, 2, 1, 10_000, 5_000, 100);
+        t.id = "tbl_l".into();
+        t.cells = vec![TableCell::pcb_new(false), TableCell { margins: [500; 4], ..TableCell::pcb_new(false) }];
+        assert_eq!(t.cells[0].margins, [1_003; 4]);
+        let mut out = String::new();
+        write(&mut out, &t, false);
+        assert!(out.contains("(margins 1.0025 1.0025 1.0025 1.0025)"), "{out}");
+        assert!(out.contains("(margins 0.5 0.5 0.5 0.5)"), "{out}");
+        let back = read_text(&out).expect("a table");
+        assert_eq!((back.cells[0].margins, back.cells[0].margin_nm(0)), ([1_003; 4], 1_002_500));
     }
 
     #[test]

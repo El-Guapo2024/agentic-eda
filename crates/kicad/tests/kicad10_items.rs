@@ -299,8 +299,7 @@ fn kicad10_items(text: &str) -> Vec<String> {
                 }
             }
             Some("grid_item" | "drill_map") => out.push(item.canon()),
-            // A drill chart is built again by kicad-cli's re-save when it is stale (`RefreshGeneratedTables`): from our file, whose cell margins are held to the micrometre
-            // (1.0025 mm is 1.003), its rows come out a micrometre or two off the original's: [`same_items`] takes numbers within 2.5 µm as one there.
+            // A drill chart is built again by kicad-cli's re-save when it is stale (`RefreshGeneratedTables`), and comes out as the original has it (see [`same_item`]).
             Some("drill_chart") => out.push(item.canon()),
             Some("setup") => out.extend(item.find("drill_symbol_profile").map(Sx::canon)),
             Some("generated") if item.find("type").and_then(|t| t.items().get(1)) == Some(&Sx::Atom("via_stitch".into())) => {
@@ -314,18 +313,10 @@ fn kicad10_items(text: &str) -> Vec<String> {
     out
 }
 
-/// Two canonical items are one: the same text, or two drill charts whose words are the same and whose numbers are within 2.5 µm of each other (see [`kicad10_items`]).
+/// Two canonical items are one: the same text, numbers to the micrometre. A drill chart kicad-cli rebuilds from our file comes out to the micrometre as the original has it
+/// (its margins written as KiCad holds them, 1.0025 mm, and laid out in nanometres: `TableCell::margin_nm`).
 fn same_item(a: &str, b: &str) -> bool {
-    if a == b {
-        return true;
-    }
-    if !(a.starts_with("(drill_chart") && b.starts_with("(drill_chart")) {
-        return false;
-    }
-    let words = |s: &str| s.replace(['(', ')'], " ").split_whitespace().map(str::to_string).collect::<Vec<_>>();
-    let (wa, wb) = (words(a), words(b));
-    wa.len() == wb.len()
-        && wa.iter().zip(&wb).all(|(x, y)| x == y || matches!((x.parse::<f64>(), y.parse::<f64>()), (Ok(p), Ok(q)) if (p - q).abs() <= 0.0025))
+    a == b
 }
 
 fn same_items(a: &[String], b: &[String]) -> bool {

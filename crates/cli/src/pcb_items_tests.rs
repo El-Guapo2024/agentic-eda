@@ -865,3 +865,22 @@ fn a_grid_item_is_one_undo_step_and_the_state_lists_it() {
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert_eq!(state(&dir)["drawings"]["grid_items"].as_array().map_or(0, |a| a.len()), 0);
 }
+
+/// A command's drill-chart rebuild sees the board the command left (`OnModify`'s `RefreshGeneratedTables` after the commit): a new board's footprints are in its chart in
+/// the import's own step, not in the next command's.
+#[test]
+fn a_replaced_boards_drill_chart_lists_its_footprints_holes_in_the_same_step() {
+    let qa = std::path::PathBuf::from(std::env::var_os("KICAD10_QA_DATA").unwrap_or_else(|| "/home/team_braneboard_com/src/kicad-src-25ec2335/qa/data".into()));
+    let Ok(text) = std::fs::read_to_string(qa.join("pcbnew/api_kitchen_sink.kicad_pcb")) else {
+        eprintln!("skipped: needs KiCad 25ec2335's api_kitchen_sink.kicad_pcb (KICAD10_QA_DATA)");
+        return;
+    };
+    let dir = scratch("drill_chart_replace");
+    setup(&dir);
+    step(&dir, Cmd::ReplaceBoard { text, name: "api_kitchen_sink.kicad_pcb".into(), keep_kicad_layer_names: false, project: None }, false, "test").unwrap();
+    let dr = load(&dir).unwrap().1.drawings.unwrap();
+    let chart = dr.board_items.drill_charts.first().expect("the kitchen sink's chart");
+    let t = dr.tables.iter().find(|t| t.id == chart.table_id).unwrap();
+    let texts: Vec<&str> = t.cells.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(texts, ["SYM", "Drill (mm)", "", "0.30", "", "1.14", "", "1.52"], "the pads' rows, as kicad-cli's upgrade has them");
+}
