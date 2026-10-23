@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 /// A number the way `fmt::format( "{:.10g}", v )` writes it, which is how `format( const PCB_GENERATOR* )` writes every numeric property.
-fn fmt_g10(v: f64) -> String {
+pub(crate) fn fmt_g10(v: f64) -> String {
     if v == 0.0 || !v.is_finite() {
         return "0".into();
     }
@@ -51,12 +51,12 @@ fn yes_no(b: bool) -> &'static str {
 }
 
 /// A point as the file keeps it: `(key\n\t\t\t(xy x y)\n\t\t)`.
-fn point_prop(out: &mut String, key: &str, p: Point) {
+pub(crate) fn point_prop(out: &mut String, key: &str, p: Point) {
     writeln!(out, "\t\t({key}\n\t\t\t(xy {} {})\n\t\t)", mm(p.x), mm(p.y)).unwrap();
 }
 
 /// A line as the file keeps it: `(key (pts (xy ..) ..))`.
-fn line_prop(out: &mut String, key: &str, pts: &[Point]) {
+pub(crate) fn line_prop(out: &mut String, key: &str, pts: &[Point]) {
     let xy: Vec<String> = pts.iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect();
     writeln!(out, "\t\t({key}\n\t\t\t(pts\n\t\t\t\t{}\n\t\t\t)\n\t\t)", xy.join(" ")).unwrap();
 }
@@ -133,7 +133,7 @@ pub(crate) fn write_generated(out: &mut String, patterns: &[TuningPattern], writ
 // ---------------------------------------------------------------------------------------------------------------------------- reading
 
 /// A number property: `(key 1.5)`.
-fn prop_num(list: &[Sexpr], key: &str) -> Option<f64> {
+pub(crate) fn prop_num(list: &[Sexpr], key: &str) -> Option<f64> {
     sexpr::find(list, key).and_then(|v| sexpr::num(v, 1))
 }
 
@@ -142,7 +142,7 @@ fn prop_um(list: &[Sexpr], key: &str) -> Option<Um> {
     prop_num(list, key).map(mm_to_um)
 }
 
-fn prop_str<'a>(list: &'a [Sexpr], key: &str) -> Option<&'a str> {
+pub(crate) fn prop_str<'a>(list: &'a [Sexpr], key: &str) -> Option<&'a str> {
     sexpr::find(list, key).and_then(|v| sexpr::txt(v, 1))
 }
 
@@ -150,14 +150,14 @@ fn prop_bool(list: &[Sexpr], key: &str) -> Option<bool> {
     prop_str(list, key).map(|v| v == "yes" || v == "true")
 }
 
-fn prop_point(list: &[Sexpr], key: &str) -> Option<Point> {
+pub(crate) fn prop_point(list: &[Sexpr], key: &str) -> Option<Point> {
     let v = sexpr::find(list, key)?;
     let xy = sexpr::find(v, "xy")?;
     Some(Point { x: mm_to_um(sexpr::num(xy, 1)?), y: mm_to_um(sexpr::num(xy, 2)?) })
 }
 
 /// `(key (pts (xy x y) .. [(arc (start ..) (mid ..) (end ..))]))`: the points of a line, an arc by its ends.
-fn prop_line(list: &[Sexpr], key: &str) -> Vec<Point> {
+pub(crate) fn prop_line(list: &[Sexpr], key: &str) -> Vec<Point> {
     let Some(v) = sexpr::find(list, key) else { return Vec::new() };
     let Some(pts) = sexpr::find(v, "pts") else { return Vec::new() };
     let mut out = Vec::new();

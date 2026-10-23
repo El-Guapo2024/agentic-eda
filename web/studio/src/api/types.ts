@@ -11,11 +11,12 @@
 
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
-import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
+import type { BoardBarcode, BoardDrillChart, BoardDrillMap, BoardDrillMark, BoardDrillProfile, BoardDrillSpan, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch, PcbItemCmd } from "./pcbItemTypes";
 import type { MicrowaveCmd } from "./microwaveTypes";
 import type { EmbeddedCmd } from "./embeddedTypes";
 import type { TableCmdWire } from "./tableTypes";
 import type { TuningPattern } from "./tuneTypes";
+import type { LineEnding } from "../kicad-port/lineEnding";
 
 export type Um = number;
 export type Degrees = number;
@@ -559,6 +560,11 @@ interface ShapeCommon {
   /** The lines `EDA_SHAPE::UpdateHatching` makes of that hatch from the board as it is, and the width they are drawn with (the shape's line width). */
   hatch_lines?: HatchLine[];
   hatch_width?: Um;
+  /** KiCad 10's line endings of a line, an arc or a curve (`(start_shape ..)`, `(end_shape ..)`; kicad-port/lineEnding.ts); absent for none. */
+  start_ending?: LineEnding;
+  end_ending?: LineEnding;
+  /** The net of a shape on a copper layer; absent for none. */
+  net?: string;
 }
 
 export type Shape =
@@ -604,6 +610,16 @@ export interface Drawings {
   images?: BoardRefImage[];
   /** The board's points (`PCB_POINT`) and barcodes (`PCB_BARCODE`) -- see api/pcbItemTypes.ts. */
   points?: BoardPoint[];
+  /** KiCad 10's grid items (`PCB_GRID_ITEM`) -- see api/pcbItemTypes.ts. */
+  grid_items?: BoardGridItem[];
+  /** KiCad 10's via stitchings (`PCB_VIA_STITCH`) -- see api/pcbItemTypes.ts. */
+  via_stitches?: BoardViaStitch[];
+  /** KiCad 10's drill charts (what makes a table one), drill maps, drill symbol profile, and -- when the board has a map -- every hole's mark and the spans a map can show. */
+  drill_charts?: BoardDrillChart[];
+  drill_maps?: BoardDrillMap[];
+  drill_profile?: BoardDrillProfile;
+  drill_marks?: BoardDrillMark[];
+  drill_spans?: BoardDrillSpan[];
   barcodes?: BoardBarcode[];
   /** The tables of the board (`PCB_TABLE`, crates/model/src/table.rs), with the geometry `crates/cli/src/table_json.rs` works out. Absent when the board has none. */
   tables?: BoardTable[];

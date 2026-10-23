@@ -35,8 +35,8 @@ pub struct Clipboard {
     pub vias: Vec<Via>,
     pub zones: Vec<Zone>,
     pub shapes: Vec<Shape>,
-    /// The hatch each of `shapes` has (`(fill hatch)` and the others), in the same order.
-    pub shape_hatch: Vec<Option<eda_model::pcb_items::HatchKind>>,
+    /// The style each of `shapes` has (its hatch -- `(fill hatch)` and the others --, its line endings and its net), in the same order.
+    pub shape_style: Vec<Option<eda_model::pcb_items::ShapeStyle>>,
     pub texts: Vec<Text>,
     pub dimensions: Vec<Dimension>,
     pub footprints: Vec<ClipFootprint>,
@@ -281,7 +281,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
     for s in &picked.shapes {
         let mut moved = (*s).clone();
         moved.translate(dx, dy);
-        let uuid = write_shape(&mut out, &moved, false, design.drawings.as_ref().and_then(|d| d.board_items.hatch_of(s.id())));
+        let uuid = write_shape(&mut out, &moved, false, design.drawings.as_ref().and_then(|d| d.board_items.style_of(s.id())), 0);
         // `write_shape` seeds its uuid by the shape's own id, which is what a group's members name.
         written.entry(s.id().to_string()).or_default().push(uuid);
     }
@@ -332,7 +332,7 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
     }
     if let Some(dr) = &design.drawings {
         clip.shapes = dr.shapes.clone();
-        clip.shape_hatch = dr.shapes.iter().map(|s| dr.board_items.hatch_of(s.id())).collect();
+        clip.shape_style = dr.shapes.iter().map(|s| dr.board_items.style_of(s.id()).cloned()).collect();
         clip.texts = dr.texts.clone();
         clip.dimensions = dr.dimensions.clone();
     }

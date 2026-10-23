@@ -4,7 +4,7 @@
 //!
 //! A graphic is the JSON of a board-level `Shape` (`kind`, `layer`, `stroke_width`, `filled`, the points: `studio::shape_json`), so the canvas draws it with
 //! the code that draws the board's own shapes, without an `id` (art is not addressed) and with what a `Shape` has no field for: `dash` for a stroke that is not
-//! solid, `hatch` for a hatched fill, `layers` for a shape on several layers. A text has the keys of a field (`FieldInfo`), at the angle it has on the board; its
+//! solid, `hatch` for a hatched fill, `layers` for a shape on several layers, `start_ending` and `end_ending` for a line's endings. A text has the keys of a field (`FieldInfo`), at the angle it has on the board; its
 //! variables (`${REFERENCE}` ...) are resolved.
 
 use eda_model::footprint::to_board;
@@ -29,6 +29,15 @@ fn graphic_json(s: &FpShape) -> Value {
         }
         if !s.layers.is_empty() {
             o.insert("layers".into(), json!(s.layers));
+        }
+        // KiCad 10's line endings of a line, an arc or a curve, as a board shape has them (`pcb_items_json::line_ending_json`).
+        if !matches!(s.shape, eda_model::ir::Shape::Rect { .. } | eda_model::ir::Shape::Circle { .. } | eda_model::ir::Shape::Polygon { .. }) {
+            if !s.endings.start.is_none() {
+                o.insert("start_ending".into(), crate::pcb_items_json::line_ending_json(&s.endings.start));
+            }
+            if !s.endings.end.is_none() {
+                o.insert("end_ending".into(), crate::pcb_items_json::line_ending_json(&s.endings.end));
+            }
         }
     }
     v

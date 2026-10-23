@@ -160,17 +160,29 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let mut refs = Refs::default();
     let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
     let (tracks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
-    let (mut shapes, texts, text_extras) = import_drawings(root, &mut refs);
+    let (mut shapes, texts, text_extras) = import_drawings(root, &net_names, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
     let (outline, outline_is_shapes, outline_width_um) = import_outline(root, &mut shapes, &mut refs, &mut notes);
     let dimensions = import_items::import_dimensions(root, &mut refs);
     let barcodes = crate::barcode_io::read_all(root, &mut refs.barcodes);
     let board_items = crate::pcb_items_io::read_all(root, &mut refs.board_items);
     // Tables (`PCB_TABLE`): the ones this model can hold as tables, and the text of the others, kept as they were.
-    let (tables, raw_tables) = crate::pcb_table::read_all(root, &mut refs.tables);
+    let (mut tables, raw_tables) = crate::pcb_table::read_all(root, &mut refs.tables);
     if !raw_tables.is_empty() {
         *notes.unread_items.entry("table".to_string()).or_insert(0) += raw_tables.len();
         raw_items.extend(raw_tables);
+    }
+    // KiCad 10's drill charts: tables of their own, after the board's other tables, and what makes each a chart (named by its table's id once the ids are given).
+    let (charts, raw_charts) = crate::drill_chart_io::read_charts(root, &mut refs.tables);
+    if !raw_charts.is_empty() {
+        *notes.unread_items.entry("drill_chart".to_string()).or_insert(0) += raw_charts.len();
+        raw_items.extend(raw_charts);
+    }
+    let first_chart_table = tables.len();
+    let mut chart_overlays = Vec::new();
+    for (t, c) in charts {
+        tables.push(t);
+        chart_overlays.push(c);
     }
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
@@ -178,7 +190,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     notes.zone_fills = crate::zone_fills::scan_zone_fills(text);
     // The board's nets: those the file lists and every net an item names -- a pad, but also a track, a via or a zone (`PCB_IO_KICAD_SEXPR_PARSER::parseNet` makes a net of any
     // `(net "name")` it meets, and a KiCad 10 file lists none: a net that only copper uses, a pour with no pad on it, is a net of the board all the same).
-    let copper_nets: Vec<&str> = tracks.iter().map(|t| t.net.as_str()).chain(vias.iter().map(|v| v.net.as_str())).chain(zones.iter().map(|z| z.net.as_str())).collect();
+    let copper_nets: Vec<&str> = tracks.iter().map(|t| t.net.as_str()).chain(vias.iter().map(|v| v.net.as_str())).chain(zones.iter().map(|z| z.net.as_str())).chain(refs.shapes.iter().filter_map(|r| r.net.as_deref())).collect();
     let nets = build_nets(&net_names, &pin_nets, &copper_nets);
 
     add_layers_in_use(
@@ -261,9 +273,9 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // deterministic ids a fresh route or a hand-add would get, so an
     // imported board is addressable from the moment it lands.
     design.assign_missing_ids();
-    // The shapes' hatch (`(fill hatch)` and the others), named by the ids the shapes have just been given.
+    // The shapes' hatch (`(fill hatch)` and the others), line endings and nets, named by the ids the shapes have just been given.
     if let Some(dr) = design.drawings.as_mut() {
-        let styles: Vec<eda_model::pcb_items::ShapeStyle> = dr.shapes.iter().zip(&refs.shapes).filter_map(|(s, r)| r.hatch.map(|h| eda_model::pcb_items::ShapeStyle { id: s.id().to_string(), hatch: Some(h) })).collect();
+        let styles: Vec<eda_model::pcb_items::ShapeStyle> = dr.shapes.iter().zip(&refs.shapes).filter_map(|(s, r)| r.shape_style(s.id())).collect();
         dr.board_items.shape_styles = styles;
     }
     // The vias' tokens beyond `Via`'s fields, named by the ids the vias have just been given.
@@ -275,6 +287,16 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if let Some(dr) = design.drawings.as_mut() {
         dr.text_extras = dr.texts.iter().zip(text_extras).filter(|(_, x)| !x.is_default()).map(|(t, mut x)| { x.id = t.id.clone(); x }).collect();
     }
+    // The drill charts, named by the ids their tables have just been given.
+    if !chart_overlays.is_empty() {
+        let dr = design.drawings.get_or_insert_with(Default::default);
+        for (i, mut c) in chart_overlays.into_iter().enumerate() {
+            c.table_id = dr.tables[first_chart_table + i].id.clone();
+            dr.board_items.drill_charts.push(c);
+        }
+    }
+    // KiCad 10's via stitchings (`(generated (type via_stitch) ..)`), their members named by the ids the vias have just been given.
+    crate::via_stitch_io::attach(&mut design, root, &mut refs);
     // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
     // uuid, and `locked` rides on each item (`BOARD_ITEM::IsLocked()`).
     let (groups, locked_ids) = refs.resolve(&design, &import_items::import_groups(root));
@@ -311,13 +333,16 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
 const READ_ITEMS: &[&str] = &[
     "version", "generator", "generator_version", "general", "paper", "page", "title_block", "layers", "setup", "host", "net", "net_class", "footprint", "module", "segment", "arc", "via", "zone", "gr_line", "gr_arc",
     "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "gr_text_box", "image", "point", "dimension", "group", "generated", "barcode", "embedded_fonts",
-    "table", "embedded_files",
+    "table", "embedded_files", "grid_item", "drill_chart", "drill_map",
 ];
 
-/// Whether a reader here takes the top-level `item` of kind `tag`: its kind is in [`READ_ITEMS`], and a reference image is one whose data is a file the reader understands
-/// (an image that is not goes on as text, as KiCad would not have loaded the board at all).
+/// Whether a reader here takes the top-level `item` of kind `tag`: its kind is in [`READ_ITEMS`], a reference image is one whose data is a file the reader understands
+/// (an image that is not goes on as text, as KiCad would not have loaded the board at all), and a generator is a tuning pattern or a via stitching.
 fn is_read(item: &[Sexpr], tag: &str) -> bool {
-    READ_ITEMS.contains(&tag) && (tag != "image" || crate::pcb_image::read(item).is_some())
+    READ_ITEMS.contains(&tag)
+        && (tag != "image" || crate::pcb_image::read(item).is_some())
+        // A generator of a kind nothing here reads (KiCad 10's microvia stack, `via_stack`) goes on as text, as an unknown item does.
+        && (tag != "generated" || matches!(sexpr::find(item, "type").and_then(|t| sexpr::txt(t, 1)), Some("tuning_pattern") | Some("via_stitch")))
 }
 
 /// The top-level items of the board whose kind no reader here takes ([`READ_ITEMS`]), counted by kind.
@@ -2009,19 +2034,21 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 /// Board-level graphics (`gr_line`/`gr_arc`/`gr_rect`/`gr_circle`/
 /// `gr_poly`/`gr_curve`) and text (`gr_text`), any layer. Those on Edge.Cuts are
 /// the board outline's items; [`import_outline`] decides what becomes of them.
-fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>, Vec<eda_model::board_text::TextExtra>) {
+fn import_drawings(root: &[Sexpr], net_names: &BTreeMap<i64, String>, refs: &mut Refs) -> (Vec<Shape>, Vec<Text>, Vec<eda_model::board_text::TextExtra>) {
     let mut shapes = Vec::new();
+    // A shape's `(net ..)` (`parsePCB_SHAPE`'s `T_net`): the net of a shape on copper. Net 0, the empty name, is no net.
+    let shape_ref = |item: &[Sexpr]| ItemRef { net: Some(net_ref(sexpr::find(item, "net"), net_names)).filter(|n| !n.is_empty()), ..ItemRef::of(item) };
     for item in sexpr::find_all(root, "gr_line") {
         if let Some(shape) = graphic_shape(item, "gr_line", |p| p) {
             shapes.push(shape);
-            refs.shapes.push(ItemRef::of(item));
+            refs.shapes.push(shape_ref(item));
         }
     }
     for tag in ["gr_arc", "gr_rect", "gr_circle", "gr_poly", "gr_curve"] {
         for item in sexpr::find_all(root, tag) {
             if let Some(shape) = graphic_shape(item, tag, |p| p) {
                 shapes.push(shape);
-                refs.shapes.push(ItemRef::of(item));
+                refs.shapes.push(shape_ref(item));
             }
         }
     }

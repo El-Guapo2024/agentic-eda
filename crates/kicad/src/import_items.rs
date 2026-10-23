@@ -24,12 +24,28 @@ pub(crate) struct ItemRef {
     pub locked: bool,
     /// The hatch of a shape (`(fill hatch)`, `(fill reverse_hatch)`, `(fill cross_hatch)`), which `Shape` has no field for.
     pub hatch: Option<eda_model::pcb_items::HatchKind>,
+    /// The line endings of a shape (`(start_shape ..)`, `(end_shape ..)`), which `Shape` has no field for either.
+    pub endings: eda_model::line_ending::LineEndings,
+    /// The net of a shape on copper (`(net ..)`), set by the reader of the shapes, which knows the file's net table.
+    pub net: Option<String>,
 }
 
 impl ItemRef {
-    /// Read the `(uuid ..)`/`(tstamp ..)`, `locked` and hatch of one parsed item.
+    /// Read the `(uuid ..)`/`(tstamp ..)`, `locked`, hatch and line endings of one parsed item.
     pub(crate) fn of(item: &[Sexpr]) -> ItemRef {
-        ItemRef { uuid: item_uuid(item), locked: is_locked(item), hatch: sexpr::find(item, "fill").and_then(|f| sexpr::txt(f, 1)).and_then(eda_model::pcb_items::HatchKind::from_token) }
+        ItemRef {
+            uuid: item_uuid(item),
+            locked: is_locked(item),
+            hatch: sexpr::find(item, "fill").and_then(|f| sexpr::txt(f, 1)).and_then(eda_model::pcb_items::HatchKind::from_token),
+            endings: crate::line_ending_io::read(item),
+            net: None,
+        }
+    }
+
+    /// The shape's style as the file gave it, by the id `id` the shape now has; `None` when it says nothing.
+    pub(crate) fn shape_style(&self, id: &str) -> Option<eda_model::pcb_items::ShapeStyle> {
+        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), ..eda_model::pcb_items::ShapeStyle::empty(id) };
+        (!st.is_empty()).then_some(st)
     }
 }
 
@@ -99,6 +115,9 @@ impl Refs {
             note(&self.board_items.text_boxes, dr.board_items.text_boxes.iter().map(|t| t.id.as_str()).collect());
             note(&self.board_items.images, dr.board_items.images.iter().map(|i| i.id.as_str()).collect());
             note(&self.board_items.points, dr.board_items.points.iter().map(|p| p.id.as_str()).collect());
+            note(&self.board_items.grid_items, dr.board_items.grid_items.iter().map(|g| g.id.as_str()).collect());
+            note(&self.board_items.via_stitches, dr.board_items.via_stitches.iter().map(|v| v.id.as_str()).collect());
+            note(&self.board_items.drill_maps, dr.board_items.drill_maps.iter().map(|m| m.id.as_str()).collect());
             note(&self.tables, dr.tables.iter().map(|t| t.id.as_str()).collect());
         }
 

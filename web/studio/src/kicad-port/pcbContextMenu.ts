@@ -73,6 +73,8 @@ export interface PcbSelectionSummary {
   zoneCanLower: boolean;
   /** `GROUP_CONTEXT_MENU::update`: `selectionCount`, a group selected, one group selected, an ungrouped item selected, a member of a group selected. */
   group: { hasGroup: boolean; onlyOneGroup: boolean; hasUngroupedItems: boolean; hasMember: boolean };
+  /** KiCad 10: selected via stitchings that have exclusions (`VIA_STITCH_TOOL::Init`'s `hasExclusionsCondition`). */
+  stitchesWithExclusions?: number;
   /** `groupWithDesignBlockLink` (pcb_edit_frame.cpp): the one selected item is a group linked to a design block -- Place Linked Design Block and Save to Linked Design Block are on only for it. */
   linkedGroup: boolean;
   /** Something selected carries a net (`haveNetCond`: `BOARD_CONNECTED_ITEM` with a net code above 0). */
@@ -801,6 +803,9 @@ export function buildSelectionMenu(): ConditionalMenu {
 
   // ---- GROUP_TOOL::Init
   menu.addMenu("Grouping", groupingMenu, notEmpty, 100);
+
+  // ---- VIA_STITCH_TOOL::Init (KiCad 10)
+  menu.addItem("pcbnew.Generator.clearStitchViaExclusions", (s) => (s.stitchesWithExclusions ?? 0) > 0, 100);
 
   return menu;
 }

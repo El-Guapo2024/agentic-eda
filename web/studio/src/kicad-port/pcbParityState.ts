@@ -19,7 +19,8 @@ export interface DrawStrokeStep {
 
 /** `ZONE_MODE` (drawing_tool.h) for the two source-zone-driven draws: `CUTOUT` subtracts the drawn polygon from `sourceId`, `SIMILAR` makes a new zone with `sourceId`'s settings and never opens the properties dialog (`ZONE_CREATE_HELPER::createZoneFromExisting`). Plain `ADD` is `null` (the dialog path, unchanged). */
 export interface ZoneDrawMode {
-  mode: "cutout" | "similar";
+  /** KiCad 10's `ZONE_MODE::STITCH` (Draw Via Stitch Area) is an outline with no source zone (`sourceId` empty). */
+  mode: "cutout" | "similar" | "stitch";
   sourceId: string;
 }
 

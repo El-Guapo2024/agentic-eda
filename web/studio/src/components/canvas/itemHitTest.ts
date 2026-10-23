@@ -12,6 +12,7 @@
 import type { BoardText, Shape } from "../../api/types";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { hatchDistance } from "../../kicad-port/shapeFill";
+import { endingInks, hasEndings } from "../../kicad-port/lineEnding";
 
 /** `EDA_SHAPE::getMaxError()` for the board (`BOARD_DESIGN_SETTINGS::m_MaxError`, 0.005 mm): the flattening tolerance a Bezier is drawn/hit-tested at. */
 export const BEZIER_MAX_ERROR_UM = 5;
@@ -69,7 +70,8 @@ export function shapeBoundingBox(s: Shape): [number, number, number, number] {
     const r = Math.hypot(s.end[0] - s.center[0], s.end[1] - s.center[1]);
     return [s.center[0] - r, s.center[1] - r, s.center[0] + r, s.center[1] + r];
   }
-  const pts = shapePoints(s);
+  // The endings reach past the ends of a line (`EDA_SHAPE::getBoundingBox` merges `GetLineEndingsBoundingBox`).
+  const pts = (s.kind === "segment" || s.kind === "arc" || s.kind === "bezier") && hasEndings(s) ? [...shapePoints(s), ...endingInks(s).flatMap((i) => i.pts)] : shapePoints(s);
   let x0 = Infinity,
     y0 = Infinity,
     x1 = -Infinity,
@@ -96,6 +98,22 @@ export function polygonArea(pts: readonly (readonly [number, number])[]): number
 }
 
 export function shapeHitDistance(s: Shape, px: number, py: number): number {
+  // A shape with line endings is hit on its endings too (`EDA_SHAPE::hitTest`: `MakeEffectiveShapesWithLineEndings`).
+  if ((s.kind === "segment" || s.kind === "arc" || s.kind === "bezier") && hasEndings(s)) return Math.min(bodyHitDistance(s, px, py), endingsHitDistance(s, px, py));
+  return bodyHitDistance(s, px, py);
+}
+
+/** How far `(px, py)` is from the ink of a shape's line endings: 0 inside a closed one, else from its outline (less half the outline's pen). */
+function endingsHitDistance(s: Extract<Shape, { kind: "segment" | "arc" | "bezier" }>, px: number, py: number): number {
+  let best = Infinity;
+  for (const ink of endingInks(s)) {
+    if (ink.fill && pointInPolygon(px, py, ink.pts)) return 0;
+    best = Math.min(best, Math.max(0, distToPolyline(px, py, ink.pts) - ink.stroke / 2));
+  }
+  return best;
+}
+
+function bodyHitDistance(s: Shape, px: number, py: number): number {
   switch (s.kind) {
     case "segment":
       return distToSegment(px, py, s.start[0], s.start[1], s.end[0], s.end[1]);
