@@ -84,6 +84,7 @@ mod pcb_global_edit;
 mod pcb_groups;
 mod sch_groups;
 mod pcb_paste;
+mod specctra;
 mod pcb_paste_special;
 mod design_blocks;
 mod multichannel;
@@ -711,6 +712,14 @@ pub enum Cmd {
     /// The multichannel tool (GAPS.md items 24 and 32, package P24): Generate Placement Rule Areas, Repeat Layout and Apply Design Block Layout -- one verb family, see
     /// [`multichannel::MultichannelCmd`]. On the wire: `{"op": "multichannel", "verb": "repeat_layout", "reference": "zone_..", "targets": [..]}`.
     Multichannel(multichannel::MultichannelCmd),
+    /// File > Import > Specctra Session... (`pcbnew.EditorControl.importSpecctraSession`, `PCB_EDIT_FRAME::ImportSpecctraSession`, `SPECCTRA_DB::FromSESSION`): the wires and
+    /// vias of a Specctra session file (`session`, its text; `name`, the file it came from, for messages) in place of the board's tracks and vias that are not locked, and
+    /// the footprints moved where its placement puts them. One undo step; see [`specctra`](crate::specctra). On the wire: `{"op": "specctra", "session": "(session ..)"}`.
+    Specctra {
+        session: String,
+        #[serde(default)]
+        name: String,
+    },
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -2100,6 +2109,12 @@ impl Cmd {
         matches!(self, Cmd::ReplaceBoard { .. })
     }
 
+    /// Is this File > Import > Specctra Session (`Cmd::Specctra`)? The routing is what the outside router made of the board: the gates that refuse a move that makes the
+    /// board worse do not judge it, as they do not judge an import of a board.
+    pub fn imports_session(&self) -> bool {
+        matches!(self, Cmd::Specctra { .. })
+    }
+
     pub fn replaces_schematic(&self) -> bool {
         matches!(self, Cmd::ReplaceSchematic { .. })
     }
@@ -2270,6 +2285,7 @@ impl Cmd {
             Cmd::PcbItem(c) => c.ids(),
             Cmd::Embedded(c) => c.ids(),
             Cmd::Microwave(c) => c.ids(),
+            Cmd::Specctra { name, .. } => vec![name.as_str()],
             Cmd::Multichannel(c) => c.ids(),
             Cmd::Table(c) | Cmd::SchTable(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
@@ -2870,6 +2886,7 @@ impl<'a> Board<'a> {
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
             Cmd::Embedded(c) => self.apply_embedded(c),
             Cmd::Microwave(c) => self.apply_microwave(c),
+            Cmd::Specctra { session, name } => self.import_specctra_session(session, name),
             Cmd::Multichannel(c) => self.apply_multichannel(c),
             Cmd::Table(c) => self.apply_table(c),
             Cmd::SchTable(c) => self.apply_sch_table(c),

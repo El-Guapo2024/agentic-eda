@@ -1,0 +1,124 @@
+//! File > Export > Specctra DSN and File > Import > Specctra Session through the CLI (`eda board export specctra`, `eda board import-ses`), round trip: a routed board's
+//! DSN, the session a router that keeps that routing sends back (`eda_kicad::specctra::session::echo_session`, FreeRouting's shape of a session), imported onto the board
+//! with its routing taken away, as one undo step. The slow tier (`EDA_SLOW_TESTS=1`, kicad-cli) holds the board that comes back to kicad-cli's DRC: no violation it did
+//! not have before.
+//!
+//! The board is `examples/opamp_filter.yaml` placed and routed by `eda pipeline`, in a folder made by `eda board new` (the examples are never written to).
+
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn eda(args: &[&str]) -> (bool, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_eda")).args(args).output().expect("run eda");
+    (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
+fn ok(args: &[&str]) -> String {
+    let (good, log) = eda(args);
+    assert!(good, "eda {}:\n{log}", args.join(" "));
+    log
+}
+
+fn scratch(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("eda_cli_specctra_{}_{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// A board folder whose design is the routed opamp filter.
+fn routed_board(tag: &str) -> PathBuf {
+    let root = scratch(tag);
+    let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/opamp_filter.yaml");
+    let p = root.join("pipeline");
+    ok(&["pipeline", example.to_str().unwrap(), "-o", p.to_str().unwrap(), "--seed", "0"]);
+    let b = root.join("board");
+    ok(&["board", "new", example.to_str().unwrap(), "-o", b.to_str().unwrap()]);
+    std::fs::copy(p.join("design.json"), b.join("design.json")).unwrap();
+    b
+}
+
+fn design(dir: &Path) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(dir.join("design.json")).unwrap()).unwrap()
+}
+
+fn counts(d: &Value) -> (usize, usize) {
+    (d["routing"]["tracks"].as_array().map_or(0, Vec::len), d["routing"]["vias"].as_array().map_or(0, Vec::len))
+}
+
+/// Export, take the routing away, import the session: the board has the routing back (segment for segment), the parts where they were, and one Undo takes the import
+/// back. Answers the board folder and the session file.
+fn round_trip(tag: &str) -> (PathBuf, PathBuf, Value) {
+    let b = routed_board(tag);
+    let routed = design(&b);
+    let (tracks, vias) = counts(&routed);
+    assert!(tracks > 0 && vias > 0, "the pipeline routed the board with vias: {tracks} tracks, {vias} vias");
+    let segments: usize = routed["routing"]["tracks"].as_array().unwrap().iter().map(|t| t["pts"].as_array().unwrap().len() - 1).sum();
+
+    let dsn = b.parent().unwrap().join("opamp.dsn");
+    let log = ok(&["board", "export", "specctra", "-o", dsn.to_str().unwrap(), "-C", b.to_str().unwrap()]);
+    assert!(log.contains("BOARD exported OK"), "{log}");
+    let text = std::fs::read_to_string(&dsn).unwrap();
+    let pcb = eda_kicad::specctra::parse::load_pcb(&text, "opamp.dsn").expect("the DSN reads back");
+    assert_eq!(pcb.pcbname, dsn.display().to_string(), "the design is named by the file (`m_pcbname = aFilename`)");
+    let ses = b.parent().unwrap().join("opamp.ses");
+    std::fs::write(&ses, eda_kicad::specctra::session::echo_session(&pcb, "opamp.ses")).unwrap();
+
+    // The routing goes (a direct edit of design.json: a step of its own), then the session brings it.
+    let mut stripped = routed.clone();
+    stripped["routing"]["tracks"] = Value::Array(vec![]);
+    stripped["routing"]["vias"] = Value::Array(vec![]);
+    std::fs::write(b.join("design.json"), serde_json::to_string_pretty(&stripped).unwrap()).unwrap();
+    let log = ok(&["board", "import-ses", ses.to_str().unwrap(), "-C", b.to_str().unwrap()]);
+    assert!(log.contains("Session file imported and merged OK."), "{log}");
+    let after = design(&b);
+    assert_eq!(counts(&after), (segments, vias), "a track of each segment of the session's paths, and its vias");
+    assert_eq!(after["placement"]["footprints"], routed["placement"]["footprints"], "the parts are where the session places them: where they were");
+
+    ok(&["board", "undo", "-C", b.to_str().unwrap()]);
+    assert_eq!(counts(&design(&b)), (0, 0), "one Undo takes the whole import back");
+    ok(&["board", "redo", "-C", b.to_str().unwrap()]);
+    assert_eq!(counts(&design(&b)), (segments, vias));
+    (b, ses, routed)
+}
+
+#[test]
+fn a_routed_board_comes_back_from_the_session_of_its_own_dsn_in_one_undo_step() {
+    let (b, ses, _) = round_trip("fast");
+    // A session of another board names a part this one has not got: KiCad's words, and nothing changes.
+    let other = std::fs::read_to_string(&ses).unwrap().replacen("(place ", "(place NOPE_", 1);
+    let bad = b.parent().unwrap().join("bad.ses");
+    std::fs::write(&bad, other).unwrap();
+    let before = std::fs::read_to_string(b.join("design.json")).unwrap();
+    let (good, log) = eda(&["board", "import-ses", bad.to_str().unwrap(), "-C", b.to_str().unwrap()]);
+    assert!(!good && log.contains("Reference 'NOPE_"), "{log}");
+    assert_eq!(std::fs::read_to_string(b.join("design.json")).unwrap(), before);
+    let _ = std::fs::remove_dir_all(b.parent().unwrap());
+}
+
+/// kicad-cli's DRC of the board the session made, against the routed board's: no kind of violation is more common, and nothing is left unconnected that was not.
+#[test]
+fn the_imported_session_makes_no_new_drc_violation() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let drc = |dir: &Path| -> Value { serde_json::from_str(&ok(&["board", "drc", "-C", dir.to_str().unwrap()]).lines().skip_while(|l| !l.starts_with('{')).collect::<Vec<_>>().join("\n")).expect("the DRC report") };
+    let (b, _, routed) = round_trip("slow");
+    let after = drc(&b);
+    // The routed board as the pipeline left it, in a folder of its own.
+    let was = b.parent().unwrap().join("was");
+    let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/opamp_filter.yaml");
+    ok(&["board", "new", example.to_str().unwrap(), "-o", was.to_str().unwrap()]);
+    std::fs::write(was.join("design.json"), serde_json::to_string_pretty(&routed).unwrap()).unwrap();
+    let before = drc(&was);
+    eprintln!("before: {} / unconnected {}", before["counts"], before["unconnected_items"].as_array().map_or(0, Vec::len));
+    eprintln!("after:  {} / unconnected {}", after["counts"], after["unconnected_items"].as_array().map_or(0, Vec::len));
+    let count = |r: &Value, k: &str| r["counts"][k].as_u64().unwrap_or(0);
+    for (kind, n) in after["counts"].as_object().cloned().unwrap_or_default() {
+        assert!(n.as_u64().unwrap_or(0) <= count(&before, &kind), "{kind}: {n} after the import, {} before", count(&before, &kind));
+    }
+    assert!(after["unconnected_items"].as_array().map_or(0, Vec::len) <= before["unconnected_items"].as_array().map_or(0, Vec::len));
+    let _ = std::fs::remove_dir_all(b.parent().unwrap());
+}

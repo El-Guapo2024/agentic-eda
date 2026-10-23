@@ -15,6 +15,8 @@ import { schematicBounds } from "../components/schematic/schHit";
 import type { Action, StudioApi } from "../state/store";
 import type { Dispatch } from "react";
 import type { ActionHandler } from "./commonActions";
+import { describeExport, describeImport as describeSessionImport, SESSION_ACCEPT, specctraImportCmd } from "../kicad-port/specctra";
+import { exportSpecctraDsn } from "../api/specctraClient";
 
 /** A drop action's parameter: the file the drop host read. */
 export function asPickedFile(param: unknown): PickedFile | null {
@@ -113,10 +115,45 @@ async function importForeign(ctx: ImportActionContext, kind: ImportKind, given: 
   }
 }
 
+/**
+ * File > Import > Specctra Session... (`BOARD_EDITOR_CONTROL::ImportSpecctraSession`, `PCB_EDIT_FRAME::ImportSpecctraSession`): a session file an outside autorouter wrote is
+ * chosen (`given`, `{ name, text }`, when the action is run with one), and the `specctra` command puts its wires and vias on the board in place of the unlocked ones, and the
+ * footprints where its placement says -- one undo step, where KiCad clears the undo list. An import is not a move the gates judge: Strict is off for it.
+ */
+async function importSpecctraSession(ctx: ImportActionContext, given: PickedFile | null): Promise<void> {
+  const toast = (message: string, kind: "error" | "info") => ctx.dispatch({ type: "TOAST", message, kind });
+  try {
+    const file = given ?? (await pickTextFile(SESSION_ACCEPT));
+    if (!file) return;
+    const done = await postCmd(specctraImportCmd(file), false);
+    if (done.ok) await ctx.api.refresh();
+    const said = describeSessionImport(done);
+    toast(said.message, said.kind);
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), "error");
+  }
+}
+
+/** File > Export > Specctra DSN... (`BOARD_EDITOR_CONTROL::ExportSpecctraDSN`, `PCB_EDIT_FRAME::ExportSpecctraFile`): the board's DSN, saved as a download. */
+async function exportSpecctra(ctx: ImportActionContext): Promise<void> {
+  const toast = (message: string, kind: "error" | "info") => ctx.dispatch({ type: "TOAST", message, kind });
+  try {
+    const { reply, savedAs } = await exportSpecctraDsn(ctx.api.getState().board?.name ?? "board");
+    const said = describeExport(reply, savedAs);
+    toast(said.message, said.kind);
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), "error");
+  }
+}
+
 export function registerImportActions(m: Map<string, ActionHandler>, ctx: ImportActionContext): void {
   if (ctx.tab === "pcb") {
     // PCB_ACTIONS::openNonKicadBoard ("Import Non-KiCad Board File..."): a file chooser; the parameter `{ name, data }` is a file the page already has.
     m.set("pcbnew.EditorControl.openNonKicadBoard", (param) => void importForeign(ctx, "board", asForeignParam(param)));
+    // PCB_ACTIONS::importSpecctraSession ("Import Specctra Session...") and PCB_ACTIONS::exportSpecctraDSN ("Export Specctra DSN..."); the import's parameter `{ name, text }`
+    // is a session file the page already has.
+    m.set("pcbnew.EditorControl.importSpecctraSession", (param) => void importSpecctraSession(ctx, asPickedFile(param)));
+    m.set("pcbnew.EditorControl.exportSpecctraDSN", () => void exportSpecctra(ctx));
     // PCB_ACTIONS::appendBoard ("Append Board..."): a file chooser; PCB_ACTIONS::ddAppendBoard: the board that was dropped on the window.
     m.set("pcbnew.EditorControl.appendBoard", () => {
       void (async () => {
