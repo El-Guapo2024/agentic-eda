@@ -53,6 +53,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-sch-details` | Next tasks 5, the schematic: a screen shown by two sheets (paste shares it, a net per placement), buses across sheets, a label's own fields (PARITY-sch.md section 39) | (a), (b), (c) done; `e2e/sch-details-2.check.js` 4/4 | see PARITY-sch.md section 39 "Left" |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

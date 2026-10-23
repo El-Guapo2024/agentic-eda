@@ -8,8 +8,8 @@
 //! [`SchCmd::EditSheetPin`], [`SchCmd::EditGraphic`]). A field left out of a verb is unchanged, and a verb that would change nothing is refused, so the undo
 //! stack never records a step that did nothing.
 //!
-//! What the dialogs have that the drawing model has no place for is not here: fonts, bold and italic, text colours, a sheet's border and fill, its extra fields and
-//! its exclusion flags, a label's fields (netclass, intersheet references).
+//! What the dialogs have that the drawing model has no place for is not here: fonts, text colours, a sheet's border and fill, its extra fields and its exclusion
+//! flags. A label's own fields (its net class, ...) are Label Properties' grid ([`label_fields_after`]).
 
 use crate::{empty_schematic_section, Board};
 use eda_model::ir::{LabelKind, LabelShape, Millideg, SchematicSection, TextJustify, TextVAlign, Um};
@@ -54,13 +54,51 @@ fn holds(contents: &BTreeMap<String, SchematicSection>, from: &str, target: &str
 }
 
 /// What Label Properties sets of a label's text beyond what it says and which way it runs: the size, bold and italic (`SetTextSize`, `SetBold`, `SetItalic`).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct LabelLookEdit {
     pub size_um: Option<Um>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     /// The "Auto" check of a global or hierarchical label (`SetAutoRotateOnPlacement`).
     pub auto_rotate: Option<bool>,
+    /// The label's own fields, as the dialog's grid leaves them (see [`label_fields_after`]).
+    pub fields: Option<Vec<eda_model::sch_extras::LabelField>>,
+}
+
+/// `DIALOG_LABEL_PROPERTIES::TransferDataFromWindow` on the grid of a label's fields: an unnamed field with no text is deleted; an empty `Netclass` is deleted when
+/// another `Netclass` field is there; an unnamed field with text is called "untitled"; "Net Class" is stored as `Netclass` (`GetCanonicalName`). Two fields of one name
+/// are refused, as the grid's `OnGridCellChanging` refuses the second ("Field name '%s' already in use.", names compared without regard to case) -- but for the net
+/// class, which Add Field gives again (`OnAddField`) and which puts the net in each class it names -- and so is a field named as the Sheet References are, which
+/// only a global label has, once.
+pub(crate) fn label_fields_after(id: &str, fields: &[eda_model::sch_extras::LabelField]) -> Result<Vec<eda_model::sch_extras::LabelField>, Vec<CheckResult>> {
+    use eda_model::sch_extras::{INTERSHEET_REFS_FIELD, NETCLASS_FIELD};
+    let mut out: Vec<eda_model::sch_extras::LabelField> = fields.iter().cloned().map(|mut f| {
+        f.name = f.name.trim().to_string();
+        if f.name == "Net Class" {
+            f.name = NETCLASS_FIELD.to_string();
+        }
+        f
+    }).collect();
+    for i in (0..out.len()).rev() {
+        let (name, text) = (out[i].name.clone(), out[i].text.clone());
+        if name.is_empty() && text.is_empty() {
+            out.remove(i);
+        } else if name == NETCLASS_FIELD && text.is_empty() {
+            if out.iter().filter(|f| f.name == NETCLASS_FIELD).count() > 1 {
+                out.remove(i);
+            }
+        } else if name.is_empty() {
+            out[i].name = "untitled".to_string();
+        }
+    }
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for f in &out {
+        // (more than one net class is allowed: OnAddField adds another, and the net is then in each class)
+        if f.name.eq_ignore_ascii_case(INTERSHEET_REFS_FIELD) || (f.name != NETCLASS_FIELD && !seen.insert(f.name.to_lowercase())) {
+            return Err(fail("ops_label_field_name", id, format!("Field name '{}' already in use.", f.name)));
+        }
+    }
+    Ok(out)
 }
 
 impl<'a> Board<'a> {
@@ -91,7 +129,19 @@ impl<'a> Board<'a> {
             return Err(fail("ops_label_no_auto_rotate", id, "only a global or a hierarchical label can rotate itself on placement"));
         }
         let auto_supported = crate::sch_labels::auto_rotate_supported(&label.kind);
+        let fields_now = look.fields.as_deref().map(|f| label_fields_after(id, f)).transpose()?;
         let mut changed = false;
+        if let Some(now) = fields_now {
+            let before = sch.extras.label_fields.get(id).cloned().unwrap_or_default();
+            if before != now {
+                changed = true;
+                if now.is_empty() {
+                    sch.extras.label_fields.remove(id);
+                } else {
+                    sch.extras.label_fields.insert(id.to_string(), now);
+                }
+            }
+        }
         if let Some(t) = text {
             if label.net != t {
                 label.net = t.to_string();

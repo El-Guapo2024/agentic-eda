@@ -412,7 +412,7 @@ function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol,
   // "above and below"), above and below and centred for everything else.
   const at = fieldAnchors(bbox, verticalTwoPin);
   const refSizeUm = REF_FONT * 1000;
-  drawStrokeText(ctx, symbol.id + unitSuffix, at.ref[0], at.ref[1], { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, justify: at.justify, color: layerColor("LAYER_REFERENCEPART") });
+  drawStrokeText(ctx, (symbol.reference ?? symbol.id) + unitSuffix, at.ref[0], at.ref[1], { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, justify: at.justify, color: layerColor("LAYER_REFERENCEPART") });
   if (symbol.value || symbol.mpn) {
     const sizeUm = VALUE_FONT * 1000;
     drawStrokeText(ctx, symbol.shown?.value ?? symbol.value ?? symbol.mpn ?? "", at.value[0], at.value[1], { sizeUm, justify: at.justify, color: layerColor("LAYER_VALUEPART") });
@@ -1056,6 +1056,15 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // Labels.
   for (const l of sch.labels) {
     drawLabel(ctx, view, l, sch.wires, opts.netHighlight === l.net || opts.selection.has(l.id));
+  }
+  // Their fields where `AutoplaceFields` puts them (`SCH_PAINTER::draw( SCH_FIELD )` of a label): a net class in `LAYER_NETCLASS_REFS`, a global label's Sheet References in
+  // `LAYER_INTERSHEET_REFS` (this palette has no colour of its own for it: the global label's), any other in `LAYER_FIELDS`; hidden ones only with Show Hidden Fields.
+  for (const l of sch.labels) {
+    for (const f of l.fields ?? []) {
+      if (!f.shown || (!f.visible && !paintedShowHiddenFields)) continue;
+      const color = !f.visible ? layerColor("LAYER_HIDDEN") : f.intersheet_refs ? layerColor("LAYER_GLOBLABEL") : f.name === "Netclass" ? layerColor("LAYER_NETCLASS_REFS") : layerColor("LAYER_FIELDS");
+      drawKicadText(ctx, f.shown, f.at, { sizeUm: f.size_um || FIELD_SIZE_UM, h: f.h, v: "center", vertical: f.vertical, color, italic: f.italic });
+    }
   }
 
   // Free text.

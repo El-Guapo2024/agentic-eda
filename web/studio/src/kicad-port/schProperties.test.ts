@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { colorToHex, graphicsEqual, hexToColor, labelEditCmd, mmToUm, powerEditCmd, propertiesTarget, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm } from "./schProperties";
+import { colorToHex, graphicsEqual, hexToColor, labelEditCmd, labelFieldDisplayName, newLabelField, ownLabelFields, mmToUm, powerEditCmd, propertiesTarget, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm } from "./schProperties";
 import type { Schematic } from "../api/types";
 
 const sheet = (over: Partial<Schematic> = {}): Schematic =>
@@ -198,4 +198,22 @@ test("a power symbol's dialog sends the new Value and the Show checks that chang
   });
   // a backend that sent no fields has no Show to change
   assert.equal(powerEditCmd({ id: "#PWR01", net: "GND" }, { net: "GND", showReference: true, showValue: true }), null);
+});
+
+test("Label Properties' grid of a label's own fields: OnAddField's name and look, the net class stored as Netclass, sent only when it changed", () => {
+  // OnAddField: a net class first, "Field" once the label has a field that is not one; the look of the last row, else shown and italic
+  assert.deepEqual(newLabelField([], null), { name: "Netclass", text: "", visible: true, italic: true });
+  assert.deepEqual(newLabelField([], false), { name: "Netclass", text: "", visible: false, italic: false }, "after a global label's Sheet References");
+  assert.deepEqual(newLabelField([{ name: "Netclass", text: "Power", visible: true, italic: true }], null).name, "Netclass");
+  assert.deepEqual(newLabelField([{ name: "Note", text: "x", visible: false, italic: false }], null), { name: "Field", text: "", visible: false, italic: false });
+  assert.equal(labelFieldDisplayName("Netclass"), "Net Class");
+  assert.equal(labelFieldDisplayName("Intersheetrefs"), "Sheet References");
+  const isr = { name: "Intersheetrefs", text: "${INTERSHEET_REFS}", shown: "[2]", visible: true, italic: false, intersheet_refs: true, at: [0, 0] as [number, number], vertical: false, h: "left" as const, size_um: 1270 };
+  const nc = { ...isr, name: "Netclass", text: "Power", shown: "Power", italic: true, intersheet_refs: false };
+  const global = { id: "lbl_g", net: "G", scope: "global" as const, shape: "input" as const, fields: [isr, nc] };
+  assert.deepEqual(ownLabelFields(global), [{ name: "Netclass", text: "Power", visible: true, italic: true }], "the Sheet References are not the label's own");
+  // the grid shows "Net Class": the same rows are no change, an edited one is sent stored as Netclass
+  const shown = [{ name: "Net Class", text: "Power", visible: true, italic: true }];
+  assert.equal(labelEditCmd(global, "right", { text: "G", shape: "input", spin: "right", fields: shown }), null);
+  assert.deepEqual(labelEditCmd(global, "right", { text: "G", shape: "input", spin: "right", fields: [{ ...shown[0]!, text: "HV" }] }), { op: "sch_edit", verb: "edit_label", id: "lbl_g", fields: [{ name: "Netclass", text: "HV", visible: true, italic: true }] });
 });

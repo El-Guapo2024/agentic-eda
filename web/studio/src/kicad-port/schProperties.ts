@@ -8,7 +8,7 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { Cmd, LabelShape, Schematic, SchematicLabel, SchematicText, Sheet } from "../api/types";
-import type { SchColor, SchGraphic, SchHAlign, SchLineStyle, SchVAlign } from "../api/schEditTypes";
+import type { LabelFieldEdit, SchColor, SchGraphic, SchHAlign, SchLineStyle, SchVAlign } from "../api/schEditTypes";
 import { textLie } from "./schTextItem";
 
 export type LabelSpinName = "right" | "up" | "left" | "bottom";
@@ -138,13 +138,44 @@ export function sameColor(a: SchColor | null | undefined, b: SchColor | null | u
 
 // ---------------------------------------------------------------------------------------------------------------------------------- label, text, sheet
 
+/** The label's own fields as Label Properties' grid starts with them: every field but a global label's Sheet References (`SCH_LABEL_BASE::m_fields` past the mandatory one). */
+export function ownLabelFields(label: Partial<Pick<SchematicLabel, "fields">>): LabelFieldEdit[] {
+  return (label.fields ?? []).filter((f) => !f.intersheet_refs).map((f) => ({ name: f.name, text: f.text, visible: f.visible, italic: f.italic }));
+}
+
+/** How a label's field is named in the grid (`SCH_LABEL_BASE::GetDefaultFieldName`): "Net Class" for `Netclass`, "Sheet References" for `Intersheetrefs`. */
+export function labelFieldDisplayName(name: string): string {
+  return name === "Netclass" ? "Net Class" : name === "Intersheetrefs" ? "Sheet References" : name;
+}
+
+/**
+ * `DIALOG_LABEL_PROPERTIES::OnAddField`: the new row is a net class unless the label has a field (other than the Sheet References) that is not one, then "Field"; it takes
+ * the look of the last row (`SetAttributes`, `SetVisible`), else shown and italic. `isrVisible` is a global label's Sheet References row (the last row when there is no other).
+ */
+export function newLabelField(fields: readonly LabelFieldEdit[], isrVisible: boolean | null): LabelFieldEdit {
+  const name = fields.every((f) => f.name === "Netclass") ? "Netclass" : "Field";
+  const last = fields[fields.length - 1];
+  if (last) return { name, text: "", visible: last.visible, italic: last.italic };
+  if (isrVisible !== null) return { name, text: "", visible: isrVisible, italic: false };
+  return { name, text: "", visible: true, italic: true };
+}
+
+function sameFields(a: readonly LabelFieldEdit[], b: readonly LabelFieldEdit[]): boolean {
+  return a.length === b.length && a.every((f, i) => f.name === b[i]!.name && f.text === b[i]!.text && f.visible === b[i]!.visible && f.italic === b[i]!.italic);
+}
+
 /** Label Properties: only the fields that differ from the label as it is (`spin` is the label's current spin, stored or read off its wire). */
 export function labelEditCmd(
-  label: Pick<SchematicLabel, "id" | "net" | "scope" | "shape"> & Partial<Pick<SchematicLabel, "size_um" | "bold" | "italic" | "auto_rotate">>,
+  label: Pick<SchematicLabel, "id" | "net" | "scope" | "shape"> & Partial<Pick<SchematicLabel, "size_um" | "bold" | "italic" | "auto_rotate" | "fields">>,
   spin: LabelSpinName,
-  next: { text: string; shape: LabelShape; spin: LabelSpinName; sizeUm?: number | null; bold?: boolean; italic?: boolean; autoRotate?: boolean }
+  next: { text: string; shape: LabelShape; spin: LabelSpinName; sizeUm?: number | null; bold?: boolean; italic?: boolean; autoRotate?: boolean; fields?: LabelFieldEdit[] }
 ): Cmd | null {
-  const edit: { text?: string; shape?: LabelShape; spin?: LabelSpinName; size_um?: number; bold?: boolean; italic?: boolean; auto_rotate?: boolean } = {};
+  const edit: { text?: string; shape?: LabelShape; spin?: LabelSpinName; size_um?: number; bold?: boolean; italic?: boolean; auto_rotate?: boolean; fields?: LabelFieldEdit[] } = {};
+  // the grid of the label's own fields, when it changed (the backend drops empty rows and names unnamed ones as the dialog's OK does)
+  if (next.fields !== undefined) {
+    const canonical = next.fields.map((f) => ({ ...f, name: f.name.trim() === "Net Class" ? "Netclass" : f.name }));
+    if (!sameFields(canonical, ownLabelFields(label))) edit.fields = canonical;
+  }
   const text = next.text.trim();
   if (text !== label.net) edit.text = text;
   if (label.scope !== "local" && next.shape !== label.shape) edit.shape = next.shape;
