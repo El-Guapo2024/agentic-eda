@@ -173,7 +173,8 @@ pub(crate) fn finds_file(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option
 }
 
 /// The file a model name finds and this route may read, as [`finds_file`] searches for it -- no `.step` stands in for a `.wrl` that is not there. What Collect and Embed 3D Models
-/// embeds (`PCB_CONTROL::CollectAndEmbed3DModels`: `ResolvePath`, then `fname.Exists()`); `None` for a name that finds nothing, or a file outside the allow-list or that is no model.
+/// embeds (`PCB_CONTROL::CollectAndEmbed3DModels`: `ResolvePath`, then `fname.Exists()`, whatever the file's extension: a `.stpz`, a `.wrz` too); `None` for a name that finds nothing
+/// or a file outside the allow-list.
 pub(crate) fn resolve_exact(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
     if name.is_empty() || name.len() > 4096 || name.contains('\0') {
         return None;
@@ -188,7 +189,7 @@ pub(crate) fn resolve_exact(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Opt
     let found = candidates.into_iter().find(|c| c.is_file())?;
     let canonical = found.canonicalize().ok()?;
     let inside = [&roots.models, &roots.project].into_iter().chain(&roots.extra).filter_map(|r| r.canonicalize().ok()).any(|r| canonical.starts_with(&r));
-    (inside && format_of(&canonical).is_some()).then_some(canonical)
+    inside.then_some(canonical)
 }
 
 /// The file a footprint's `(model "name")` names, found the way KiCad's `FILENAME_RESOLVER::ResolvePath` finds it and then held to the allow-list.

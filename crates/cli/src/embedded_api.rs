@@ -2,11 +2,12 @@
 //! `kicad-embed://` names of the 3D models.
 //!
 //!   - **`GET /api/embedded?owner=<board|schematic|footprint|library_footprint|library_symbol>[&id=<reference|name|lib_id>]`**: the owner's list, without the data --
-//!     `{"owner", "fonts", "files": [{"name", "type", "link", "size", "stored", "checksum", "status", "message", "used_by"}], "inherited": [..]}`. `status` says whether the file
+//!     `{"owner", "fonts", "files": [{"name", "type", "link", "size", "stored", "checksum", "content_checksum", "status", "message", "used_by"}], "inherited": [..]}`. `status` says whether the file
 //!     reads (`ok`; `legacy`: its checksum is of an older kind, which KiCad takes and replaces when it saves; `reference`: no data, the board holds it; `error`: it does not decode,
 //!     `message` says why). For the board, `used_by` names the footprints whose own list has the file ("Deleted embedded files are also referenced in some footprints ..."),
 //!     and `inherited` lists the files only footprints hold, which Board Setup shows and does not let go (`PANEL_EMBEDDED_FILES::RemoveEmbeddedFile`).
-//!   - **`GET /api/embedded/file?owner=..&id=..&name=..`**: the file's content, extracted (`PANEL_EMBEDDED_FILES::onExportFiles`); `422` with the reason when it does not decode.
+//!   - **`GET /api/embedded/file?owner=..&id=..&name=..`**: the file's content, extracted (`PANEL_EMBEDDED_FILES::onExportFiles`) -- for the board, a file only footprints hold
+//!     too; `422` with the reason when it does not decode.
 //!   - **`GET /api/embedded/collect`**: what Collect and Embed 3D Models would embed (`PCB_CONTROL::CollectAndEmbed3DModels`) -- `{"count", "models": [{"path", "files", "footprints"}],
 //!     "skipped": [{"path", "reason"}]}`. The same plan is made when the `collect_models` verb arrives with none ([`with_collected_models`]), so that the command carries the files and
 //!     replays the same elsewhere.
@@ -60,6 +61,8 @@ struct Seen {
     status: &'static str,
     message: String,
     content: Option<u64>,
+    /// The checksum KiCad holds for the file once it has read it (`DecompressAndDecode`: `data_hash = new_hash`), which `AddEmbeddedFile` compares a file added again with.
+    checksum: Option<String>,
 }
 
 fn seen_cache() -> &'static Mutex<HashMap<(String, u64, usize), Seen>> {
@@ -76,7 +79,7 @@ fn data_key(f: &EmbeddedFile) -> (String, u64, usize) {
 
 fn look_at(f: &EmbeddedFile) -> Seen {
     if f.data.is_empty() {
-        return Seen { status: "reference", message: "no data of its own: the board's list holds it".into(), content: None };
+        return Seen { status: "reference", message: "no data of its own: the board's list holds it".into(), content: None, checksum: (!f.checksum.is_empty()).then(|| f.checksum.clone()) };
     }
     let key = data_key(f);
     if let Some(hit) = seen_cache().lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
@@ -84,9 +87,9 @@ fn look_at(f: &EmbeddedFile) -> Seen {
     }
     let sizes = embedded::sizes(f);
     let seen = match embedded::decode(f) {
-        Ok(d) if d.legacy_checksum => Seen { status: "legacy", message: "its checksum is of an older kind; KiCad writes the current one when it saves".into(), content: Some(d.bytes.len() as u64) },
-        Ok(d) => Seen { status: "ok", message: String::new(), content: Some(d.bytes.len() as u64) },
-        Err(e) => Seen { status: "error", message: e.to_string(), content: sizes.content },
+        Ok(d) if d.legacy_checksum => Seen { status: "legacy", message: "its checksum is of an older kind; KiCad writes the current one when it saves".into(), content: Some(d.bytes.len() as u64), checksum: Some(d.checksum) },
+        Ok(d) => Seen { status: "ok", message: String::new(), content: Some(d.bytes.len() as u64), checksum: Some(d.checksum) },
+        Err(e) => Seen { status: "error", message: e.to_string(), content: sizes.content, checksum: None },
     };
     let mut cache = seen_cache().lock().unwrap_or_else(PoisonError::into_inner);
     if cache.len() > 512 {
@@ -106,6 +109,7 @@ fn file_json(f: &EmbeddedFile, used_by: &[String]) -> Value {
         "size": seen.content,
         "stored": embedded::sizes(f).stored,
         "checksum": f.checksum,
+        "content_checksum": seen.checksum,
         "status": seen.status,
         "message": seen.message,
         "used_by": used_by,
@@ -168,7 +172,14 @@ pub fn file(dir: &Path, target: &str) -> Reply {
         Err(e) => return reply("404 Not Found", json!({ "error": e.reason, "check": e.check })),
     };
     let name = embedded_files::name_of_link(&name).unwrap_or(&name).to_string();
-    let Some(found) = list.get(&name) else { return reply("404 Not Found", json!({ "error": format!("no file named '{name}' is embedded") })) };
+    // Board Setup's list holds the files only footprints hold too (`m_inheritedFiles`), and its Export writes them (`onExportFiles` walks `m_localFiles`).
+    let inherited = || -> Option<&EmbeddedFile> {
+        if !matches!(owner, EmbeddedOwner::Board) {
+            return None;
+        }
+        design.placement.iter().flat_map(|p| p.footprints.iter()).filter_map(|f| embedded_files::of_footprint(&design, &f.id)).find_map(|l| l.get(&name).filter(|f| !f.data.is_empty()))
+    };
+    let Some(found) = list.get(&name).or_else(inherited) else { return reply("404 Not Found", json!({ "error": format!("no file named '{name}' is embedded") })) };
     // A footprint's file that is only a reference has its data in the board's list (`BOARD::FixupEmbeddedData`).
     let found = if found.data.is_empty() { design.drawings.as_ref().and_then(|d| d.embedded.get(&name)).unwrap_or(found) } else { found };
     match embedded::decode(found) {
@@ -234,7 +245,10 @@ pub(crate) fn plan(dir: &Path, design: &Design, model: &ConstraintModel) -> Plan
     let names = crate::library_tables::model_names(dir);
     let roots = crate::model3d_api::board_roots(dir, &names);
     let mut plan = Plan::default();
+    // The models in the order the footprints first name them: `AddFile( fname, false )` keeps the first file of a name, so the first footprint's wins.
     let mut tried: BTreeMap<String, Option<CollectedModel>> = BTreeMap::new();
+    let mut order: Vec<String> = Vec::new();
+    let board_has = |name: &str| design.drawings.as_ref().is_some_and(|d| d.embedded.get(name).is_some());
     for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
         let Some(part) = model.part(&fp.id) else { continue };
         let Some(footprint) = model.footprint_of(part) else { continue };
@@ -243,8 +257,11 @@ pub(crate) fn plan(dir: &Path, design: &Design, model: &ConstraintModel) -> Plan
             if m.path.is_empty() || m.path.starts_with(embedded_files::URI_SCHEME.trim_end_matches("://")) {
                 continue;
             }
-            let found = tried.entry(m.path.clone()).or_insert_with(|| match collect_one(&m.path, &roots, &|v| names.get(v)) {
-                Ok(c) => Some(c),
+            let found = tried.entry(m.path.clone()).or_insert_with(|| match collect_one(&m.path, &roots, &|v| names.get(v), &board_has) {
+                Ok(c) => {
+                    order.push(m.path.clone());
+                    Some(c)
+                }
                 Err(why) => {
                     plan.skipped.push((m.path.clone(), why));
                     None
@@ -256,19 +273,25 @@ pub(crate) fn plan(dir: &Path, design: &Design, model: &ConstraintModel) -> Plan
             }
         }
     }
-    plan.models = tried.into_values().flatten().collect();
+    plan.models = order.iter().filter_map(|p| tried.remove(p).flatten()).collect();
     plan
 }
 
-/// The files of one model path: the model, and for a VRML model the STEP beside it.
-fn collect_one(path: &str, roots: &crate::model3d_api::Roots, env: &dyn Fn(&str) -> Option<String>) -> Result<CollectedModel, String> {
+/// The files of one model path: the model, and for a VRML model the STEP beside it. `board_has` says whether the board embeds a file of that name already: `AddFile( fname, false )`
+/// then hands back the file that is there without reading the one on disk, so an empty file on disk (which `AddFile` cannot read) still counts.
+fn collect_one(path: &str, roots: &crate::model3d_api::Roots, env: &dyn Fn(&str) -> Option<String>, board_has: &dyn Fn(&str) -> bool) -> Result<CollectedModel, String> {
     let file = crate::model3d_api::resolve_exact(path, roots, env).ok_or_else(|| "no file of that name was found in KiCad's 3D model library, the board's folder or the folders of its path variables".to_string())?;
+    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if !board_has(name) && std::fs::metadata(&file).is_ok_and(|m| m.len() == 0) {
+        return Err(format!("Failed to add file '{name}'."));
+    }
     let mut files = vec![read_embedded(&file)?];
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_uppercase();
     if ext == "WRL" || ext == "WRZ" {
         let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         if let Some(alt) = STEP_EXTENSIONS.iter().map(|e| file.with_file_name(format!("{stem}.{e}"))).find(|p| p.is_file()) {
-            if let Ok(f) = read_embedded(&alt) {
+            // an empty STEP is not added (`AddFile` fails on it, and the failure is ignored)
+            if let Some(f) = std::fs::metadata(&alt).is_ok_and(|m| m.len() > 0).then(|| read_embedded(&alt).ok()).flatten() {
                 files.push(f);
             }
         }
