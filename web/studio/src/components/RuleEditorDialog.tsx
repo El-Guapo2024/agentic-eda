@@ -357,7 +357,8 @@ export function RuleEditorDialog() {
       setDrafts(rest);
       setPanel(null);
       setSelected(nodeById(id)?.parent ?? 2);
-      if (rest.length === 0) clearModified();
+      // `Cancel` -> `RemoveRule`, which clears the modified state whatever else is new (`OnCancel`'s own check after it finds it cleared).
+      clearModified();
       return;
     }
     if (modified) {
@@ -498,6 +499,7 @@ export function RuleEditorDialog() {
                 view={view}
                 constraintName={nodeById(nodeById(panel.nodeId)?.parent ?? null)?.name ?? ""}
                 update={update}
+                onEnter={() => void save()}
                 syntaxTip={syntaxTip}
                 checkSyntax={async () => {
                   const r = await postRuleEditorCheck({ syntax: { name: panel.name, body: panel.customText } });
@@ -591,6 +593,7 @@ function RulePanel({
   view,
   constraintName,
   update,
+  onEnter,
   syntaxTip,
   checkSyntax,
 }: {
@@ -598,6 +601,8 @@ function RulePanel({
   view: RuleEditorView;
   constraintName: string;
   update: (patch: Partial<PanelState>) => void;
+  /** Enter in the name, the comment or a value field saves (`OnEnterKey`, the overlay fields' `wxEVT_TEXT_ENTER`). */
+  onEnter: () => void;
   syntaxTip: string | null;
   checkSyntax: () => Promise<void>;
 }) {
@@ -609,11 +614,11 @@ function RulePanel({
       <div className="re-row">
         <label>
           Name:{" "}
-          <input data-testid="re-name" value={p.name} onChange={(e) => update({ name: e.target.value })} />
+          <input data-testid="re-name" value={p.name} onChange={(e) => update({ name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && onEnter()} />
         </label>
         <label>
           Comment:{" "}
-          <input data-testid="re-comment" value={p.comment} onChange={(e) => update({ comment: e.target.value })} />
+          <input data-testid="re-comment" value={p.comment} onChange={(e) => update({ comment: e.target.value })} onKeyDown={(e) => e.key === "Enter" && onEnter()} />
         </label>
       </div>
       <h4 className="re-section">{constraintName} Constraint</h4>
@@ -632,7 +637,7 @@ function RulePanel({
           </div>
         </div>
       ) : (
-        <Overlay p={p} update={update} />
+        <Overlay p={p} update={update} onEnter={onEnter} />
       )}
       {!custom && (
         <>
@@ -657,7 +662,7 @@ function RulePanel({
 }
 
 /** `DRC_RE_BITMAP_OVERLAY_PANEL`: the constraint's picture with its fields where `GetFieldPositions` puts them. */
-function Overlay({ p, update }: { p: PanelState; update: (patch: Partial<PanelState>) => void }) {
+function Overlay({ p, update, onEnter }: { p: PanelState; update: (patch: Partial<PanelState>) => void; onEnter: () => void }) {
   const scheme = useColorScheme();
   const spec = overlaySpec(p.panel);
   if (!spec) return null;
@@ -674,6 +679,7 @@ function Overlay({ p, update }: { p: PanelState; update: (patch: Partial<PanelSt
           data-testid={`re-field-${f.key}`}
           value={p.text[f.key] ?? ""}
           onChange={(e) => update({ text: { ...p.text, [f.key]: e.target.value } })}
+          onKeyDown={(e) => e.key === "Enter" && onEnter()}
         />
       );
     }
@@ -704,6 +710,11 @@ function Overlay({ p, update }: { p: PanelState; update: (patch: Partial<PanelSt
   return (
     <div className="re-overlay" style={{ minWidth: right, minHeight: bottom }} data-testid="re-overlay">
       <img src={`/icons/${scheme}/${spec.bitmap}.png`} alt="" draggable={false} />
+      {(spec.decor ?? []).map((d, i) => (
+        <span key={`decor${i}`} className="re-label" style={{ left: d.x, top: d.y + 3 }}>
+          {d.text}
+        </span>
+      ))}
       {spec.fields.map((f) => (
         <span key={f.key}>
           {field(f)}
