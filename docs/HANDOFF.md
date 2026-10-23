@@ -81,6 +81,8 @@ Gates for any of them:
    - ~~browser checks for the older areas (P20)~~ merged 2026-10-23: `tools/run-all-checks.sh` runs all 42, 42/42.
    - ~~re-running `tools/parity_report.py`~~ merged 2026-10-23: the connectivity set is fixed at 186 boards, 97.8%.
 
+TODO (the user, 2026-10-23: not now): check the kicad-cli fallbacks on a kicad-cli without `pcb export specctra`, `idf` or `gencad` (the Mac's 10.99.0-5334); delete the deprecated Specctra exporter once every machine has the command (scope in GAPS.md P19).
+
 Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Python plugins, the autoplacer and the viewer windows (see `STALE-REASONS.md`); Hyperlynx and footprint-report export (no kicad-cli exporter, not even in the box's nightly; ask the user before porting them as was done for Specctra). IDFv3 and GenCAD are kicad-cli's (user, 2026-10-23: `task-cli-exports`), offered where the kicad-cli in use has the command and disabled with the reason where it has not.
 
 ## How the work was run
