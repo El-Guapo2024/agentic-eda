@@ -796,6 +796,19 @@ fn handle(
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
         ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
+        // The Embedded Files panel (`crate::embedded_api`): a list without the data, one file extracted, and what Collect and Embed 3D Models would embed.
+        ("GET", "/api/embedded") => {
+            let r = crate::embedded_api::list(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        ("GET", "/api/embedded/file") => {
+            let r = crate::embedded_api::file(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        ("GET", "/api/embedded/collect") => {
+            let r = crate::embedded_api::collect_plan(dir);
+            respond(stream, r.status, r.kind, &r.body)
+        }
         ("GET", "/api/symbol_library/export") => match symbol_library_kicad_sym(dir) {
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
@@ -2346,7 +2359,7 @@ fn symbol_library_kicad_sym(dir: &Path) -> Result<String, Vec<CheckResult>> {
     let (_, design, _) = board::load(dir)?;
     let lib = design.symbol_library.as_ref().filter(|l| !l.symbols.is_empty()).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", "symbol_library", "the project symbol library has no symbols yet -- open or create one in the Symbol Editor first")])?;
     let syms: Vec<&eda_model::ir::LibrarySymbol> = lib.symbols.iter().collect();
-    Ok(eda_kicad::export_kicad_sym_library(&syms))
+    Ok(eda_kicad::export_kicad_sym_library_with(&syms, &lib.embedded))
 }
 
 /// `GET /api/ratsnest`: the board's airwires for the React view's ratsnest

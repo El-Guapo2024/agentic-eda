@@ -92,6 +92,8 @@ mod multichannel_copy;
 mod multichannel_facts;
 mod multichannel_geom;
 pub use multichannel::{AreaKind, AreaPick, MultichannelCmd, PlacementSources, PotentialArea, RepeatOptions, RepeatPlan, TargetCompat};
+pub mod embedded;
+pub use embedded::{CollectedModel, EmbeddedCmd, EmbeddedOwner};
 pub mod pcb_items;
 mod pcb_props;
 mod pcb_table_builders;
@@ -700,6 +702,10 @@ pub enum Cmd {
     /// The board items the IR gained with GAPS.md item 24 (package P16): text boxes, reference images, points and the hatch fill of shapes -- one verb family, see
     /// [`pcb_items::PcbItemCmd`]. On the wire: `{"op": "pcb_item", "verb": "add_text_box", "text_box": {..}}`.
     PcbItem(pcb_items::PcbItemCmd),
+    /// The files embedded in a board, a schematic, a footprint or a symbol (GAPS.md items 24 and 30): the Embedded Files panel's Add, Remove and Embed fonts, the tool actions
+    /// `common.Embed.embededFile` and `removeFile`, and Collect and Embed 3D Models -- one verb family, see [`embedded::EmbeddedCmd`]. On the wire:
+    /// `{"op": "embedded", "verb": "add", "owner": {"kind": "board"}, "name": "part.step", "data": "<base64>"}`.
+    Embedded(embedded::EmbeddedCmd),
     /// The microwave tools (`pcbnew.MicrowaveTool.*`, GAPS.md item 9, package P19): a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own, one verb family, see
     /// [`microwave::MicrowaveCmd`]. On the wire: `{"op": "microwave", "verb": "gap", "at": {..}, "size_um": 500, "track_width_um": 250}`.
     Microwave(microwave::MicrowaveCmd),
@@ -1959,6 +1965,7 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.first().map_or(Domain::Pcb, Cmd::domain),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.domain(),
             Cmd::ReorganizeSheets => Domain::Schematic,
+            Cmd::Embedded(c) => c.domain(),
             Cmd::MoveSymbol { .. }
             | Cmd::DragSymbol { .. }
             | Cmd::RotateSymbol { .. }
@@ -2084,6 +2091,8 @@ impl Cmd {
             Cmd::SchEdit(c) => c.edits_connectivity(),
             // A table is drawn text and lines: nothing it covers is connected to it.
             Cmd::SchTable(_) => false,
+            // A file kept inside the schematic is no part of the drawing.
+            Cmd::Embedded(_) => false,
             // A definition kept with the schematic changes no connection.
             Cmd::EmbedLibSymbol { .. } => false,
             // Drawn lines, shapes and text are not wires: nothing they cross is connected to them.
@@ -2274,6 +2283,7 @@ impl Cmd {
             Cmd::SchEdit(c) => c.ids(),
             Cmd::SchMove(c) => c.ids(),
             Cmd::PcbItem(c) => c.ids(),
+            Cmd::Embedded(c) => c.ids(),
             Cmd::Microwave(c) => c.ids(),
             Cmd::Specctra { name, .. } => vec![name.as_str()],
             Cmd::Multichannel(c) => c.ids(),
@@ -2874,6 +2884,7 @@ impl<'a> Board<'a> {
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
+            Cmd::Embedded(c) => self.apply_embedded(c),
             Cmd::Microwave(c) => self.apply_microwave(c),
             Cmd::Specctra { session, name } => self.import_specctra_session(session, name),
             Cmd::Multichannel(c) => self.apply_multichannel(c),
@@ -5221,6 +5232,7 @@ impl<'a> Board<'a> {
         if lib.footprints.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_footprint", name, "no footprint with this name in the library")]);
         }
+        lib.embedded.remove(name);
         Ok(())
     }
 
@@ -5594,6 +5606,7 @@ impl<'a> Board<'a> {
         if lib.symbols.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the library")]);
         }
+        lib.embedded.retain(|k, _| !gone.contains(k));
         Ok(())
     }
 
@@ -5952,6 +5965,8 @@ mod import_graphics_sch_tests;
 mod pcb_groups_tests;
 #[cfg(test)]
 mod pcb_items_tests;
+#[cfg(test)]
+mod embedded_tests;
 #[cfg(test)]
 mod microwave_tests;
 #[cfg(test)]

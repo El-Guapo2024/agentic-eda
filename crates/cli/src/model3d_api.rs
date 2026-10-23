@@ -19,6 +19,7 @@
 
 use crate::kicad_lane::Lane;
 use eda_kicad::part_models;
+use eda_model::embedded_files;
 use eda_model::{ConstraintModel, Footprint, Part};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -155,6 +156,10 @@ pub(crate) fn finds_file(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option
     if name.is_empty() || name.len() > 4096 || name.contains('\0') {
         return false;
     }
+    // `kicad-embed://name` finds the file the board embeds under that name (`FILENAME_RESOLVER::ResolvePath` with the board's embedded files).
+    if embedded_files::name_of_link(&name.replace('\\', "/")).is_some() {
+        return crate::embedded_api::embeds(&roots.project, &name.replace('\\', "/"));
+    }
     let expanded = expand(&name.replace('\\', "/"), roots, env);
     if expanded.contains("${") || expanded.contains("$(") {
         return false;
@@ -165,6 +170,25 @@ pub(crate) fn finds_file(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option
     } else {
         roots.project.join(&given).is_file() || roots.models.join(&given).is_file()
     }
+}
+
+/// The file a model name finds and this route may read, as [`finds_file`] searches for it -- no `.step` stands in for a `.wrl` that is not there. What Collect and Embed 3D Models
+/// embeds (`PCB_CONTROL::CollectAndEmbed3DModels`: `ResolvePath`, then `fname.Exists()`); `None` for a name that finds nothing, or a file outside the allow-list or that is no model.
+pub(crate) fn resolve_exact(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    if name.is_empty() || name.len() > 4096 || name.contains('\0') {
+        return None;
+    }
+    let name = name.replace('\\', "/");
+    let expanded = expand(&name, roots, env);
+    if expanded.contains("${") || expanded.contains("$(") {
+        return None;
+    }
+    let given = PathBuf::from(&expanded);
+    let candidates: Vec<PathBuf> = if given.is_absolute() { vec![given] } else { vec![roots.project.join(&given), roots.models.join(&given)] };
+    let found = candidates.into_iter().find(|c| c.is_file())?;
+    let canonical = found.canonicalize().ok()?;
+    let inside = [&roots.models, &roots.project].into_iter().chain(&roots.extra).filter_map(|r| r.canonicalize().ok()).any(|r| canonical.starts_with(&r));
+    (inside && format_of(&canonical).is_some()).then_some(canonical)
 }
 
 /// The file a footprint's `(model "name")` names, found the way KiCad's `FILENAME_RESOLVER::ResolvePath` finds it and then held to the allow-list.
@@ -181,6 +205,15 @@ pub fn resolve(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) 
         return Err(Reject::BadName);
     }
     let name = name.replace('\\', "/");
+    // `kicad-embed://name`: the file the board embeds under that name, extracted beside the derived KiCad files (`EMBEDDED_FILES::GetTemporaryFileName`), which lies inside the board's folder.
+    if let Some(extracted) = crate::embedded_api::embedded_model_path(&roots.project, &name) {
+        let found = extracted.map_err(|_| Reject::NotFound)?;
+        let canonical = found.canonicalize().map_err(|_| Reject::NotFound)?;
+        return match format_of(&canonical) {
+            Some(format) => Ok(Resolved { path: canonical, format }),
+            None => Err(Reject::Forbidden("only .wrl, .step and .stp files are served".into())),
+        };
+    }
     let expanded = expand(&name, roots, env);
     if expanded.contains("${") || expanded.contains("$(") {
         return Err(Reject::NotFound);

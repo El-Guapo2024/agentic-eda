@@ -16,7 +16,10 @@
 // The 3D Models tab (`PANEL_FP_PROPERTIES_3D_MODEL`, components/footprint/FootprintModelsPanel.tsx) edits a copy of the footprint's list of models; OK sends it as one
 // `set_board_models` in the same batch when it differs (kicad-port/fpModels.ts `boardModelsCmds`).
 //
-// Not ported: the footprint's own mask/paste margins, the embedded files and the extruded 3D body, jumper pad groups. The Reference and Value texts come from the schematic and the
+// The Embedded Files tab is the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the footprint's own list; each of its edits is a verb of its own, sent at
+// once (KiCad applies it with the dialog's OK).
+//
+// Not ported: the footprint's own mask/paste margins, the extruded 3D body, jumper pad groups. The Reference and Value texts come from the schematic and the
 // intent: they are shown, not edited.
 import { useEffect, useMemo, useState } from "react";
 import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, PadConnection, Part } from "../api/types";
@@ -29,6 +32,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { formatLength, umFrom, umTo } from "../state/units";
 import { boardModelsCmds, rowsOf, type ModelRow } from "../kicad-port/fpModels";
 import { FootprintModelsPanel } from "./footprint/FootprintModelsPanel";
+import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
 import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
 
 /** One row of the grid. `from` is the field it started as (null for a row added here). */
@@ -74,7 +78,7 @@ export function FootprintPropertiesDialog() {
   const [padNum, setPadNum] = useState("");
   const [padZones, setPadZones] = useState<Record<string, PadZoneForm>>({});
   // The 3D Models tab: a copy of the footprint's list, which OK sends when it differs.
-  const [tab, setTab] = useState<"general" | "models">("general");
+  const [tab, setTab] = useState<"general" | "models" | "embedded">("general");
   const [models, setModels] = useState<ModelRow[]>([]);
 
   // Fill the form when the dialog opens on a footprint -- not on every poll, or a keystroke would be lost to the next refresh.
@@ -204,6 +208,7 @@ export function FootprintPropertiesDialog() {
               [
                 ["general", "General"],
                 ["models", "3D Models"],
+                ["embedded", "Embedded Files"],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -219,6 +224,7 @@ export function FootprintPropertiesDialog() {
             ))}
           </div>
           {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ part: part.ref }} units={units} />}
+          {tab === "embedded" && <EmbeddedFilesPanel owner={{ kind: "footprint", reference: part.ref }} run={api.cmd} version={state.version} />}
           <div style={{ display: tab === "general" ? undefined : "none" }}>
           <div style={{ overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse", fontSize: 12 }} data-testid="footprint-fields-grid">

@@ -172,7 +172,8 @@ pub fn symbol_kicad_sym_any(dir: &Path, lib_id: &str) -> Result<String, Vec<Chec
         Some(lib) => lib.flatten(lib_id).map_err(|e| vec![CheckResult::fail("ops_bad_symbol", lib_id, e)])?,
         None => sym,
     };
-    Ok(eda_kicad::export_kicad_sym(&flat))
+    let embedded: std::collections::BTreeMap<String, eda_model::embedded_files::EmbeddedFiles> = design.symbol_library.as_ref().and_then(|l| l.embedded.get(lib_id)).map(|e| [(flat.lib_id.clone(), e.clone())].into()).unwrap_or_default();
+    Ok(eda_kicad::export_kicad_sym_library_with(&[&flat], &embedded))
 }
 
 /// `GET /api/symbol?lib_id=&flatten=1`: the project-library symbol with everything it inherits -- what the Symbol Editor draws of a derived symbol -- or the symbol itself.
@@ -184,7 +185,10 @@ pub fn symbol_flattened(dir: &Path, lib_id: &str) -> Result<LibrarySymbol, Vec<C
 
 /// The derived `.kicad_mod` of any footprint (`Export Current Footprint...`).
 pub fn footprint_kicad_mod_any(dir: &Path, name: &str) -> Result<String, Vec<CheckResult>> {
-    footprint_any(dir, name).map(|(fp, _)| eda_kicad::export_kicad_mod(&fp))
+    let (fp, _) = footprint_any(dir, name)?;
+    // the files a project footprint embeds are written with it
+    let embedded = board::load(dir).ok().and_then(|(_, design, _)| design.footprint_library.and_then(|l| l.embedded.get(name).cloned())).unwrap_or_default();
+    Ok(eda_kicad::export_kicad_mod_with(&fp, &embedded))
 }
 
 fn text_of(body: &[u8]) -> Result<&str, Value> {
@@ -199,7 +203,7 @@ pub fn parse_symbols(body: &[u8]) -> Value {
         Err(e) => return e,
     };
     match eda_kicad::parse_library_symbols(text) {
-        Ok(parsed) => json!({ "symbols": parsed.symbols, "warnings": parsed.warnings }),
+        Ok(parsed) => json!({ "symbols": parsed.symbols, "warnings": parsed.warnings, "embedded": parsed.embedded }),
         Err(e) => json!({ "error": e }),
     }
 }
@@ -212,7 +216,7 @@ pub fn parse_footprint(body: &[u8]) -> Value {
         Err(e) => return e,
     };
     match eda_kicad::parse_library_footprint(text) {
-        Ok(parsed) => json!({ "footprint": parsed.footprint, "warnings": parsed.warnings }),
+        Ok(parsed) => json!({ "footprint": parsed.footprint, "warnings": parsed.warnings, "embedded": parsed.embedded }),
         Err(e) => json!({ "error": e }),
     }
 }

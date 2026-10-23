@@ -13,6 +13,9 @@
 // The Fields grid (`PCB_FIELDS_GRID_TABLE`, components/footprint/FootprintFieldsGrid.tsx) is the General tab's first part: the Reference and the Value with their texts and places, and the
 // user fields -- named, shown or hidden, with their layer, size, orientation and offset. It replaces the two "visible" check boxes this tab had: they are the grid's Show column.
 //
+// The Embedded Files tab is the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the library footprint's list; each of its edits is a verb of its own,
+// sent at once (KiCad applies it with the dialog's OK).
+//
 // Not ported: the Layers tab (private/custom user layers -- this app's
 // board has a fixed layer set, nothing to assign a private layer from),
 // the Clearances tab beyond its "Zone connection" (the solder mask and paste
@@ -26,6 +29,7 @@ import { boardLayerList } from "../../kicad-port/boardLayers";
 import { gridProblem, panelOfRows, rowsOfFootprint, type LibFieldRow } from "../../kicad-port/fpLibFields";
 import { formatLength } from "../../state/units";
 import { FootprintFieldsGrid } from "./FootprintFieldsGrid";
+import { EmbeddedFilesPanel } from "../EmbeddedFilesPanel";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { PAD_CONNECTION_OPTIONS } from "../../kicad-port/padSettings";
 import { libraryModels, rowsOfLibrary, type ModelRow } from "../../kicad-port/fpModels";
@@ -51,7 +55,7 @@ export function FootprintLibraryPropertiesDialog() {
 
   const [form, setForm] = useState<FootprintPropertiesFields>(DEFAULT_FIELDS);
   // The 3D Models tab's working copy of the list; OK sends it.
-  const [tab, setTab] = useState<"general" | "models">("general");
+  const [tab, setTab] = useState<"general" | "models" | "embedded">("general");
   const [models, setModels] = useState<ModelRow[]>([]);
   // The fields grid's working copy, and what is wrong with it.
   const [rows, setRows] = useState<LibFieldRow[]>([]);
@@ -103,6 +107,7 @@ export function FootprintLibraryPropertiesDialog() {
               [
                 ["general", "General"],
                 ["models", "3D Models"],
+                ["embedded", "Embedded Files"],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -118,6 +123,7 @@ export function FootprintLibraryPropertiesDialog() {
             ))}
           </div>
           {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ footprint: fp.name }} units={units} />}
+          {tab === "embedded" && <EmbeddedFilesPanel owner={{ kind: "library_footprint", name: fp.name }} run={api.cmd} version={studio.version} />}
           <div style={{ display: tab === "general" ? undefined : "none" }}>
           <FootprintFieldsGrid rows={rows} onChange={setRows} units={units} layers={layers} layerSetup={layerSetup} onError={setError} />
           <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr", marginTop: 10 }}>
