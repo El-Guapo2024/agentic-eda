@@ -519,7 +519,7 @@ export async function downloadKicadSchematic(boardName: string): Promise<string[
 }
 
 /** A browser download of `text` as `fileName` (the web equivalent of a native Save dialog). */
-function saveTextAs(text: string, fileName: string): void {
+export function saveTextAs(text: string, fileName: string): void {
   const blob = new Blob([text], { type: "text/plain" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

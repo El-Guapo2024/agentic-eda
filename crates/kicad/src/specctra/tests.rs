@@ -164,3 +164,188 @@ fn the_pins_of_the_dsn_are_where_the_pads_of_the_board_are() {
     }
     assert_eq!(checked, 5, "every pad was found");
 }
+
+// ------------------------------------------------------------------------------------------------------------------------------- the writer, element by element
+
+use super::format::Out;
+
+fn written(f: impl FnOnce(&mut Out)) -> String {
+    let mut out = Out::default();
+    f(&mut out);
+    out.into_string()
+}
+
+/// `PATH::Format`: the points go on one line until it is past 70 characters, then on a line of their own at nest level 6 (or one deeper than the path, if that is more).
+#[test]
+fn a_path_wraps_past_seventy_characters_at_nest_level_six() {
+    let mut p = PathElem::new(false);
+    p.layer_id = "F.Cu".into();
+    p.aperture_width = 200.0;
+    p.points = (0..8).map(|i| Pt::new(10000.0 + i as f64, -20000.5)).collect();
+    let text = written(|o| p.format(o, 2));
+    assert_eq!(text, "    (path F.Cu 200  10000 -20000.5  10001 -20000.5  10002 -20000.5  10003 -20000.5\n            10004 -20000.5  10005 -20000.5  10006 -20000.5  10007 -20000.5)\n");
+    // At nest level 0 (inside a wire) there is no newline after it, and a square aperture is said.
+    p.points.truncate(2);
+    p.aperture_square = true;
+    assert_eq!(written(|o| p.format(o, 0)), "(path F.Cu 200  10000 -20000.5  10001 -20000.5(aperture_type square))");
+    p.polygon = true;
+    assert!(written(|o| p.format(o, 0)).starts_with("(polygon F.Cu 200"));
+}
+
+/// `CIRCLE::Format` writes the centre only when it is not the origin; `QARC::Format` writes its three points.
+#[test]
+fn a_circle_writes_its_centre_only_off_the_origin_and_a_qarc_its_three_points() {
+    let c = Circle { layer_id: "B.Cu".into(), diameter: 600.0, vertex: Pt::default() };
+    assert_eq!(written(|o| c.format(o, 3)), "      (circle B.Cu 600)\n");
+    let c = Circle { vertex: Pt::new(-1.5, 2.0), ..c };
+    assert_eq!(written(|o| c.format(o, 3)), "      (circle B.Cu 600 -1.5 2)\n");
+    let q = Qarc { layer_id: "F.Cu".into(), aperture_width: 250.0, vertex: [Pt::new(0.0, 0.0), Pt::new(10.0, 10.0), Pt::new(10.0, 0.0)] };
+    assert_eq!(written(|o| q.format(o, 0)), "(qarc F.Cu 250  0 0  10 10  10 0)");
+}
+
+/// `WIRE::Format` and `WIRE_VIA::Format`: what `FromBOARD` writes for a routed track and a via, a layer name with a space quoted, and a via's vertexes wrapped past 80
+/// characters at one level deeper.
+#[test]
+fn a_wire_and_a_via_are_written_as_kicad_writes_them() {
+    let mut p = PathElem::new(false);
+    p.layer_id = "Top Layer".into();
+    p.aperture_width = 150.0;
+    p.points = vec![Pt::new(1.0, 2.0), Pt::new(3.0, 4.0)];
+    let mut w = Wire::new();
+    w.shape = Some(ShapeElem::Path(p));
+    w.net_id = "/SDA".into();
+    w.wire_type = Some(WireType::Fix);
+    assert_eq!(written(|o| w.format(o, 2)), "    (wire (path \"Top Layer\" 150  1 2  3 4)(net /SDA)(type fix))\n");
+
+    let mut v = WireVia::new();
+    v.padstack_id = "Via[0-1]_600:300_um".into();
+    v.vertexes = vec![Pt::new(3292.0, -8374.0)];
+    v.net_id = "N1".into();
+    v.via_type = Some(WireType::Route);
+    assert_eq!(written(|o| v.format(o, 2)), "    (via \"Via[0-1]_600:300_um\"  3292 -8374 (net N1)(type route))\n");
+    v.vertexes = (0..7).map(|i| Pt::new(100000.0 + i as f64, -200000.0)).collect();
+    v.net_id.clear();
+    v.via_type = None;
+    assert_eq!(
+        written(|o| v.format(o, 2)),
+        "    (via \"Via[0-1]_600:300_um\"  100000 -200000  100001 -200000  100002 -200000  100003 -200000\n      100004 -200000  100005 -200000  100006 -200000)\n"
+    );
+}
+
+/// `PLACE::Format` on one line (no rules, properties or region): the vertex, the side, the rotation, then the lock type and the part number.
+#[test]
+fn a_place_is_one_line_with_its_part_number_last() {
+    let mut p = Place::new();
+    p.component_id = "R 1".into();
+    p.set_vertex(Pt::new(2875.0, -11200.0));
+    p.side = super::model::Side::Back;
+    p.rotation = 270.0;
+    p.part_number = "10k".into();
+    assert_eq!(written(|o| p.format(o, 3)), "      (place \"R 1\" 2875 -11200 back 270 (PN 10k))\n");
+}
+
+/// `PADSTACK::Format` of a via `makeVia` made: a circle on each layer and `(attach off)`.
+#[test]
+fn a_via_padstack_is_its_circles_and_attach_off() {
+    let mut ps = Padstack::new();
+    ps.padstack_id = "Via[0-1]_600:300_um".into();
+    for layer in ["F.Cu", "B.Cu"] {
+        let mut s = ShapeEl::new(false);
+        s.shape = Some(ShapeElem::Circle(Circle { layer_id: layer.into(), diameter: 600.0, vertex: Pt::default() }));
+        ps.shapes.push(s);
+    }
+    assert_eq!(written(|o| ps.format(o, 2)), "    (padstack \"Via[0-1]_600:300_um\"\n      (shape (circle F.Cu 600))\n      (shape (circle B.Cu 600))\n      (attach off)\n    )\n");
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------- FromSESSION
+
+use super::session::{echo_session, from_session, from_session_db};
+use eda_model::via_extra::ViaKind;
+
+/// The sample board's DSN and the session a router that kept its routing would send back.
+fn sample_session() -> (Design, ConstraintModel, String) {
+    let (design, model) = sample_board();
+    let dsn = super::export_dsn(&design, &model, "sample.dsn").unwrap();
+    let pcb = load_pcb(&dsn.text, "sample.dsn").unwrap();
+    (design, model, echo_session(&pcb, "sample.ses"))
+}
+
+/// The routing and the placement of a board come back from the session its own DSN makes: the track's two segments, the via with its drill (which the padstack's name
+/// holds), the parts where they were -- the one on the back on the back, turned as it was.
+#[test]
+fn a_session_brings_back_the_routing_and_the_placement_the_dsn_had() {
+    let (design, model, ses) = sample_session();
+    let got = from_session(&ses, "sample.ses", &design, &model).unwrap();
+    let segs: Vec<(Point, Point, i64, &str, &str)> = got.tracks.iter().map(|(t, _)| (t.pts[0], t.pts[1], t.width, t.layer.as_str(), t.net.as_str())).collect();
+    assert_eq!(
+        segs,
+        vec![(Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }, 200, "F.Cu", "VIN"), (Point { x: 10_000, y: 5_000 }, Point { x: 10_000, y: 8_000 }, 200, "F.Cu", "VIN")]
+    );
+    assert!(got.tracks.iter().all(|(_, locked)| !locked));
+    assert_eq!(got.vias.len(), 1);
+    let v = &got.vias[0];
+    assert_eq!((v.via.at, v.via.diameter, v.via.drill, v.via.from_layer.as_str(), v.via.to_layer.as_str(), v.via.net.as_str()), (Point { x: 10_000, y: 8_000 }, 600, 300, "F.Cu", "B.Cu", "VIN"));
+    assert_eq!(v.kind, ViaKind::Through);
+    let mut places: Vec<_> = got.placements.iter().map(|p| (p.reference.as_str(), p.at, p.rot, p.side)).collect();
+    places.sort_by(|a, b| a.0.cmp(b.0));
+    assert_eq!(places, vec![("C1", Point { x: 10_000, y: 10_000 }, 90_000, Side::Bottom), ("U1", Point { x: 5_000, y: 5_000 }, 0, Side::Top)]);
+}
+
+fn session_with(routes: &str) -> String {
+    format!("(session s.ses (base_design s.dsn)\n (routes (resolution mil 1)\n  (library_out (padstack V:400_um (shape (circle F.Cu 24)) (attach off)) (padstack Sq (shape (rect F.Cu -1 -1 1 1))))\n  (network_out {routes})))\n")
+}
+
+/// `scale` and `mapPt`: a session's own resolution (mils here), the y axis turned down; `(type fix)` is a locked track; a net the board has not got is no net;
+/// a via whose padstack's name holds a drill other than the Default class's keeps it, and one with no drill in its name takes its net's.
+#[test]
+fn a_session_is_read_in_its_own_resolution() {
+    let (design, model) = sample_board();
+    let ses = session_with("(net VIN (wire (path F.Cu 10 0 0 100 -50) (type fix)) (via V:400_um 100 -50)) (net NOPE (wire (path B.Cu 8 0 0 0 100)))");
+    let got = from_session(&ses, "s.ses", &design, &model).unwrap();
+    let (t, locked) = &got.tracks[0];
+    assert_eq!((t.pts[0], t.pts[1], t.width, *locked), (Point { x: 0, y: 0 }, Point { x: 2_540, y: 1_270 }, 254, true));
+    assert_eq!(got.tracks[1].0.net, "", "a net the board has not got is no net");
+    let v = &got.vias[0].via;
+    assert_eq!((v.at, v.diameter, v.drill), (Point { x: 2_540, y: 1_270 }, 610, 400));
+}
+
+/// `makeARC`: a quarter arc about its third vertex, the middle on the short way round.
+#[test]
+fn a_qarc_is_an_arc_through_its_middle() {
+    let (design, model) = sample_board();
+    let ses = session_with("(net VIN (wire (qarc F.Cu 10 0 0 100 -100 100 0)))");
+    let got = from_session(&ses, "s.ses", &design, &model).unwrap();
+    let (start, mid, end) = got.tracks[0].0.arc().expect("an arc");
+    assert_eq!((start, end), (Point { x: 0, y: 0 }, Point { x: 2_540, y: 2_540 }));
+    // The centre is (2540, 0) on the board: the middle of the quarter is at 45 degrees from it, towards the origin's side.
+    let r = 2_540.0_f64;
+    assert!(((mid.x as f64) - (r - r / 2f64.sqrt())).abs() <= 1.0 && ((mid.y as f64) - r / 2f64.sqrt()).abs() <= 1.0, "{mid:?}");
+}
+
+/// The `IO_ERROR`s of `FromSESSION`, `makeTRACK` and `makeVIA`, in KiCad's words.
+#[test]
+fn a_bad_session_is_refused_in_kicads_words() {
+    let (design, model) = sample_board();
+    let err = |ses: &str| from_session(ses, "s.ses", &design, &model).unwrap_err();
+    assert_eq!(err("(session s (base_design x))"), "Session file is missing the \"routes\" section");
+    assert_eq!(err("(session s (routes (resolution um 10)))"), "Session file is missing the \"library_out\" section");
+    assert_eq!(err(&session_with("(net VIN (wire (path In9.Cu 10 0 0 1 1)))")), "Session file uses invalid layer id 'In9.Cu'.");
+    assert_eq!(err(&session_with("(net VIN (via Nope 0 0))")), "A wire_via refers to missing padstack 'Nope'.");
+    assert_eq!(err(&session_with("(net VIN (via Sq 0 0))")), "Unsupported via shape: rect.");
+    assert_eq!(err("(session s (placement (component X (place Q9 0 0 front 0))) (routes (library_out)))"), "Reference 'Q9' not found.");
+    // What the parser refuses is said as `PARSE_ERROR` says it.
+    assert!(err("(pcb x)").starts_with("Expecting 'session' in 's.ses', line 1"), "{}", err("(pcb x)"));
+}
+
+/// The drill a via's padstack name holds is `UNDEFINED_DRILL_DIAMETER` when it is the Default class's, so the via takes its own net's class drill.
+#[test]
+fn a_via_drill_equal_to_the_default_is_the_nets_own() {
+    let (_, model) = sample_board();
+    let pcb_text = crate::export_kicad_pcb(&sample_board().0, &model, &crate::ExportMeta { date: "", title: "" }).unwrap();
+    let board = BoardView::parse(&pcb_text).unwrap();
+    let session = super::parse::load_session(&session_with("(net VIN (via V:400_um 0 0))"), "s.ses").unwrap();
+    let got = from_session_db(&session, &board, 400_000, &|net| if net == "VIN" { 350 } else { 0 }).unwrap();
+    assert_eq!(got.vias[0].via.drill, 350);
+    let got = from_session_db(&session, &board, 300_000, &|_| 0).unwrap();
+    assert_eq!(got.vias[0].via.drill, 400);
+}
