@@ -14,6 +14,11 @@
 # MAZE_PASS=0 dumps the board alone. FreeRouting runs with automatic neckdown off, as
 # eda-freeroute routes designs.
 # Needs Java 25 and a FreeRouting checkout, as maze_dump.sh does.
+#
+# tests/design/<name>/dsn_board.txt, which tests/design.rs compares with, is the board part
+# alone (MAZE_PASS unset, cut at the first `tree_class` record) of the dump of the DSN the
+# nanometre design writes; board.txt keeps the dump with its passes, made when the design was
+# in micrometres, for tests/maze.rs's replays.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 fr=${FREEROUTING:-$HOME/ws/freerouting}

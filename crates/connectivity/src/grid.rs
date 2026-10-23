@@ -64,7 +64,7 @@ impl Grid {
     /// `sqrt(item count)`, clamped to a sane minimum (0.5 mm) so a board
     /// with one giant item and many tiny ones doesn't collapse to one cell.
     fn pick_cell_size(boxes: &[(Nm, Nm, Nm, Nm)]) -> i64 {
-        const MIN_CELL_NM: i64 = 500;
+        const MIN_CELL_NM: i64 = 500_000;
         if boxes.is_empty() {
             return MIN_CELL_NM;
         }
@@ -87,9 +87,9 @@ mod tests {
 
     #[test]
     fn finds_overlapping_boxes_across_cell_boundaries() {
-        let boxes = vec![(0, 0, 100, 100), (90, 90, 200, 200), (10_000, 10_000, 10_100, 10_100)];
+        let boxes = vec![(0, 0, 100_000, 100_000), (90_000, 90_000, 200_000, 200_000), (10_000_000, 10_000_000, 10_100_000, 10_100_000)];
         let grid = Grid::build(&boxes);
-        let hits = grid.query((50, 50, 95, 95));
+        let hits = grid.query((50_000, 50_000, 95_000, 95_000));
         assert!(hits.contains(&0));
         assert!(hits.contains(&1));
         assert!(!hits.contains(&2));
@@ -97,9 +97,9 @@ mod tests {
 
     #[test]
     fn query_dedupes_items_spanning_many_cells() {
-        let boxes = vec![(0, 0, 50_000, 50_000)];
+        let boxes = vec![(0, 0, 50_000_000, 50_000_000)];
         let grid = Grid::build(&boxes);
-        let hits = grid.query((0, 0, 50_000, 50_000));
+        let hits = grid.query((0, 0, 50_000_000, 50_000_000));
         assert_eq!(hits, vec![0]);
     }
 }

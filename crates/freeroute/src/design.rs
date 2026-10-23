@@ -36,8 +36,17 @@ use crate::model::{AreaKind, AutorouteSettings, Board, ExitRestriction, FixedSta
 use crate::routing::RoutingBoard;
 use crate::rules::ClearanceMatrix;
 
-/// Board units per micrometre.
+/// Board units per micrometre: FreeRouting's unit here is the DSN's `(resolution um 10)`, a tenth of a micrometre.
 pub const UNITS_PER_UM: i64 = 10;
+
+/// Nanometres in a board unit.
+pub const NM_PER_UNIT: i64 = 100;
+
+/// A design length (nm) in board units, to the nearest.
+fn units(nm: i64) -> i64 {
+    let q = nm.abs() / NM_PER_UNIT + i64::from(nm.abs() % NM_PER_UNIT >= NM_PER_UNIT / 2);
+    nm.signum() * q
+}
 
 /// `Limits.CRIT_INT`: FreeRouting scales down a board reaching a fifth of it.
 const CRIT_INT: i64 = 33_554_432;
@@ -45,13 +54,13 @@ const CRIT_INT: i64 = 33_554_432;
 /// `BoardOutline.HALF_WIDTH`.
 const OUTLINE_HALF_WIDTH: i64 = 100;
 
-/// Added to every clearance, µm: routes go back to the design rounded to
-/// the µm, which moves a corner up to half a µm each way, and the routing
-/// gates allow nothing under their rule.
-const ROUNDING_MARGIN_NM: i64 = 2;
+/// Added to every clearance, board units (2 um): the routing gates allow nothing under their rule, and a route's corners come back from
+/// FreeRouting's floating point rounded to the design's grid. The design's grid is a nanometre now, where it was a micrometre when this
+/// margin was chosen; it is kept, as the DSN it is written into is what the FreeRouting dumps in `tests/design` were made from.
+const ROUNDING_MARGIN: i64 = 2 * UNITS_PER_UM;
 
-/// The copper-to-edge clearance the routing gate holds a board to, µm.
-const EDGE_CLEARANCE_NM: i64 = 500;
+/// The copper-to-edge clearance the routing gate holds a board to, nm.
+const EDGE_CLEARANCE_NM: i64 = 500_000;
 
 /// Passes of rescue for what FreeRouting's own passes leave, each search
 /// keeping [`RESCUE_MARGIN`] more room round the trace than it needs.
@@ -71,12 +80,12 @@ const POUR_LAYER_COST_FACTOR: f64 = 2.0;
 /// it goes first: that copper is the plane's backbone.
 const POUR_NET_OFF_LAYER_FACTOR: f64 = 4.0;
 
-/// How far a strip between two pads stops short of each, µm. A keep-out
+/// How far a strip between two pads stops short of each, nm. A keep-out
 /// meeting a pad edge to edge leaves FreeRouting's rooms beside the pad
 /// degenerate, and the pad's own net cannot get out; a foreign trace fits
 /// no better through the sliver left, which lies within the pad's
 /// clearance.
-const STRIP_INSET_NM: i64 = 5;
+const STRIP_INSET_NM: i64 = 5_000;
 
 /// A pad's copper about its centre, in board units, as a DSN padstack
 /// writes it and FreeRouting keeps it.
@@ -289,7 +298,7 @@ impl Plan {
             }
         }
         if rules.track_width <= 0 || rules.clearance < 0 || rules.via_diameter <= 0 {
-            return Err(format!("unusable rules: track {} clearance {} via {} um", rules.track_width, rules.clearance, rules.via_diameter));
+            return Err(format!("unusable rules: track {} clearance {} via {} nm", rules.track_width, rules.clearance, rules.via_diameter));
         }
         let mut outline = placement.outline.clone();
         if outline.len() < 3 {
@@ -340,25 +349,25 @@ impl Plan {
                 let name = if *count == 0 && !pad.number.is_empty() { pad.number.clone() } else { format!("{}@{count}", pad.number) };
                 *count += 1;
                 let (from, to) = if pad.through_hole { (0, layer_count - 1) } else { (side_layer, side_layer) };
-                let form = PadForm::Box { half_w: pad.size.0 * UNITS_PER_UM / 2, half_h: pad.size.1 * UNITS_PER_UM / 2 };
+                let form = PadForm::Box { half_w: units(pad.size.0) / 2, half_h: units(pad.size.1) / 2 };
                 let span = if from == to { rules.layers[from].clone() } else { format!("{}-{}", rules.layers[from], rules.layers[to]) };
                 let key = format!("{}[{span}]", form.name());
                 stacks.insert(key.clone(), (form, from, to));
                 let net = pin_nets.get(format!("{}.{}", fp.id, pad.number).as_str()).and_then(|n| net_index.get(n).copied());
                 max_coor = max_coor.max(pad.center.x.abs()).max(pad.center.y.abs());
-                let center = IntPoint::new(pad.center.x * UNITS_PER_UM, pad.center.y * UNITS_PER_UM);
+                let center = IntPoint::new(units(pad.center.x), units(pad.center.y));
                 pins.push((PlanPin { number: pad.number.clone(), name, center, padstack: 0, net, geom: pad.clone() }, key));
             }
             placed.push((fp.id.clone(), pins));
         }
-        if 5 * max_coor * UNITS_PER_UM >= CRIT_INT {
-            return Err(format!("the board reaches {max_coor} um, past what FreeRouting holds unscaled"));
+        if 5 * units(max_coor) >= CRIT_INT {
+            return Err(format!("the board reaches {max_coor} nm, past what FreeRouting holds unscaled"));
         }
         let mut padstacks: Vec<PlanPadstack> = stacks.iter().map(|(name, &(form, from_layer, to_layer))| PlanPadstack { name: name.clone(), form, from_layer, to_layer }).collect();
         let stack_no: BTreeMap<&str, usize> = stacks.keys().enumerate().map(|(i, k)| (k.as_str(), i)).collect();
         padstacks.push(PlanPadstack {
-            name: format!("Via[0-{}]_{}:{}_um", layer_count - 1, rules.via_diameter, rules.via_drill),
-            form: PadForm::Circle { radius: rules.via_diameter * UNITS_PER_UM / 2 },
+            name: format!("Via[0-{}]_{}:{}_um", layer_count - 1, um(units(rules.via_diameter)), um(units(rules.via_drill))),
+            form: PadForm::Circle { radius: units(rules.via_diameter) / 2 },
             from_layer: 0,
             to_layer: layer_count - 1,
         });
@@ -394,12 +403,12 @@ impl Plan {
                 }
             };
             if width <= 0 {
-                return Err(format!("net class {name} has track width {width} um"));
+                return Err(format!("net class {name} has track width {width} nm"));
             }
             if clearance_nm < 0 {
-                return Err(format!("net class {name} has clearance {clearance_nm} um"));
+                return Err(format!("net class {name} has clearance {clearance_nm} nm"));
             }
-            classes.push(PlanClass { name, half_width: width * UNITS_PER_UM / 2, clearance: clearance_nm * UNITS_PER_UM + ROUNDING_MARGIN_NM * UNITS_PER_UM });
+            classes.push(PlanClass { name, half_width: units(width) / 2, clearance: units(clearance_nm) + ROUNDING_MARGIN });
         }
         // Nets by number: FreeRouting makes a plane's net as it reads the
         // plane, before the netlist, so poured nets come first.
@@ -438,7 +447,7 @@ impl Plan {
                 pins: pins.into_iter().map(|(pin, key)| PlanPin { padstack: stack_no[key.as_str()], net: pin.net.map(|n| net_no[n]), ..pin }).collect(),
             })
             .collect();
-        let margin = ROUNDING_MARGIN_NM * UNITS_PER_UM;
+        let margin = ROUNDING_MARGIN;
         Ok(Plan {
             layers: rules.layers.clone(),
             outline,
@@ -448,11 +457,11 @@ impl Plan {
             classes,
             keepouts,
             planes,
-            track_half_width: rules.track_width * UNITS_PER_UM / 2,
-            clearance: rules.clearance * UNITS_PER_UM + margin,
+            track_half_width: units(rules.track_width) / 2,
+            clearance: units(rules.clearance) + margin,
             // The outline is copper `OUTLINE_HALF_WIDTH` wide either side
             // of the edge.
-            edge_clearance: rules.tuning.edge_clearance_nm.max(EDGE_CLEARANCE_NM) * UNITS_PER_UM - OUTLINE_HALF_WIDTH + margin,
+            edge_clearance: units(rules.tuning.edge_clearance_nm.max(EDGE_CLEARANCE_NM)) - OUTLINE_HALF_WIDTH + margin,
             keepout_clearance: margin,
         })
     }
@@ -460,8 +469,7 @@ impl Plan {
     /// The board's bounding box, board units: the outline's, grown by
     /// 1000 as FreeRouting grows it.
     fn bounds(&self) -> IntBox {
-        let u = UNITS_PER_UM;
-        let (xs, ys) = (self.outline.iter().map(|p| p.x * u), self.outline.iter().map(|p| p.y * u));
+        let (xs, ys) = (self.outline.iter().map(|p| units(p.x)), self.outline.iter().map(|p| units(p.y)));
         IntBox::new(xs.clone().min().unwrap(), ys.clone().min().unwrap(), xs.max().unwrap(), ys.max().unwrap()).offset(1000)
     }
 
@@ -501,7 +509,7 @@ pub fn to_dsn(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> R
     let _ = writeln!(out, "    )");
     let _ = write!(out, "    (boundary\n      (path pcb 0");
     for p in &plan.outline {
-        let _ = write!(out, "  {} {}", p.x, p.y);
+        let _ = write!(out, "  {} {}", um(units(p.x)), um(units(p.y)));
     }
     let _ = writeln!(out, ")\n      (clearance_class edge)\n    )");
     let via = plan.via_padstack();
@@ -518,12 +526,12 @@ pub fn to_dsn(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> R
     );
     for k in &plan.keepouts {
         let (x0, y0, x1, y1) = k.rect;
-        let _ = writeln!(out, "    (keepout \"\" (rect {} {x0} {y0} {x1} {y1}) (clearance_class keepout))", layer(k.layer));
+        let _ = writeln!(out, "    (keepout \"\" (rect {} {} {} {} {}) (clearance_class keepout))", layer(k.layer), um(units(x0)), um(units(y0)), um(units(x1)), um(units(y1)));
     }
     for p in &plan.planes {
         let _ = write!(out, "    (plane {} (polygon {} 0", quoted(&plan.nets[p.net].name), layer(p.layer));
         for c in &plan.outline {
-            let _ = write!(out, " {} {}", c.x, c.y);
+            let _ = write!(out, " {} {}", um(units(c.x)), um(units(c.y)));
         }
         let _ = writeln!(out, "))");
     }
@@ -798,7 +806,7 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
     let plan = Plan::of(design, model, rules)?;
     let layer_count = plan.layers.len();
     let layers = plan.layers.iter().map(|name| Layer { name: name.clone(), is_signal: true }).collect();
-    let corners: Vec<IntPoint> = plan.outline.iter().map(|p| IntPoint::new(p.x * UNITS_PER_UM, p.y * UNITS_PER_UM)).collect();
+    let corners: Vec<IntPoint> = plan.outline.iter().map(|p| IntPoint::new(units(p.x), units(p.y))).collect();
     let bounds = plan.bounds();
 
     // The structure's rule: the clearance, then the outline's class and
@@ -899,10 +907,9 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
     }];
     for k in &plan.keepouts {
         let (x0, y0, x1, y1) = k.rect;
-        let u = UNITS_PER_UM;
         items.push(Item {
             id: items.len() as u32 + 1,
-            kind: ItemKind::Area { kind: AreaKind::Keepout, layer: k.layer as i32, shape: AreaShape::Tile(TileShape::Box(IntBox::new(x0 * u, y0 * u, x1 * u, y1 * u))) },
+            kind: ItemKind::Area { kind: AreaKind::Keepout, layer: k.layer as i32, shape: AreaShape::Tile(TileShape::Box(IntBox::new(units(x0), units(y0), units(x1), units(y1)))) },
             first_layer: k.layer as i32,
             last_layer: k.layer as i32,
             clearance_class: keepout_class,
@@ -981,16 +988,15 @@ fn pad_contains(shape: &PadShape, p: FloatPoint) -> bool {
     }
 }
 
-/// Board units as the nearest µm.
-fn to_um(p: FloatPoint) -> IrPoint {
-    let unit = UNITS_PER_UM as f64;
-    IrPoint { x: (p.x / unit).round() as i64, y: (p.y / unit).round() as i64 }
+/// Board units as the nearest nanometre.
+fn to_nm(p: FloatPoint) -> IrPoint {
+    let unit = NM_PER_UNIT as f64;
+    IrPoint { x: (p.x * unit).round() as i64, y: (p.y * unit).round() as i64 }
 }
 
 /// The routes on `rb`, a board [`board_from_design`] built for the design,
-/// as the design's routing section: traces as tracks and vias, in µm, with
-/// corners off the µm grid rounded onto it and necked-down widths rounded
-/// down. A track lists the pads its ends lie on. The design's zones stay.
+/// as the design's routing section: traces as tracks and vias, in nm, with
+/// corners off the nanometre grid rounded onto it. A track lists the pads its ends lie on. The design's zones stay.
 pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRules, rb: &RoutingBoard) -> Result<RoutingSection, String> {
     let plan = Plan::of(design, model, rules)?;
     // "REF.PIN" of every pin, by item number as `board_from_design` gives
@@ -1015,7 +1021,7 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
             ItemKind::Trace { layer, half_width, polyline } => {
                 let mut pts: Vec<IrPoint> = Vec::new();
                 for k in 0..polyline.corner_count() {
-                    let p = to_um(polyline.corner_float(k));
+                    let p = to_nm(polyline.corner_float(k));
                     if pts.last() != Some(&p) {
                         pts.push(p);
                     }
@@ -1037,12 +1043,12 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
                         }
                     }
                 }
-                tracks.push(Track { id: String::new(), net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: 2 * half_width / UNITS_PER_UM, pts, arc_mid_offset: None });
+                tracks.push(Track { id: String::new(), net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: 2 * half_width * NM_PER_UNIT, pts, arc_mid_offset: None });
             }
             ItemKind::Via { center, .. } => vias.push(IrVia {
                 id: String::new(),
                 net,
-                at: to_um(FloatPoint::new(center.x as f64, center.y as f64)),
+                at: to_nm(FloatPoint::new(center.x as f64, center.y as f64)),
                 drill: rules.via_drill,
                 diameter: rules.via_diameter,
                 from_layer: plan.layers[item.first_layer as usize].clone(),
@@ -1394,11 +1400,11 @@ mod tests {
     use eda_model::footprint::PadShape as ModelPadShape;
 
     fn pad(x: i64, y: i64, shape: ModelPadShape) -> PlacedPad {
-        PlacedPad { number: "1".into(), center: IrPoint { x, y }, size: (1000, 1000), through_hole: false, shape, roundrect_ratio: None, pieces: Vec::new() }
+        PlacedPad { number: "1".into(), center: IrPoint { x, y }, size: (1_000_000, 1_000_000), through_hole: false, shape, roundrect_ratio: None, pieces: Vec::new() }
     }
 
     fn track(pts: &[(i64, i64)]) -> Track {
-        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| IrPoint { x, y }).collect(), arc_mid_offset: None }
+        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: 200_000, pts: pts.iter().map(|&(x, y)| IrPoint { x, y }).collect(), arc_mid_offset: None }
     }
 
     fn gate_pads(pads: &[PlacedPad]) -> Vec<GatePad<'_>> {
@@ -1409,7 +1415,7 @@ mod tests {
     fn a_track_through_a_pad_of_its_net_ends_in_it() {
         for shape in [ModelPadShape::Rect, ModelPadShape::RoundRect, ModelPadShape::Circle] {
             let pads = [pad(0, 0, shape)];
-            let split = split_at_own_pads(vec![track(&[(-3000, 100), (3000, 100)])], &gate_pads(&pads));
+            let split = split_at_own_pads(vec![track(&[(-3_000_000, 100_000), (3_000_000, 100_000)])], &gate_pads(&pads));
             assert_eq!(split.len(), 2, "{shape:?}");
             for t in &split {
                 assert!(pads[0].contains(t.pts[0]) || pads[0].contains(t.pts[t.pts.len() - 1]), "{shape:?}: {:?}", t.pts);
@@ -1417,20 +1423,20 @@ mod tests {
         }
         // Grazing a rounded corner is not running through it.
         let pads = [pad(0, 0, ModelPadShape::Circle)];
-        assert_eq!(split_at_own_pads(vec![track(&[(-3000, 600), (3000, 600)])], &gate_pads(&pads)).len(), 1);
+        assert_eq!(split_at_own_pads(vec![track(&[(-3_000_000, 600_000), (3_000_000, 600_000)])], &gate_pads(&pads)).len(), 1);
     }
 
     #[test]
     fn a_run_back_into_its_own_pad_goes() {
-        let pads = [pad(0, 0, ModelPadShape::Rect), pad(5000, 0, ModelPadShape::Rect)];
+        let pads = [pad(0, 0, ModelPadShape::Rect), pad(5_000_000, 0, ModelPadShape::Rect)];
         // Out of the first pad and back into it, and on to the second.
-        let tracks = vec![track(&[(0, 0), (0, 2000)]), track(&[(0, 2000), (300, 2000), (300, 300)]), track(&[(300, 300), (5000, 0)])];
+        let tracks = vec![track(&[(0, 0), (0, 2_000_000)]), track(&[(0, 2_000_000), (300_000, 2_000_000), (300_000, 300_000)]), track(&[(300_000, 300_000), (5_000_000, 0)])];
         let kept = drop_pad_loops(tracks, &[], &gate_pads(&pads));
         assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].pts[0], IrPoint { x: 300, y: 300 });
+        assert_eq!(kept[0].pts[0], IrPoint { x: 300_000, y: 300_000 });
         // A via on the way keeps the run: it may lead elsewhere.
-        let tracks = vec![track(&[(0, 0), (0, 2000)]), track(&[(0, 2000), (300, 300)])];
-        let via = IrVia { id: String::new(), net: "A".into(), at: IrPoint { x: 0, y: 2000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        let tracks = vec![track(&[(0, 0), (0, 2_000_000)]), track(&[(0, 2_000_000), (300_000, 300_000)])];
+        let via = IrVia { id: String::new(), net: "A".into(), at: IrPoint { x: 0, y: 2_000_000 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
         assert_eq!(drop_pad_loops(tracks, &[via], &gate_pads(&pads)).len(), 2);
     }
 
@@ -1447,7 +1453,7 @@ mod tests {
 
         let pad1 = Footprint {
             name: "PAD1".into(),
-            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1000, 1000), shape: ModelPadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1_000_000, 1_000_000), shape: ModelPadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],
@@ -1476,18 +1482,18 @@ mod tests {
             ],
             footprints: vec![pad1],
             board: BoardRules {
-                clearance: 200,
-                net_classes: vec![NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150), clearance: Some(150), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
+                clearance: 200_000,
+                net_classes: vec![NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150_000), clearance: Some(150_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
                 ..BoardRules::default()
             },
             ..Default::default()
         };
         let placement = PlacementSection {
-            outline: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 10_000, y: 0 }, IrPoint { x: 10_000, y: 10_000 }, IrPoint { x: 0, y: 10_000 }],
+            outline: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 10_000_000, y: 0 }, IrPoint { x: 10_000_000, y: 10_000_000 }, IrPoint { x: 0, y: 10_000_000 }],
             footprints: vec![
-                FootprintInstance { id: "P1".into(), at: IrPoint { x: 1_000, y: 1_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "P2".into(), at: IrPoint { x: 3_000, y: 1_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "P3".into(), at: IrPoint { x: 5_000, y: 1_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P1".into(), at: IrPoint { x: 1_000_000, y: 1_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P2".into(), at: IrPoint { x: 3_000_000, y: 1_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P3".into(), at: IrPoint { x: 5_000_000, y: 1_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
             ],
             modules: Vec::new(),
         };
@@ -1518,10 +1524,10 @@ mod tests {
 
         let layer = 0;
         // Both raw values carry `Plan`'s own rounding margin (see
-        // `ROUNDING_MARGIN_NM`), the same way `plan.clearance` itself does.
-        let escape_nm = |raw: i64| raw / UNITS_PER_UM - ROUNDING_MARGIN_NM;
-        assert_eq!(escape_nm(board.rules.clearance.get(escape_trace_class, escape_trace_class, layer)), 150, "the escape class's clearance to its own copper");
-        assert_eq!(escape_nm(board.rules.clearance.get(escape_trace_class, default_trace_class, layer)), 150, "and to the default class's copper -- this is what lets it actually escape past a neighbour on the default class");
-        assert_eq!(escape_nm(board.rules.clearance.get(default_trace_class, default_trace_class, layer)), 200, "the default class keeps the board's own clearance, untouched by the escape class existing");
+        // `ROUNDING_MARGIN`), the same way `plan.clearance` itself does.
+        let escape_nm = |raw: i64| (raw - ROUNDING_MARGIN) * NM_PER_UNIT;
+        assert_eq!(escape_nm(board.rules.clearance.get(escape_trace_class, escape_trace_class, layer)), 150_000, "the escape class's clearance to its own copper");
+        assert_eq!(escape_nm(board.rules.clearance.get(escape_trace_class, default_trace_class, layer)), 150_000, "and to the default class's copper -- this is what lets it actually escape past a neighbour on the default class");
+        assert_eq!(escape_nm(board.rules.clearance.get(default_trace_class, default_trace_class, layer)), 200_000, "the default class keeps the board's own clearance, untouched by the escape class existing");
     }
 }

@@ -1,7 +1,7 @@
 //! `eda-place` — native component placer (v1): seeded simulated annealing
 //! over real courtyards and real pad centres, against our own IR.
 //!
-//! Objective (all integer-µm, summed):
+//! Objective (all integer-nm, summed):
 //! * half-perimeter wirelength of every net over its pad centres, plus
 //!   `W_COMPACT` × the excess of a small net's HPWL over its packed bound,
 //! * courtyard overlap area (same side) × `W_OVERLAP`,
@@ -37,14 +37,14 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct PlaceOptions {
     pub seed: u64,
-    /// Position snap, µm.
+    /// Position snap, nm.
     pub snap: Nm,
     /// Annealing moves per part. Larger = better, slower.
     pub moves_per_part: usize,
     /// Explicit outline; else `model.board.outline`; else an auto square.
     pub outline: Option<Vec<Point>>,
     /// Extra keep-apart margin around every courtyard during placement,
-    /// µm — routing channel space. Gates still judge the true courtyards.
+    /// nm — routing channel space. Gates still judge the true courtyards.
     pub spacing: Nm,
     /// Lower bound on the fitted board as a fraction of the outline the
     /// intent declared. The placer shrinks the board to
@@ -60,11 +60,11 @@ pub struct PlaceOptions {
 
 impl Default for PlaceOptions {
     fn default() -> Self {
-        PlaceOptions { seed: 0, snap: 100, moves_per_part: 4000, outline: None, spacing: 600, fit_floor: 0.0, floorplan: None }
+        PlaceOptions { seed: 0, snap: 100_000, moves_per_part: 4000, outline: None, spacing: 600_000, fit_floor: 0.0, floorplan: None }
     }
 }
 
-/// Overlap penalty, `W_OVERLAP * (sqrt(area) + 500)` µm of HPWL-equivalent:
+/// Overlap penalty, `W_OVERLAP * (sqrt(area) + 0.5 mm)` of HPWL-equivalent (the cost is in nanometres of wirelength):
 /// a full-body overlap of two headers must cost more than the wirelength
 /// saved by leaving them stacked on one edge.
 const W_OVERLAP: f64 = 16.0;
@@ -72,30 +72,30 @@ const W_OUTSIDE: f64 = 8.0;
 /// Explicit proximity/cluster/decoupling rules are hard gates: their pull
 /// must beat every other linear term (HPWL 1, compactness 3, use 4).
 const W_RULE: f64 = 40.0;
-/// Floorplan region pull, per µm of courtyard escaping the module's
+/// Floorplan region pull, per nm of courtyard escaping the module's
 /// rectangle. Above `W_OUTSIDE` (the board edge) because a part drifting
 /// out of its block is a floorplan violation the gate will fail, but below
 /// `W_RULE`: an explicit proximity rule in the intent still outranks the
 /// block boundary the floorplan derived from it.
 const W_REGION: f64 = 20.0;
 const CLUSTER_MM: f64 = 4.0;
-/// Congestion overflow penalty, µm of HPWL-equivalent per (track-over-capacity)².
-const W_CONGEST: f64 = 6000.0;
-/// Per-pad penalty, µm of HPWL-equivalent, for each escape side beyond the
+/// Congestion overflow penalty, nm of HPWL-equivalent per (track-over-capacity)².
+const W_CONGEST: f64 = 6_000_000.0;
+/// Per-pad penalty, nm of HPWL-equivalent, for each escape side beyond the
 /// 2nd that a neighbour's courtyard blocks.
-const W_ESCAPE: f64 = 3000.0;
-/// Edge-connector pull, µm of HPWL-equivalent per µm between a connector's
+const W_ESCAPE: f64 = 3_000_000.0;
+/// Edge-connector pull, nm of HPWL-equivalent per nm between a connector's
 /// courtyard and the nearest board edge (gate: `placement_edge_connector`).
 const W_EDGE: f64 = 30.0;
-/// Board-use pull, per µm of centring imbalance / span shortfall beyond
+/// Board-use pull, per nm of centring imbalance / span shortfall beyond
 /// the targets below (gate: `placement_board_use`, 0.15 / 0.5).
 const W_USE: f64 = 4.0;
 const USE_MAX_IMBALANCE: f64 = 0.08;
 const USE_MIN_SPAN: f64 = 0.58;
-/// Per crossing pair of 2-pin-net stubs (gate: `placement_stub_crossings`).
-const W_CROSS: f64 = 15000.0;
+/// Per crossing pair of 2-pin-net stubs (gate: `placement_stub_crossings`), nm of HPWL-equivalent.
+const W_CROSS: f64 = 15_000_000.0;
 /// Net-compactness pull (gate: `placement_net_compactness`, 1.6x): per
-/// µm a small net's HPWL exceeds `COMPACT_RATIO` × its packed bound
+/// nm a small net's HPWL exceeds `COMPACT_RATIO` × its packed bound
 /// `2·sqrt(Σ member courtyard areas)`. Two 2-pin nets through one
 /// resistor sum to the same HPWL wherever the resistor sits between its
 /// partners; this is what says "not 38 mm from the MCU".
@@ -121,9 +121,9 @@ const COMPACT_RATIO: f64 = 1.3;
 /// seed 0 alone, which looked like an improvement because n=1 cannot tell
 /// a fix from a reshuffle. An eight-seed sweep was available and was what
 /// should have decided it.
-/// Auto proximity rule, µm courtyard gap, for a decoupling capacitor and
-/// the IC it decouples (gate: `placement_decoupling`, 3000 µm).
-const DECOUPLING_NM: i64 = 2200;
+/// Auto proximity rule, nm courtyard gap, for a decoupling capacitor and
+/// the IC it decouples (gate: `placement_decoupling`, 3 mm).
+const DECOUPLING_NM: i64 = 2_200_000;
 
 struct Item {
     id: String,
@@ -153,8 +153,8 @@ fn boxed_pads(pads: &[(String, (Nm, Nm))], pitch_max: Nm) -> Vec<usize> {
         for (j, (_, (ox, oy))) in pads.iter().enumerate() {
             if j == k { continue }
             let (dx, dy) = (ox - x, oy - y);
-            if dy.abs() < 250 && dx != 0 && dx.abs() <= pitch_max { if dx < 0 { left = true } else { right = true } }
-            if dx.abs() < 250 && dy != 0 && dy.abs() <= pitch_max { if dy < 0 { up = true } else { down = true } }
+            if dy.abs() < 250_000 && dx != 0 && dx.abs() <= pitch_max { if dx < 0 { left = true } else { right = true } }
+            if dx.abs() < 250_000 && dy != 0 && dy.abs() <= pitch_max { if dy < 0 { up = true } else { down = true } }
         }
         if (left && right) || (up && down) { out.push(k) }
     }
@@ -232,7 +232,7 @@ fn gap(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
-/// How far a courtyard escapes a floorplan region, µm, summed over both
+/// How far a courtyard escapes a floorplan region, nm, summed over both
 /// axes. Linear in distance on purpose: the board-outline term uses
 /// `sqrt(area)`, which saturates almost immediately, and a saturating
 /// penalty lets a part wander arbitrarily far out of its block for a
@@ -259,16 +259,16 @@ struct Problem<'a> {
     /// Per net: HPWL above which `W_COMPACT` applies, or `None` for nets
     /// the gate doesn't judge (wide fan-out, or touching an edge connector).
     compact_limit: Vec<Option<f64>>,
-    /// (item a, item b, max distance µm)
+    /// (item a, item b, max distance nm)
     pair_rules: Vec<(usize, usize, i64)>,
-    /// The same pairs with the rule's true maximum (µm), for the final
+    /// The same pairs with the rule's true maximum (nm), for the final
     /// repair pass that measures exactly as the gate does.
     pair_rules_true: Vec<(usize, usize, i64)>,
-    /// Separation rules as (a, b, min gap µm): the repulsive mirror of
+    /// Separation rules as (a, b, min gap nm): the repulsive mirror of
     /// `pair_rules`. Overshoot by 300 µm for the same reason proximity
     /// undershoots -- the gate measures true courtyards after snapping.
     sep_rules: Vec<(usize, usize, i64)>,
-    /// (item, candidate items, max distance µm): the nearest candidate
+    /// (item, candidate items, max distance nm): the nearest candidate
     /// must be within max — decoupling caps that could serve several ICs.
     group_rules: Vec<(usize, Vec<usize>, i64)>,
     /// 2-pin nets between distinct parts as (item, pad, item, pad).
@@ -300,7 +300,7 @@ struct Problem<'a> {
     /// is part of the part's keep-out (gate `placement_refdes_clear`).
     font: Nm,
     model: &'a ConstraintModel,
-    /// Congestion grid bin size, µm (~2 mm).
+    /// Congestion grid bin size, nm (~2 mm).
     bin_nm: Nm,
     /// Tracks that can cross one bin, all routing layers combined —
     /// `layers * bin_nm / (track_width + clearance)`.
@@ -477,7 +477,7 @@ impl Problem<'_> {
     /// overlap. `esc` is a short probe, one clearance + a hair, along each
     /// axis from the pad centre.
     fn escape_cost(&self, i: usize, poses: &[Pose]) -> f64 {
-        let esc = self.model.board.clearance + self.spacing + 200;
+        let esc = self.model.board.clearance + self.spacing + 200_000;
         let mut cost = 0.0;
         for k in 0..self.items[i].pads.len() {
             let p = self.pad_center(i, k, poses[i]);
@@ -524,14 +524,14 @@ impl Problem<'_> {
             if j != i {
                 let ov = overlap(ci, self.keepout(j, poses[j]));
                 if ov > 0 {
-                    // sqrt keeps the penalty in µm units and dominant.
-                    c += W_OVERLAP * ((ov as f64).sqrt() + 500.0);
+                    // sqrt keeps the penalty in nm units and dominant.
+                    c += W_OVERLAP * ((ov as f64).sqrt() + 500_000.0);
                 }
             }
         }
         let out = outside_area(ci, self.bounds(i));
         if out > 0 {
-            c += W_OUTSIDE * ((out as f64).sqrt() + 500.0);
+            c += W_OUTSIDE * ((out as f64).sqrt() + 500_000.0);
         }
         if let Some(r) = self.region[i] {
             let out = region_escape(courtyard(&self.items[i], poses[i]), r);
@@ -654,7 +654,7 @@ impl Problem<'_> {
 
     /// Board-use penalty over the union of all courtyards: centring
     /// imbalance beyond `USE_MAX_IMBALANCE` and span shortfall below
-    /// `USE_MIN_SPAN`, each in µm. Global — recomputed per move, O(n).
+    /// `USE_MIN_SPAN`, each in nm. Global — recomputed per move, O(n).
     fn use_cost(&self, poses: &[Pose]) -> f64 {
         if self.items.len() < 2 || self.auto_outline {
             return 0.0;
@@ -760,12 +760,12 @@ impl Problem<'_> {
             for j in i + 1..self.items.len() {
                 let ov = overlap(ci, self.keepout(j, poses[j]));
                 if ov > 0 {
-                    c += W_OVERLAP * ((ov as f64).sqrt() + 500.0);
+                    c += W_OVERLAP * ((ov as f64).sqrt() + 500_000.0);
                 }
             }
             let out = outside_area(ci, self.bounds(i));
             if out > 0 {
-                c += W_OUTSIDE * ((out as f64).sqrt() + 500.0);
+                c += W_OUTSIDE * ((out as f64).sqrt() + 500_000.0);
             }
             if let Some(r) = self.region[i] {
                 let out = region_escape(courtyard(&self.items[i], poses[i]), r);
@@ -859,7 +859,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
                 let (hw, hh) = fp.courtyard_half();
                 let half = (hw + opts.spacing, hh + opts.spacing);
                 let pad_inset = fp.pads.iter().map(|p| (half.0 - p.at.0.abs() - p.size.0 / 2).min(half.1 - p.at.1.abs() - p.size.1 / 2)).min().unwrap_or(0);
-                let boxed = boxed_pads(&pads, 1300);
+                let boxed = boxed_pads(&pads, 1_300_000);
                 items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half, pads, pad_inset, boxed });
             }
             None => fails.push(CheckResult::fail(
@@ -946,8 +946,8 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
                 // 300 µm under the rule: the gate measures true courtyards
                 // after snapping, and a linear penalty barely resists a
                 // few-µm excess.
-                pair_rules.push((ia, ib, ((max_mm * 1000.0) as i64 - 300).max(0)));
-                pair_rules_true.push((ia, ib, (max_mm * 1000.0) as i64));
+                pair_rules.push((ia, ib, ((max_mm * 1e6) as i64 - 300_000).max(0)));
+                pair_rules_true.push((ia, ib, (max_mm * 1e6) as i64));
             }
         }
     }
@@ -955,7 +955,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     for rule in &model.placement_rules {
         if let PlacementRule::Separation { a, b, min_mm, .. } = rule {
             if let (Some(&ia), Some(&ib)) = (index.get(a), index.get(b)) {
-                sep_rules.push((ia, ib, (min_mm * 1000.0) as i64 + 300));
+                sep_rules.push((ia, ib, (min_mm * 1e6) as i64 + 300_000));
             }
         }
     }
@@ -963,7 +963,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
         if let Some(&ia) = index.get(&cl.anchor) {
             for m in &cl.members {
                 if let Some(&im) = index.get(m) {
-                    pair_rules.push((ia, im, (CLUSTER_MM * 1000.0) as i64));
+                    pair_rules.push((ia, im, (CLUSTER_MM * 1e6) as i64));
                 }
             }
         }
@@ -976,8 +976,8 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
         None => {
             // Auto square: 2.5x the summed courtyard area, rounded up to mm.
             let area: f64 = items.iter().map(|it| (it.half.0 * 2) as f64 * (it.half.1 * 2) as f64).sum();
-            let side = ((area * 2.5).sqrt() / 1000.0).ceil() as Nm * 1000;
-            let side = side.max(items.iter().map(|it| it.half.0.max(it.half.1) * 2 + 1000).max().unwrap_or(1000));
+            let side = ((area * 2.5).sqrt() / 1e6).ceil() as Nm * 1_000_000;
+            let side = side.max(items.iter().map(|it| it.half.0.max(it.half.1) * 2 + 1_000_000).max().unwrap_or(1_000_000));
             vec![Point { x: 0, y: 0 }, Point { x: side, y: 0 }, Point { x: side, y: side }, Point { x: 0, y: side }]
         }
     };
@@ -1003,7 +1003,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     // IC rows open onto the board and only need a track lane.
     let escape_lane_small = (model.board.via_diameter + 2 * model.board.clearance + model.board.track_width - opts.spacing).max(0);
 
-    let bin_nm: Nm = 2000;
+    let bin_nm: Nm = 2_000_000;
     let pitch = (model.board.track_width + model.board.clearance).max(1);
     let congest_capacity = model.board.layers.len() as f64 * bin_nm as f64 / pitch as f64;
     let congest_nets: Vec<usize> = (0..nets.len()).filter(|&n| nets[n].len() >= 2 && nets[n].len() <= 6).collect();
@@ -1145,8 +1145,8 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
     // into a ring instead of freezing in the first tidy local minimum.
     let total_moves = opts.moves_per_part * n.max(25);
     let mut cur = pb.total_cost(poses);
-    let t0 = (cur / n as f64).max(1000.0);
-    let t_end = 10.0;
+    let t0 = (cur / n as f64).max(1_000_000.0);
+    let t_end = 10_000.0;
     let mut best = cur;
     let mut best_poses: Vec<Pose> = poses.to_vec();
 
@@ -1420,9 +1420,9 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) {
     }
 }
 
-/// Margin, µm, from the placed cluster's true courtyards to an auto-sized
+/// Margin, nm, from the placed cluster's true courtyards to an auto-sized
 /// board edge (routing channel + mechanical clearance).
-const AUTO_OUTLINE_MARGIN: Nm = 2000;
+const AUTO_OUTLINE_MARGIN: Nm = 2_000_000;
 
 /// Shrink an auto-sized outline to the placed cluster: the board becomes
 /// the union of true courtyards plus `AUTO_OUTLINE_MARGIN`, except on a
@@ -1460,18 +1460,18 @@ fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Nm, Nm, Nm,
     // clears the edge, and is not rounded further out (gate
     // `placement_edge_connector`: ≤ 1.5 mm); the opposite side absorbs
     // the rounding so the board dimension still comes out on the grid.
-    const HELD: Nm = 1200;
-    const GRID: Nm = 500;
+    const HELD: Nm = 1_200_000;
+    const GRID: Nm = 500_000;
     let span_of = |lo: Nm, hi: Nm, held_lo: bool, held_hi: bool| -> (Nm, Nm) {
         let margin = AUTO_OUTLINE_MARGIN.min((hi - lo) / 4);
         match (held_lo, held_hi) {
-            (true, true) => (snap_down(lo - HELD, 100), snap_up(hi + HELD, 100)),
+            (true, true) => (snap_down(lo - HELD, 100_000), snap_up(hi + HELD, 100_000)),
             (true, false) => {
-                let b0 = snap_down(lo - HELD, 100);
+                let b0 = snap_down(lo - HELD, 100_000);
                 (b0, b0 + snap_up(hi + margin - b0, GRID))
             }
             (false, true) => {
-                let b1 = snap_up(hi + HELD, 100);
+                let b1 = snap_up(hi + HELD, 100_000);
                 (b1 - snap_up(b1 - (lo - margin), GRID), b1)
             }
             (false, false) => (snap_down(lo - margin, GRID), snap_up(hi + margin, GRID)),
@@ -1945,12 +1945,12 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
             let ci = pb.keepout(i, poses[i]);
             let outside = outside_area(ci, pb.bounds(i));
             if outside > 0 {
-                fails.push(CheckResult::fail("place_outside", &pb.items[i].id, format!("{outside} µm² outside its bound (keepout {ci:?}, bound {:?}; non-connectors keep the edge margin)", pb.bounds(i))));
+                fails.push(CheckResult::fail("place_outside", &pb.items[i].id, format!("{outside} nm² outside its bound (keepout {ci:?}, bound {:?}; non-connectors keep the edge margin)", pb.bounds(i))));
             }
             for j in i + 1..pb.items.len() {
                 let ov = overlap(pb.keepout(i, poses[i]), pb.keepout(j, poses[j]));
                 if ov > 0 {
-                    fails.push(CheckResult::fail("place_overlap", format!("{}/{}", pb.items[i].id, pb.items[j].id), format!("{ov} µm²")));
+                    fails.push(CheckResult::fail("place_overlap", format!("{}/{}", pb.items[i].id, pb.items[j].id), format!("{ov} nm²")));
                 }
             }
         }
@@ -1974,7 +1974,7 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
     Ok(out)
 }
 
-/// Total half-perimeter wirelength of a placed design, µm. A cheap,
+/// Total half-perimeter wirelength of a placed design, nm. A cheap,
 /// generator-agnostic quality number for scorecards.
 pub fn hpwl(design: &Design, model: &ConstraintModel) -> Option<i64> {
     let pl = design.placement.as_ref()?;

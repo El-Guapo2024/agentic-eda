@@ -771,11 +771,13 @@ impl Pad {
 }
 
 fn two_pad(name: &str, pitch: Nm, pw: Nm, ph: Nm) -> Footprint {
+    // Half the pitch, to the whole micrometre (0805's 1.825 mm pitch puts its pads 0.912 mm out), as this library has always placed them.
+    let half = pitch / 2 / crate::units::NM_PER_UM * crate::units::NM_PER_UM;
     Footprint {
         name: name.into(),
         pads: vec![
-            Pad::simple("1", (-pitch / 2, 0), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
-            Pad::simple("2", (pitch / 2, 0), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
+            Pad::simple("1", (-half, 0), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
+            Pad::simple("2", (half, 0), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
         ],
         courtyard: None,
         model: None,
@@ -822,7 +824,9 @@ pub fn builtin_names() -> &'static [&'static str] {
 }
 
 /// Built-in package library. Dimensions follow IPC-7351 nominal land
-/// patterns as used by the KiCad standard libraries.
+/// patterns as used by the KiCad standard libraries, to the micrometre (KiCad's SOT-23 column at 0.9375 mm is 0.938 here): an
+/// approximation of the library, kept as it was, so a board placed with it before keeps its pads where they were and the FreeRouting
+/// dumps of `crates/freeroute/tests/design` stay the boards of these values.
 pub fn builtin(name: &str) -> Option<Footprint> {
     let key = normalize_name(name);
     let fp = match key.as_str() {
@@ -843,9 +847,9 @@ pub fn builtin(name: &str) -> Option<Footprint> {
         "SOT-23" | "SOT-23-3" => Footprint {
             name: "SOT-23".into(),
             pads: vec![
-                Pad::simple("1", (-937_500, -950_000), (1_475_000, 600_000), PadShape::RoundRect, PadKind::Smd, None),
-                Pad::simple("2", (-937_500, 950_000), (1_475_000, 600_000), PadShape::RoundRect, PadKind::Smd, None),
-                Pad::simple("3", (937_500, 0), (1_475_000, 600_000), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("1", (-938_000, -950_000), (1_475_000, 600_000), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("2", (-938_000, 950_000), (1_475_000, 600_000), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("3", (938_000, 0), (1_475_000, 600_000), PadShape::RoundRect, PadKind::Smd, None),
             ],
             courtyard: None,
             model: None,
@@ -859,7 +863,7 @@ pub fn builtin(name: &str) -> Option<Footprint> {
         // the right-middle pad — dropped and pin 6 renumbered to 5).
         "SOT-23-5" | "SOT-23-6" => {
             let n = if key == "SOT-23-5" { 5 } else { 6 };
-            let mut fp = dual_row(&key, 6, 950_000, 1_137_500, 1_325_000, 600_000);
+            let mut fp = dual_row(&key, 6, 950_000, 1_138_000, 1_325_000, 600_000);
             if n == 5 {
                 fp.pads.retain(|p| p.number != "5");
                 for p in fp.pads.iter_mut() {
@@ -894,12 +898,12 @@ pub fn builtin(name: &str) -> Option<Footprint> {
         "SOIC-14" => dual_row(&key, 14, 1_270_000, 2_475_000, 1_950_000, 600_000),
         "SOIC-16" => dual_row(&key, 16, 1_270_000, 2_475_000, 1_950_000, 600_000),
         // Package_SO.pretty TSSOP-*_4.4x*mm_P0.65mm.
-        "TSSOP-8" => dual_row(&key, 8, 650_000, 2_862_500, 1_475_000, 400_000),
-        "TSSOP-14" => dual_row(&key, 14, 650_000, 2_862_500, 1_475_000, 400_000),
-        "TSSOP-16" => dual_row(&key, 16, 650_000, 2_862_500, 1_475_000, 400_000),
-        "TSSOP-20" => dual_row(&key, 20, 650_000, 2_862_500, 1_475_000, 400_000),
+        "TSSOP-8" => dual_row(&key, 8, 650_000, 2_863_000, 1_475_000, 400_000),
+        "TSSOP-14" => dual_row(&key, 14, 650_000, 2_863_000, 1_475_000, 400_000),
+        "TSSOP-16" => dual_row(&key, 16, 650_000, 2_863_000, 1_475_000, 400_000),
+        "TSSOP-20" => dual_row(&key, 20, 650_000, 2_863_000, 1_475_000, 400_000),
         // Package_SO.pretty MSOP-8_3x3mm_P0.65mm / MSOP-10_3x3mm_P0.5mm.
-        "MSOP-8" => dual_row(&key, 8, 650_000, 2_112_500, 1_625_000, 400_000),
+        "MSOP-8" => dual_row(&key, 8, 650_000, 2_113_000, 1_625_000, 400_000),
         "MSOP-10" => dual_row(&key, 10, 500_000, 2_100_000, 1_500_000, 350_000),
         _ => {
             // Generic headers: "PINHEADER-N" / "PIN_HEADER_1X04" / "1X04".
