@@ -183,3 +183,45 @@ fn a_footprint_lists_its_own_files_and_board_setup_shows_the_ones_only_footprint
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert_eq!(names_listed(&dir, "/api/embedded?owner=footprint&id=U1"), ["U1.step"]);
 }
+
+/// `PCB_CONTROL::CollectAndEmbed3DModels` goes through the footprints in their order and `AddFile( fname, false )` keeps the first file of a name: two models of the same file name
+/// in two folders are one file, the one of the first footprint, whatever the paths sort as. A model file of any extension that is there is embedded (`fname.Exists()`), and
+/// an empty one is not (`AddFile` fails on it: no data to read).
+#[test]
+fn collect_takes_the_first_footprints_file_of_a_name_any_model_file_and_no_empty_one() {
+    let dir = scratch("embedded_collect_order");
+    setup(&dir);
+    for (sub, content) in [("b", &b"ISO-10303-21; from b"[..]), ("a", b"ISO-10303-21; from a")] {
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
+        std::fs::write(dir.join(sub).join("part.step"), content).unwrap();
+    }
+    std::fs::write(dir.join("a/zipped.stpz"), b"\x1f\x8b not really gzip").unwrap();
+    std::fs::write(dir.join("a/empty.step"), b"").unwrap();
+    // U1 is placed before U2 and names the folder that sorts last
+    step(&dir, Cmd::SetBoardModels { part: "U1".into(), models: vec![Model3d::identity("${KIPRJMOD}/b/part.step"), Model3d::identity("${KIPRJMOD}/a/zipped.stpz")] }, false, "test").unwrap();
+    step(&dir, Cmd::SetBoardModels { part: "U2".into(), models: vec![Model3d::identity("${KIPRJMOD}/a/part.step"), Model3d::identity("${KIPRJMOD}/a/empty.step")] }, false, "test").unwrap();
+    let plan = json_of(&crate::embedded_api::collect_plan(&dir));
+    assert_eq!(plan["count"], 3, "{plan}");
+    step(&dir, Cmd::Embedded(EmbeddedCmd::CollectModels { models: vec![] }), false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let list = &design.drawings.as_ref().unwrap().embedded;
+    assert_eq!(list.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["part.step", "zipped.stpz"]);
+    assert_eq!(eda_kicad::embedded::decode(list.get("part.step").unwrap()).unwrap().bytes, b"ISO-10303-21; from b", "the first footprint's file");
+    let paths = |r: &str| model.footprint_of(model.part(r).unwrap()).unwrap().models3d.iter().map(|m| m.path.clone()).collect::<Vec<_>>();
+    assert_eq!(paths("U1"), ["kicad-embed://part.step", "kicad-embed://zipped.stpz"]);
+    assert_eq!(paths("U2"), ["kicad-embed://part.step", "${KIPRJMOD}/a/empty.step"]);
+}
+
+/// Board Setup's Export writes every file of the panel's list (`onExportFiles` walks `m_localFiles`, which holds the files only footprints hold too); the list tells the content's
+/// checksum KiCad compares a file added again with (`AddEmbeddedFile`: `existingFile->data_hash == newFileHash`, the current hash once the file is read).
+#[test]
+fn board_setup_extracts_an_inherited_file_and_the_listing_tells_the_contents_checksum() {
+    let dir = scratch("embedded_inherited_extract");
+    setup(&dir);
+    step(&dir, add(EmbeddedOwner::Footprint { reference: "U1".into() }, "U1.step", STEP), false, "test").unwrap();
+    let got = crate::embedded_api::file(&dir, "/api/embedded/file?owner=board&name=U1.step");
+    assert_eq!(got.status, "200 OK", "{}", String::from_utf8_lossy(&got.body));
+    assert_eq!(got.body, STEP);
+    let board = json_of(&crate::embedded_api::list(&dir, "/api/embedded?owner=board"));
+    assert_eq!(board["inherited"][0]["content_checksum"], eda_kicad::embedded::checksum_of(STEP), "{board}");
+}
