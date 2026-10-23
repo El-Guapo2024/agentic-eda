@@ -264,8 +264,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   label or sheet pin on it names it; each member's nets on the bus's sheet (the nets of the member's name) are one net with the member, and a bus sheet pin and the hierarchical
   label of its sheet are one bus whose members are matched by index (a vector) or by name (a group): `processSubGraphs`, `propagateToNeighbors`, `matchBusMember`. kicad-cli's
   netlist of a bus across sheets, with the same and with different names on the two sides, is the studio's (`slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it`).
-- Left: a screen that has sheets of its own is still pasted as a copy (an override is filed under the placement just above the symbol, which nested placements share); Annotate
-  numbers the screen's own references only, not the other placements'; Delete of a placement leaves its overrides (unused) in the screen;
+- Reviewed 2026-10-23 (`task-sch-details-review`; `PARITY-sch.md` section 38 "Review"): a shared screen's per-placement references now follow its symbols (moved, added, deleted),
+  a deleted placement takes its references with it, an imported tree that shows a screen twice numbers each placement, KiCad 6's root `symbol_instances` and sheet field names
+  are read, a PWR_FLAG of any library names no net, a group bus matches by local name, a bus label's class goes to its members and a shared screen's label class to each placement;
+  18 of KiCad's QA hierarchies trace as kicad-cli reads them (`slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them`).
+- Left: a screen that has sheets of its own is still pasted as a copy, and a screen shown twice inside a screen shown twice has one reference per symbol for both (an override is filed
+  under the placement just above the symbol, which nested placements share; KiCad's `qa/data/eeschema/issue10926_1`, `hierarchy_aliases`); Annotate numbers the screen's own
+  references only, not the other placements' (it leaves no duplicate); two buses on one sheet that share only a member name are not joined (`bus_connection`, `issue17771`);
   Find does not match a sheet's name, file or pins; Clear Annotation (a design names a part by its reference, so two cannot be `R?`); "Place as group" and a ghost of the contents while they are carried;
   of the drop, one file is imported at a time (the others of the drop that the first does not place are said to be left out; KiCad runs Import Sheet for each in turn) and Choose Schematic opens on the file, where KiCad, given a file, has no chooser and has the sheet or its contents in the hand at once;
   the attribute, library-link and Update / Change Symbol tools act on the sheet in view; a footprint already placed keeps
