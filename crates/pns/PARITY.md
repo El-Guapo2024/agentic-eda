@@ -47,9 +47,8 @@ exists rather than letting you rediscover it.
    first `Append( vertex )` of `LINE::Walkaround`; here a walked line keeps the arcs it did not
    touch. Where a
    KiCad pass branches on "does this line contain an arc" (the optimizer skips such a
-   line, `Simplify` keeps an arc's points) the same branch is taken. Not ported: the
-   rounded corners of `CORNER_MODE` (`SwitchRounding*`, `BuildInitialTrace( ROUNDED_45 )`:
-   the router makes no arc of its own; the tuner's meanders do, Stage 8).
+   line, `Simplify` keeps an arc's points) the same branch is taken. The router makes
+   arcs of its own since Stage 10 step 2: the rounded corners of `CORNER_MODE`.
 4. **No component dragger, no multi-selection drag.** Single-item
    (segment/via) drag only. Diff pairs (Stage 7) and length tuning
    (Stage 8: single track, pair and skew, KiCad's placers and tool) are
@@ -76,7 +75,7 @@ exists rather than letting you rediscover it.
 | `pns_node.{h,cpp}` | `src/node.rs` | Done, modulo the branching simplification (#1 above) and: no `m_override`/root-fallback machinery (unneeded once branching is a full clone); dangling joints *are* pruned on empty (KiCad leaves them, per its own `// fixme: remove dangling joints`) since pruning is free with a plain `HashMap`; no edge exclusions, no `RULE_RESOLVER` net-tie/keepout hooks (nothing in this project's model to resolve yet); `NearestObstacle`'s true path-length-global nearest search is narrowed to "first leg that collides, nearest hit on that leg" (see `walkaround.rs`/`shove.rs`'s own notes) -- cheaper and almost always the same answer at these board sizes. |
 | `pns_utils.cpp` (`OctagonalHull`/`SegmentHull`/`ConvexHull`) | `src/hull.rs` | Done, via a different construction (circumscribing-octagon samples + a shared convex-hull routine) that is always *at least* as generous as KiCad's own chamfer -- see that file's doc comment for the exact argument. |
 | `pns_routing_settings.h`, `pns_sizes_settings.h` | `src/settings.rs` | Done. Defaults cross-checked against `pns_routing_settings.cpp`'s real constructor (including the non-obvious default `RM_Walkaround`, not `RM_Shove`). `SizesSettings::for_net` pulls from this project's own `BoardRules` net-class resolution instead of a live KiCad dialog. `free_angle_mode` is live since 2026-10-08 (Highlight collisions only: `build_head` draws the head as one free-angle segment, as `buildInitialLine` does). |
-| `geometry/direction45.h` | `src/direction45.rs` | `CORNER_MODE` narrowed to `Mitered45`/`Mitered90` (no arcs to fillet a rounded corner with -- see decision #3). `BuildInitialTrace`'s "only honor `start_diagonal` when direction is `Undefined`" subtlety preserved. |
+| `geometry/direction45.h`, `direction_45.cpp` | `src/direction45.rs` | `CORNER_MODE`'s four modes and `BuildInitialTrace` in each (Stage 10 step 2: on the nanometre grid, checked against KiCad's own compiled `direction_45.cpp`, 100 000 random cases). `BuildInitialTrace`'s "only honor `start_diagonal` when direction is `Undefined`" subtlety preserved. |
 
 ## Stage 2 -- LINE_PLACER + WALKAROUND
 
@@ -765,6 +764,33 @@ a locked track (refused, Drag Anyway, walked round), `V` shoving the track under
    micrometre (the studio sends `32000.000000000004` after Backspace, and on `/`) was read as missing, and the head went to 0 -- `route_api::num`
    rounds it now.
 
+2. **Rounded corners** (`CORNER_MODE`; `libs/kimath/src/geometry/direction_45.cpp`: `BuildInitialTrace`; `pns_routing_settings.cpp`: `m_cornerMode`,
+   `corner_mode`; `pns_router.cpp`: `ToggleCornerMode`; `router_tool.cpp`: `ACT_SwitchCornerMode*`, `handlePnSCornerModeChange`, the Track Corner Mode
+   submenu; `pns_line_placer.cpp`: `buildInitialLine`, the smart-pads condition of `rhWalkOnly` / `rhShoveOnly`, `FixRoute`'s "act as though we are in
+   fix-all mode" with arcs; `pns_optimizer.cpp`: `mergeStep`'s bypass in the corner mode, the arc segments it skips; `pns_shove.cpp`: `runOptimizer`'s
+   smart-pads condition). `CornerMode` has KiCad's four modes; `Direction45::build_initial_line` is `BuildInitialTrace` in each, computed on the
+   nanometre grid (`ConstructFromStartEndAngle`, `ConstructFromStartEndCenter`, the centre-and-angle constructor, the `MIN_PRECISION_IU` endpoint fix,
+   `Simplify`) and rounded to micrometres where it becomes points; an arc whose polyline is one segment is its chord, as
+   `SHAPE_LINE_CHAIN::Append( SHAPE_ARC )` makes it. The mitered 90 mode also had a bug, fixed: the leg it started with was chosen by `w >= h`, where
+   KiCad's is `startDiagonal == ( h >= w )`. `RoutingSettings::corner_mode` is read by the line placer (the head is built in it; a rounded corner is an
+   arc of the head, `Line::arcs`, through the pad walk, the shove, the walk and the optimizer, and of the fixed run, which the commit writes as an
+   `(arc ..)` track), by the optimizer (`Constraints::corner_mode`: `mergeStep`'s bypasses, which in a rounded mode are arcs; KiCad's optimizer reads
+   the router's settings itself) through the placer, the walk (`walkaround::walk_base_line`), the shove and the dragger, and for smart pads (45-degree
+   modes only). The studio: the five actions (`pcbnew.InteractiveRouter.SwitchRoundingToNext`, `SwitchRounding45`, `SwitchRoundingArc45`,
+   `SwitchRounding90`, `SwitchRoundingArc90`) in `pcbEditSweep.ts`, the submenu's check items from the setting, the hotkeys (Ctrl+/, Ctrl+W, Ctrl+Shift+W,
+   Ctrl+Alt+W, Alt+W) in the router tool (they are static `TOOL_ACTION`s of `router_tool.cpp` that the action catalog does not list; a browser keeps
+   Ctrl+W), and `corner_mode` on the wire (`routerSettings.ts`, `route_api::settings_over`); a running route takes a new mode at once and redraws the
+   head. **Differences:** `m_orthoMode` is not ported (nothing sets it); the arcs of a rounded corner are held on the micrometre grid, so an arc of a few
+   micrometres that the grid cannot curve is its chord; the end of a fix in the middle of an arc is not possible (KiCad's `FixRoute` turns fix-all on
+   when the head has arcs, and so does `fix`). **Proof:** `tests/direction45_oracle.rs` against KiCad's `direction_45.cpp` compiled over the real
+   kimath (`oracle/build_direction.sh`, g++ on Linux): 100 000 random cases of all four modes and both postures agree (the points exactly, an arc's ends
+   exactly and its middle to 1 um), 160 baked in; units in `line_placer.rs` (every mode in each routing mode, the fixed run keeps its arc, a rounded head
+   shoves what its arc meets and commits clean), `optimizer.rs` (an arc bypass), `router.rs` (the corner committed as an arc track), `route_api.rs`;
+   kicad-cli (`gate_vs_kicad::tests::routes_in_every_corner_mode_add_no_violation_to_kicad_clis_drc`, `EDA_SLOW_TESTS=1`): 16 two-leg routes on
+   `pic_programmer`, four modes by Shove and Walk around, add no copper violation and their arcs are `(arc ..)` of the file -- but for violations with
+   a board text on copper, which this router does not see (`syncTextItem` is not ported: four of them, two in a mitered mode; a gap of its own); the browser check's Track Corner Mode
+   scenario.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
@@ -809,9 +835,10 @@ a locked track (refused, Drag Anyway, walked round), `V` shoving the track under
 - ~~`KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints~~
   **Ported 2026-10-20** (Stage 9 step 4: `optimizer.rs`'s constraints, used by
   "Optimize entire track being dragged").
-- ~~Arcs as router items~~ **Ported 2026-10-20** (Stage 9 step 1). Still missing: rounded (arc-filleted)
-  corners made by the router itself (`CORNER_MODE`: `SwitchRounding*`,
-  `BuildInitialTrace( ROUNDED_45 / ROUNDED_90 )`): the tuner is the only maker of arcs.
+- ~~Arcs as router items~~ **Ported 2026-10-20** (Stage 9 step 1). ~~Rounded corners~~ **Ported 2026-10-23**
+  (Stage 10 step 2: `CORNER_MODE`, `SwitchRounding*`). Not ported: `m_orthoMode` (`SetOrthoMode`, which
+  forces `MITERED_45` in `buildInitialLine`; nothing here sets it), and the 90-degree hull box of
+  `rhMarkObstacles` (the mark-obstacles hull snap is not ported at all).
 - ~~`VIA::PushoutForce`~~ is ported (2026-10-08, `shove::via_pushout_force`); the
   second lead KiCad tries (`m_last_p_end`) is not kept.
 - ~~`MOUSE_TRAIL_TRACER`~~ **Ported 2026-10-20** (Stage 9 step 4). ~~Springback~~

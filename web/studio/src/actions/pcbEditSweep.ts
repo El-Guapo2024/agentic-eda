@@ -11,7 +11,8 @@
 // -- anything read after an `await` goes through `ctx.api.getState()`.
 
 import type { BoardState, Cmd, RouteMode, Shape } from "../api/types";
-import { dpMove, routeMove, routeSetMode } from "../api/client";
+import { dpMove, routeMove, routeSetMode, routeSetSettings } from "../api/client";
+import { nextCornerMode, type CornerMode } from "../kicad-port/routerSettings";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
@@ -46,6 +47,8 @@ const last = {
   filterOptions: { ...DEFAULT_FILTER_OPTIONS } as FilterOptions,
 };
 
+/** The Track Corner Mode actions' friendly names (`ACT_SwitchCornerMode45` ...: "Track Corner Mode 45", "... Arc 45", "... 90", "... Arc 90"). */
+const CORNER_MODE_LABEL: Record<CornerMode, string> = { mitered_45: "45", rounded_45: "Arc 45", mitered_90: "90", rounded_90: "Arc 90" };
 const ROUTER_MODE_LABEL: Record<RouteMode, string> = { mark_obstacles: "Highlight collisions", shove: "Shove", walkaround: "Walk around" };
 
 /** `ROUTER_TOOL::CycleRouterMode`: MarkObstacles -> Shove -> Walkaround -> MarkObstacles. */
@@ -96,6 +99,25 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   m.set("pcbnew.InteractiveRouter.WalkaroundMode", pcbOnly(() => setRouterMode("walkaround")));
   m.set("pcbnew.InteractiveRouter.HighlightMode", pcbOnly(() => setRouterMode("mark_obstacles")));
   m.set("pcbnew.InteractiveRouter.CycleRouterMode", pcbOnly(() => setRouterMode(nextRouterMode(state.routerSettings.mode))));
+
+  // ------------------------------------------------------------ track corner mode
+  // router_tool.cpp handlePnSCornerModeChange: `Settings().SetCornerMode( mode )`, then `UpdateMessagePanel()` and `m_router->Move( .. )` to refresh the
+  // head. The studio keeps the mode in `state.routerSettings` (sent with the next route) and pushes it to a running session.
+  const setCornerMode = (cornerMode: CornerMode) => {
+    const settings = { ...state.routerSettings, cornerMode };
+    dispatch({ type: "SET_ROUTER_SETTINGS", settings });
+    toast(`Track corner mode: ${CORNER_MODE_LABEL[cornerMode]}`);
+    const draw = state.drawState;
+    const cur = state.cursorUm;
+    if (draw?.kind === "route" || draw?.kind === "drag") {
+      void routeSetSettings(settings).then(() => draw.kind === "route" && cur && routeMove(cur.x, cur.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) })));
+    }
+  };
+  m.set("pcbnew.InteractiveRouter.SwitchRoundingToNext", pcbOnly(() => setCornerMode(nextCornerMode(state.routerSettings.cornerMode ?? "mitered_45"))));
+  m.set("pcbnew.InteractiveRouter.SwitchRounding45", pcbOnly(() => setCornerMode("mitered_45")));
+  m.set("pcbnew.InteractiveRouter.SwitchRoundingArc45", pcbOnly(() => setCornerMode("rounded_45")));
+  m.set("pcbnew.InteractiveRouter.SwitchRounding90", pcbOnly(() => setCornerMode("mitered_90")));
+  m.set("pcbnew.InteractiveRouter.SwitchRoundingArc90", pcbOnly(() => setCornerMode("rounded_90")));
 
   // ------------------------------------------------------------ selection by net
   // PCB_SELECTION_TOOL::selectNet / deselectNet: `selectCursor()`, then SelectAllItemsOnNet for the net of every selected

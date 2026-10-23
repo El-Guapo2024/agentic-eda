@@ -1524,8 +1524,8 @@ impl<'a> Shove<'a> {
             OptEffort::Low => (effort::MERGE_OBTUSE, 1),
             OptEffort::Medium | OptEffort::Full => (effort::MERGE_SEGMENTS, 2),
         };
-        // Smart pads need the 45-degree corner mode, the only one this router places in.
-        if self.settings.smart_pads {
+        // "Smart Pads is incompatible with 90-degree mode for now": `MITERED_45` or `ROUNDED_45`
+        if self.settings.smart_pads && !self.settings.corner_mode.is_90() {
             flags |= effort::SMART_PADS;
         }
         let max_width = self.optimizer_queue.iter().map(|l| l.line.width).max().unwrap_or(0);
@@ -1543,7 +1543,8 @@ impl<'a> Shove<'a> {
                 if root.is_some_and(|r| self.roots[r].is_head) || line.line.pts.len() < 2 {
                     continue;
                 }
-                let optimized = crate::optimizer::optimize_in_area(&line.line, &self.node, self.rules, &line.links(), flags, area);
+                let constraints = crate::optimizer::Constraints { area, corner_mode: self.settings.corner_mode, ..Default::default() };
+                let optimized = crate::optimizer::optimize_constrained(&line.line, &self.node, self.rules, &line.links(), flags, &constraints);
                 if optimized.pts != line.line.pts {
                     let mut new = SLine { line: optimized, via: line.via.clone(), rank: self.line_rank(&line) };
                     new.clear_links();
@@ -1792,13 +1793,16 @@ pub fn shove_heads(node: &Node, heads: Vec<ShoveHead>, rules: &BoardRules, setti
 /// world and `prior_area` its area, which the optimizer's restriction area takes in (`totalAffectedArea`). The outcome's displacement is
 /// against `node`; [`crate::springback::World::merge_shove`] makes it the frame's against the session's world.
 #[allow(clippy::too_many_arguments)] // `shove_line`'s query context plus the frame's area
-pub fn shove_line_after(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, prior_area: Option<Area>) -> Option<ShoveOutcome> {
-    if raw.len() < 2 {
-        return shove_line(node, raw, net, layer, width, rules, settings);
+/// `head` may hold arcs (a rounded corner): they are kept where the shove leaves the head's points alone.
+pub fn shove_line_after(node: &Node, head: &Line, rules: &BoardRules, settings: &RoutingSettings, prior_area: Option<Area>) -> Option<ShoveOutcome> {
+    if head.pts.len() < 2 {
+        return shove_line(node, &head.pts, &head.net, head.layer, head.width, rules, settings);
     }
     let mut shove = Shove::new(node, rules, settings);
     shove.prior_area = prior_area;
-    shove.run(Line::from_points(net.clone(), layer, width, raw.to_vec()))
+    let mut head = head.clone();
+    head.clear_links();
+    shove.run(head)
 }
 
 /// [`shove_heads`] from a springback frame: see [`shove_line_after`].

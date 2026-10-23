@@ -521,6 +521,23 @@ pub fn path_collides(node: &Node, rules: &BoardRules, net: &Net, layer: i32, wid
 /// false). The cursor is the head's last point.
 #[allow(clippy::too_many_arguments)] // the node/rules/net/layer/width query context, plus the head, the kind mask, the iteration limit and the hug threshold this is specific to.
 pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Um, head: &[Point], mask: u8, iteration_limit: u32, hug_threshold: f64, exclude: &[ItemId]) -> Option<Vec<Point>> {
+    let line = Line::from_points(net.clone(), layer, width, head.to_vec());
+    walk_base_line(node, rules, &line, mask, iteration_limit, hug_threshold, exclude, crate::direction45::CornerMode::Mitered45).map(|l| l.pts)
+}
+
+/// [`walk_base`] for a head that may hold arcs (a rounded corner, [`Line::arcs`]), in the router's corner mode: the optimizer's merge builds its
+/// bypasses in `corner` (`OPTIMIZER::mergeStep`), and the walked line keeps the arcs the walk left alone and those the merge made.
+#[allow(clippy::too_many_arguments)] // walk_base's, with the head as a line and the corner mode
+pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, mask: u8, iteration_limit: u32, hug_threshold: f64, exclude: &[ItemId], corner: crate::direction45::CornerMode) -> Option<Line> {
+    let (net, layer, width) = (&head_line.net, head_line.layer, head_line.width);
+    let head: &[Point] = &head_line.pts;
+    let finish = |pts: Vec<Point>, arcs: Vec<crate::arcs::ArcPts>| {
+        let mut l = Line::from_points(net.clone(), layer, width, pts);
+        l.arcs = arcs;
+        let kept = l.arc_runs().into_iter().map(|r| l.arcs[r.arc]).collect();
+        l.arcs = kept;
+        l
+    };
     let cursor = *head.last()?;
     let mut w = Walker::new(node, rules);
     w.item_mask = mask;
@@ -536,6 +553,7 @@ pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: 
     // index 0 = clockwise, 1 = counter-clockwise (`WP_CW`, `WP_CCW`)
     let pols = [WalkPolicy::Cw, WalkPolicy::Ccw];
     let mut lines: [Vec<Point>; 2] = [wr.line_of(WalkPolicy::Cw).to_vec(), wr.line_of(WalkPolicy::Ccw).to_vec()];
+    let mut arcs: [Vec<crate::arcs::ArcPts>; 2] = [head_line.arcs.clone(), head_line.arcs.clone()];
     let mut len = [i64::MAX; 2];
     let mut best: Option<usize> = None;
     for (i, pol) in pols.iter().enumerate() {
@@ -544,8 +562,10 @@ pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: 
             len[i] = chain_length(&lines[i]);
         }
         if status == WalkStatus::Done {
-            let line = Line::from_points(net.clone(), layer, width, lines[i].clone());
-            lines[i] = crate::optimizer::optimize_with(&line, node, rules, exclude, crate::optimizer::effort::MERGE_SEGMENTS).pts;
+            let line = finish(lines[i].clone(), arcs[i].clone());
+            let constraints = crate::optimizer::Constraints { corner_mode: corner, ..Default::default() };
+            let optimized = crate::optimizer::optimize_constrained(&line, node, rules, exclude, crate::optimizer::effort::MERGE_SEGMENTS, &constraints);
+            (lines[i], arcs[i]) = (optimized.pts, optimized.arcs);
             len[i] = chain_length(&lines[i]);
             // `if( len_ccw < len_cw ) bestLine = ccw` -- CW wins ties
             if i == 0 || len[1] < len[0] {
@@ -556,7 +576,7 @@ pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: 
     let best_length = len[0].min(len[1]);
     if let Some(b) = best {
         if (best_length as f64) < hug_len_complete {
-            return Some(lines[b].clone());
+            return Some(finish(lines[b].clone(), arcs[b].clone()));
         }
     }
 
@@ -573,11 +593,8 @@ pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: 
             dists[i] = l.last().map_or(i64::MAX, |&p| dist_f(cursor, p).round() as i64);
         }
     }
-    if dists[0] < dists[1] && hugged[0].is_some() {
-        hugged[0].take()
-    } else {
-        hugged[1].take()
-    }
+    let pick = if dists[0] < dists[1] && hugged[0].is_some() { 0 } else { 1 };
+    hugged[pick].take().map(|pts| finish(pts, arcs[pick].clone()))
 }
 
 #[cfg(test)]

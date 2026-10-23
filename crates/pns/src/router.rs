@@ -1214,6 +1214,24 @@ mod tests {
         assert_eq!(commit.tracks[0].pts.last(), Some(&Point { x: 5175, y: 0 }));
     }
 
+    /// Track Corner Mode arc 45 (`ROUNDED_45`): the corner of a route is an arc track of the commit, between two polylines.
+    #[test]
+    fn a_rounded_corner_is_committed_as_an_arc_track() {
+        let (design, model) = two_pad_board();
+        let mut router = Router::new(&design, &model);
+        router.settings.corner_mode = crate::direction45::CornerMode::Rounded45;
+        router.start(Point { x: -825, y: 0 }, "F.Cu", 200).unwrap();
+        router.fix(Point { x: 3000, y: -2000 }).expect("a route is in progress");
+        let commit = router.finish(Point { x: 5175, y: 0 }).expect("must finish");
+        let arcs: Vec<_> = commit.tracks.iter().filter(|t| t.arc().is_some()).collect();
+        assert_eq!(arcs.len(), 2, "one arc a leg: {:?}", commit.tracks.iter().map(|t| (t.pts.len(), t.arc_mid_offset)).collect::<Vec<_>>());
+        // the pieces join end to end
+        let ends: Vec<(Point, Point)> = commit.tracks.iter().map(|t| (t.pts[0], *t.pts.last().unwrap())).collect();
+        for (a, b) in &ends {
+            assert!(ends.iter().filter(|(c, d)| c == b || d == b).count() >= 1 && ends.iter().any(|(c, d)| (c, d) != (a, b) && (c == a || d == a || c == b || d == b)), "{ends:?}");
+        }
+    }
+
     /// D1: intermediate fix clicks must not emit vias.
     #[test]
     fn multi_click_route_emits_no_fake_vias() {

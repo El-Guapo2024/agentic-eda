@@ -49,7 +49,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-router-details` | Next tasks 5, the router's three leftovers: springback, rounded corners, virtual vias (`crates/pns/PARITY.md` Stage 10) | Springback done (the line placer) | Rounded corners, virtual vias |
+| `task-router-details` | Next tasks 5, the router's three leftovers: springback, rounded corners, virtual vias (`crates/pns/PARITY.md` Stage 10) | Springback (the line placer) and rounded corners done | Virtual vias |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

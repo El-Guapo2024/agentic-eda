@@ -23,6 +23,8 @@
 //   tuner on arc  a track that is an arc is picked by the tuner (the line's length along the arc), a pattern is started on it and tuned to 24 mm through the arc, which stays an arc;
 //   delay        a net whose class names a tuning profile with the time domain on is tuned in picoseconds: the status box reads "current delay", the Tuning Pattern dialog has the Delay
 //                radio button and a target delay, the pattern is tuned to it within 0.2 ps and stored as a time domain one.
+//   corner mode  (Stage 10) the Track Corner Mode actions: arc 45 rounds the head's corner and commits it as an arc track, 90 routes axis legs,
+//                Ctrl+/ steps through the modes and the running route takes the new one;
 //   springback   (Stage 10) in Shove mode a track the head pushed stays pushed, is pushed on from where it was left, and springs back once the head draws back off it; a click keeps the
 //                push and the next leg pushes on from it, Backspace takes the leg and its push back, and the finished route commits the track where the session left it in one undo step;
 //
@@ -660,6 +662,60 @@
     await E.run("common.Interactive.undo");
     await sleep(600);
     t(tracksOf(await state()).length === 2, "one Undo takes the route and the push away");
+  });
+
+  await scenario("Track Corner Mode: arc 45 rounds the head's corner and commits it as an arc track, 90 routes axis legs, Ctrl+/ steps through the four", async (t) => {
+    await commit([line("PA5", "F.Cu", [[5000, 30000], [6000, 30000]])]);
+    await E.run("pcbnew.InteractiveRouter.SingleTrack");
+    await E.run("pcbnew.InteractiveRouter.WalkaroundMode");
+    await sleep(300);
+    const route = async (corner, to) => {
+      await E.run(corner);
+      await sleep(300);
+      if (E.state().tool !== "route") { await E.run("pcbnew.InteractiveRouter.SingleTrack"); await sleep(300); }
+      const n = replies.length;
+      await clickAt(6000, 30000);
+      const s = await waitReply("start", n);
+      // along the row first, so the posture is straight-first
+      for (const [x, y] of [[7000, 30000], [8000, 30000], [9000, 29000], to]) await moveTo(x, y);
+      return { start: s, head: lastReply("move", n) };
+    };
+    const arc45 = await route("pcbnew.InteractiveRouter.SwitchRoundingArc45", [11000, 28000]);
+    t(arc45.start && arc45.start.req.settings && arc45.start.req.settings.corner_mode === "rounded_45", `the route starts with the corner mode: ${arc45.start && JSON.stringify(arc45.start.req.settings && arc45.start.req.settings.corner_mode)}`);
+    const pts = arc45.head && arc45.head.body.head;
+    t(!!pts && pts.length > 4 && nearPt(pts[0], [6000, 30000], 0) && nearPt(pts[pts.length - 1], [11000, 28000], 0), `the head's corner is an arc (the points of its polyline): ${pts && pts.length} points`);
+    let n = replies.length;
+    await clickAt(11000, 28000);
+    await waitReply("fix", n);
+    n = replies.length;
+    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await waitReply("finish", n);
+    await sleep(700);
+    let st = await state();
+    const arcs = arcsOf(st).filter((q) => q.net === "PA5");
+    t(arcs.length === 1 && nearPt(arcs[0].pts[arcs[0].pts.length - 1], [11000, 28000], 1), `the corner is committed as an arc track: ${JSON.stringify(arcs.map((q) => [q.pts[0], q.arc_mid, q.pts[q.pts.length - 1]]))}`);
+    t(tracksOf(st).some((q) => q.net === "PA5" && !q.arc_mid && nearPt(q.pts[0], [6000, 30000], 0)), "and the straight leg before it as a track");
+    t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), "the gates find no clearance failure");
+    await E.run("common.Interactive.undo");
+    await sleep(600);
+    t(tracksOf(await state()).length === 1, "one Undo takes the route away");
+    await leaveTool();
+    const ninety = await route("pcbnew.InteractiveRouter.SwitchRounding90", [11000, 28000]);
+    const p90 = ninety.head && ninety.head.body.head;
+    t(!!p90 && p90.length === 3 && p90.every((q, i) => i === 0 || q[0] === p90[i - 1][0] || q[1] === p90[i - 1][1]), `90 routes two axis legs: ${JSON.stringify(p90)}`);
+    // Ctrl+/ (SwitchRoundingToNext) from 90 is arc 90, then 45, the default again
+    const container = document.querySelector(".pcb-canvas-container");
+    const ctrlSlash = async () => { container.dispatchEvent(new KeyboardEvent("keydown", { key: "/", code: "Slash", ctrlKey: true, bubbles: true, cancelable: true })); await sleep(500); await quiet(); };
+    n = replies.length;
+    await ctrlSlash();
+    const set1 = replies.slice(n).find((r) => r.name === "settings");
+    t(!!set1 && set1.req.settings.corner_mode === "rounded_90", `Ctrl+/ steps 90 to arc 90 and the running route takes it: ${set1 && JSON.stringify(set1.req.settings.corner_mode)}`);
+    const again = lastReply("move", n);
+    t(!!again && again.body.head.length > 3, `the head is refreshed with a rounded corner: ${again && again.body.head.length} points`);
+    n = replies.length;
+    await ctrlSlash();
+    const set2 = replies.slice(n).find((r) => r.name === "settings");
+    t(!!set2 && set2.req.settings.corner_mode === "mitered_45", `and again to 45, the default: ${set2 && JSON.stringify(set2.req.settings.corner_mode)}`);
   });
 
   await scenario("the board is as it was, and the studio reported no error", async (t) => {

@@ -48,8 +48,7 @@
 
 /// `LINE_PLACER::rhWalkOnly`/`rhShoveOnly`'s head effort: `OE_LOW` merges
 /// nothing, `OE_MEDIUM`/`OE_FULL` merge segments; smart pads on top when
-/// enabled (KiCad also requires 45-degree corner mode, the only mode this
-/// router places in).
+/// enabled and the corner mode is a 45-degree one.
 ///
 /// "Smart Pads is incompatible with 90-degree mode for now" and with a posture the person forced with `/`
 /// (`!m_mouseTrailTracer.IsManuallyForced()`).
@@ -58,10 +57,11 @@ fn head_effort(settings: &RoutingSettings, manually_forced: bool) -> u32 {
         crate::settings::OptEffort::Low => 0,
         crate::settings::OptEffort::Medium | crate::settings::OptEffort::Full => optimizer::effort::MERGE_SEGMENTS,
     };
-    merge | if settings.smart_pads && !manually_forced { optimizer::effort::SMART_PADS } else { 0 }
+    // `cornerMode == DIRECTION_45::MITERED_45 || cornerMode == DIRECTION_45::ROUNDED_45`
+    merge | if settings.smart_pads && !settings.corner_mode.is_90() && !manually_forced { optimizer::effort::SMART_PADS } else { 0 }
 }
 
-use crate::direction45::{CornerMode, Direction45};
+use crate::direction45::Direction45;
 use crate::mouse_trail::MouseTrailTracer;
 use crate::item::{Item, ItemId, Net};
 use crate::layer::LayerRange;
@@ -120,6 +120,8 @@ pub struct Preview {
 /// whatever else had to move to make room for it.
 struct HeadResult {
     pts: Vec<Point>,
+    /// The arcs of the head (a rounded corner: `CORNER_MODE`'s `ROUNDED_45` / `ROUNDED_90`), as [`Line::arcs`].
+    arcs: Vec<crate::arcs::ArcPts>,
     colliding: bool,
     displaced_lines: Vec<DisplacedLine>,
     displaced_vias: Vec<DisplacedVia>,
@@ -135,7 +137,12 @@ struct HeadResult {
 impl HeadResult {
     /// A head resolved without a shove, in `world` (whose moved tracks and vias are what the preview shows displaced).
     fn plain(pts: Vec<Point>, colliding: bool, node: &Node, world: World) -> Self {
-        HeadResult { pts, colliding, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via: None }
+        HeadResult { pts, arcs: Vec::new(), colliding, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via: None }
+    }
+
+    /// [`Self::plain`] for a head that may hold arcs.
+    fn plain_line(line: Line, colliding: bool, node: &Node, world: World) -> Self {
+        HeadResult { arcs: line.arcs, ..Self::plain(line.pts, colliding, node, world) }
     }
 }
 
@@ -245,9 +252,19 @@ impl LinePlacer {
         // `buildInitialLine`: in Shove mode a pending via is pushed off the pads under it before the head is built to it (`v.PushoutForce( ..,
         // collMask = SOLID_T, .. )`, the head then ends at `aP + force`); the other modes place theirs on the finished head (`place_via`).
         let p = if self.placing_via && settings.mode == Mode::Shove { self.place_via(node, rules, settings, p, self.via_to_layer.unwrap_or(self.current_layer)) } else { p };
-        // `buildInitialLine`: `if( GetFreeAngleMode() && Mode() == RM_MarkObstacles ) l = SHAPE_LINE_CHAIN( { m_p_start, aP } )`
-        let raw = if settings.free_angle() { vec![start, p] } else { self.posture(settings, p).build_initial_trace(start, p, false, CornerMode::Mitered45) };
+        // `buildInitialLine`: `if( GetFreeAngleMode() && Mode() == RM_MarkObstacles ) l = SHAPE_LINE_CHAIN( { m_p_start, aP } )`, else the trace in the
+        // corner mode (`guessedDir.BuildInitialTrace( m_p_start, aP, false, cornerMode )`): a rounded corner is an arc of the head
+        let mut raw = Line::new(self.net.clone(), self.current_layer, self.width);
+        if settings.free_angle() {
+            raw.pts = vec![start, p];
+        } else {
+            let trace = self.posture(settings, p).build_initial_line(start, p, false, settings.corner_mode);
+            (raw.pts, raw.arcs) = (trace.pts, trace.arcs);
+        }
         let exclude = self.exclude();
+        let iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
+        let effort = head_effort(settings, self.manually_forced);
+        let optimize = |line: &Line, world: &Node| optimizer::optimize_constrained(line, world, rules, &exclude, effort, &optimizer::Constraints { corner_mode: settings.corner_mode, ..Default::default() });
 
         let mut current = current;
         if settings.mode == Mode::Shove {
@@ -256,33 +273,33 @@ impl LinePlacer {
             // shove tracks and vias out of its way. A pad the head cannot be
             // walked around, a locked item, or the iteration limit falls back
             // to a full walkaround for this call, exactly like upstream.
-            let iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
-            if let Some(walked) = walkaround::walk_base(node, rules, &self.net, self.current_layer, self.width, &raw, crate::node::kind_mask::SOLID, iteration_limit, settings.walkaround_hug_length_threshold, &exclude) {
+            if let Some(walked) = walkaround::walk_base_line(node, rules, &raw, crate::node::kind_mask::SOLID, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode) {
                 // `if( m_placingVia && viaOk ) newHead.AppendVia( makeVia( newHead.CLastPoint() ) )`: the via is part of the head, so the shove
                 // moves what is in the way of the via as well as what is in the way of the track (`SHOVE::Run`: `headVia->SetRank( 100000 )`,
                 // `m_currentNode->Add( std::move( headVia ) )`)
-                let head_via = if self.placing_via { walked.last().map(|&end| self.make_via(end)) } else { None };
+                let head_via = if self.placing_via { walked.last().map(|end| self.make_via(end)) } else { None };
                 // `SHOVE::Run`: "Pop NODEs containing previous shoves which are no longer necessary" (`reduceSpringback( headSet )`), then
                 // `m_currentNode = parent->Branch()`: the shove starts from the world the newest frame the head still presses on left
-                let head_set = HeadSet { pts: &walked, net: &self.net, layer: self.current_layer, width: self.width, via: head_via.as_ref() };
+                let head_set = HeadSet { pts: &walked.pts, net: &self.net, layer: self.current_layer, width: self.width, via: head_via.as_ref() };
                 let (parent, prior_area) = self.springback.borrow_mut().reduce(node, &head_set, rules);
                 let parent_node = parent.apply(node);
                 let outcome = match &head_via {
-                    Some(via) => crate::shove::shove_heads_after(&parent_node, vec![crate::shove::ShoveHead { line: Line::from_points(self.net.clone(), self.current_layer, self.width, walked.clone()), via: Some(via.clone()) }], rules, settings, prior_area),
-                    None => crate::shove::shove_line_after(&parent_node, &walked, &self.net, self.current_layer, self.width, rules, settings, prior_area),
+                    Some(via) => crate::shove::shove_heads_after(&parent_node, vec![crate::shove::ShoveHead { line: walked.clone(), via: Some(via.clone()) }], rules, settings, prior_area),
+                    None => crate::shove::shove_line_after(&parent_node, &walked, rules, settings, prior_area),
                 };
                 if let Some(outcome) = outcome {
-                    let line = Line::from_points(self.net.clone(), self.current_layer, self.width, outcome.head.clone());
+                    // the head as the shove left it, with the arcs of it the shove did not cut into
+                    let line = Line { arcs: walked.arcs.clone(), ..Line::from_points(self.net.clone(), self.current_layer, self.width, outcome.head.clone()) };
                     // Like `OPTIMIZER::Optimize( &aNewHead, effort, m_currentNode )`
                     // after the shove: against the world the shove left, so a
                     // shortcut is only taken where the pushed items now allow it.
-                    let optimized = optimizer::optimize_with(&line, &outcome.world, rules, &exclude, head_effort(settings, self.manually_forced));
+                    let optimized = optimize(&line, &outcome.world);
                     let via = head_via.as_ref().and_then(|_| optimized.pts.last().copied());
                     // `pushSpringback( m_currentNode, m_affectedArea )`: the world this shove left is the newest frame
                     let mut world = parent;
                     world.merge_shove(&outcome.displaced_lines, &outcome.displaced_vias);
                     self.springback.borrow_mut().push(node, world.clone(), outcome.area);
-                    return HeadResult { pts: optimized.pts, colliding: false, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via };
+                    return HeadResult { pts: optimized.pts, arcs: optimized.arcs, colliding: false, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via };
                 }
                 // the shove failed: "m_currentNode = parent", and `rhWalkOnly` walks the head in it
                 current = parent;
@@ -300,25 +317,20 @@ impl LinePlacer {
         };
         match settings.mode {
             Mode::MarkObstacles => {
-                let colliding = raw.windows(2).any(|w| {
+                let colliding = raw.pts.windows(2).any(|w| {
                     let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width / 2 };
                     world_node.first_colliding(&shape, &self.net, LayerRange::single(self.current_layer), rules, &exclude).is_some()
                 });
-                HeadResult::plain(raw, colliding, node, current)
+                HeadResult::plain_line(raw, colliding, node, current)
             }
             Mode::Walkaround | Mode::Shove => {
                 // `rhWalkOnly`: `rhWalkBase( aP, walkFull, ITEM::ANY_T, RM_Walkaround )`, refused if the walk still
                 // collides with anything, then the head optimized per the effort setting.
-                let iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
-                let walked = walkaround::walk_base(world_node, rules, &self.net, self.current_layer, self.width, &raw, crate::node::kind_mask::ANY, iteration_limit, settings.walkaround_hug_length_threshold, &exclude)
-                    .filter(|path| !walkaround::path_collides(world_node, rules, &self.net, self.current_layer, self.width, path, &exclude));
+                let walked = walkaround::walk_base_line(world_node, rules, &raw, crate::node::kind_mask::ANY, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode)
+                    .filter(|path| !walkaround::path_collides(world_node, rules, &self.net, self.current_layer, self.width, &path.pts, &exclude));
                 match walked {
-                    Some(path) => {
-                        let line = Line::from_points(self.net.clone(), self.current_layer, self.width, path);
-                        let optimized = optimizer::optimize_with(&line, world_node, rules, &exclude, head_effort(settings, self.manually_forced));
-                        HeadResult::plain(optimized.pts, false, node, current)
-                    }
-                    None => HeadResult::plain(raw, true, node, current), // ST_STUCK: show the direct line, flagged violating
+                    Some(path) => HeadResult::plain_line(optimize(&path, world_node), false, node, current),
+                    None => HeadResult::plain_line(raw, true, node, current), // ST_STUCK: show the direct line, flagged violating
                 }
             }
         }
@@ -392,6 +404,7 @@ impl LinePlacer {
         let mut colliding = head_result.colliding;
         let shoved_via = head_result.via;
         let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
+        head.arcs = head_result.arcs;
         head.simplify();
         // `Move`: a route that ends on a track it runs along (its last segment collinear with the track's and overlapping it) ends
         // where it first touches the track, not at the cursor further along it
@@ -509,7 +522,8 @@ impl LinePlacer {
         // `FixRoute`: with "Fix all segments on click" off, a click that does not end the route fixes every segment but
         // the last, which stays free and follows the cursor; the next leg starts where the last one began
         // (`m_currentStart = p_pre_last`) and continues in the direction of the one before it (`lastDirSeg = CSegment( -2 )`).
-        let keep_last_free = !settings.fix_all_segments && !real_end && !self.placing_via && preview.head.segment_count() > 1;
+        // "Rollback doesn't work properly if fix-all isn't enabled and we are placing arcs, so if we are, act as though we are in fix-all mode."
+        let keep_last_free = !settings.fix_all_segments && preview.head.arc_count() == 0 && !real_end && !self.placing_via && preview.head.segment_count() > 1;
         let mut head = preview.head.clone();
         if keep_last_free {
             head.pts.pop();
@@ -549,6 +563,7 @@ impl LinePlacer {
         let shoved_via = head_result.via;
         *self.last_world.borrow_mut() = head_result.world;
         let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
+        head.arcs = head_result.arcs;
         head.simplify();
         let via_pos = match shoved_via {
             // shoved together with the head: the via is where the head ends
@@ -1099,6 +1114,66 @@ mod tests {
         assert!(placer.undo_last_segment());
         assert_eq!(placer.displaced_tracks().count(), 0, "the leg and its push are gone");
         assert!(placer.preview(&node, &rules, &settings, Point { x: 1500, y: 0 }).displaced_lines.is_empty());
+    }
+
+    /// `CORNER_MODE` (`buildInitialLine`: `BuildInitialTrace( m_p_start, aP, false, cornerMode )`): arc 45 makes the diagonal leg a 45-degree arc
+    /// tangent to the straight one, arc 90 the corner a quarter arc, 90 two axis legs; a click fixes the arc as an arc, and the head keeps it through
+    /// the walk and the optimizer, in every mode.
+    #[test]
+    fn the_corner_mode_shapes_the_head_and_a_rounded_corner_is_an_arc_of_it() {
+        use crate::direction45::CornerMode;
+        let (node, rules) = (Node::new(), rules());
+        let to = Point { x: 6000, y: 2000 };
+        for mode in [Mode::MarkObstacles, Mode::Walkaround, Mode::Shove] {
+            for corner in [CornerMode::Mitered45, CornerMode::Rounded45, CornerMode::Mitered90, CornerMode::Rounded90] {
+                let settings = RoutingSettings { mode, corner_mode: corner, auto_posture: false, ..RoutingSettings::default() };
+                let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+                placer.direction = Direction45::E;
+                placer.restart_trail(Point { x: 0, y: 0 }, Direction45::E);
+                let pv = placer.preview(&node, &rules, &settings, to);
+                assert!(!pv.colliding);
+                assert_eq!((pv.head.first(), pv.head.last()), (Some(Point { x: 0, y: 0 }), Some(to)), "{mode:?} {corner:?}");
+                let arcs = pv.head.arc_runs();
+                match corner {
+                    CornerMode::Mitered45 => assert_eq!(pv.head.pts, vec![Point { x: 0, y: 0 }, Point { x: 4000, y: 0 }, to], "{mode:?}"),
+                    CornerMode::Mitered90 => assert_eq!(pv.head.pts, vec![Point { x: 0, y: 0 }, Point { x: 6000, y: 0 }, to], "{mode:?}"),
+                    CornerMode::Rounded45 | CornerMode::Rounded90 => {
+                        assert_eq!(arcs.len(), 1, "{mode:?} {corner:?}: {:?}", pv.head);
+                        let arc = pv.head.arcs[arcs[0].arc];
+                        let sweep = crate::arcs::ArcPts::central_angle(&arc).abs();
+                        let want = if corner == CornerMode::Rounded45 { 45.0 } else { 90.0 };
+                        assert!((sweep - want).abs() < 0.5, "{mode:?} {corner:?}: a {sweep} degree arc");
+                        // it leaves the straight leg along it (tangent) and ends at the cursor
+                        assert_eq!(pv.head.pts[0].y, 0);
+                        assert_eq!(pv.head.last(), Some(to));
+                    }
+                }
+                assert!(matches!(placer.fix(&node, &rules, &settings, to), FixOutcome::Fixed { .. }));
+                assert_eq!(placer.runs[0].arc_count(), usize::from(matches!(corner, CornerMode::Rounded45 | CornerMode::Rounded90)), "{mode:?} {corner:?}: the fixed run keeps its arc");
+            }
+        }
+    }
+
+    /// `rhShoveOnly` with a rounded head: the head and its arc push the track in their way, and the head is still the arc it was.
+    #[test]
+    fn a_rounded_head_shoves_what_its_arc_meets() {
+        use crate::direction45::CornerMode;
+        use crate::item::Segment;
+        let mut node = Node::new();
+        // across the arc of the corner (the arc of radius ~4.8 mm from (1172, 0) to (6000, 2000))
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 4500, y: -2000 }, b: Point { x: 4500, y: 4000 }, width: 200, source_track: Some(("g".into(), 0)), locked: false }));
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Shove, corner_mode: CornerMode::Rounded45, auto_posture: false, ..RoutingSettings::default() };
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        placer.direction = Direction45::E;
+        placer.restart_trail(Point { x: 0, y: 0 }, Direction45::E);
+        let pv = placer.preview(&node, &rules, &settings, Point { x: 6000, y: 2000 });
+        assert!(!pv.colliding);
+        assert_eq!(pv.head.arc_count(), 1, "{:?}", pv.head);
+        assert_eq!(pv.displaced_lines.len(), 1, "the track is pushed");
+        placer.finish(&node, &rules, &settings, Point { x: 6000, y: 2000 }).expect("finishes");
+        let board = committed_world(&node, &placer);
+        assert!(violations(&board, &rules).is_empty(), "{:?}", violations(&board, &rules));
     }
 
     /// `buildInitialLine`: a via that lands on a pad is pushed off it before the head is built, and the head ends at the via.

@@ -636,4 +636,99 @@ mod tests {
         assert!(judged >= 3, "{judged} sessions judged by kicad-cli");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// The Track Corner Mode (`CORNER_MODE`) against kicad-cli's DRC (slow tier): routes on `pic_programmer` in each of the four modes, in Shove and
+    /// Walk around, from pads out into the board with a click and a second leg -- each commit adds no copper violation to kicad-cli's report (but those
+    /// with a board text on copper, which the router does not see), and in the two rounded modes the corners are `(arc ..)` tracks of the board file.
+    #[test]
+    fn routes_in_every_corner_mode_add_no_violation_to_kicad_clis_drc() {
+        use eda_model::ir::Point;
+        use eda_pns::direction45::CornerMode;
+        use eda_pns::item::Item;
+        use eda_pns::router::Router;
+        use eda_pns::settings::Mode;
+        if !kicad_available() {
+            return;
+        }
+        let kinds = ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width"];
+        let Some((design, model)) = qa_board("pic_programmer") else {
+            eprintln!("KiCad's QA corpus not found; skipping");
+            return;
+        };
+        let dir = scratch("corner_modes");
+        // a board text on copper is not an obstacle of this router (`syncTextItem` is not ported: a gap of its own, not the corners'), so what a
+        // route does to the text of `pic_programmer` is left out of the count, and said
+        let without_text = |r: Vec<(String, String)>| r.into_iter().filter(|(_, d)| !d.contains("PCB text")).collect::<Vec<_>>();
+        let before = without_text(all_track_report(&design, &model, &dir, &kinds));
+        let baseline = counts_of(&before);
+        let (node, _) = eda_pns::from_ir::build_node(&design, &model);
+        let mut pads: Vec<(Point, String)> = node
+            .iter()
+            .filter_map(|(_, it)| match it {
+                Item::Solid(s) if !s.edge && s.net.is_some() && s.layers.overlaps_layer(0) => Some((s.pos, s.source.clone())),
+                _ => None,
+            })
+            .collect();
+        pads.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut judged = 0;
+        let mut arcs_written = 0;
+        let mut pushed = 0;
+        for (c, corner) in [CornerMode::Mitered45, CornerMode::Rounded45, CornerMode::Mitered90, CornerMode::Rounded90].into_iter().enumerate() {
+            for (m, mode) in [Mode::Shove, Mode::Walkaround].into_iter().enumerate() {
+                let mut done = 0;
+                // each mode from pads of its own, round the board
+                let offset = (c * 2 + m) * pads.len() / 8;
+                for (pad, name) in pads.iter().cycle().skip(offset).take(pads.len()) {
+                    if done >= 2 {
+                        break;
+                    }
+                    let mut router = Router::new(&design, &model);
+                    router.settings.mode = mode;
+                    router.settings.corner_mode = corner;
+                    if router.start(*pad, "F.Cu", model.board.track_width).is_err() {
+                        continue;
+                    }
+                    let (mid, end) = (Point { x: pad.x + 3000, y: pad.y - 1300 }, Point { x: pad.x + 4300, y: pad.y - 4500 });
+                    for k in 1..=4 {
+                        router.preview(Point { x: pad.x + 750 * k, y: pad.y - 325 * k });
+                    }
+                    if !router.preview(mid).is_some_and(|pv| !pv.colliding) || !matches!(router.fix(mid), Some(eda_pns::line_placer::FixOutcome::Fixed { real_end: false })) {
+                        continue;
+                    }
+                    if !router.preview(end).is_some_and(|pv| !pv.colliding) {
+                        continue;
+                    }
+                    let Some(commit) = router.finish(end) else { continue };
+                    let arcs = commit.tracks.iter().filter(|t| t.arc().is_some() && t.net != "").count();
+                    let after = apply_commit(&design, &commit);
+                    let full = all_track_report(&after, &model, &dir, &kinds);
+                    let text = full.iter().filter(|(_, d)| d.contains("PCB text")).count();
+                    if text > 0 {
+                        eprintln!("    {text} violation(s) with a board text, left out (the router does not see copper text)");
+                    }
+                    let now = without_text(full);
+                    let counts = counts_of(&now);
+                    eprintln!("pic_programmer {corner:?} {mode:?} from {name}: {} tracks put ({arcs} arcs), {} taken: {counts:?} (before {baseline:?})", commit.tracks.len(), commit.remove_track_ids.len());
+                    if counts != baseline {
+                        eprintln!("    new: {:?}", now.iter().filter(|v| !before.contains(v)).collect::<Vec<_>>());
+                    }
+                    for kind in kinds {
+                        let (was, got) = (baseline.get(kind).copied().unwrap_or(0), counts.get(kind).copied().unwrap_or(0));
+                        assert!(got <= was, "{corner:?} {mode:?} from {name}: kicad-cli reports {got} {kind} (the board had {was})");
+                    }
+                    if matches!(corner, CornerMode::Rounded45 | CornerMode::Rounded90) {
+                        assert!(arcs > 0, "{corner:?} {mode:?} from {name}: the corners are arcs");
+                        assert_eq!(arcs_in_file(&after, &model), arcs_in_file(&design, &model) + commit.tracks.iter().filter(|t| t.arc().is_some()).count(), "every arc is an (arc ..) of the board file");
+                        arcs_written += arcs;
+                    }
+                    pushed += usize::from(!commit.remove_track_ids.is_empty());
+                    done += 1;
+                    judged += 1;
+                }
+            }
+        }
+        eprintln!("{judged} routes judged by kicad-cli, {arcs_written} arcs written, {pushed} of them pushed tracks");
+        assert!(judged >= 12, "{judged} routes judged");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
