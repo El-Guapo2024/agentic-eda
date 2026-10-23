@@ -78,13 +78,15 @@ impl<'m> Scene<'m> {
             }
         }
 
-        // SCH_LINE_T: wires, buses and graphic lines
-        let mut lines: Vec<(Point, Point)> = self.segs.iter().filter(|s| !s.dead).map(|s| (s.a, s.b)).collect();
+        // SCH_LINE_T: wires, buses and graphic lines. `Items().Overlapping( aPosition )` is the R-tree of `SCH_LINE::GetBoundingBox`, the box of the two ends
+        // grown by half the pen (`GetPenWidth() / 2`, and 1 IU on the far side): a point anywhere in that box counts, on the line or not.
+        let mut lines: Vec<(Point, Point, Um)> = self.segs.iter().filter(|s| !s.dead).map(|s| (s.a, s.b, if s.bus { HALF_BUS_PEN_UM } else { HALF_WIRE_PEN_UM })).collect();
         for l in &self.sch.lines {
-            lines.extend(l.pts.windows(2).map(|w| (w[0], w[1])));
+            let half = if l.width_um > 0 { l.width_um / 2 } else { HALF_WIRE_PEN_UM };
+            lines.extend(l.pts.windows(2).map(|w| (w[0], w[1], half)));
         }
-        for (start, end) in lines {
-            if !on_segment(start, end, at) {
+        for (start, end, half) in lines {
+            if at.x < start.x.min(end.x) - half || at.x > start.x.max(end.x) + half || at.y < start.y.min(end.y) - half || at.y > start.y.max(end.y) + half {
                 continue;
             }
             // "line angles goes between -90 and 90 degrees, but normalize": `Angle().Normalize90()` is in (-90, 90], so -45 < angle <= 45 is
@@ -161,6 +163,11 @@ impl<'m> Scene<'m> {
         true
     }
 }
+
+/// Half the pen `SCH_LINE::GetPenWidth` gives a wire with nothing set (the Default net class's 6 mil; a graphic line's `m_DefaultLineWidth` is 6 mil too) and a bus
+/// (12 mil), in micrometres.
+const HALF_WIRE_PEN_UM: Um = 76;
+const HALF_BUS_PEN_UM: Um = 152;
 
 /// What Place Label sets on the label it puts down (`createNewLabel`: the properties dialog's result).
 #[derive(Debug, Clone, Default)]

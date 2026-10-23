@@ -142,6 +142,20 @@ fn a_diagonal_line_counts_as_horizontal_up_to_45_degrees_and_as_vertical_beyond(
     assert_eq!(spin_at(&s, p(45_720, 0), LabelSpin::Up), LabelSpin::Up, "ends at the top of an upward line");
 }
 
+/// `Items().Overlapping( aPosition )` asks the R-tree of bounding boxes: a point inside a diagonal line's box counts though it is not on the line, and so does a
+/// point beside a wire by less than half its pen; one further off does not.
+#[test]
+fn a_line_counts_wherever_its_bounding_box_holds_the_point() {
+    let mut s = section();
+    s.lines.push(SchLine { id: "line_d".into(), pts: vec![p(0, 0), p(10_000, 10_000)], width_um: 0 });
+    // 45 degrees: horizontal; not the end: LEFT
+    assert_eq!(spin_at(&s, p(5_000, 2_000), LabelSpin::Right), LabelSpin::Left);
+    let mut w = section();
+    w.wires.push(wire("wire_h", &[p(0, 0), p(10_160, 0)]));
+    assert_eq!(spin_at(&w, p(5_080, 70), LabelSpin::Up), LabelSpin::Left, "within half of the wire's 6 mil");
+    assert_eq!(spin_at(&w, p(5_080, 200), LabelSpin::Up), LabelSpin::Up, "beyond it");
+}
+
 /// The way a pin points away from the other pin of its resistor: the spin `GetPinSpinStyle` asks for, whatever the symbol's orientation.
 #[test]
 fn a_label_on_a_pin_reads_away_from_the_symbol_in_every_orientation() {
