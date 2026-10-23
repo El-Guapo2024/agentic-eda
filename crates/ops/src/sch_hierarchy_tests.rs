@@ -295,10 +295,16 @@ fn the_checks_of_a_sheet_file_are_loadsheetfromfile_s() {
     assert_eq!(bb.apply(&import(Some(cyclic), true, false)).unwrap_err()[0].check, "ops_sheet_file");
     // symbols that name no library (a legacy link), and the reader's own remarks
     let mut legacy = a_file();
-    legacy.root.symbols[0].lib_id = "R".into();
+    legacy.root.symbols.iter_mut().for_each(|s| s.lib_id = s.lib_id.rsplit(':').next().unwrap_or("R").to_string());
+    legacy.root.power_symbols.iter_mut().for_each(|s| s.lib_id = s.lib_id.rsplit(':').next().unwrap_or("GND").to_string());
+    legacy.screens.values_mut().flat_map(|sc| sc.symbols.iter_mut()).for_each(|s| s.lib_id = s.lib_id.rsplit(':').next().unwrap_or("R").to_string());
     legacy.notes.push("2 symbol(s) had no library symbol in the file and were left out".into());
     let found = b.check_sheet_file(&legacy, "amp", false);
-    assert!(found.iter().any(|f| f.severity == "error" && f.text.contains("symbol library links")), "{found:?}");
+    assert!(found.iter().any(|f| f.severity == "error" && f.text == "The schematic 'amp' has not had its symbol library links remapped to the symbol library table.  The project this schematic belongs to must first be remapped before it can be imported into the current project."), "{found:?}");
+    // one symbol with a library link is enough (`HasNoFullyDefinedLibIds` returns false at the first)
+    let mut mixed = a_file();
+    mixed.root.symbols[0].lib_id = "R".into();
+    assert!(b.check_sheet_file(&mixed, "amp", false).iter().all(|f| !f.text.contains("symbol library links")));
     assert!(found.iter().any(|f| f.severity == "warning" && f.text.starts_with("2 symbol(s) had no library")));
     assert!(b.check_sheet_file(&a_file(), "amp", false).iter().all(|f| f.severity != "warning"));
 }

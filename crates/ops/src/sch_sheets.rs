@@ -111,19 +111,15 @@ impl<'a> Board<'a> {
         if let Some(file) = content.root.sheets.iter().find_map(|sh| tree_of(&sh.file, &|f| content.screens.get(f).cloned(), &mut order, &mut Vec::new()).err()) {
             out.push(SheetFileFinding { severity: "error", text: format!("The sheet changes cannot be made because the schematic '{label}' places '{file}', which has itself as a parent somewhere in its hierarchy.") });
         }
-        // `checkForNoFullyDefinedLibIds`
-        let loose: BTreeSet<&str> = content
-            .all_screens()
-            .flat_map(|(_, s)| s.symbols.iter().map(|x| x.lib_id.as_str()).chain(s.power_symbols.iter().map(|p| p.lib_id.as_str())))
-            .filter(|id| !id.is_empty() && !eda_model::is_synthetic_lib_id(id) && !id.split_once(':').is_some_and(|(l, n)| !l.is_empty() && !n.is_empty()))
-            .collect();
-        if !loose.is_empty() {
-            let shown: Vec<&str> = loose.iter().copied().take(4).collect();
+        // `checkForNoFullyDefinedLibIds`: `SCH_SCREENS::HasNoFullyDefinedLibIds` refuses a file whose symbols, every one of them, name no library ("return true
+        // (i.e. has no fully defined symbol) only if at least one symbol is found"); one symbol with a library nickname lets the file in
+        let ids: Vec<&str> = content.all_screens().flat_map(|(_, s)| s.symbols.iter().map(|x| x.lib_id.as_str()).chain(s.power_symbols.iter().map(|p| p.lib_id.as_str()))).collect();
+        let nickname = |id: &str| id.split_once(':').is_some_and(|(l, n)| !l.is_empty() && !n.is_empty());
+        if !ids.is_empty() && !ids.iter().any(|id| nickname(id) || eda_model::is_synthetic_lib_id(id)) {
             out.push(SheetFileFinding {
                 severity: "error",
                 text: format!(
-                    "The schematic '{label}' has not had its symbol library links remapped to the symbol library table ({}). The project this schematic belongs to must first be remapped before it can be imported into the current project.",
-                    shown.join(", ")
+                    "The schematic '{label}' has not had its symbol library links remapped to the symbol library table.  The project this schematic belongs to must first be remapped before it can be imported into the current project."
                 ),
             });
         }
