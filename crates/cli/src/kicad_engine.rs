@@ -127,12 +127,45 @@ pub(crate) fn chrono_like_today() -> String {
 
 /// The board's project name: its intent's file stem, as every file written for
 /// it has always been named.
-fn project_name(dir: &Path) -> String {
+pub(crate) fn project_name(dir: &Path) -> String {
     board::load(dir).ok().and_then(|(meta, _, _)| Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).map(str::to_string)).unwrap_or_else(|| "board".to_string())
 }
 
-/// `kicad-cli pcb export <kind> [args...]`: `{ ok, engine, files }`.
+/// The board's project name (the derived files' stem), for the simulator's default workbook name (`SIMULATOR_CONTROL::getDefaultFilename`).
+pub fn project_name_of(dir: &Path) -> String {
+    project_name(dir)
+}
+
+/// kicad-cli's SPICE and XML netlists of the board's schematic, for the simulator (`crate::sim_api`), with the design they were made from.
+pub fn sim_netlists(dir: &Path) -> Result<(Design, eda_kicad_engine::SimNetlists), Vec<CheckResult>> {
+    let (design, model) = load_with_schematic(dir)?;
+    let n = eda_kicad_engine::sim_netlists(&design, &model, &work(dir), &project_name(dir))?;
+    Ok((design, n))
+}
+
+/// The exporters the studio offers only where the kicad-cli in use has them (File > Export > IDFv3... and GenCAD...), by their
+/// `pcb export` command, with the name a message calls each one by.
+pub const OPTIONAL_PCB_EXPORTS: [(&str, &str); 2] = [("idf", "IDF"), ("gencad", "GenCAD")];
+
+/// Why `kicad-cli pcb export <kind>` cannot run here, or `None` when it can: "This kicad-cli (10.99.0) has no IDF exporter; KiCad 10.99
+/// nightly or later has one." Only the kinds of [`OPTIONAL_PCB_EXPORTS`] are asked about (`eda_kicad_engine::cli_has_export`, one
+/// `kicad-cli pcb export --help` per binary per process); with no kicad-cli at all nothing is refused here, and the export says it is missing.
+pub fn missing_pcb_export(kind: &str) -> Option<String> {
+    let (_, name) = OPTIONAL_PCB_EXPORTS.iter().find(|(k, _)| *k == kind)?;
+    let cli = eda_kicad_engine::find_cli()?;
+    if eda_kicad_engine::cli_has_export(&cli, "pcb", kind) {
+        return None;
+    }
+    let version = eda_kicad_engine::cli_version(&cli);
+    Some(format!("This kicad-cli{} has no {name} exporter; KiCad 10.99 nightly or later has one.", if version.is_empty() { String::new() } else { format!(" ({version})") }))
+}
+
+/// `kicad-cli pcb export <kind> [args...]`: `{ ok, engine, files }`. IDF or GenCAD on a kicad-cli that does not have it is refused with
+/// [`missing_pcb_export`]'s reason before anything is written.
 pub fn export(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
+    if let Some(why) = missing_pcb_export(kind) {
+        return Err(vec![CheckResult::fail("kicad_cli_export", kind, why)]);
+    }
     let (_, design, model) = board::load(dir)?;
     eda_kicad_engine::export_pcb(&design, &model, &work(dir), dir, &project_name(dir), kind, args)
 }

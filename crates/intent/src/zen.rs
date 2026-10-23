@@ -193,6 +193,7 @@ pub fn import_zen(path: &Path) -> Result<ConstraintModel, Vec<CheckResult>> {
         edited_models: Default::default(),
         installed_art: Default::default(),
         symbols: Vec::new(),
+        symbol_sim_fields: Default::default(),
         board: Default::default(),
         allow: Default::default(),
         solver: Default::default(),

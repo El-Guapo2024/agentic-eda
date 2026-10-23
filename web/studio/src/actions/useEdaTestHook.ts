@@ -25,6 +25,7 @@ import { getGridOverrides } from "../state/gridOverrides";
 import { gridEditorOfTab } from "../kicad-port/gridSettings";
 import { highlightedNets } from "../kicad-port/boardControl";
 import { lastSnapReport, type SnapReport } from "../kicad-port/snapReport";
+import { cliExporterUnavailable } from "../state/cliExporters";
 import {
   ErrorLog,
   appearanceSummary,
@@ -200,13 +201,13 @@ function build(latest: { current: Latest }): EdaTestHook {
       const L = latest.current;
       const handled = L.runner.actionNames;
       const have = new Set(handled);
-      return describeActions(handled, L.getStudio().tab, labels, opts?.all ? everyKicadAction.filter((id) => !have.has(id)) : []);
+      return describeActions(handled, L.getStudio().tab, labels, opts?.all ? everyKicadAction.filter((id) => !have.has(id)) : [], cliExporterUnavailable);
     },
 
     async run(id, args) {
       const L = latest.current;
       const tab = L.getStudio().tab;
-      if (!L.runner.isEnabled(id)) return { ok: false, error: disabledReason(id, tab, L.runner.actionNames.includes(id)) ?? "the action is not enabled", revision: await version() };
+      if (!L.runner.isEnabled(id)) return { ok: false, error: disabledReason(id, tab, L.runner.actionNames.includes(id), cliExporterUnavailable) ?? "the action is not enabled", revision: await version() };
       const started = Date.now();
       const dialogsBefore = dialogTitles();
       cmdReplies.length = 0;

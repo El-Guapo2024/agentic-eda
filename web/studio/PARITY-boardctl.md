@@ -81,7 +81,7 @@ internal events that nothing posts here (`layerChanged`, `angleSnapModeChanged`,
 subsystem the studio lacks (design blocks, the Footprint Viewer and Footprint Wizard windows, plugins,
 Specctra DSN/SES, hatch fills, net colours, placement rule areas and the multichannel
 tools, appending another board, importing a netlist, rescue of autosave files, project open/switch);
-exports kicad-cli cannot do (IDF, Hyperlynx, the footprint report); and the ones that would need an edit verb
+exports kicad-cli cannot do (Hyperlynx, the footprint report; IDF is kicad-cli's since 2026-10-23, `PARITY-pcb.md` section 49); and the ones that would need an edit verb
 the intent-derived constraint model did not have (net classes, custom DRC rules and renaming a footprint are verbs now: Board Setup,
 `PARITY-pcb.md` section 30). Find by Properties is recorded the same way: it is built on KiCad's property manager and the full
 expression language; Compare Footprint with Library is done (`PARITY-pcb.md` section 30).
