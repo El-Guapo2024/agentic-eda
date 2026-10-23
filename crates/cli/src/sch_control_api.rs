@@ -160,7 +160,7 @@ mod tests {
     }
 
     fn placement(id: &str, name: &str, file: &str, page: &str) -> SheetInstance {
-        SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![], page: page.into() }
+        SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: Point { x: 0, y: 0 }, size: (1_000_000, 1_000_000), pins: vec![], page: page.into() }
     }
 
     fn design(root: SchematicSection, screens: BTreeMap<String, SchematicSection>) -> Design {

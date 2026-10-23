@@ -145,7 +145,7 @@ fn lone_barcode(b: &Barcode, text: &str) -> Design {
         schematic: None,
         nets: None,
         routing: None,
-        placement: Some(PlacementSection { outline: vec![Point { x: -1_000, y: -1_000 }, Point { x: 1_000, y: -1_000 }, Point { x: 1_000, y: 1_000 }, Point { x: -1_000, y: 1_000 }], footprints: vec![], modules: vec![] }),
+        placement: Some(PlacementSection { outline: vec![Point { x: -1_000_000, y: -1_000_000 }, Point { x: 1_000_000, y: -1_000_000 }, Point { x: 1_000_000, y: 1_000_000 }, Point { x: -1_000_000, y: 1_000_000 }], footprints: vec![], modules: vec![] }),
         drawings: Some(DrawingsSection { barcodes: vec![barcode], ..Default::default() }),
     }
 }
@@ -193,7 +193,7 @@ pub fn filled_paths(svg: &str) -> Vec<Vec<Vec<[i64; 2]>>> {
             .map(|sub| {
                 sub.split(|c: char| c.is_whitespace() || c == 'Z' || c == 'L')
                     .filter(|t| t.contains(','))
-                    .filter_map(|t| t.split_once(',').and_then(|(x, y)| Some([(x.parse::<f64>().ok()? * 1000.0).round() as i64, (y.parse::<f64>().ok()? * 1000.0).round() as i64])))
+                    .filter_map(|t| t.split_once(',').and_then(|(x, y)| Some([eda_model::units::from_mm(x.parse::<f64>().ok()?), eda_model::units::from_mm(y.parse::<f64>().ok()?)])))
                     .collect::<Vec<_>>()
             })
             .filter(|c| c.len() >= 3)
@@ -261,13 +261,13 @@ mod tests {
     fn qr(text: &str) -> Barcode {
         Barcode {
             id: "bar_a".into(),
-            at: Point { x: 5_000, y: 5_000 },
+            at: Point { x: 5_000_000, y: 5_000_000 },
             angle: 0,
             layer: "F.SilkS".into(),
-            width_nm: 10_000,
-            height_nm: 10_000,
+            width_nm: 10_000_000,
+            height_nm: 10_000_000,
             text: text.into(),
-            text_height_nm: 1_500,
+            text_height_nm: 1_500_000,
             kind: BarcodeKind::Qr,
             ecc: eda_model::barcode::EccLevel::L,
             show_text: true,
@@ -281,20 +281,20 @@ mod tests {
     fn the_key_has_what_the_shape_depends_on_and_not_the_place_or_the_id() {
         let a = qr("HELLO");
         let mut moved = a.clone();
-        moved.at = Point { x: 9_000, y: -3_000 };
+        moved.at = Point { x: 9_000_000, y: -3_000_000 };
         moved.id = "bar_b".into();
         assert_eq!(key(&a, "HELLO"), key(&moved, "HELLO"));
         for change in [
-            Box::new(|b: &mut Barcode| b.width_nm = 12_000) as Box<dyn Fn(&mut Barcode)>,
-            Box::new(|b| b.height_nm = 12_000),
+            Box::new(|b: &mut Barcode| b.width_nm = 12_000_000) as Box<dyn Fn(&mut Barcode)>,
+            Box::new(|b| b.height_nm = 12_000_000),
             Box::new(|b| b.angle = 90_000),
             Box::new(|b| b.layer = "B.SilkS".into()),
             Box::new(|b| b.show_text = false),
             Box::new(|b| b.knockout = true),
-            Box::new(|b| b.margin_x_nm = 500),
+            Box::new(|b| b.margin_x_nm = 500_000),
             Box::new(|b| b.kind = BarcodeKind::DataMatrix),
             Box::new(|b| b.ecc = eda_model::barcode::EccLevel::H),
-            Box::new(|b| b.text_height_nm = 2_000),
+            Box::new(|b| b.text_height_nm = 2_000_000),
         ] {
             let mut c = a.clone();
             change(&mut c);
@@ -310,15 +310,15 @@ mod tests {
     }
 
     #[test]
-    fn the_filled_paths_of_a_plot_are_read_in_micrometres() {
+    fn the_filled_paths_of_a_plot_are_read_in_nanometres() {
         let svg = "<g>\n<path style=\"fill:none; stroke:#AFAFAF; stroke-width:0.2000;\" d=\"M 1.0000,1.0000\n2.0000,1.0000\n2.0000,2.0000\nZ\" /> \n\
                    <path style=\"fill:#F2EDA1; fill-opacity:1.0000; stroke:none;fill-rule:evenodd;\"\nd=\"M -0.8389,6.0018\n-0.8051,6.0158\n-0.7792,6.0417\nZ\" /> \n\
                    <path style=\"fill:#F2EDA1; fill-opacity:1.0000; stroke:none;fill-rule:evenodd;\"\nd=\"M 0.0000,0.0000\n1.0000,0.0000\n1.0000,1.0000\nZ M 0.2500,0.2500\n0.5000,0.2500\n0.5000,0.5000\nZ\" /> \n</g>";
         let paths = filled_paths(svg);
         assert_eq!(paths.len(), 2, "the stroked outline is not a shape: {paths:?}");
-        assert_eq!(paths[0], vec![vec![[-839, 6002], [-805, 6016], [-779, 6042]]]);
+        assert_eq!(paths[0], vec![vec![[-838_900, 6_001_800], [-805_100, 6_015_800], [-779_200, 6_041_700]]]);
         assert_eq!(paths[1].len(), 2, "a path may have a hole");
-        assert_eq!(paths[1][1], vec![[250, 250], [500, 250], [500, 500]]);
+        assert_eq!(paths[1][1], vec![[250_000, 250_000], [500_000, 250_000], [500_000, 500_000]]);
     }
 
     #[test]

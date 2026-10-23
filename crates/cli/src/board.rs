@@ -92,7 +92,7 @@ mod multichannel_board_tests;
 mod table_tests;
 
 /// What a board directory remembers between commands.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize)]
 pub(crate) struct Meta {
     /// The intent this board was started from.
     pub(crate) intent: String,
@@ -100,6 +100,26 @@ pub(crate) struct Meta {
     /// board was created on.
     pub(crate) snap_nm: i64,
     pub(crate) spacing_nm: i64,
+}
+
+/// A `board.json` as it is on disk: `snap_nm`/`spacing_nm`, or the `snap_um`/`spacing_um` a board written before the IR was in
+/// nanometres has (read x1000; the next save writes the nanometres).
+impl<'de> serde::Deserialize<'de> for Meta {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct OnDisk {
+            intent: String,
+            snap_nm: Option<i64>,
+            spacing_nm: Option<i64>,
+            snap_um: Option<i64>,
+            spacing_um: Option<i64>,
+        }
+        let m = OnDisk::deserialize(d)?;
+        let pick = |nm: Option<i64>, um: Option<i64>, name: &'static str| {
+            nm.or(um.map(|v| v * eda_model::units::NM_PER_UM)).ok_or_else(|| serde::de::Error::missing_field(name))
+        };
+        Ok(Meta { snap_nm: pick(m.snap_nm, m.snap_um, "snap_nm")?, spacing_nm: pick(m.spacing_nm, m.spacing_um, "spacing_nm")?, intent: m.intent })
+    }
 }
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
@@ -776,7 +796,7 @@ fn print_fill(dir: &Path, want_zone: Option<&str>, want_layer: Option<&str>, as_
     let cache = crate::fill_api::cached(dir);
     let copper = cache.as_ref().map(|k| k.copper(&design)).unwrap_or_default();
     let zones: &[eda_model::ir::Zone] = design.routing.as_ref().map(|r| r.zones.as_slice()).unwrap_or(&[]);
-    let mm = |v: i64| v as f64 / 1000.0;
+    let mm = eda_model::units::to_mm;
 
     let mut matched = 0usize;
     let mut json_zones = Vec::new();
@@ -790,7 +810,7 @@ fn print_fill(dir: &Path, want_zone: Option<&str>, want_layer: Option<&str>, as_
             let filled = cache.as_ref().is_some_and(|k| k.current(z).is_some());
             let fill = copper.get(&z.id, layer);
             let fragments: Vec<&eda_shape_poly_set::Polygon> = fill.map(|f| f.polys.iter().collect()).unwrap_or_default();
-            let area_mm2 = fill.map(|f| f.area() / 1_000_000.0).unwrap_or(0.0);
+            let area_mm2 = fill.map(|f| f.area() / 1e12).unwrap_or(0.0);
 
             if as_json {
                 let frags_json: Vec<Vec<[f64; 2]>> = fragments.iter().map(|poly| poly[0].iter().map(|p| [mm(p.x), mm(p.y)]).collect()).collect();
@@ -1359,7 +1379,7 @@ pub(crate) fn log_activity(dir: &Path, by: &str, line: &str, ok: bool, message: 
 
 /// The command as it would be typed after `eda board`.
 fn cmd_line(c: &Cmd) -> String {
-    let mm = |v: i64| format!("{:.2}", v as f64 / 1000.0);
+    let mm = |v: i64| format!("{:.2}", eda_model::units::to_mm(v));
     let pts = |pts: &[Point]| pts.iter().map(|p| format!("{},{}", mm(p.x), mm(p.y))).collect::<Vec<_>>().join(" ");
     match c {
         Cmd::Place { part, anchor, side } => format!("place {part} --near {anchor} --side {}", side.as_str()),
@@ -1917,7 +1937,7 @@ fn parse_region(s: &str) -> Result<Region, Vec<CheckResult>> {
 
 /// A millimetre value, as every position/size flag below takes it.
 fn mm_arg(s: &str) -> Result<i64, Vec<CheckResult>> {
-    s.trim().parse::<f64>().map(|v| (v * 1000.0).round() as i64).map_err(|_| fail("board_usage", s, "expected a number, in millimetres"))
+    s.trim().parse::<f64>().map(eda_model::units::from_mm).map_err(|_| fail("board_usage", s, "expected a number, in millimetres"))
 }
 
 /// "x,y" in millimetres.
@@ -2050,7 +2070,7 @@ pub fn run(
             } else if let Some(at) = flag(rest, "--at") {
                 let (x, y) = at.split_once(',').ok_or_else(|| fail("board_usage", "--at", "--at takes x,y in millimetres"))?;
                 let mm = |s: &str| -> Result<i64, Vec<CheckResult>> {
-                    s.trim().parse::<f64>().map(|v| (v * 1000.0) as i64).map_err(|_| fail("board_usage", "--at", "x and y must be numbers, in millimetres"))
+                    s.trim().parse::<f64>().map(eda_model::units::from_mm).map_err(|_| fail("board_usage", "--at", "x and y must be numbers, in millimetres"))
                 };
                 Cmd::PlaceAt { part, x: mm(x)?, y: mm(y)? }
             } else {
@@ -2063,7 +2083,7 @@ pub fn run(
             if let Some(to) = flag(rest, "--to") {
                 let (x, y) = to.split_once(',').ok_or_else(|| fail("board_usage", "--to", "--to takes x,y in millimetres"))?;
                 let mm = |s: &str| -> Result<i64, Vec<CheckResult>> {
-                    s.trim().parse::<f64>().map(|v| (v * 1000.0).round() as i64).map_err(|_| fail("board_usage", "--to", "x and y must be numbers, in millimetres"))
+                    s.trim().parse::<f64>().map(eda_model::units::from_mm).map_err(|_| fail("board_usage", "--to", "x and y must be numbers, in millimetres"))
                 };
                 return step_with(&dir, Cmd::MoveTo { part, x: mm(x)?, y: mm(y)? }, strict, &actor()).map(|s| eprintln!("{s}"));
             }
@@ -2327,10 +2347,10 @@ mod tests {
         let fp = Footprint {
             name: "2PAD".into(),
             pads: vec![
-                Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (-1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
-                Pad { opposite_side: false, ext: Default::default(), number: "2".into(), at: (1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
+                Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (-1_000_000, 0), size: (800_000, 800_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
+                Pad { opposite_side: false, ext: Default::default(), number: "2".into(), at: (1_000_000, 0), size: (800_000, 800_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
             ],
-            courtyard: Some((2000, 1000)),
+            courtyard: Some((2_000_000, 1_000_000)),
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
@@ -2363,10 +2383,10 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection {
-                outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
+                outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }],
                 footprints: vec![
-                    FootprintInstance { id: "U1".into(), at: Point { x: 5_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "U2".into(), at: Point { x: 15_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "U1".into(), at: Point { x: 5_000_000, y: 5_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "U2".into(), at: Point { x: 15_000_000, y: 5_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: vec![],
             }),
@@ -2374,7 +2394,7 @@ mod tests {
             drawings: None,
         };
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -2385,7 +2405,7 @@ mod tests {
         // U1's pad 2 (VCC) sits at board (6000, 5000); a GND track landed
         // on it is copper of two different nets touching -- exactly what
         // `routing_clearance` exists to catch, whoever drew the track.
-        let cmd = Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 5_000 }, Point { x: 6_000, y: 5_000 }] };
+        let cmd = Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 5_000_000 }, Point { x: 6_000_000, y: 5_000_000 }] };
         step(&dir, cmd, false, "test").expect("adding the track itself is legal; only the copper it creates is bad");
 
         let (meta, design, model) = load(&dir).unwrap();
@@ -2400,7 +2420,7 @@ mod tests {
         // reported, exactly like a placement move that makes things worse.
         let dir2 = scratch("wrong_net_strict");
         setup(&dir2);
-        let cmd = Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 5_000 }, Point { x: 6_000, y: 5_000 }] };
+        let cmd = Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 5_000_000 }, Point { x: 6_000_000, y: 5_000_000 }] };
         let err = step(&dir2, cmd, true, "test").unwrap_err();
         assert_eq!(err[0].check, "board_worse");
     }
@@ -2416,7 +2436,7 @@ mod tests {
         }
         // U2 onto U1's spot. The in-process gates have nothing to say about
         // stacked courtyards (KiCad's `courtyards_overlap`); kicad-cli does.
-        let cmd = Cmd::MoveTo { part: "U2".into(), x: 5_000, y: 5_000 };
+        let cmd = Cmd::MoveTo { part: "U2".into(), x: 5_000_000, y: 5_000_000 };
         let studio = scratch("strict_studio");
         setup(&studio);
         step(&studio, cmd.clone(), true, "test").expect("the studio's strict counts in-process gates only");
@@ -2435,8 +2455,8 @@ mod tests {
 
     /// Two tracks on different nets, 450 um centre to centre and 200 um wide: 250 um of air between them.
     fn two_close_tracks(dir: &Path) {
-        step(dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
-        step(dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_450 }, Point { x: 12_000, y: 12_450 }] }, false, "test").unwrap();
+        step(dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 12_000_000 }, Point { x: 12_000_000, y: 12_000_000 }] }, false, "test").unwrap();
+        step(dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 12_450_000 }, Point { x: 12_000_000, y: 12_450_000 }] }, false, "test").unwrap();
     }
 
     /// Board Setup's edits reach kicad-cli: the two tracks of [`two_close_tracks`] are clean under the board's 200 um
@@ -2456,9 +2476,9 @@ mod tests {
 
         let (_, _, model) = load(&dir).unwrap();
         let mut settings = eda_model::rules::net_class_settings_of(&model.board);
-        settings.default.clearance = Some(300);
+        settings.default.clearance = Some(300_000);
         step(&dir, Cmd::SetNetClasses { settings }, false, "ui").unwrap();
-        assert_eq!(load(&dir).unwrap().2.board.clearance, 300, "board::load lays the overlay over the intent's rules");
+        assert_eq!(load(&dir).unwrap().2.board.clearance, 300_000, "board::load lays the overlay over the intent's rules");
         assert!(clearance(&dir) >= 1, "250 um apart is too close for a 300 um clearance");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(clearance(&dir), 0, "Undo takes the edit back, overlay and all");
@@ -2605,7 +2625,7 @@ mod tests {
             return;
         };
         let (with, plain) = (scratch("board_layers_cli_a"), scratch("board_layers_cli_b"));
-        let text = |content: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 3_000, y: 12_000 }, angle: 0, layer: "User.1".into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        let text = |content: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 3_000_000, y: 12_000_000 }, angle: 0, layer: "User.1".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: Default::default(), mirror: false } };
         for dir in [&with, &plain] {
             setup(dir);
             four_copper_layers(dir);
@@ -2629,7 +2649,7 @@ mod tests {
         assert_ne!(body(&a), body(&b), "the plots differ: 'Notes' is not 'User.1'");
         step(&plain, Cmd::SetBoardLayers { settings: { let mut p = a_layers_page(); p.names.clear(); p.names.insert("User.1".into(), "Notes".into()); p } }, false, "ui").unwrap();
         let text_id = load(&plain).unwrap().1.drawings.unwrap().texts[0].id.clone();
-        step(&plain, Cmd::EditText { id: text_id, content: "on Notes / Notes".into(), angle: 0, layer: "User.1".into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false }, false, "ui").unwrap();
+        step(&plain, Cmd::EditText { id: text_id, content: "on Notes / Notes".into(), angle: 0, layer: "User.1".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: Default::default(), mirror: false }, false, "ui").unwrap();
         assert_eq!(body(&plot(&with)), body(&plot(&plain)), "the LAYER variable on a renamed layer is the user's name, as the studio shows it");
 
         // kicad-cli's own rewrite of the derived board file keeps what the page set: the names, the types and the layers.
@@ -2651,7 +2671,7 @@ mod tests {
 
     fn a_tuning_profile(name: &str) -> eda_model::setup_pages::TuningProfile {
         use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile};
-        TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("B.Cu".into()), width_nm: 130, diff_pair_gap_nm: 150, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
+        TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("B.Cu".into()), width_nm: 130_000, diff_pair_gap_nm: 150_000, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
     }
 
     /// Formatting, Zone Hatch Offsets, Length-tuning Patterns and Tuning Profiles: each a page of one undo step, in the state the studio reads, and in the derived board file and project
@@ -2669,16 +2689,16 @@ mod tests {
             (eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap(), serde_json::from_str::<serde_json::Value>(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap())
         };
         let before = rules(&dir);
-        assert_eq!((before["formatting"]["dash_length_ratio"].as_f64(), before["tuning_patterns"]["diff_pair"]["spacing_nm"].as_i64(), before["zone_hatch_offsets"].as_object().map(|o| o.len()), before["tuning_profiles"]["profiles"].as_array().map(|a| a.len())), (Some(12.0), Some(1_000), Some(0), Some(0)));
+        assert_eq!((before["formatting"]["dash_length_ratio"].as_f64(), before["tuning_patterns"]["diff_pair"]["spacing_nm"].as_i64(), before["zone_hatch_offsets"].as_object().map(|o| o.len()), before["tuning_profiles"]["profiles"].as_array().map(|a| a.len())), (Some(12.0), Some(1_000_000), Some(0), Some(0)));
 
         let formatting = FormattingSettings { dash_length_ratio: 8.0, gap_length_ratio: 2.0, apply_to_fp_fields: true, ..Default::default() };
         step(&dir, Cmd::SetFormatting { settings: formatting.clone() }, false, "ui").unwrap();
-        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), HatchOffset { x_nm: 1_500, y_nm: -2_000 })].into() }, false, "ui").unwrap();
+        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), HatchOffset { x_nm: 1_500_000, y_nm: -2_000_000 })].into() }, false, "ui").unwrap();
         let mut patterns = TuningPatterns::default();
         patterns.diff_pair.corner_style = CornerStyle::Chamfer;
-        patterns.single_track.max_amplitude_nm = 1_500;
+        patterns.single_track.max_amplitude_nm = 1_500_000;
         step(&dir, Cmd::SetTuningPatterns { settings: patterns.clone() }, false, "ui").unwrap();
-        let power = eda_model::NetClass { name: "power".into(), nets: vec!["VCC".into()], track_width: Some(250), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["VCC".into()], track_width: Some(250_000), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
         let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
         step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults } }, false, "ui").unwrap();
         let profiles = TuningProfiles { profiles: vec![a_tuning_profile("USB 90")], class_profiles: [("power".to_string(), "USB 90".to_string())].into() };
@@ -2686,7 +2706,7 @@ mod tests {
 
         let after = rules(&dir);
         assert_eq!(after["formatting"], serde_json::to_value(&formatting).unwrap());
-        assert_eq!(after["zone_hatch_offsets"], serde_json::json!({ "F.Cu": { "x_nm": 1_500, "y_nm": -2_000 } }));
+        assert_eq!(after["zone_hatch_offsets"], serde_json::json!({ "F.Cu": { "x_nm": 1_500_000, "y_nm": -2_000_000 } }));
         assert_eq!(after["tuning_patterns"], serde_json::to_value(&patterns).unwrap());
         assert_eq!(after["tuning_profiles"]["class_profiles"], serde_json::json!({ "power": "USB 90" }));
         for page in ["formatting", "zone_hatch_offsets", "tuning_patterns", "tuning_profiles"] {
@@ -2707,7 +2727,7 @@ mod tests {
 
         // A bad page is refused with the setting's name and stores nothing.
         let mut bad = patterns.clone();
-        bad.diff_pair_skew.corner_radius_percentage = 120;
+        bad.diff_pair_skew.corner_radius_percentage = 120_000;
         assert!(format!("{:?}", step(&dir, Cmd::SetTuningPatterns { settings: bad }, false, "ui").unwrap_err()).contains("diff_pair_skew.corner_radius_percentage"));
         assert!(format!("{:?}", step(&dir, Cmd::SetTuningProfiles { settings: TuningProfiles { profiles: vec![a_tuning_profile("")], ..Default::default() } }, false, "ui").unwrap_err()).contains("profile 1"));
         assert_eq!(rules(&dir)["tuning_patterns"], serde_json::to_value(&patterns).unwrap());
@@ -2741,7 +2761,7 @@ mod tests {
         let dir = scratch("setup_pages_cli_board");
         setup(&dir);
         step(&dir, Cmd::SetFormatting { settings: eda_model::setup_pages::FormattingSettings { dash_length_ratio: 8.0, gap_length_ratio: 2.5, ..Default::default() } }, false, "ui").unwrap();
-        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_nm: 1_500, y_nm: -2_000 }), ("B.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_nm: 0, y_nm: 700 })].into() }, false, "ui").unwrap();
+        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_nm: 1_500_000, y_nm: -2_000_000 }), ("B.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_nm: 0, y_nm: 700_000 })].into() }, false, "ui").unwrap();
         let (_, design, model) = load(&dir).unwrap();
         let copy = dir.join("upgraded.kicad_pcb");
         std::fs::write(&copy, eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap()).unwrap();
@@ -2774,7 +2794,7 @@ mod tests {
         setup(&dir);
         let count = |dir: &Path| drc_counts(dir).get("missing_tuning_profile").copied().unwrap_or(0);
         assert_eq!(count(&dir), 0);
-        let power = eda_model::NetClass { name: "power".into(), nets: vec!["VCC".into()], track_width: Some(250), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["VCC".into()], track_width: Some(250_000), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
         let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
         step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults } }, false, "ui").unwrap();
         assert_eq!(count(&dir), 0, "a class that names no profile is fine");
@@ -2807,18 +2827,18 @@ mod tests {
         two_close_tracks(&dir);
         let count = |dir: &Path| drc_counts(dir).get("clearance").copied().unwrap_or(0);
         assert_eq!(count(&dir), 0, "250 um of air between GND and VCC is fine for the board's 200 um");
-        let class = |name: &str, nets: &[&str], clearance: Nm| eda_model::NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(200), clearance: Some(clearance), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let class = |name: &str, nets: &[&str], clearance: Nm| eda_model::NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(200_000), clearance: Some(clearance), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
         let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
         // VCC is in both: `wide` names it, `power` has a pattern (`V??`, or the regular expression `V[A-Z]+`) that matches it. `wide` is first, so its 100 um is VCC's clearance.
-        let (wide, power) = (class("wide", &["VCC"], 100), class("power", &["V[A-Z]{2}"], 400));
+        let (wide, power) = (class("wide", &["VCC"], 100_000), class("power", &["V[A-Z]{2}"], 400_000));
         step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![wide.clone(), power.clone()], ..defaults.clone() } }, false, "ui").unwrap();
         let (_, _, model) = load(&dir).unwrap();
         assert_eq!(model.board.matching_classes("VCC").len(), 2, "the regular expression matches VCC");
-        assert_eq!(model.board.clearance_of("VCC"), 100);
+        assert_eq!(model.board.clearance_of("VCC"), 100_000);
         assert_eq!(count(&dir), 0, "kicad-cli holds VCC to wide's 100 um first: the 200 um of GND is the larger of the two");
         // power first: its 400 um wins.
         step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power, wide], ..defaults } }, false, "ui").unwrap();
-        assert_eq!(load(&dir).unwrap().2.board.clearance_of("VCC"), 400);
+        assert_eq!(load(&dir).unwrap().2.board.clearance_of("VCC"), 400_000);
         assert!(count(&dir) >= 1, "now kicad-cli holds VCC to power's 400 um and the two tracks are too close");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(count(&dir), 0, "Undo puts the order back");
@@ -2843,22 +2863,22 @@ mod tests {
         let (_, design, _) = load(&dir).unwrap();
         let d = design.drawings.as_ref().unwrap();
         let widths: Vec<(String, Nm)> = d.shapes.iter().map(|s| match s { Shape::Segment { layer, stroke_width, .. } => (layer.clone(), *stroke_width), _ => unreachable!() }).collect();
-        assert_eq!(widths, vec![("F.SilkS".into(), 100), ("F.Cu".into(), 200), ("Edge.Cuts".into(), 50), ("F.Fab".into(), 400)], "KiCad's line thickness of each class; an explicit --width wins");
-        assert_eq!(d.texts.iter().map(|t| (t.size_nm, t.stroke_width)).collect::<Vec<_>>(), vec![(1_000, 100), (1_500, 300)]);
+        assert_eq!(widths, vec![("F.SilkS".into(), 100_000), ("F.Cu".into(), 200_000), ("Edge.Cuts".into(), 50_000), ("F.Fab".into(), 400_000)], "KiCad's line thickness of each class; an explicit --width wins");
+        assert_eq!(d.texts.iter().map(|t| (t.size_nm, t.stroke_width)).collect::<Vec<_>>(), vec![(1_000_000, 100_000), (1_500_000, 300_000)]);
 
         // The page changes what the next item starts with.
         let mut defaults = eda_model::rules::TextGraphicsDefaults::default();
-        defaults.silk.line_width_nm = 180;
-        defaults.silk.text_width_nm = 1_200;
-        defaults.silk.text_height_nm = 1_200;
-        defaults.silk.text_thickness_nm = 200;
+        defaults.silk.line_width_nm = 180_000;
+        defaults.silk.text_width_nm = 1_200_000;
+        defaults.silk.text_height_nm = 1_200_000;
+        defaults.silk.text_thickness_nm = 200_000;
         step(&dir, Cmd::SetTextGraphicsDefaults { settings: defaults }, false, "ui").unwrap();
         cli(&["shape", "add", "--kind", "segment", "--layer", "B.SilkS", "--pts", "1,5 5,5"]);
         cli(&["text", "add", "--content", "again", "--at", "3,10", "--layer", "B.SilkS"]);
         let (_, design, _) = load(&dir).unwrap();
         let d = design.drawings.as_ref().unwrap();
-        assert!(matches!(d.shapes.last(), Some(Shape::Segment { stroke_width: 180, .. })));
-        assert_eq!((d.texts.last().unwrap().size_nm, d.texts.last().unwrap().stroke_width), (1_200, 200));
+        assert!(matches!(d.shapes.last(), Some(Shape::Segment { stroke_width: 180_000, .. })));
+        assert_eq!((d.texts.last().unwrap().size_nm, d.texts.last().unwrap().stroke_width), (1_200_000, 200_000));
     }
 
     fn variables_of(rows: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
@@ -2873,11 +2893,11 @@ mod tests {
         let dir = scratch("text_variables_shown");
         setup(&dir);
         step(&dir, Cmd::SetTextVariables { variables: variables_of(&[("REV", "B"), ("Designer name", "Ada")]) }, false, "ui").unwrap();
-        let text = |content: &str, layer: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 1_000, y: 1_000 }, angle: 0, layer: layer.into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        let text = |content: &str, layer: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 1_000_000, y: 1_000_000 }, angle: 0, layer: layer.into(), size_nm: 1_000_000, stroke_width: 150_000, justify: Default::default(), mirror: false } };
         for (content, layer) in [("Rev ${REV} by ${Designer name} on ${LAYER}, \\${REV}", "F.SilkS"), ("plain", "F.SilkS"), ("A{slash}B", "F.Fab"), ("${PROJECTNAME}/${FILENAME} ${CURRENT_DATE} ${U1:Value}", "F.SilkS")] {
             step(&dir, text(content, layer), false, "ui").unwrap();
         }
-        let mut value = FieldLayout::new(Point { x: 0, y: 1_000 }, "F.Fab");
+        let mut value = FieldLayout::new(Point { x: 0, y: 1_000_000 }, "F.Fab");
         value.text = Some("${REV}-10k".into());
         let user = |name: &str, text: &str| UserField { name: name.into(), text: text.into(), layout: FieldLayout::new(Point { x: 0, y: 0 }, "F.Fab") };
         step(&dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: None, value: Some(value), fields: Some(vec![user("MPN", "ERJ ${REV} ${LAYER}")]), attrs: None }, false, "ui").unwrap();
@@ -2926,7 +2946,7 @@ mod tests {
         step(&dir, Cmd::SetTextVariables { variables: variables_of(&[("REV", "B")]) }, false, "ui").unwrap();
         step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k ${REV}".into()), footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "ui").unwrap();
         step(&dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some("${R1:Value} twin, ${Footprint} ${FOOTPRINT_NAME}".into()), footprint: None, datasheet: None }, false, "ui").unwrap();
-        step(&dir, Cmd::AddSchText { content: "Sheet ${#}/${##} ${SHEETPATH} ${TITLE} ${REV}".into(), at: Point { x: 15_000, y: 5_000 }, angle_millideg: 0, size_nm: 1_270 }, false, "ui").unwrap();
+        step(&dir, Cmd::AddSchText { content: "Sheet ${#}/${##} ${SHEETPATH} ${TITLE} ${REV}".into(), at: Point { x: 15_000_000, y: 5_000_000 }, angle_millideg: 0, size_nm: 1_270_000 }, false, "ui").unwrap();
         step(&dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block: eda_model::ir::TitleBlock { title: "Main ${REV}".into(), ..Default::default() } }, false, "ui").unwrap();
 
         let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
@@ -2982,13 +3002,13 @@ mod tests {
         if !variables.is_empty() {
             step(dir, Cmd::SetTextVariables { variables: variables_of(variables) }, false, "ui").unwrap();
         }
-        let add = Cmd::AddText { text: Text { id: String::new(), content: texts.board_text.clone(), at: Point { x: 3_000, y: 12_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        let add = Cmd::AddText { text: Text { id: String::new(), content: texts.board_text.clone(), at: Point { x: 3_000_000, y: 12_000_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: Default::default(), mirror: false } };
         step(dir, add, false, "ui").unwrap();
-        let mut value = FieldLayout::new(Point { x: 0, y: 2_500 }, "F.SilkS");
+        let mut value = FieldLayout::new(Point { x: 0, y: 2_500_000 }, "F.SilkS");
         value.text = Some(texts.value.clone());
         let user = |name: &str, text: &str, y: Nm| UserField { name: name.into(), text: text.into(), layout: FieldLayout::new(Point { x: 0, y }, "F.SilkS") };
-        step(dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: None, value: Some(value), fields: Some(vec![user("MPN", &texts.mpn, -2_500)]), attrs: None }, false, "ui").unwrap();
-        step(dir, Cmd::EditBoardFootprint { part: "U2".into(), reference: None, value: None, fields: Some(vec![user("Twin", &texts.twin, -2_500)]), attrs: None }, false, "ui").unwrap();
+        step(dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: None, value: Some(value), fields: Some(vec![user("MPN", &texts.mpn, -2_500_000)]), attrs: None }, false, "ui").unwrap();
+        step(dir, Cmd::EditBoardFootprint { part: "U2".into(), reference: None, value: None, fields: Some(vec![user("Twin", &texts.twin, -2_500_000)]), attrs: None }, false, "ui").unwrap();
         let title_block = eda_model::ir::TitleBlock { title: texts.title.clone(), rev: "C".into(), company: texts.company.clone(), ..Default::default() };
         step(dir, Cmd::SetBoardPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block }, false, "ui").unwrap();
     }
@@ -3060,7 +3080,7 @@ mod tests {
         }
         step(dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some(texts[0].into()), footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "ui").unwrap();
         step(dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some(texts[1].into()), footprint: None, datasheet: None }, false, "ui").unwrap();
-        step(dir, Cmd::AddSchText { content: texts[2].into(), at: Point { x: 15_000, y: 30_000 }, angle_millideg: 0, size_nm: 1_270 }, false, "ui").unwrap();
+        step(dir, Cmd::AddSchText { content: texts[2].into(), at: Point { x: 15_000_000, y: 30_000_000 }, angle_millideg: 0, size_nm: 1_270_000 }, false, "ui").unwrap();
         let title_block = eda_model::ir::TitleBlock { title: texts[3].into(), ..Default::default() };
         step(dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block }, false, "ui").unwrap();
     }
@@ -3117,16 +3137,16 @@ mod tests {
     fn moving_copper_is_one_undo_step_and_leaves_the_routing_alone() {
         let dir = scratch("move_items_undo");
         setup(&dir);
-        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
-        step(&dir, Cmd::AddVia { net: "GND".into(), x: 12_000, y: 12_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 12_000_000 }, Point { x: 12_000_000, y: 12_000_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 12_000_000, y: 12_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
         let (_, before, _) = load(&dir).unwrap();
         let (track, via) = (before.routing.as_ref().unwrap().tracks[0].id.clone(), before.routing.as_ref().unwrap().vias[0].id.clone());
 
-        let msg = step(&dir, Cmd::MoveItems { ids: vec![track.clone(), via.clone()], dx: 1_500, dy: -500 }, false, "test").unwrap();
+        let msg = step(&dir, Cmd::MoveItems { ids: vec![track.clone(), via.clone()], dx: 1_500_000, dy: -500_000 }, false, "test").unwrap();
         assert!(!msg.contains("routing cleared"), "copper alone leaves the routing be: {msg}");
         let (_, moved, _) = load(&dir).unwrap();
         let rt = moved.routing.as_ref().unwrap();
-        assert_eq!((rt.tracks[0].id.as_str(), rt.tracks[0].pts[0], rt.vias[0].at), (track.as_str(), Point { x: 3_500, y: 11_500 }, Point { x: 13_500, y: 11_500 }));
+        assert_eq!((rt.tracks[0].id.as_str(), rt.tracks[0].pts[0], rt.vias[0].at), (track.as_str(), Point { x: 3_500_000, y: 11_500_000 }, Point { x: 13_500_000, y: 11_500_000 }));
 
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         let (_, back, _) = load(&dir).unwrap();
@@ -3135,12 +3155,12 @@ mod tests {
         assert_eq!(back.routing.as_ref().unwrap().vias[0].at, before.routing.as_ref().unwrap().vias[0].at);
 
         // A footprint nothing is routed to (U1 sits at (5000, 5000), the track is at y = 12000) takes no routing with it...
-        let msg = step(&dir, Cmd::MoveItems { ids: vec![track.clone(), "U1".into()], dx: 100, dy: 0 }, false, "test").unwrap();
+        let msg = step(&dir, Cmd::MoveItems { ids: vec![track.clone(), "U1".into()], dx: 100_000, dy: 0 }, false, "test").unwrap();
         assert!(!msg.contains("routing cleared"), "{msg}");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         // ...and neither does one with a track on its pad: KiCad's Move leaves the copper where it was (it is no longer connected to the pad).
-        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 4_000, y: 5_000 }, Point { x: 4_000, y: 9_000 }] }, false, "test").unwrap();
-        let msg = step(&dir, Cmd::MoveItems { ids: vec![track, "U1".into()], dx: 100, dy: 0 }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 4_000_000, y: 5_000_000 }, Point { x: 4_000_000, y: 9_000_000 }] }, false, "test").unwrap();
+        let msg = step(&dir, Cmd::MoveItems { ids: vec![track, "U1".into()], dx: 100_000, dy: 0 }, false, "test").unwrap();
         assert!(!msg.contains("routing cleared"), "{msg}");
         assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 2, "both tracks are still there");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
@@ -3154,10 +3174,10 @@ mod tests {
     fn a_properties_panel_edit_of_several_items_is_one_undo_step() {
         let dir = scratch("panel_edit_undo");
         setup(&dir);
-        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
-        step(&dir, Cmd::AddVia { net: "GND".into(), x: 12_000, y: 12_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
-        step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 20_000 }, Point { x: 5_000, y: 20_000 }, Point { x: 5_000, y: 25_000 }] }, false, "test").unwrap();
-        step(&dir, Cmd::AddShape { shape: eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 30_000 }, end: Point { x: 4_000, y: 30_000 } } }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 12_000_000 }, Point { x: 12_000_000, y: 12_000_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 12_000_000, y: 12_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 20_000_000 }, Point { x: 5_000_000, y: 20_000_000 }, Point { x: 5_000_000, y: 25_000_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddShape { shape: eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: 0, y: 30_000_000 }, end: Point { x: 4_000_000, y: 30_000_000 } } }, false, "test").unwrap();
         let (_, before, _) = load(&dir).unwrap();
         let rt = before.routing.as_ref().unwrap();
         let (track, via, zone) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.zones[0].id.clone());
@@ -3175,16 +3195,16 @@ mod tests {
 
         let edits = Cmd::Batch {
             cmds: vec![
-                Cmd::EditTrack { id: track.clone(), start: None, end: Some(Point { x: 14_000, y: 12_000 }) },
+                Cmd::EditTrack { id: track.clone(), start: None, end: Some(Point { x: 14_000_000, y: 12_000_000 }) },
                 Cmd::SetZoneName { id: zone.clone(), name: "pour".into() },
-                Cmd::ReplaceShape { id: shape.clone(), shape: eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 30_000 }, end: Point { x: 9_000, y: 30_000 } } },
+                Cmd::ReplaceShape { id: shape.clone(), shape: eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: 0, y: 30_000_000 }, end: Point { x: 9_000_000, y: 30_000_000 } } },
             ],
         };
         step(&dir, edits, false, "test").unwrap();
         let (_, after, _) = load(&dir).unwrap();
-        assert_eq!(after.routing.as_ref().unwrap().tracks[0].pts.last(), Some(&Point { x: 14_000, y: 12_000 }));
+        assert_eq!(after.routing.as_ref().unwrap().tracks[0].pts.last(), Some(&Point { x: 14_000_000, y: 12_000_000 }));
         assert_eq!(after.routing.as_ref().unwrap().zones[0].name, "pour");
-        assert_eq!(after.drawings.as_ref().unwrap().shapes[0].points()[1], Point { x: 9_000, y: 30_000 });
+        assert_eq!(after.drawings.as_ref().unwrap().shapes[0].points()[1], Point { x: 9_000_000, y: 30_000_000 });
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         let (_, back, _) = load(&dir).unwrap();
         assert_eq!(back.routing.as_ref().unwrap().tracks[0].pts, before.routing.as_ref().unwrap().tracks[0].pts);
@@ -3199,12 +3219,12 @@ mod tests {
     fn placing_and_deleting_a_copied_footprint_leaves_the_routing_alone() {
         let dir = scratch("copy_keeps_routing");
         setup(&dir);
-        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 4_000, y: 5_000 }, Point { x: 4_000, y: 9_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 4_000_000, y: 5_000_000 }, Point { x: 4_000_000, y: 9_000_000 }] }, false, "test").unwrap();
         step(&dir, Cmd::Duplicate { ids: vec!["U1".into()] }, false, "test").unwrap();
 
-        let msg = step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 8_000 }, true, "test").expect("the copy moves under --strict");
+        let msg = step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 8_000_000 }, true, "test").expect("the copy moves under --strict");
         assert!(!msg.contains("routing cleared"), "{msg}");
-        let msg = step(&dir, Cmd::RotateItems { ids: vec!["U3".into()], pivot: Point { x: 5_000, y: 13_000 }, angle_millideg: -90_000 }, true, "test").unwrap();
+        let msg = step(&dir, Cmd::RotateItems { ids: vec!["U3".into()], pivot: Point { x: 5_000_000, y: 13_000_000 }, angle_millideg: -90_000 }, true, "test").unwrap();
         assert!(!msg.contains("routing cleared"), "{msg}");
         let msg = step(&dir, Cmd::Rip { part: "U3".into() }, true, "test").expect("the copy goes again under --strict");
         assert!(!msg.contains("routing cleared"), "{msg}");
@@ -3213,7 +3233,7 @@ mod tests {
         assert!(model.part("U3").is_none(), "and the copy is gone");
 
         // The original has a track on its pad: moving it leaves the track where it was, as KiCad does.
-        let msg = step(&dir, Cmd::MoveItems { ids: vec!["U1".into()], dx: 0, dy: 100 }, false, "test").unwrap();
+        let msg = step(&dir, Cmd::MoveItems { ids: vec!["U1".into()], dx: 0, dy: 100_000 }, false, "test").unwrap();
         assert!(!msg.contains("routing cleared"), "{msg}");
         assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 1, "the routing is still there");
     }
@@ -3223,17 +3243,17 @@ mod tests {
     fn rotating_and_flipping_a_mix_of_items_each_undo_in_one_step() {
         let dir = scratch("transform_items_undo");
         setup(&dir);
-        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
-        step(&dir, Cmd::AddText { text: eda_model::ir::Text { id: String::new(), content: "hi".into(), at: Point { x: 8_000, y: 16_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000, stroke_width: 150, justify: eda_model::ir::TextJustify::Center, mirror: false } }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 12_000_000 }, Point { x: 12_000_000, y: 12_000_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddText { text: eda_model::ir::Text { id: String::new(), content: "hi".into(), at: Point { x: 8_000_000, y: 16_000_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: eda_model::ir::TextJustify::Center, mirror: false } }, false, "test").unwrap();
         let (_, before, _) = load(&dir).unwrap();
         let (track, text) = (before.routing.as_ref().unwrap().tracks[0].id.clone(), before.drawings.as_ref().unwrap().texts[0].id.clone());
-        let pivot = Point { x: 10_000, y: 10_000 };
+        let pivot = Point { x: 10_000_000, y: 10_000_000 };
 
         step(&dir, Cmd::RotateItems { ids: vec![track.clone(), text.clone()], pivot, angle_millideg: -90_000 }, false, "test").unwrap();
         let (_, turned, _) = load(&dir).unwrap();
         // Counter-clockwise on the screen: (dx, dy) -> (dy, -dx).
-        assert_eq!(turned.routing.as_ref().unwrap().tracks[0].pts, vec![Point { x: 12_000, y: 18_000 }, Point { x: 12_000, y: 8_000 }]);
-        assert_eq!((turned.drawings.as_ref().unwrap().texts[0].at, turned.drawings.as_ref().unwrap().texts[0].angle), (Point { x: 16_000, y: 12_000 }, 90_000));
+        assert_eq!(turned.routing.as_ref().unwrap().tracks[0].pts, vec![Point { x: 12_000_000, y: 18_000_000 }, Point { x: 12_000_000, y: 8_000_000 }]);
+        assert_eq!((turned.drawings.as_ref().unwrap().texts[0].at, turned.drawings.as_ref().unwrap().texts[0].angle), (Point { x: 16_000_000, y: 12_000_000 }, 90_000));
 
         step(&dir, Cmd::FlipItems { ids: vec![track.clone(), text.clone()], pivot, direction: eda_ops::FlipDirection::LeftRight }, false, "test").unwrap();
         let (_, flipped, _) = load(&dir).unwrap();
@@ -3242,7 +3262,7 @@ mod tests {
 
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks[0].layer, "F.Cu", "the flip is undone");
-        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks[0].pts[0], Point { x: 12_000, y: 18_000 }, "and the turn before it is not");
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks[0].pts[0], Point { x: 12_000_000, y: 18_000_000 }, "and the turn before it is not");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks[0].pts, before.routing.as_ref().unwrap().tracks[0].pts);
     }
@@ -3258,14 +3278,14 @@ mod tests {
         }
         let dir = scratch("move_items_drc");
         setup(&dir);
-        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
-        step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 14_000 }, Point { x: 12_000, y: 14_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 12_000_000 }, Point { x: 12_000_000, y: 12_000_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 14_000_000 }, Point { x: 12_000_000, y: 14_000_000 }] }, false, "test").unwrap();
         let counts = |dir: &Path| drc_counts(dir);
         let clean = counts(&dir);
         assert_eq!(clean.get("shorting_items").copied().unwrap_or(0) + clean.get("clearance").copied().unwrap_or(0), 0, "2 mm apart is fine: {clean:?}");
 
         let mover = track_ids(&dir).into_iter().find(|(_, net, _)| net == "VCC").unwrap().0;
-        step(&dir, Cmd::MoveItems { ids: vec![mover.clone()], dx: 500, dy: -2_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveItems { ids: vec![mover.clone()], dx: 500_000, dy: -2_000_000 }, false, "test").unwrap();
         let report = crate::kicad_engine::drc(&dir, false).unwrap();
         let hits: Vec<(f64, f64)> = report["violations"]
             .as_array()
@@ -3276,7 +3296,7 @@ mod tests {
             .map(|i| (i["pos"][0].as_f64().unwrap(), i["pos"][1].as_f64().unwrap()))
             .collect();
         assert!(!hits.is_empty(), "kicad-cli must report the moved track now that it sits on the other net's copper: {report}");
-        assert!(hits.iter().all(|(_, y)| (y - 12_000.0).abs() <= 200.0), "reported at its new place (y 12000), not where it was (y 14000): {hits:?}");
+        assert!(hits.iter().all(|(_, y)| (y - 12_000_000.0).abs() <= 200_000.0), "reported at its new place (y 12000), not where it was (y 14000): {hits:?}");
 
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         let after = counts(&dir);
@@ -3306,9 +3326,9 @@ mod tests {
         assert!(pcb.contains("(property \"Reference\" \"U3\""), "{pcb}");
 
         // Move the copy away and its pads become U3's: a real part, on a real net.
-        step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 6_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 6_000_000 }, false, "test").unwrap();
         let (_, moved, _) = load(&dir).unwrap();
-        assert_eq!(moved.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U3").unwrap().at, Point { x: 5_000, y: 11_000 });
+        assert_eq!(moved.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U3").unwrap().at, Point { x: 5_000_000, y: 11_000_000 });
 
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
@@ -3323,14 +3343,14 @@ mod tests {
     fn a_copy_pastes_on_another_board_through_kicads_text() {
         let a = scratch("copy_from");
         setup(&a);
-        step(&a, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
-        step(&a, Cmd::AddVia { net: "VCC".into(), x: 12_000, y: 12_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        step(&a, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 12_000_000 }, Point { x: 12_000_000, y: 12_000_000 }] }, false, "test").unwrap();
+        step(&a, Cmd::AddVia { net: "VCC".into(), x: 12_000_000, y: 12_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
         let (track, via) = {
             let (_, d, _) = load(&a).unwrap();
             let rt = d.routing.unwrap();
             (rt.tracks[0].id.clone(), rt.vias[0].id.clone())
         };
-        let body = serde_json::json!({ "ids": [track, via, "U1"], "reference": { "x": 2_000, "y": 12_000 } }).to_string();
+        let body = serde_json::json!({ "ids": [track, via, "U1"], "reference": { "x": 2_000_000, "y": 12_000_000 } }).to_string();
         let reply = crate::clipboard_api::copy(&a, body.as_bytes());
         assert_eq!(reply["ok"], true, "{reply}");
         let text = reply["text"].as_str().unwrap().to_string();
@@ -3338,11 +3358,11 @@ mod tests {
 
         let b = scratch("paste_into");
         setup(&b);
-        step(&b, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 8_000, y: 16_000 } }, false, "test").unwrap();
+        step(&b, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 8_000_000, y: 16_000_000 } }, false, "test").unwrap();
         let (_, d, model) = load(&b).unwrap();
         let rt = d.routing.as_ref().unwrap();
-        assert_eq!((rt.tracks.len(), rt.tracks[0].net.as_str(), rt.tracks[0].pts.clone()), (1, "GND", vec![Point { x: 8_000, y: 16_000 }, Point { x: 18_000, y: 16_000 }]));
-        assert_eq!((rt.vias[0].net.as_str(), rt.vias[0].at), ("VCC", Point { x: 18_000, y: 16_000 }));
+        assert_eq!((rt.tracks.len(), rt.tracks[0].net.as_str(), rt.tracks[0].pts.clone()), (1, "GND", vec![Point { x: 8_000_000, y: 16_000_000 }, Point { x: 18_000_000, y: 16_000_000 }]));
+        assert_eq!((rt.vias[0].net.as_str(), rt.vias[0].at), ("VCC", Point { x: 18_000_000, y: 16_000_000 }));
         // U1 was copied along with the copper, and U1 is already on this board: the paste made a part of its own.
         assert!(model.part("U3").is_some(), "{:?}", model.parts.iter().map(|p| p.reference.clone()).collect::<Vec<_>>());
         undo(&b, "test", Some(Domain::Pcb)).unwrap();
@@ -3367,7 +3387,7 @@ mod tests {
             scale: 1.0,
             offset_x_nm: 0,
             offset_y_nm: 0,
-            line_width_nm: 200,
+            line_width_nm: 200_000,
             group: true,
             fix_tolerance_nm: None,
             replace_outline: false,
@@ -3434,7 +3454,7 @@ mod tests {
         step_carrying(&dir, Cmd::ImportSchGraphics(req.clone()), Strictness::Off, "test", Some(carry::Carry::Begin)).unwrap();
         assert!(carry::is_carrying(&dir));
         assert_eq!(counts(&dir), (before.0 + 4, before.1 + 4), "the items are on the sheet while they are carried");
-        let drop = Cmd::AddSchLine { pts: vec![Point { x: 0, y: 0 }, Point { x: 5_000, y: 0 }], width_nm: 0 };
+        let drop = Cmd::AddSchLine { pts: vec![Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 0 }], width_nm: 0 };
         step_carrying(&dir, drop, Strictness::Off, "test", Some(carry::Carry::Commit)).unwrap();
         assert!(!carry::is_carrying(&dir));
         assert_eq!(counts(&dir), (before.0 + 5, before.1 + 4));
@@ -3471,7 +3491,7 @@ mod tests {
         let defaults = eda_model::rules::net_class_settings_of(&model.board);
 
         // A class on VCC, assigned by a pattern, asks for 400 um (the larger of the two nets' clearances applies).
-        let power = eda_model::NetClass { name: "power".into(), nets: vec!["V??".into()], track_width: Some(200), clearance: Some(400), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["V??".into()], track_width: Some(200_000), clearance: Some(400_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
         step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults.clone() } }, false, "ui").unwrap();
         assert!(count(&dir, "clearance") >= 1, "a net class assigned by a pattern reaches kicad-cli");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
@@ -3479,14 +3499,14 @@ mod tests {
 
         // Constraints: a minimum track width above the tracks' 200 um.
         assert_eq!(count(&dir, "track_width"), 0);
-        let constraints = eda_model::rules::Constraints { min_track_width_nm: 250, ..eda_model::rules::Constraints::of(&model.board) };
+        let constraints = eda_model::rules::Constraints { min_track_width_nm: 250_000, ..eda_model::rules::Constraints::of(&model.board) };
         step(&dir, Cmd::SetConstraints { constraints }, false, "ui").unwrap();
-        assert_eq!(count(&dir, "track_width"), 2, "both tracks are under the new minimum");
+        assert_eq!(count(&dir, "track_width"), 2000, "both tracks are under the new minimum");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(count(&dir, "track_width"), 0);
 
         // Violation Severity: the clearance check turned off reports nothing, whatever the rules.
-        let tight = eda_model::rules::NetClassSettings { default: eda_model::NetClass { clearance: Some(300), ..defaults.default.clone() }, classes: vec![] };
+        let tight = eda_model::rules::NetClassSettings { default: eda_model::NetClass { clearance: Some(300_000), ..defaults.default.clone() }, classes: vec![] };
         step(&dir, Cmd::SetNetClasses { settings: tight }, false, "ui").unwrap();
         assert!(count(&dir, "clearance") >= 1);
         step(&dir, Cmd::SetRuleSeverities { severities: [("clearance".to_string(), "ignore".to_string())].into() }, false, "ui").unwrap();
@@ -3521,7 +3541,7 @@ mod tests {
         let count = |dir: &Path, kind: &str| drc_counts(dir).get(kind).copied().unwrap_or(0);
         let (_, _, model) = load(&dir).unwrap();
         let defaults = eda_model::rules::net_class_settings_of(&model.board);
-        let power = eda_model::NetClass { name: "power".into(), nets: vec!["V??".into()], track_width: Some(200), clearance: Some(400), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["V??".into()], track_width: Some(200_000), clearance: Some(400_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
         step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults.clone() } }, false, "ui").unwrap();
         let plain = count(&dir, "clearance");
         assert!(plain >= 1, "the class asks for 400 um, the tracks are closer");
@@ -3552,8 +3572,8 @@ mod tests {
         let dir = scratch("copper_persists");
         setup(&dir);
         // Below both footprints (courtyards end at y=6000): touches no pad.
-        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 8_000 }, Point { x: 8_000, y: 8_000 }] }, false, "test").unwrap();
-        step(&dir, Cmd::AddVia { net: "GND".into(), x: 8_000, y: 8_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 5_000_000, y: 8_000_000 }, Point { x: 8_000_000, y: 8_000_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 8_000_000, y: 8_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
 
         let (_, design, _) = load(&dir).unwrap();
         let rt = design.routing.as_ref().expect("adding a via must not have cleared the track added just before it");
@@ -3561,7 +3581,7 @@ mod tests {
         assert_eq!(rt.vias.len(), 1);
 
         // A part edit, in contrast, clears routing exactly as it always has.
-        step(&dir, Cmd::MoveTo { part: "U2".into(), x: 16_000, y: 5_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveTo { part: "U2".into(), x: 16_000_000, y: 5_000_000 }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(design.routing.is_none(), "moving a part must still clear routing -- it can move a footprint out from under a track");
     }
@@ -3580,15 +3600,15 @@ mod tests {
             "schema": 1,
             "provenance": {"engine_version": "t", "intent_hash": "x", "seed": 0},
             "placement": {
-                "outline": [{"x": 0, "y": 0}, {"x": 20000, "y": 0}, {"x": 20000, "y": 20000}, {"x": 0, "y": 20000}],
+                "outline": [{"x": 0, "y": 0}, {"x": 20_000_000, "y": 0}, {"x": 20_000_000, "y": 20_000_000}, {"x": 0, "y": 20_000_000}],
                 "footprints": [
-                    {"id": "U1", "at": {"x": 5000, "y": 5000}, "rot": 0, "side": "top"},
-                    {"id": "U2", "at": {"x": 15000, "y": 5000}, "rot": 0, "side": "top"}
+                    {"id": "U1", "at": {"x": 5_000_000, "y": 5_000_000}, "rot": 0, "side": "top"},
+                    {"id": "U2", "at": {"x": 15_000_000, "y": 5_000_000}, "rot": 0, "side": "top"}
                 ]
             },
             "routing": {
-                "tracks": [{"net": "GND", "layer": "F.Cu", "width": 200, "pts": [{"x": 4000, "y": 5000}, {"x": 14000, "y": 5000}]}],
-                "vias": [{"net": "GND", "at": {"x": 9000, "y": 5000}, "drill": 300, "diameter": 600, "from_layer": "F.Cu", "to_layer": "B.Cu"}]
+                "tracks": [{"net": "GND", "layer": "F.Cu", "width": 200_000, "pts": [{"x": 4_000_000, "y": 5_000_000}, {"x": 14_000_000, "y": 5_000_000}]}],
+                "vias": [{"net": "GND", "at": {"x": 9_000_000, "y": 5_000_000}, "drill": 300_000, "diameter": 600_000, "from_layer": "F.Cu", "to_layer": "B.Cu"}]
             }
         });
         std::fs::write(design_path(&dir), serde_json::to_string_pretty(&old_design_json).unwrap()).unwrap();
@@ -3658,7 +3678,7 @@ mod tests {
             schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(eda_model::ir::SchematicSection {
-                symbols: vec![sym("R1", 10_000, 10_000), sym("R2", 20_000, 10_000)],
+                symbols: vec![sym("R1", 10_000_000, 10_000_000), sym("R2", 20_000_000, 10_000_000)],
                 wires: vec![],
                 labels: vec![],
                 texts: vec![],
@@ -3681,7 +3701,7 @@ mod tests {
             drawings: None,
         };
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -3692,8 +3712,8 @@ mod tests {
         setup_schematic(dir);
         let (_, mut design, _) = load(dir).unwrap();
         design.placement = Some(PlacementSection {
-            outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
-            footprints: vec![FootprintInstance { id: "R1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 0, side: Side::Top, label: Default::default() }],
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }],
+            footprints: vec![FootprintInstance { id: "R1".into(), at: Point { x: 10_000_000, y: 10_000_000 }, rot: 0, side: Side::Top, label: Default::default() }],
             modules: vec![],
         });
         save(dir, &design).unwrap();
@@ -3719,7 +3739,7 @@ mod tests {
         let (_, _, model) = load(&dir).unwrap();
         assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "sanity: R1 and R2 start on separate nets");
 
-        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000, y: 10_000 }, Point { x: 20_000, y: 10_000 }], bus: false }, false, "test").expect("R1.1 and R2.1 both sit exactly on this wire's endpoints");
+        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000_000, y: 10_000_000 }, Point { x: 20_000_000, y: 10_000_000 }], bus: false }, false, "test").expect("R1.1 and R2.1 both sit exactly on this wire's endpoints");
 
         let (_, design, model) = load(&dir).unwrap();
         assert!(design.nets.is_some(), "a schematic Cmd must persist the reconciled net list onto the design, not just compute it in-memory for this one request");
@@ -3754,16 +3774,16 @@ mod tests {
         let dir = scratch("sch_bus_entry");
         setup_schematic(&dir);
 
-        step(&dir, Cmd::AddWire { pts: vec![Point { x: 0, y: 30_000 }, Point { x: 30_000, y: 30_000 }], bus: true }, false, "test").unwrap();
-        step(&dir, Cmd::AddBusEntry { at: Point { x: 10_000, y: 30_000 }, size: Point { x: 2_540, y: 2_540 } }, false, "test").unwrap();
+        step(&dir, Cmd::AddWire { pts: vec![Point { x: 0, y: 30_000_000 }, Point { x: 30_000_000, y: 30_000_000 }], bus: true }, false, "test").unwrap();
+        step(&dir, Cmd::AddBusEntry { at: Point { x: 10_000_000, y: 30_000_000 }, size: Point { x: 2_540_000, y: 2_540_000 } }, false, "test").unwrap();
 
         let (_, design, _model) = load(&dir).unwrap();
         let sch = design.schematic.as_ref().unwrap();
         assert_eq!(sch.wires.len(), 1);
         assert!(sch.wires[0].bus, "the wire's own bus flag must survive reconcile_schematic's in-place mutation");
         assert_eq!(sch.bus_entries.len(), 1);
-        assert_eq!(sch.bus_entries[0].at, Point { x: 10_000, y: 30_000 });
-        assert_eq!(sch.bus_entries[0].size, Point { x: 2_540, y: 2_540 });
+        assert_eq!(sch.bus_entries[0].at, Point { x: 10_000_000, y: 30_000_000 });
+        assert_eq!(sch.bus_entries[0].size, Point { x: 2_540_000, y: 2_540_000 });
         let entry_id = sch.bus_entries[0].id.clone();
         assert!(!entry_id.is_empty(), "AddBusEntry's id must be backfilled, same as every other addressable item");
 
@@ -3791,8 +3811,8 @@ mod tests {
         assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "sanity: starts on separate nets");
 
         // One label, exactly on each pin (no wire needed -- see reconcile's own doc).
-        step(&dir, Cmd::AddLabel { net: "SIG".into(), at: Point { x: 10_000, y: 10_000 }, kind: eda_model::ir::LabelKind::Local }, false, "test").unwrap();
-        step(&dir, Cmd::AddLabel { net: "SIG".into(), at: Point { x: 20_000, y: 10_000 }, kind: eda_model::ir::LabelKind::Local }, false, "test").unwrap();
+        step(&dir, Cmd::AddLabel { net: "SIG".into(), at: Point { x: 10_000_000, y: 10_000_000 }, kind: eda_model::ir::LabelKind::Local }, false, "test").unwrap();
+        step(&dir, Cmd::AddLabel { net: "SIG".into(), at: Point { x: 20_000_000, y: 10_000_000 }, kind: eda_model::ir::LabelKind::Local }, false, "test").unwrap();
 
         let (_, design, model) = load(&dir).unwrap();
         let merged = net_of(&model.nets, "R1.1").expect("R1.1 must still be on a net");
@@ -3824,7 +3844,7 @@ mod tests {
         let (_, _, before) = load(&dir).unwrap();
         assert_ne!(net_of(&before.nets, "R1.1").unwrap().name, net_of(&before.nets, "R2.1").unwrap().name, "sanity: starts on separate nets");
 
-        step(&dir, Cmd::AddSchText { content: "Power supply section".into(), at: Point { x: 15_000, y: 5_000 }, angle_millideg: 0, size_nm: 1270 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSchText { content: "Power supply section".into(), at: Point { x: 15_000_000, y: 5_000_000 }, angle_millideg: 0, size_nm: 1_270_000 }, false, "test").unwrap();
 
         // Reconciling at all (triggered by *any* Domain::Schematic Cmd, not
         // just this one) is free to rename an unlabeled net to its own
@@ -3840,7 +3860,7 @@ mod tests {
         let text = &sch.texts[0];
         assert!(!text.id.is_empty(), "AddSchText's id must be backfilled, same as every other addressable schematic item");
         assert_eq!(text.content, "Power supply section");
-        assert_eq!(text.at, Point { x: 15_000, y: 5_000 });
+        assert_eq!(text.at, Point { x: 15_000_000, y: 5_000_000 });
 
         let text_id = text.id.clone();
         step(&dir, Cmd::DeleteSchText { id: text_id }, false, "test").unwrap();
@@ -3866,8 +3886,8 @@ mod tests {
         let (_, mut design, _) = load(&dir).unwrap();
         {
             let sch = design.schematic.as_mut().unwrap();
-            sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: Point { x: 50_000, y: 50_000 }, rot: 0, net: "GND".into(), pin: "R1.1".into() });
-            sch.no_connects.push(eda_model::ir::NoConnect { id: String::new(), at: Point { x: 60_000, y: 60_000 }, pin: "R1.1".into() });
+            sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: Point { x: 50_000_000, y: 50_000_000 }, rot: 0, net: "GND".into(), pin: "R1.1".into() });
+            sch.no_connects.push(eda_model::ir::NoConnect { id: String::new(), at: Point { x: 60_000_000, y: 60_000_000 }, pin: "R1.1".into() });
         }
         save(&dir, &design).unwrap();
 
@@ -3888,7 +3908,7 @@ mod tests {
     fn rename_symbol_keeps_a_connected_wire_connected() {
         let dir = scratch("sch_rename_wire");
         setup_schematic(&dir);
-        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000, y: 10_000 }, Point { x: 20_000, y: 10_000 }], bus: false }, false, "test").unwrap();
+        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000_000, y: 10_000_000 }, Point { x: 20_000_000, y: 10_000_000 }], bus: false }, false, "test").unwrap();
 
         let (_, design, model) = load(&dir).unwrap();
         let before_net = net_of(&model.nets, "R2.1").unwrap().name.clone();
@@ -4029,10 +4049,10 @@ mod tests {
         setup(&dir);
         // A via with a 25 um ring (minimum 100), a 100 um track (minimum 200), and a via 100 um from the side of a track (clearance 200):
         // the marker of that one sits on the track beside the via, at a point no position in the report is.
-        step(&dir, Cmd::AddVia { net: "GND".into(), x: 10_000, y: 15_000, drill: 300, diameter: 350, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
-        step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 100, pts: vec![Point { x: 2_000, y: 8_000 }, Point { x: 6_001, y: 8_000 }] }, false, "test").unwrap();
-        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
-        step(&dir, Cmd::AddVia { net: "VCC".into(), x: 6_100, y: 12_500, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 10_000_000, y: 15_000_000, drill: 300_000, diameter: 350_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 100_000, pts: vec![Point { x: 2_000_000, y: 8_000_000 }, Point { x: 6_001_000, y: 8_000_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 12_000_000 }, Point { x: 12_000_000, y: 12_000_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "VCC".into(), x: 6_100_000, y: 12_500_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
 
         let find = |report: &serde_json::Value, kind: &str| -> serde_json::Value { report["violations"].as_array().unwrap().iter().find(|v| v["type"] == kind).cloned().unwrap_or_else(|| panic!("no {kind} in {report:#}")) };
         let first = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
@@ -4272,7 +4292,7 @@ mod tests {
         setup_schematic(&dir);
         step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k".into()), footprint: None, datasheet: None }, false, "test").unwrap();
         step(&dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some("22K".into()), footprint: None, datasheet: None }, false, "test").unwrap();
-        step(&dir, Cmd::AddSchText { content: "set to 10k".into(), at: Point { x: 0, y: 0 }, angle_millideg: 0, size_nm: 1270 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSchText { content: "set to 10k".into(), at: Point { x: 0, y: 0 }, angle_millideg: 0, size_nm: 1_270_000 }, false, "test").unwrap();
 
         let values = |dir: &Path| -> Vec<String> {
             let (_, design, _) = load(dir).unwrap();
@@ -4411,7 +4431,7 @@ mod tests {
         let (_, mut design, _) = load(&dir).unwrap();
         let root = design.schematic.as_mut().unwrap();
         let r2 = root.symbols.iter().position(|s| s.id == "R2").map(|i| root.symbols.remove(i)).unwrap();
-        root.sheets.push(eda_model::ir::SheetInstance { id: "s1".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (10_000, 10_000), pins: vec![], page: "7".into() });
+        root.sheets.push(eda_model::ir::SheetInstance { id: "s1".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (10_000_000, 10_000_000), pins: vec![], page: "7".into() });
         let mut sub = eda_model::ir::SchematicSection::default();
         sub.symbols.push(r2);
         design.sheet_contents = Some([("sub.kicad_sch".to_string(), sub)].into_iter().collect());
@@ -4462,16 +4482,16 @@ mod tests {
             // Neither point may collide with setup_schematic's own R1
             // (10_000,10_000)/R2 (20_000,10_000) -- `.find(|s| s.at == ...)`
             // below would silently match the wrong symbol otherwise.
-            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 5_000, y: 50_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }); // "A": further left, further down
-            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 60_000, y: 40_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }); // "B": further right, further up
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 5_000_000, y: 50_000_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }); // "A": further left, further down
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 60_000_000, y: 40_000_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }); // "B": further right, further up
         }
         save(&dir, &design).unwrap();
 
         step(&dir, Cmd::Annotate { reset_existing: false, order: eda_ops::AnnotateOrder::YThenX, ids: None, options: Default::default() }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let sch = design.schematic.as_ref().unwrap();
-        let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000, y: 50_000 }).unwrap();
-        let b = sch.symbols.iter().find(|s| s.at == Point { x: 60_000, y: 40_000 }).unwrap();
+        let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000_000, y: 50_000_000 }).unwrap();
+        let b = sch.symbols.iter().find(|s| s.at == Point { x: 60_000_000, y: 40_000_000 }).unwrap();
         assert_eq!(b.id, "C1", "Y-then-X: B (lower Y) is numbered first");
         assert_eq!(a.id, "C2");
 
@@ -4479,8 +4499,8 @@ mod tests {
         step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::XThenY, ids: None, options: Default::default() }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let sch = design.schematic.as_ref().unwrap();
-        let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000, y: 50_000 }).unwrap();
-        let b = sch.symbols.iter().find(|s| s.at == Point { x: 60_000, y: 40_000 }).unwrap();
+        let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000_000, y: 50_000_000 }).unwrap();
+        let b = sch.symbols.iter().find(|s| s.at == Point { x: 60_000_000, y: 40_000_000 }).unwrap();
         assert_eq!(a.id, "C1", "X-then-Y: A (lower X) is numbered first -- the opposite of the Y-then-X result above");
         assert_eq!(b.id, "C2");
     }
@@ -4492,7 +4512,7 @@ mod tests {
         let dir = scratch("sch_placed_symbol_part");
         setup_schematic(&dir);
         assert!(load(&dir).unwrap().2.part("R3").is_none(), "the intent has no R3");
-        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000, y: 10_000 }, rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000_000, y: 10_000_000 }, rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
         let (_, design, model) = load(&dir).unwrap();
         let part = model.part("R3").expect("the placed symbol has a part again after a fresh load");
         assert_eq!((part.symbol.as_deref(), part.value.as_deref(), part.pins.len()), (Some("TEST:R"), Some("10k"), 1));
@@ -4514,9 +4534,9 @@ mod tests {
         setup_mcu30_flat(&dir);
         let before = load(&dir).unwrap().1;
         assert!(before.symbol_library.is_none());
-        let place = |id: &str, x: Nm| Cmd::AddSymbol { id: id.into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x, y: 20_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
+        let place = |id: &str, x: Nm| Cmd::AddSymbol { id: id.into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x, y: 20_000_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
 
-        step(&dir, place("U90", 200_000), false, "test").unwrap();
+        step(&dir, place("U90", 200_000_000), false, "test").unwrap();
         let (_, design, model) = load(&dir).unwrap();
         let kept = design.symbol_library.as_ref().and_then(|l| l.by_lib_id("Amplifier_Operational:LM358")).expect("the definition is kept with the schematic");
         assert!(kept.published, "published: the model resolves the instance from it");
@@ -4529,7 +4549,7 @@ mod tests {
         assert!(part.datasheet.as_deref().is_some_and(|d| d.contains("lm2904")), "and its Datasheet: {:?}", part.datasheet);
         // A symbol with a default footprint brings it: the part names it, and it resolves from the footprint library so the PCB can place the part.
         if eda_kicad::default_symbol_library_root().join("Regulator_Linear.kicad_sym").is_file() && eda_kicad::default_footprint_library_root().join("Package_TO_SOT_SMD.pretty").is_dir() {
-            step(&dir, Cmd::AddSymbol { id: "U95".into(), lib_id: "Regulator_Linear:AMS1117-3.3".into(), at: Point { x: 240_000, y: 20_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+            step(&dir, Cmd::AddSymbol { id: "U95".into(), lib_id: "Regulator_Linear:AMS1117-3.3".into(), at: Point { x: 240_000_000, y: 20_000_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
             let (_, _, model) = load(&dir).unwrap();
             let reg = model.part("U95").unwrap();
             assert_eq!((reg.value.as_deref(), reg.footprint.as_deref(), reg.pins.len()), (Some("AMS1117-3.3"), Some("Package_TO_SOT_SMD:SOT-223-3_TabPin2"), 3));
@@ -4542,7 +4562,7 @@ mod tests {
         assert_eq!(sheet["lib_symbols"]["Amplifier_Operational:LM358"]["pins"].as_array().map(|p| p.len()), Some(8), "{}", sheet["lib_symbols"]);
 
         // a second one needs no second copy
-        step(&dir, place("U91", 220_000), false, "test").unwrap();
+        step(&dir, place("U91", 220_000_000), false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert_eq!(design.symbol_library.as_ref().unwrap().symbols.iter().filter(|s| s.lib_id == "Amplifier_Operational:LM358").count(), 1);
         assert!(design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U91"));
@@ -4588,7 +4608,7 @@ mod tests {
         };
         let base = counts(&dir);
         // On the schematic grid (50 mil, as the studio snaps a click): a pin off it is `endpoint_off_grid`, and rightly.
-        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x: 157 * 1270, y: 16 * 1270 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x: 157_000 * 1_270_000, y: 16_000 * 1_270_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
         let after = counts(&dir);
         let grew = |kind: &str| after.get(kind).copied().unwrap_or(0).saturating_sub(base.get(kind).copied().unwrap_or(0));
         for kind in ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues", "unannotated", "endpoint_off_grid", "duplicate_reference", "unresolved_variable", "different_unit_footprint", "different_unit_net", "pin_to_pin", "bus_to_net_conflict"] {
@@ -4613,9 +4633,9 @@ mod tests {
         }
         let dir = scratch("pcb_installed_footprint");
         setup_mcu30_flat(&dir);
-        let place = |x: i64| Cmd::PlaceFootprint { footprint: name.into(), at: Point { x, y: 30_000 }, reference: String::new(), value: String::new(), definition: None };
-        step(&dir, place(40_000), false, "test").unwrap();
-        step(&dir, place(60_000), false, "test").unwrap();
+        let place = |x: i64| Cmd::PlaceFootprint { footprint: name.into(), at: Point { x, y: 30_000_000 }, reference: String::new(), value: String::new(), definition: None };
+        step(&dir, place(40_000_000), false, "test").unwrap();
+        step(&dir, place(60_000_000), false, "test").unwrap();
         let (_, design, model) = load(&dir).unwrap();
         let parts: Vec<&str> = design.drawings.as_ref().unwrap().board_parts.iter().map(|p| p.reference.as_str()).collect();
         assert_eq!(parts, ["H1", "H2"]);
@@ -4624,7 +4644,7 @@ mod tests {
         assert_eq!(fp.pads.len(), 1, "a mounting hole is one pad");
         assert_eq!(fp.pads[0].kind, PadKind::NonPlatedHole);
         let pose = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "H2").unwrap();
-        assert_eq!((pose.at, pose.rot, pose.side), (Point { x: 60_000, y: 30_000 }, 0, Side::Top));
+        assert_eq!((pose.at, pose.rot, pose.side), (Point { x: 60_000_000, y: 30_000_000 }, 0, Side::Top));
         let pcb = kicad_pcb_text_of(&dir);
         assert!(pcb.contains("MountingHole_3.2mm_M3") && pcb.contains("\"H1\"") && pcb.contains("\"H2\""), "the derived board has both holes");
 
@@ -4653,7 +4673,7 @@ mod tests {
         let dir = scratch("pcb_installed_footprint_drc");
         setup(&dir);
         let base = drc_counts(&dir);
-        step(&dir, Cmd::PlaceFootprint { footprint: name.into(), at: Point { x: 10_000, y: 14_000 }, reference: String::new(), value: String::new(), definition: None }, false, "test").unwrap();
+        step(&dir, Cmd::PlaceFootprint { footprint: name.into(), at: Point { x: 10_000_000, y: 14_000_000 }, reference: String::new(), value: String::new(), definition: None }, false, "test").unwrap();
         let after = drc_counts(&dir);
         let new: Vec<(&String, u64)> = after.iter().map(|(k, v)| (k, v.saturating_sub(base.get(k).copied().unwrap_or(0)))).filter(|(_, n)| *n > 0).collect();
         assert!(new.is_empty(), "placing the hole added DRC findings {new:?}: before {base:?}, after {after:?}");
@@ -4684,7 +4704,7 @@ mod tests {
         let added = crate::library_tables::add_library(&dir, br#"{"kind":"symbol","path":"${KIPRJMOD}/libs/MyParts.kicad_sym","descr":"mine"}"#);
         assert_eq!(added["ok"], true, "{added}");
         step(&dir, Cmd::SetErcSeverities { severities: [("lib_symbol_issues".to_string(), "warning".to_string())].into() }, false, "test").unwrap();
-        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "MyParts:R".into(), at: Point { x: 63_500, y: 25_400 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "MyParts:R".into(), at: Point { x: 63_500_000, y: 25_400_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id("MyParts:R").is_some()), "the placed symbol kept its definition with the schematic");
 
@@ -4726,7 +4746,7 @@ mod tests {
         let set = crate::library_tables::set_table(&dir, table);
         assert_eq!(set["ok"], true, "{set}");
         step(&dir, Cmd::SetRuleSeverities { severities: [("lib_footprint_issues".to_string(), "warning".to_string())].into() }, false, "test").unwrap();
-        step(&dir, Cmd::PlaceFootprint { footprint: "MyFoot:R_0603_1608Metric".into(), at: Point { x: 10_000, y: 14_000 }, reference: String::new(), value: String::new(), definition: None }, false, "test").unwrap();
+        step(&dir, Cmd::PlaceFootprint { footprint: "MyFoot:R_0603_1608Metric".into(), at: Point { x: 10_000_000, y: 14_000_000 }, reference: String::new(), value: String::new(), definition: None }, false, "test").unwrap();
         let (_, _, model) = load(&dir).unwrap();
         assert!(model.part("R1").is_some_and(|p| model.footprint_of(p).is_some_and(|f| f.pads.len() == 2)), "placed from the table library as R1, with its two pads");
 
@@ -4768,7 +4788,7 @@ mod tests {
         assert!(text.contains("${TEAM}/R_0603_1608Metric.step"), "the footprint names its model through the variable");
         std::fs::write(dir.join("libs").join("Res.pretty").join("R_0603_1608Metric.kicad_mod"), text).unwrap();
         assert_eq!(crate::library_tables::add_library(&dir, br#"{"kind":"footprint","path":"${KIPRJMOD}/libs/Res.pretty"}"#)["ok"], true);
-        step_ok(&dir, Cmd::PlaceFootprint { footprint: "Res:R_0603_1608Metric".into(), at: Point { x: 10_000, y: 14_000 }, reference: String::new(), value: String::new(), definition: None });
+        step_ok(&dir, Cmd::PlaceFootprint { footprint: "Res:R_0603_1608Metric".into(), at: Point { x: 10_000_000, y: 14_000_000 }, reference: String::new(), value: String::new(), definition: None });
 
         let meshes = |glb: &[u8]| -> usize {
             let json_len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
@@ -4803,8 +4823,8 @@ mod tests {
     fn annotate_with_an_explicit_id_list_only_touches_those_symbols() {
         let dir = scratch("sch_annotate_selection");
         setup_schematic(&dir);
-        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
-        step(&dir, Cmd::AddSymbol { id: "R4".into(), lib_id: "TEST:R".into(), at: Point { x: 40_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000_000, y: 10_000_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "R4".into(), lib_id: "TEST:R".into(), at: Point { x: 40_000_000, y: 10_000_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
 
         step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::default(), ids: Some(vec!["R3".into()]), options: Default::default() }, false, "test").unwrap();
 
@@ -4815,7 +4835,7 @@ mod tests {
         // R3 was in scope: reset to "R?", then renumbered to the first free
         // "R" number (`FindFirstUnusedReference`): R1, R2 and R4 are held by
         // the symbols out of scope, so the gap is R3 again.
-        assert_eq!(sch.symbols.iter().find(|s| s.at == Point { x: 30_000, y: 10_000 }).unwrap().id, "R3");
+        assert_eq!(sch.symbols.iter().find(|s| s.at == Point { x: 30_000_000, y: 10_000_000 }).unwrap().id, "R3");
         assert!(!sch.symbols.iter().any(|s| s.id.ends_with('?')), "nothing should be left unannotated after the pass");
     }
 
@@ -4829,15 +4849,15 @@ mod tests {
         let dir = scratch("domain_scoped_undo");
         setup_both(&dir);
 
-        step(&dir, Cmd::MoveTo { part: "R1".into(), x: 11_000, y: 10_000 }, false, "test").unwrap();
-        step(&dir, Cmd::MoveSymbol { id: "R2".into(), x: 25_000, y: 10_000, unit: None }, false, "test").unwrap();
+        step(&dir, Cmd::MoveTo { part: "R1".into(), x: 11_000_000, y: 10_000_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveSymbol { id: "R2".into(), x: 25_000_000, y: 10_000_000, unit: None }, false, "test").unwrap();
 
         let pcb_at = |d: &eda_model::ir::Design| d.placement.as_ref().unwrap().footprints[0].at;
         let sch_at = |d: &eda_model::ir::Design| d.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R2").unwrap().at;
 
         let (_, design, _) = load(&dir).unwrap();
-        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 });
-        assert_eq!(sch_at(&design), Point { x: 25_000, y: 10_000 });
+        assert_eq!(pcb_at(&design), Point { x: 11_000_000, y: 10_000_000 });
+        assert_eq!(sch_at(&design), Point { x: 25_000_000, y: 10_000_000 });
 
         // The schematic edit is the most recent on the *shared* timeline --
         // before this fix, an unscoped undo (what every call site used)
@@ -4848,8 +4868,8 @@ mod tests {
         // Schematic undo touches only the schematic symbol.
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         let (_, design, _) = load(&dir).unwrap();
-        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 }, "a Schematic-tab undo must never touch the PCB tab's edit");
-        assert_eq!(sch_at(&design), Point { x: 20_000, y: 10_000 }, "a Schematic-tab undo must revert the schematic move");
+        assert_eq!(pcb_at(&design), Point { x: 11_000_000, y: 10_000_000 }, "a Schematic-tab undo must never touch the PCB tab's edit");
+        assert_eq!(sch_at(&design), Point { x: 20_000_000, y: 10_000_000 }, "a Schematic-tab undo must revert the schematic move");
 
         // Nothing left to undo on the Schematic tab: a clean no-op/error,
         // *not* a silent fallback to the PCB tab's edit -- the literal bug
@@ -4857,20 +4877,20 @@ mod tests {
         let err = undo(&dir, "test", Some(Domain::Schematic)).unwrap_err();
         assert_eq!(err[0].check, "board_no_undo");
         let (_, design, _) = load(&dir).unwrap();
-        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 }, "a failed Schematic undo must still never reach the PCB tab's edit");
+        assert_eq!(pcb_at(&design), Point { x: 11_000_000, y: 10_000_000 }, "a failed Schematic undo must still never reach the PCB tab's edit");
 
         // The PCB tab's own undo/redo still works, scoped the same way.
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-        assert_eq!(pcb_at(&load(&dir).unwrap().1), Point { x: 10_000, y: 10_000 });
+        assert_eq!(pcb_at(&load(&dir).unwrap().1), Point { x: 10_000_000, y: 10_000_000 });
         redo(&dir, "test", Some(Domain::Pcb)).unwrap();
-        assert_eq!(pcb_at(&load(&dir).unwrap().1), Point { x: 11_000, y: 10_000 });
+        assert_eq!(pcb_at(&load(&dir).unwrap().1), Point { x: 11_000_000, y: 10_000_000 });
 
         // And the Schematic tab's own redo brings its move back, still
         // without disturbing the PCB tab.
         redo(&dir, "test", Some(Domain::Schematic)).unwrap();
         let (_, design, _) = load(&dir).unwrap();
-        assert_eq!(sch_at(&design), Point { x: 25_000, y: 10_000 });
-        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 });
+        assert_eq!(sch_at(&design), Point { x: 25_000_000, y: 10_000_000 });
+        assert_eq!(pcb_at(&design), Point { x: 11_000_000, y: 10_000_000 });
     }
 
     // ---------------------------------------------------- footprint editor
@@ -4886,28 +4906,28 @@ mod tests {
         setup(&dir);
 
         step(&dir, Cmd::OpenFootprintForEdit { name: "Test:FP".into() }, false, "test").unwrap();
-        step(&dir, Cmd::MoveTo { part: "U1".into(), x: 6_000, y: 5_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveTo { part: "U1".into(), x: 6_000_000, y: 5_000_000 }, false, "test").unwrap();
 
         let pcb_at = |d: &eda_model::ir::Design| d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().at;
         let lib_has_fp = |d: &eda_model::ir::Design| d.footprint_library.as_ref().is_some_and(|l| l.by_name("Test:FP").is_some());
 
         let (_, design, _) = load(&dir).unwrap();
-        assert_eq!(pcb_at(&design), Point { x: 6_000, y: 5_000 });
+        assert_eq!(pcb_at(&design), Point { x: 6_000_000, y: 5_000_000 });
         assert!(lib_has_fp(&design));
 
         // A Pcb-scoped undo must never touch the footprint library.
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         let (_, design, _) = load(&dir).unwrap();
-        assert_eq!(pcb_at(&design), Point { x: 5_000, y: 5_000 }, "the PCB move must revert");
+        assert_eq!(pcb_at(&design), Point { x: 5_000_000, y: 5_000_000 }, "the PCB move must revert");
         assert!(lib_has_fp(&design), "a Pcb-tab undo must never touch the Footprint Editor tab's edit");
 
-        step(&dir, Cmd::MoveTo { part: "U1".into(), x: 6_000, y: 5_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveTo { part: "U1".into(), x: 6_000_000, y: 5_000_000 }, false, "test").unwrap();
 
         // A FootprintEditor-scoped undo must never touch the PCB tab.
         undo(&dir, "test", Some(Domain::FootprintEditor)).unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(!lib_has_fp(&design), "the OpenFootprintForEdit must revert");
-        assert_eq!(pcb_at(&design), Point { x: 6_000, y: 5_000 }, "a FootprintEditor-tab undo must never touch the PCB tab's edit");
+        assert_eq!(pcb_at(&design), Point { x: 6_000_000, y: 5_000_000 }, "a FootprintEditor-tab undo must never touch the PCB tab's edit");
 
         // Nothing left to undo on this tab: a clean error, not a silent
         // fallback onto the PCB tab's stack -- the exact GAPS.md #15 bug
@@ -4929,9 +4949,9 @@ mod tests {
         let pad = eda_model::ir::LibraryPad {
             id: String::new(),
             number: "3".into(),
-            at: Point { x: 0, y: 2000 },
+            at: Point { x: 0, y: 2_000_000 },
             offset: Point { x: 0, y: 0 },
-            size: (800, 800),
+            size: (800_000, 800_000),
             shape: eda_model::ir::LibraryPadShape::Rect,
             kind: PadKind::Smd,
             drill: None,
@@ -4977,28 +4997,28 @@ mod tests {
         setup_both(&dir);
 
         step(&dir, Cmd::OpenSymbolForEdit { lib_id: "TEST:R".into() }, false, "test").unwrap();
-        step(&dir, Cmd::MoveTo { part: "R1".into(), x: 11_000, y: 10_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveTo { part: "R1".into(), x: 11_000_000, y: 10_000_000 }, false, "test").unwrap();
 
         let pcb_at = |d: &eda_model::ir::Design| d.placement.as_ref().unwrap().footprints[0].at;
         let lib_has_sym = |d: &eda_model::ir::Design| d.symbol_library.as_ref().is_some_and(|l| l.by_lib_id("TEST:R").is_some());
 
         let (_, design, _) = load(&dir).unwrap();
-        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 });
+        assert_eq!(pcb_at(&design), Point { x: 11_000_000, y: 10_000_000 });
         assert!(lib_has_sym(&design));
 
         // A Pcb-scoped undo must never touch the symbol library.
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         let (_, design, _) = load(&dir).unwrap();
-        assert_eq!(pcb_at(&design), Point { x: 10_000, y: 10_000 }, "the PCB move must revert");
+        assert_eq!(pcb_at(&design), Point { x: 10_000_000, y: 10_000_000 }, "the PCB move must revert");
         assert!(lib_has_sym(&design), "a Pcb-tab undo must never touch the Symbol Editor tab's edit");
 
-        step(&dir, Cmd::MoveTo { part: "R1".into(), x: 11_000, y: 10_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveTo { part: "R1".into(), x: 11_000_000, y: 10_000_000 }, false, "test").unwrap();
 
         // A SymbolEditor-scoped undo must never touch the PCB tab.
         undo(&dir, "test", Some(Domain::SymbolEditor)).unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(!lib_has_sym(&design), "the OpenSymbolForEdit must revert");
-        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 }, "a SymbolEditor-tab undo must never touch the PCB tab's edit");
+        assert_eq!(pcb_at(&design), Point { x: 11_000_000, y: 10_000_000 }, "a SymbolEditor-tab undo must never touch the PCB tab's edit");
 
         // Nothing left to undo on this tab: a clean error, not a silent
         // fallback onto another tab's stack.
@@ -5039,7 +5059,7 @@ mod tests {
         let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -5069,7 +5089,7 @@ mod tests {
         let intent_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/mcu_board_30plus.yaml");
         let design: eda_model::ir::Design = serde_json::from_str(include_str!("../tests/fixtures/mcu30_legacy_flat.design.json")).unwrap();
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 600 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 600_000 };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -5112,9 +5132,9 @@ mod tests {
         assert_eq!(intent.len(), 20);
         assert_every_routed_net_exists(&before, &model_before);
 
-        step(&dir, Cmd::DragSymbol { id: "J1".into(), x: 133_350, y: 86_360, attached_wire_endpoints: vec![], unit: None }, true, "ui").unwrap();
+        step(&dir, Cmd::DragSymbol { id: "J1".into(), x: 133_350_000, y: 86_360_000, attached_wire_endpoints: vec![], unit: None }, true, "ui").unwrap();
         let (_, after, model_after) = load(&dir).unwrap();
-        assert_eq!(after.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "J1").unwrap().at, Point { x: 133_350, y: 86_360 }, "the part moved");
+        assert_eq!(after.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "J1").unwrap().at, Point { x: 133_350_000, y: 86_360_000 }, "the part moved");
         assert!(after.nets.is_none(), "a move does not store a net list at all");
         assert_eq!(joined(&model_after.nets), intent);
         assert_eq!(canonical(&model_after.nets), canonical(&model_before.nets), "same names, same pins, lone pins included");
@@ -5168,7 +5188,7 @@ mod tests {
                     }
                 };
                 let at = screen.symbols.iter().find(|s| s.id == id).unwrap().at;
-                let (dx, dy) = (5_080, 2_540);
+                let (dx, dy) = (5_080_000, 2_540_000);
                 // the drag takes the wires glued to the symbol along; the studio finds them in the drawing it shows
                 let view = Design { schematic: Some(screen.clone()), ..now.clone() };
                 let attached = attached_ends(&view, &model_now, &id);
@@ -5215,18 +5235,18 @@ mod tests {
             let sch = design.schematic.as_mut().unwrap();
             let pt = |x: Nm, y: Nm| Point { x, y };
             // R1.1 is at (10_000, 10_000) and R2.1 at (20_000, 10_000): wires to both, a label and a junction on them, and one of everything else
-            sch.wires.push(eda_model::ir::Wire { id: "wire_a".into(), net: "N1".into(), pins: vec![], pts: vec![pt(10_000, 10_000), pt(10_000, 30_000)], bus: false });
-            sch.wires.push(eda_model::ir::Wire { id: "wire_b".into(), net: "N2".into(), pins: vec![], pts: vec![pt(20_000, 10_000), pt(20_000, 40_000), pt(30_000, 40_000)], bus: false });
-            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_a".into(), net: "N1".into(), at: pt(10_000, 20_000), kind: eda_model::ir::LabelKind::Local });
-            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_g".into(), net: "N2".into(), at: pt(30_000, 40_000), kind: eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input } });
-            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "note".into(), at: pt(50_000, 10_000), angle: 0, size_nm: 1_270 });
-            sch.no_connects.push(eda_model::ir::NoConnect { id: "nc_a".into(), at: pt(60_000, 10_000), pin: String::new() });
-            sch.bus_entries.push(eda_model::ir::BusEntry { id: "bent_a".into(), at: pt(70_000, 10_000), size: pt(2_540, 2_540) });
-            sch.junctions.push(eda_model::ir::Junction { id: "jct_a".into(), at: pt(80_000, 10_000) });
-            sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(50_000, 30_000), pt(60_000, 30_000)], width_nm: 0 });
-            sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: pt(10_000, 30_000), rot: 0, net: "N1".into(), pin: String::new() });
-            sch.extras.graphics.push(eda_model::sch_extras::SchGraphic::new(eda_model::sch_extras::SchGraphicKind::Rectangle { start: pt(70_000, 30_000), end: pt(80_000, 40_000), corner_radius_nm: 0 }));
-            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000), size: (20_000, 10_000), pins: vec![eda_model::ir::SheetPin { id: "shpin_a".into(), name: "IN".into(), shape: eda_model::ir::LabelShape::Input, at: pt(90_000, 15_000) }], page: String::new() });
+            sch.wires.push(eda_model::ir::Wire { id: "wire_a".into(), net: "N1".into(), pins: vec![], pts: vec![pt(10_000_000, 10_000_000), pt(10_000_000, 30_000_000)], bus: false });
+            sch.wires.push(eda_model::ir::Wire { id: "wire_b".into(), net: "N2".into(), pins: vec![], pts: vec![pt(20_000_000, 10_000_000), pt(20_000_000, 40_000_000), pt(30_000_000, 40_000_000)], bus: false });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_a".into(), net: "N1".into(), at: pt(10_000_000, 20_000_000), kind: eda_model::ir::LabelKind::Local });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_g".into(), net: "N2".into(), at: pt(30_000_000, 40_000_000), kind: eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input } });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "note".into(), at: pt(50_000_000, 10_000_000), angle: 0, size_nm: 1_270_000 });
+            sch.no_connects.push(eda_model::ir::NoConnect { id: "nc_a".into(), at: pt(60_000_000, 10_000_000), pin: String::new() });
+            sch.bus_entries.push(eda_model::ir::BusEntry { id: "bent_a".into(), at: pt(70_000_000, 10_000_000), size: pt(2_540_000, 2_540_000) });
+            sch.junctions.push(eda_model::ir::Junction { id: "jct_a".into(), at: pt(80_000_000, 10_000_000) });
+            sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(50_000_000, 30_000_000), pt(60_000_000, 30_000_000)], width_nm: 0 });
+            sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: pt(10_000_000, 30_000_000), rot: 0, net: "N1".into(), pin: String::new() });
+            sch.extras.graphics.push(eda_model::sch_extras::SchGraphic::new(eda_model::sch_extras::SchGraphicKind::Rectangle { start: pt(70_000_000, 30_000_000), end: pt(80_000_000, 40_000_000), corner_radius_nm: 0 }));
+            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000_000), size: (20_000_000, 10_000_000), pins: vec![eda_model::ir::SheetPin { id: "shpin_a".into(), name: "IN".into(), shape: eda_model::ir::LabelShape::Input, at: pt(90_000, 15_000_000) }], page: String::new() });
             sch.assign_missing_ids();
         }
         save(&dir, &design).unwrap();
@@ -5240,9 +5260,9 @@ mod tests {
         let sheet_of = |d: &eda_model::ir::Design| serde_json::to_value(d.schematic.as_ref().unwrap()).unwrap();
         let start = sheet_of(&load(&dir).unwrap().1);
         let commands = vec![
-            Cmd::SchMove(V::Move { ids: all.clone(), dx: 2_540, dy: -1_270, turns: Vec::new(), about: None }),
-            Cmd::SchMove(V::Drag { ids: vec!["R1".into(), "lbl_g".into(), "sheet_a".into()], vertices: Default::default(), dx: 5_080, dy: 2_540, ortho: true, grid: 0, turns: Vec::new(), about: None }),
-            Cmd::SchMove(V::Drag { ids: vec!["wire_b".into()], vertices: [("wire_b".to_string(), vec![0usize])].into_iter().collect(), dx: 0, dy: 2_540, ortho: true, grid: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(V::Move { ids: all.clone(), dx: 2_540_000, dy: -1_270_000, turns: Vec::new(), about: None }),
+            Cmd::SchMove(V::Drag { ids: vec!["R1".into(), "lbl_g".into(), "sheet_a".into()], vertices: Default::default(), dx: 5_080_000, dy: 2_540_000, ortho: true, grid: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(V::Drag { ids: vec!["wire_b".into()], vertices: [("wire_b".to_string(), vec![0usize])].into_iter().collect(), dx: 0, dy: 2_540_000, ortho: true, grid: 0, turns: Vec::new(), about: None }),
             Cmd::SchMove(V::Rotate { ids: all.clone(), vertices: Default::default(), ccw: true, about: None, grid: 0 }),
             Cmd::SchMove(V::Rotate { ids: vec!["lbl_a".into()], vertices: Default::default(), ccw: false, about: None, grid: 0 }),
             Cmd::SchMove(V::Mirror { ids: all.clone(), vertices: Default::default(), vertical: false, about: None, grid: 0 }),
@@ -5274,14 +5294,14 @@ mod tests {
         {
             let sch = design.schematic.as_mut().unwrap();
             let pt = |x: Nm, y: Nm| Point { x, y };
-            sch.wires.push(eda_model::ir::Wire { id: "wire_a".into(), net: "N1".into(), pins: vec![], pts: vec![pt(10_000, 10_000), pt(10_000, 30_000)], bus: false });
-            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_a".into(), net: "N1".into(), at: pt(10_000, 20_000), kind: eda_model::ir::LabelKind::Local });
-            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_g".into(), net: "N2".into(), at: pt(30_000, 40_000), kind: eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input } });
-            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "note".into(), at: pt(50_000, 10_000), angle: 0, size_nm: 1_270 });
-            sch.bus_entries.push(eda_model::ir::BusEntry { id: "bent_a".into(), at: pt(70_000, 10_000), size: pt(2_540, 2_540) });
-            sch.junctions.push(eda_model::ir::Junction { id: "jct_a".into(), at: pt(80_000, 10_000) });
-            sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(50_000, 30_000), pt(60_000, 30_000)], width_nm: 0 });
-            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000), size: (20_000, 10_000), pins: vec![], page: String::new() });
+            sch.wires.push(eda_model::ir::Wire { id: "wire_a".into(), net: "N1".into(), pins: vec![], pts: vec![pt(10_000_000, 10_000_000), pt(10_000_000, 30_000_000)], bus: false });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_a".into(), net: "N1".into(), at: pt(10_000_000, 20_000_000), kind: eda_model::ir::LabelKind::Local });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_g".into(), net: "N2".into(), at: pt(30_000_000, 40_000_000), kind: eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input } });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "note".into(), at: pt(50_000_000, 10_000_000), angle: 0, size_nm: 1_270_000 });
+            sch.bus_entries.push(eda_model::ir::BusEntry { id: "bent_a".into(), at: pt(70_000_000, 10_000_000), size: pt(2_540_000, 2_540_000) });
+            sch.junctions.push(eda_model::ir::Junction { id: "jct_a".into(), at: pt(80_000_000, 10_000_000) });
+            sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(50_000_000, 30_000_000), pt(60_000_000, 30_000_000)], width_nm: 0 });
+            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000_000), size: (20_000_000, 10_000_000), pins: vec![], page: String::new() });
             sch.assign_missing_ids();
         }
         design.sheet_contents = Some([("sub.kicad_sch".to_string(), eda_model::ir::SchematicSection::default())].into_iter().collect());
@@ -5292,9 +5312,9 @@ mod tests {
         let commands = vec![
             V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_nm: None, bold: None, italic: None, auto_rotate: None, fields: None },
             V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: None },
-            V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_nm: Some(2_540), angle: Some(90_000), h: None, v: None },
+            V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_nm: Some(2_540_000), angle: Some(90_000), h: None, v: None },
             V::EditSheet { id: "sheet_a".into(), name: Some("Power".into()), file: Some("power".into()) },
-            V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_nm: Some(300), style: Some(SchLineStyle::Dash), color: Some(red), diameter_nm: Some(900) },
+            V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_nm: Some(300_000), style: Some(SchLineStyle::Dash), color: Some(red), diameter_nm: Some(900_000) },
         ];
         for cmd in commands {
             let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(Cmd::SchEdit(cmd.clone())) };
@@ -5321,14 +5341,14 @@ mod tests {
         let start = sheet_of(&design);
         let label = design.schematic.as_ref().unwrap().labels.first().map(|l| l.id.clone()).expect("the board has a net label");
         let commands = vec![
-            Cmd::SchMove(V::Move { ids: vec![field_id("R1", "Reference")], dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(V::Move { ids: vec![field_id("R1", "Reference")], dx: 2_540_000, dy: 0, turns: Vec::new(), about: None }),
             Cmd::SchMove(V::Rotate { ids: vec![field_id("R1", "Value")], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
             Cmd::SchMove(V::Mirror { ids: vec![field_id("R1", "Value")], vertices: Default::default(), vertical: false, about: None, grid: 0 }),
             Cmd::SchMove(V::Rotate { ids: vec!["R1".into()], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
-            Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_nm: Some(2_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_nm: Some(2_000_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::AutoplaceFields { ids: vec!["R1".into()] }),
-            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_nm: Some(2_000), bold: Some(true), italic: Some(true), auto_rotate: None, fields: None }),
+            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_nm: Some(2_000_000), bold: Some(true), italic: Some(true), auto_rotate: None, fields: None }),
         ];
         for cmd in commands {
             let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd.clone()) };
@@ -5437,7 +5457,7 @@ mod tests {
                 let (_, now, model_now) = load(&dir).unwrap();
                 let before = ends_on_pins(&now, &model_now, &id, &sheet);
                 wired += (before > 0) as usize;
-                let cmd = Cmd::SchMove(eda_ops::sch_move::SchMoveCmd::Drag { ids: vec![id.clone()], vertices: Default::default(), dx: 5_080, dy: 2_540, ortho: true, grid: 0, turns: Vec::new(), about: None });
+                let cmd = Cmd::SchMove(eda_ops::sch_move::SchMoveCmd::Drag { ids: vec![id.clone()], vertices: Default::default(), dx: 5_080_000, dy: 2_540_000, ortho: true, grid: 0, turns: Vec::new(), about: None });
                 let cmd = match &sheet {
                     None => cmd,
                     Some(sid) => Cmd::OnSheet { sheet: sid.clone(), cmd: Box::new(cmd) },
@@ -5466,7 +5486,7 @@ mod tests {
             eda_engine::placed::pin_points(sym, part, model.real_symbol_of(&sym.lib_id, part).as_ref()).into_iter().find(|(n, _)| n == number).unwrap().1
         };
         let (a, b) = (tip("R1", "1"), tip("R3", "1"));
-        step(&dir, Cmd::AddWire { pts: vec![a, Point { x: a.x, y: a.y - 2_540 }, Point { x: b.x, y: a.y - 2_540 }, b], bus: false }, true, "ui").unwrap();
+        step(&dir, Cmd::AddWire { pts: vec![a, Point { x: a.x, y: a.y - 2_540_000 }, Point { x: b.x, y: a.y - 2_540_000 }, b], bus: false }, true, "ui").unwrap();
         let (_, after, model_after) = load(&dir).unwrap();
         let want: Vec<(String, Vec<String>)> = {
             let mut nets: Vec<(String, Vec<String>)> = joined(&model.nets).into_iter().filter(|(n, _)| n != "PA0" && n != "PA2").collect();
@@ -5551,7 +5571,7 @@ mod tests {
         assert_every_routed_net_exists(&after, &model_after);
         // and the next edit, on a sheet, keeps them
         let mcu = after.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().id.clone();
-        let note = Cmd::AddSchText { content: "checked".into(), at: Point { x: 20_000, y: 20_000 }, angle_millideg: 0, size_nm: 1_270 };
+        let note = Cmd::AddSchText { content: "checked".into(), at: Point { x: 20_000_000, y: 20_000_000 }, angle_millideg: 0, size_nm: 1_270_000 };
         step(&dir, Cmd::OnSheet { sheet: mcu, cmd: Box::new(note) }, true, "ui").unwrap();
         let (_, noted, model_noted) = load(&dir).unwrap();
         assert_eq!(joined(&model_noted.nets), intent);
@@ -5586,7 +5606,7 @@ mod tests {
 
         // An edit inside the MCU sheet lands on that sheet alone, and the nets are still read across all the sheets.
         let mcu = root.sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().clone();
-        let note = Cmd::AddSchText { content: "note".into(), at: Point { x: 20_000, y: 20_000 }, angle_millideg: 0, size_nm: 1_270 };
+        let note = Cmd::AddSchText { content: "note".into(), at: Point { x: 20_000_000, y: 20_000_000 }, angle_millideg: 0, size_nm: 1_270_000 };
         step(&dir, Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(note) }, false, "test").unwrap();
         let (_, noted, _) = load(&dir).unwrap();
         assert_eq!(noted.sheet_contents.as_ref().unwrap()[&mcu.file].texts.len(), 1);
@@ -5609,7 +5629,7 @@ mod tests {
 
         // Moving U1 is layout: it lands on the sheet, and the nets stay as they were (the wires it leaves behind are what ERC is for).
         let u1 = screens[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at;
-        let moved = Point { x: u1.x + 2_540, y: u1.y };
+        let moved = Point { x: u1.x + 2_540_000, y: u1.y };
         step(&dir, Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::MoveSymbol { id: "U1".into(), x: moved.x, y: moved.y, unit: None }) }, false, "test").unwrap();
         let (_, edited, _) = load(&dir).unwrap();
         assert_eq!(edited.sheet_contents.as_ref().unwrap()[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at, moved);
@@ -5679,10 +5699,10 @@ mod tests {
         use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintKind, PadEdit, UserField};
         let dir = scratch("footprint_edit_undo");
         setup(&dir);
-        let mut reference = FieldLayout::new(Point { x: 1_500, y: -2_500 }, "F.Fab");
-        reference.size = (900, 900);
-        reference.thickness = 120;
-        let vendor = UserField { name: "Vendor".into(), text: "ACME".into(), layout: FieldLayout::new(Point { x: 0, y: 2_000 }, "F.Fab") };
+        let mut reference = FieldLayout::new(Point { x: 1_500_000, y: -2_500_000 }, "F.Fab");
+        reference.size = (900_000, 900_000);
+        reference.thickness = 120_000;
+        let vendor = UserField { name: "Vendor".into(), text: "ACME".into(), layout: FieldLayout::new(Point { x: 0, y: 2_000_000 }, "F.Fab") };
         let attrs = FootprintAttrs { kind: FootprintKind::Smd, exclude_from_pos_files: true, dnp: true, ..Default::default() };
         step(&dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: Some(reference.clone()), value: None, fields: Some(vec![vendor]), attrs: Some(attrs) }, false, "test").unwrap();
 
@@ -5697,19 +5717,19 @@ mod tests {
 
         let mut pad = PadEdit::none("1", 1);
         pad.shape = Some(PadShape::Oval);
-        pad.size = Some((1_200, 500));
-        pad.offset = Some(Point { x: 100, y: 0 });
+        pad.size = Some((1_200_000, 500_000));
+        pad.offset = Some(Point { x: 100_000, y: 0 });
         step(&dir, Cmd::EditBoardPad { part: "U1".into(), edit: pad.clone() }, false, "test").unwrap();
         let (_, design, model) = load(&dir).unwrap();
         let pads = |model: &ConstraintModel, r: &str| model.footprint_of(model.part(r).unwrap()).unwrap().pads;
-        assert_eq!((pads(&model, "U1")[0].size, pads(&model, "U1")[0].shape), ((1_200, 500), PadShape::Oval), "the model answers with the pad as edited");
-        assert_eq!(pads(&model, "U2")[0].size, (800, 800), "another instance of the same footprint keeps the library's pad");
+        assert_eq!((pads(&model, "U1")[0].size, pads(&model, "U1")[0].shape), ((1_200_000, 500_000), PadShape::Oval), "the model answers with the pad as edited");
+        assert_eq!(pads(&model, "U2")[0].size, (800_000, 800_000), "another instance of the same footprint keeps the library's pad");
         let text = pcb(&design, &model);
         assert!(text.contains("(size 1.2 0.5)") && text.contains("(drill (offset 0.1 0))"), "{text}");
 
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         let (_, after_pad, model) = load(&dir).unwrap();
-        assert_eq!(pads(&model, "U1")[0].size, (800, 800), "one undo takes the pad edit back");
+        assert_eq!(pads(&model, "U1")[0].size, (800_000, 800_000), "one undo takes the pad edit back");
         assert!(after_pad.footprint_edit("U1").unwrap().pad("1", 1).is_none() && after_pad.footprint_edit("U1").unwrap().reference.is_some(), "and only the pad edit");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert!(load(&dir).unwrap().1.footprint_edit("U1").is_none(), "the next one takes the footprint edit back");
@@ -5720,17 +5740,17 @@ mod tests {
     fn edit_both_ways(dir: &Path) -> (eda_model::fp_edit::FieldLayout, eda_model::fp_edit::FootprintAttrs, eda_model::fp_edit::PadEdit) {
         use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintKind, PadEdit};
         use eda_model::ir::PadConnection;
-        let mut reference = FieldLayout::new(Point { x: 1_500, y: -2_500 }, "F.Fab");
-        reference.size = (900, 900);
+        let mut reference = FieldLayout::new(Point { x: 1_500_000, y: -2_500_000 }, "F.Fab");
+        reference.size = (900_000, 900_000);
         let attrs = FootprintAttrs { kind: FootprintKind::Smd, dnp: true, ..Default::default() };
         step(dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: Some(reference.clone()), value: None, fields: None, attrs: Some(attrs) }, false, "test").unwrap();
         let mut pad = PadEdit::none("2", 1);
-        pad.size = Some((1_000, 1_000));
-        pad.offset = Some(Point { x: 100, y: 0 });
-        pad.solder_mask_margin = Some(50);
+        pad.size = Some((1_000_000, 1_000_000));
+        pad.offset = Some(Point { x: 100_000, y: 0 });
+        pad.solder_mask_margin = Some(50_000);
         step(dir, Cmd::EditBoardPad { part: "U1".into(), edit: pad.clone() }, false, "test").unwrap();
-        step(dir, Cmd::SetPadZoneOverrides { part: "U1".into(), pad: "2".into(), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(250) }, false, "test").unwrap();
-        step(dir, Cmd::SetFootprintZoneConnection { part: "U1".into(), zone_connection: Some(PadConnection::None), clearance: Some(300) }, false, "test").unwrap();
+        step(dir, Cmd::SetPadZoneOverrides { part: "U1".into(), pad: "2".into(), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400_000), thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(250_000) }, false, "test").unwrap();
+        step(dir, Cmd::SetFootprintZoneConnection { part: "U1".into(), zone_connection: Some(PadConnection::None), clearance: Some(300_000) }, false, "test").unwrap();
         (reference, attrs, pad)
     }
 
@@ -5746,9 +5766,9 @@ mod tests {
         assert_eq!((got.offset, got.solder_mask_margin), (pad.offset, pad.solder_mask_margin), "{reference}: the pad edit");
         let zone = design.drawings.as_ref().unwrap().zone_overrides.iter().find(|z| z.id == reference).unwrap_or_else(|| panic!("{reference} has its own zone overrides"));
         let p2 = zone.pads.iter().find(|p| p.number == "2").unwrap_or_else(|| panic!("{reference}: pad 2's zone overrides"));
-        assert_eq!((p2.zone_connection, p2.thermal_gap, p2.clearance), (Some(PadConnection::Full), Some(400), Some(250)), "{reference}");
-        assert_eq!(zone.footprint.map(|f| (f.zone_connection, f.clearance)), Some((Some(PadConnection::None), Some(300))), "{reference}: the footprint's own");
-        assert_eq!(model.footprint_of(model.part(reference).unwrap()).unwrap().pads[1].size, (1_000, 1_000), "{reference}: its pads are the edited ones");
+        assert_eq!((p2.zone_connection, p2.thermal_gap, p2.clearance), (Some(PadConnection::Full), Some(400_000), Some(250_000)), "{reference}");
+        assert_eq!(zone.footprint.map(|f| (f.zone_connection, f.clearance)), Some((Some(PadConnection::None), Some(300_000))), "{reference}: the footprint's own");
+        assert_eq!(model.footprint_of(model.part(reference).unwrap()).unwrap().pads[1].size, (1_000_000, 1_000_000), "{reference}: its pads are the edited ones");
         // One pad form carries the pad edit's offset and margin and the zone facts, in KiCad's order.
         let text = eda_kicad::export_kicad_pcb(design, model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
         let line = text.lines().filter(|l| l.contains("(pad \"2\"") && l.contains("(size 1 1)")).find(|l| l.contains("(thermal_gap 0.4)")).unwrap_or_else(|| panic!("a pad 2 form with both overlays:\n{text}"));
@@ -5783,7 +5803,7 @@ mod tests {
         let text = reply["text"].as_str().unwrap().to_string();
 
         // On the same board, where U1 exists: a part of its own.
-        step(&a, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 30_000, y: 30_000 } }, false, "test").unwrap();
+        step(&a, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 30_000_000, y: 30_000_000 } }, false, "test").unwrap();
         let (_, design, model) = load(&a).unwrap();
         assert_has_both(&design, &model, "U3", &edited);
         undo(&a, "test", Some(Domain::Pcb)).unwrap();
@@ -5791,7 +5811,7 @@ mod tests {
         // On another board.
         let b = scratch("paste_both_into");
         setup(&b);
-        step(&b, Cmd::PasteClipboard { text, at: Point { x: 30_000, y: 30_000 } }, false, "test").unwrap();
+        step(&b, Cmd::PasteClipboard { text, at: Point { x: 30_000_000, y: 30_000_000 } }, false, "test").unwrap();
         let (_, design, model) = load(&b).unwrap();
         assert_has_both(&design, &model, "U3", &edited);
     }
@@ -5814,7 +5834,7 @@ mod tests {
         let dir = scratch("footprint_attrs_exports");
         setup(&dir);
         step(&dir, Cmd::Duplicate { ids: vec!["U1".into()] }, false, "test").unwrap();
-        step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 6_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 6_000_000 }, false, "test").unwrap();
         let attrs = |part: &str, a: FootprintAttrs| step(&dir, Cmd::EditBoardFootprint { part: part.into(), reference: None, value: None, fields: None, attrs: Some(a) }, false, "test").unwrap();
         attrs("U1", FootprintAttrs { kind: FootprintKind::Smd, exclude_from_pos_files: true, ..Default::default() });
         attrs("U2", FootprintAttrs { kind: FootprintKind::Smd, dnp: true, ..Default::default() });
@@ -5845,9 +5865,9 @@ mod tests {
         // A pad's clearance override (the zone overlay's: a pad has one clearance) is the clearance kicad-cli enforces between pad 1 and pad 2 of
         // U2 (1.2 mm apart); and a pad edit of ours beside it (a solder mask margin) is written with it, on the same pad line.
         let mut pad = PadEdit::none("1", 1);
-        pad.solder_mask_margin = Some(50);
+        pad.solder_mask_margin = Some(50_000);
         step(&dir, Cmd::EditBoardPad { part: "U2".into(), edit: pad }, false, "test").unwrap();
-        step(&dir, Cmd::SetPadZoneOverrides { part: "U2".into(), pad: "1".into(), zone_connection: None, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(3_000) }, false, "test").unwrap();
+        step(&dir, Cmd::SetPadZoneOverrides { part: "U2".into(), pad: "1".into(), zone_connection: None, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(3_000_000) }, false, "test").unwrap();
         {
             let (_, design, model) = load(&dir).unwrap();
             let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
@@ -5870,14 +5890,14 @@ mod tests {
         // a zero spacing is the dialog's refusal; a real one
         let bad = step(&dir, Cmd::CreateArray { ids: vec!["U1".into()], geometry, arrange: false, reannotate: true }, false, "test");
         assert!(bad.is_err(), "horizontal delta of zero with 2 objects");
-        let geometry = eda_ops::ArrayGeometry::Grid { nx: 2, ny: 2, dx: 3_000, dy: 4_000, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
+        let geometry = eda_ops::ArrayGeometry::Grid { nx: 2, ny: 2, dx: 3_000_000, dy: 4_000_000, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
         let msg = step(&dir, Cmd::CreateArray { ids: vec!["U1".into()], geometry, arrange: false, reannotate: true }, false, "test").unwrap();
         assert!(msg.contains("5/5 placed"), "three copies join the two parts: {msg}");
         let (_, design, model) = load(&dir).unwrap();
         let refs: Vec<String> = design.placement.as_ref().unwrap().footprints.iter().map(|f| f.id.clone()).collect();
         assert_eq!(refs, ["U1", "U2", "U3", "U4", "U5"]);
         let at = |r: &str| design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == r).unwrap().at;
-        assert_eq!((at("U3"), at("U4"), at("U5")), (Point { x: at("U1").x + 3_000, y: at("U1").y }, Point { x: at("U1").x, y: at("U1").y + 4_000 }, Point { x: at("U1").x + 3_000, y: at("U1").y + 4_000 }));
+        assert_eq!((at("U3"), at("U4"), at("U5")), (Point { x: at("U1").x + 3_000_000, y: at("U1").y }, Point { x: at("U1").x, y: at("U1").y + 4_000_000 }, Point { x: at("U1").x + 3_000_000, y: at("U1").y + 4_000_000 }));
         let on = |net: &str| model.nets.iter().find(|n| n.name == net).unwrap().pins.clone();
         assert!(on("GND").contains(&"U5.1".to_string()) && on("VCC").contains(&"U5.2".to_string()), "the copies are on U1's nets: {:?}", model.nets);
         let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
@@ -5904,7 +5924,7 @@ mod tests {
         }
         let dir = scratch("pad_zone_connection");
         setup(&dir);
-        let outline = vec![Point { x: 1_000, y: 1_000 }, Point { x: 19_000, y: 1_000 }, Point { x: 19_000, y: 19_000 }, Point { x: 1_000, y: 19_000 }];
+        let outline = vec![Point { x: 1_000_000, y: 1_000_000 }, Point { x: 19_000_000, y: 1_000_000 }, Point { x: 19_000_000, y: 19_000_000 }, Point { x: 1_000_000, y: 19_000_000 }];
         step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline }, false, "test").unwrap();
         // The area of the pour after kicad-cli has filled the board as it is now.
         let area = |dir: &Path| -> f64 {
@@ -5956,7 +5976,7 @@ mod tests {
         let model = ConstraintModel {
             parts: vec![part("R1", &["1", "2"], "TEST:R2"), part("U2", &["1", "2", "3", "4"], "TEST:DUAL")],
             nets: ["R1.1", "R1.2", "U2.1", "U2.2", "U2.3", "U2.4"].iter().enumerate().map(|(i, p)| Net { name: format!("N{}", i + 1), pins: vec![p.to_string()] }).collect(),
-            symbols: vec![lib("TEST:R2", 1, vec![lib_pin("1", 2.54, 1), lib_pin("2", -2.54, 1)]), lib("TEST:DUAL", 2, vec![lib_pin("1", 2.54, 1), lib_pin("2", -2.54, 1), lib_pin("3", 2.54, 2), lib_pin("4", -2.54, 2)])],
+            symbols: vec![lib("TEST:R2", 1, vec![lib_pin("1", 2.54, 1), lib_pin("2", -2.54, 1)]), lib("TEST:DUAL", 2000, vec![lib_pin("1", 2.54, 1), lib_pin("2", -2.54, 1), lib_pin("3", 2.54, 2000), lib_pin("4", -2.54, 2000)])],
             ..Default::default()
         };
         let intent_path = dir.join("intent.yaml");
@@ -5964,19 +5984,19 @@ mod tests {
 
         let pt = |x: Nm, y: Nm| Point { x, y };
         let sym = |id: &str, lib_id: &str, unit: u32, at: Point| eda_model::ir::SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
-        let mut sch = eda_model::ir::SchematicSection { symbols: vec![sym("R1", "TEST:R2", 1, pt(20_000, 20_000)), sym("U2", "TEST:DUAL", 1, pt(60_000, 20_000)), sym("U2", "TEST:DUAL", 2, pt(100_000, 20_000))], imported_from_kicad: true, ..Default::default() };
+        let mut sch = eda_model::ir::SchematicSection { symbols: vec![sym("R1", "TEST:R2", 1, pt(20_000_000, 20_000_000)), sym("U2", "TEST:DUAL", 1, pt(60_000_000, 20_000_000)), sym("U2", "TEST:DUAL", 2000, pt(100_000_000, 20_000_000))], imported_from_kicad: true, ..Default::default() };
         // a pin is 2.54 mm above or below its symbol's origin: a wire 10 mm further out to a label
         let mut wire_to_label = |tip: Point, up: bool, label: &str| {
-            let end = pt(tip.x, tip.y + if up { -10_000 } else { 10_000 });
+            let end = pt(tip.x, tip.y + if up { -10_000_000 } else { 10_000_000 });
             sch.wires.push(eda_model::ir::Wire { id: format!("wire_{label}"), net: label.into(), pins: vec![], pts: vec![tip, end], bus: false });
             sch.labels.push(eda_model::ir::NetLabel { id: format!("lbl_{label}"), net: label.into(), at: end, kind: eda_model::ir::LabelKind::Local });
         };
-        wire_to_label(pt(20_000, 17_460), true, "A");
-        wire_to_label(pt(20_000, 22_540), false, "B");
-        wire_to_label(pt(60_000, 17_460), true, "L1");
-        wire_to_label(pt(60_000, 22_540), false, "L2");
-        wire_to_label(pt(100_000, 17_460), true, "L3");
-        wire_to_label(pt(100_000, 22_540), false, "L4");
+        wire_to_label(pt(20_000_000, 17_460_000), true, "A");
+        wire_to_label(pt(20_000_000, 22_540_000), false, "B");
+        wire_to_label(pt(60_000_000, 17_460_000), true, "L1");
+        wire_to_label(pt(60_000_000, 22_540_000), false, "L2");
+        wire_to_label(pt(100_000_000, 17_460_000), true, "L3");
+        wire_to_label(pt(100_000_000, 22_540_000), false, "L4");
         sch.assign_missing_ids();
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
@@ -5989,7 +6009,7 @@ mod tests {
             drawings: None,
         };
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -6007,9 +6027,9 @@ mod tests {
             let pt = |x: Nm, y: Nm| Point { x, y };
             let pin = |id: &str, name: &str, at: Point| eda_model::ir::SheetPin { id: id.into(), name: name.into(), shape: eda_model::ir::LabelShape::Input, at };
             // a sheet 20 x 10 mm at (90, 10) mm with a pin on its left border (to a wire and a label) and one on its right border
-            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000), size: (20_000, 10_000), pins: vec![pin("shpin_in", "IN", pt(90_000, 15_000)), pin("shpin_out", "OUT", pt(110_000, 14_000))], page: String::new() });
-            sch.wires.push(eda_model::ir::Wire { id: "wire_in".into(), net: "N1".into(), pins: vec![], pts: vec![pt(80_000, 15_000), pt(90_000, 15_000)], bus: false });
-            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_in".into(), net: "N1".into(), at: pt(80_000, 15_000), kind: eda_model::ir::LabelKind::Local });
+            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000_000), size: (20_000_000, 10_000_000), pins: vec![pin("shpin_in", "IN", pt(90_000, 15_000_000)), pin("shpin_out", "OUT", pt(110_000_000, 14_000_000))], page: String::new() });
+            sch.wires.push(eda_model::ir::Wire { id: "wire_in".into(), net: "N1".into(), pins: vec![], pts: vec![pt(80_000_000, 15_000_000), pt(90_000, 15_000_000)], bus: false });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_in".into(), net: "N1".into(), at: pt(80_000_000, 15_000_000), kind: eda_model::ir::LabelKind::Local });
             sch.assign_missing_ids();
         }
         design.sheet_contents = Some([("sub.kicad_sch".to_string(), eda_model::ir::SchematicSection::default())].into_iter().collect());
@@ -6019,9 +6039,9 @@ mod tests {
         let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
         let commands = vec![
             // along the border, and across to the other one
-            Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000, turns: Vec::new(), about: None }),
-            Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 18_000, dy: 2_000, turns: Vec::new(), about: None }),
-            Cmd::SchMove(M::Drag { ids: vec!["shpin_in".into()], vertices: Default::default(), dx: 0, dy: 2_000, ortho: true, grid: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000_000, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 18_000_000, dy: 2_000_000, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Drag { ids: vec!["shpin_in".into()], vertices: Default::default(), dx: 0, dy: 2_000_000, ortho: true, grid: 0, turns: Vec::new(), about: None }),
             Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None, size_nm: None, bold: None, italic: None }),
             Cmd::SwapSchItems { a: "shpin_in".into(), b: "shpin_out".into() },
             Cmd::SchEdit(V::DeleteSheetPin { id: "shpin_out".into() }),
@@ -6047,8 +6067,8 @@ mod tests {
         {
             let sch = design.schematic.as_mut().unwrap();
             let pt = |x: Nm, y: Nm| Point { x, y };
-            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "a".into(), at: pt(15_000, 30_000), angle: 0, size_nm: 1_270 });
-            sch.texts.push(eda_model::ir::SchematicText { id: "txt_b".into(), content: "b".into(), at: pt(25_000, 30_000), angle: 0, size_nm: 1_270 });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "a".into(), at: pt(15_000_000, 30_000_000), angle: 0, size_nm: 1_270_000 });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_b".into(), content: "b".into(), at: pt(25_000_000, 30_000_000), angle: 0, size_nm: 1_270_000 });
             sch.assign_missing_ids();
             // inner = {R1, R2}, outer = {inner, txt_a}
             sch.extras.groups = vec![
@@ -6067,7 +6087,7 @@ mod tests {
             Cmd::SchEdit(V::AddToGroup { group_id: "grp_inner".into(), ids: ids(&["txt_b"]) }),
             Cmd::SchEdit(V::RemoveFromGroup { ids: ids(&["txt_a"]) }),
             Cmd::SchEdit(V::EditGroup { id: "grp_outer".into(), name: "renamed".into(), member_ids: ids(&["grp_inner", "txt_b"]), design_block: None }),
-            Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540_000, dy: 0, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Rotate { ids: ids(&["grp_outer"]), vertices: Default::default(), ccw: true, about: None, grid: 0 }),
             Cmd::SchMove(M::Mirror { ids: ids(&["grp_outer"]), vertices: Default::default(), vertical: false, about: None, grid: 0 }),
             Cmd::DeleteSchText { id: "txt_a".into() },
@@ -6079,13 +6099,13 @@ mod tests {
             assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet and its groups back exactly after {cmd:?}");
         }
         // the move really took the whole tree: R1, R2 and txt_a are 2.54 mm further right; txt_b, in no group, is where it was
-        step(&dir, on_sheet(Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540, dy: 0, turns: Vec::new(), about: None })), false, "test").unwrap();
+        step(&dir, on_sheet(Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540_000, dy: 0, turns: Vec::new(), about: None })), false, "test").unwrap();
         let d = load(&dir).unwrap().1;
         let sch = d.schematic.as_ref().unwrap();
-        assert_eq!(sch.symbols.iter().find(|s| s.id == "R1").unwrap().at.x, 12_540);
-        assert_eq!(sch.symbols.iter().find(|s| s.id == "R2").unwrap().at.x, 22_540);
-        assert_eq!(sch.texts.iter().find(|t| t.id == "txt_a").unwrap().at.x, 17_540);
-        assert_eq!(sch.texts.iter().find(|t| t.id == "txt_b").unwrap().at.x, 25_000);
+        assert_eq!(sch.symbols.iter().find(|s| s.id == "R1").unwrap().at.x, 12_540_000);
+        assert_eq!(sch.symbols.iter().find(|s| s.id == "R2").unwrap().at.x, 22_540_000);
+        assert_eq!(sch.texts.iter().find(|t| t.id == "txt_a").unwrap().at.x, 17_540_000);
+        assert_eq!(sch.texts.iter().find(|t| t.id == "txt_b").unwrap().at.x, 25_000_000);
         assert_eq!(sch.extras.groups.len(), 2, "the tree is still the tree");
         // the studio's sheet carries the groups
         let json = crate::studio::schematic_json_of(&d, &load(&dir).unwrap().2, "");
@@ -6166,7 +6186,7 @@ mod tests {
         let commands = vec![
             edit(&|_, v| *v = Some(true)),
             edit(&|t, _| *t = Some("RC0603".into())),
-            Cmd::SchMove(M::Move { ids: vec![field.clone()], dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Move { ids: vec![field.clone()], dx: 2_540_000, dy: 0, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Rotate { ids: vec![field.clone()], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
             Cmd::SchMove(M::Mirror { ids: vec![field.clone()], vertical: false, vertices: Default::default(), about: None, grid: 0 }),
             Cmd::SchEdit(V::AutoplaceFields { ids: vec!["R1".into()] }),
@@ -6272,7 +6292,7 @@ mod tests {
         };
         let global = eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Output };
         // wire A runs from R1's top pin up to (20, 7.46) mm, where the local label A is
-        let place = V::PlaceLabel { net: "CLK".into(), at: pt(20_000, 7_460), kind: global.clone(), spin: Some(eda_model::sch_extras::LabelSpin::Left), size_nm: None, bold: None, italic: None, auto_rotate: Some(true) };
+        let place = V::PlaceLabel { net: "CLK".into(), at: pt(20_000_000, 7_460_000), kind: global.clone(), spin: Some(eda_model::sch_extras::LabelSpin::Left), size_nm: None, bold: None, italic: None, auto_rotate: Some(true) };
         check(Cmd::SchEdit(place.clone()), &|d| {
             let sch = d.schematic.as_ref().unwrap();
             let l = sch.labels.iter().find(|l| l.net == "CLK").expect("the label is on the sheet");
@@ -6280,7 +6300,7 @@ mod tests {
             assert_eq!(sch.extras.label_spins.get(&l.id), Some(&eda_model::sch_extras::LabelSpin::Up));
             assert!(sch.extras.label_looks[&l.id].auto_rotate);
         });
-        check(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000, 50_000), angle: 0, size_nm: 1_270, h: None, v: None }), &|d| {
+        check(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000_000, 50_000_000), angle: 0, size_nm: 1_270_000, h: None, v: None }), &|d| {
             let sch = d.schematic.as_ref().unwrap();
             let t = sch.texts.iter().find(|t| t.content == "note").expect("the text is on the sheet");
             assert_eq!(sch.extras.text_justify_of(&t.id), eda_model::sch_extras::SchTextJustify::FILE_DEFAULT);
@@ -6293,7 +6313,7 @@ mod tests {
 
         // keep a label and a text on the sheet to edit
         step(&dir, on_sheet(Cmd::SchEdit(place)), false, "test").unwrap();
-        step(&dir, on_sheet(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000, 50_000), angle: 0, size_nm: 1_270, h: Some(eda_model::ir::TextJustify::Left), v: Some(eda_model::ir::TextVAlign::Bottom) })), false, "test").unwrap();
+        step(&dir, on_sheet(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000_000, 50_000_000), angle: 0, size_nm: 1_270_000, h: Some(eda_model::ir::TextJustify::Left), v: Some(eda_model::ir::TextVAlign::Bottom) })), false, "test").unwrap();
         let (label, text) = {
             let d = load(&dir).unwrap().1;
             let sch = d.schematic.unwrap();
@@ -6336,22 +6356,22 @@ mod tests {
         {
             let sch = design.schematic.as_mut().unwrap();
             // a wire that stands apart from the others, 25 mm to the right of wire A (which runs up from R1's pin 1 at x = 20 mm)
-            sch.wires.push(eda_model::ir::Wire { id: "wire_h2".into(), net: "H2".into(), pins: vec![], pts: vec![Point { x: 45_000, y: 12_000 }, Point { x: 60_000, y: 12_000 }], bus: false });
+            sch.wires.push(eda_model::ir::Wire { id: "wire_h2".into(), net: "H2".into(), pins: vec![], pts: vec![Point { x: 45_000_000, y: 12_000_000 }, Point { x: 60_000_000, y: 12_000_000 }], bus: false });
             sch.assign_missing_ids();
         }
         save(&dir, &design).unwrap();
         let preview = |cmd: serde_json::Value| crate::sch_move_api::move_preview(&dir, serde_json::json!({ "sheet": "", "cmds": [cmd] }).to_string().as_bytes());
         // carried onto wire A's middle: its end makes a T there, and the two are different nets
-        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["wire_h2"], "dx": -25_000, "dy": 0 }));
+        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["wire_h2"], "dx": -25_000_000, "dy": 0 }));
         assert_eq!(v["ok"], serde_json::json!(true), "{v}");
-        assert_eq!(v["net_collision"]["collisions"], serde_json::json!([{ "at": [20_000, 12_000], "radius_nm": 914.4 * 1.5 }]), "{v}");
+        assert_eq!(v["net_collision"]["collisions"], serde_json::json!([{ "at": [20_000_000, 12_000_000], "radius_nm": 914_400.0 * 1.5 }]), "{v}");
         assert_eq!(v["net_collision"]["disconnections"], serde_json::json!([]));
         // short of it nothing is marked, and the patch is there all the same
-        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["wire_h2"], "dx": -10_000, "dy": 0 }));
+        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["wire_h2"], "dx": -10_000_000, "dy": 0 }));
         assert_eq!((v["net_collision"]["collisions"].clone(), v["net_collision"]["disconnections"].clone()), (serde_json::json!([]), serde_json::json!([])), "{v}");
         assert!(v["wires"].as_array().is_some_and(|w| !w.is_empty()));
         // R1 carried off its wires: a mark at each pin it left
-        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["R1"], "dx": 10_000, "dy": 0 }));
+        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["R1"], "dx": 10_000_000, "dy": 0 }));
         assert_eq!(v["net_collision"]["disconnections"].as_array().map(Vec::len), Some(2), "{v}");
         let _ = std::fs::remove_dir_all(&dir);
     }

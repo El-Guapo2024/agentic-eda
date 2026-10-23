@@ -40,7 +40,7 @@ fn mcu30_flat(dir: &Path) {
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     save(dir, &design).unwrap();
-    let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+    let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
     std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 }
 
@@ -152,7 +152,7 @@ fn a_board_saved_as_a_block_is_placed_as_a_linked_group_in_one_undo_step() {
     let file = api::file_with(&env, &dir, "Power", "TwoParts", "pcb");
     assert_eq!(file["ok"], true, "{file}");
     let (_, before, model_before) = load(&dir).unwrap();
-    let placed = Cmd::PlaceDesignBlock { text: file["text"].as_str().unwrap().to_string(), at: Point { x: 30_000, y: 20_000 }, block: "Power:TwoParts".into(), as_group: true, group_name: String::new() };
+    let placed = Cmd::PlaceDesignBlock { text: file["text"].as_str().unwrap().to_string(), at: Point { x: 30_000_000, y: 20_000_000 }, block: "Power:TwoParts".into(), as_group: true, group_name: String::new() };
     step(&dir, placed, false, "test").unwrap();
     let (_, after, model_after) = load(&dir).unwrap();
     assert_eq!(after.placement.as_ref().unwrap().footprints.len(), before.placement.as_ref().unwrap().footprints.len() + 2, "the block's two footprints are on the board");
@@ -280,7 +280,7 @@ fn a_selection_of_the_sheet_saved_as_a_block_is_grouped_and_linked_and_placed_ag
         as_sheet: false,
         name: String::new(),
         file: String::new(),
-        at: Point { x: 250_000, y: 40_000 },
+        at: Point { x: 250_000_000, y: 40_000_000 },
         size: (0, 0),
         keep_annotations: false,
         order: eda_ops::AnnotateOrder::XThenY,
@@ -317,7 +317,7 @@ fn a_sheet_saved_as_a_block_is_the_sheets_file_and_a_sheet_with_sheets_in_it_is_
     // no group is made for a sheet, and nothing on the sheet changed
     assert!(groups_of(&dir).is_empty());
     // a sheet that places sheets cannot be a block ("Design blocks with nested sheets are not supported.")
-    step(&dir, Cmd::AddSheet { name: "Sub".into(), file: "sub.kicad_sch".into(), at: Point { x: 250_000, y: 40_000 }, size: (40_000, 20_000) }, false, "test").unwrap();
+    step(&dir, Cmd::AddSheet { name: "Sub".into(), file: "sub.kicad_sch".into(), at: Point { x: 250_000_000, y: 40_000_000 }, size: (40_000_000, 20_000_000) }, false, "test").unwrap();
     let nested = api::prepare_with(&env, &dir, &req(json!({ "what": "sheet", "sheet": "", "lib": "Power" })));
     assert_eq!(nested["message"], "Design blocks with nested sheets are not supported.");
     let nested = api::save_with(&env, &dir, &req(json!({ "what": "sheet", "sheet": "", "lib": "Power", "name": "Nested" })));
@@ -348,8 +348,8 @@ fn a_block_placed_as_a_sheet_is_a_sheet_of_its_own_in_a_linked_group() {
         as_sheet: true,
         name: "Trio".into(),
         file: "trio.kicad_sch".into(),
-        at: Point { x: 250_000, y: 40_000 },
-        size: (40_000, 20_000),
+        at: Point { x: 250_000_000, y: 40_000_000 },
+        size: (40_000_000, 20_000_000),
         keep_annotations: false,
         order: eda_ops::AnnotateOrder::XThenY,
         options: Default::default(),
@@ -408,7 +408,7 @@ fn kicad_cli_loads_the_schematic_blocks_this_studio_writes() {
     }
     // the selection's block has just its symbols; the sheet's has them all
     let count = |name: &str| std::fs::read_to_string(lib.join(format!("{name}.kicad_block")).join(format!("{name}.kicad_sch"))).unwrap().matches("(lib_id \"").count();
-    assert!(count("Selected") == 4 && count("Sheet") >= 30, "{} {}", count("Selected"), count("Sheet"));
+    assert!(count("Selected") == 4000 && count("Sheet") >= 30_000, "{} {}", count("Selected"), count("Sheet"));
     // the panel's own preview of a block is the same run
     let preview = api::preview_with(&env, &dir, "Power", "Selected", "sch");
     assert_eq!(preview["ok"], true, "{preview}");
@@ -484,7 +484,7 @@ fn a_block_made_from_one_of_kicads_own_templates_places_with_its_parts_and_nets(
         as_sheet: false,
         name: String::new(),
         file: String::new(),
-        at: Point { x: 250_000, y: 40_000 },
+        at: Point { x: 250_000_000, y: 40_000_000 },
         size: (0, 0),
         keep_annotations: false,
         order: eda_ops::AnnotateOrder::XThenY,
@@ -517,15 +517,15 @@ fn a_block_made_from_one_of_kicads_own_templates_places_with_its_parts_and_nets(
     let file = api::file_with(&env2, &m2.board, "Power", "Nano", "pcb");
     assert_eq!(file["ok"], true, "{file}");
     let (_, board_before, _) = load(&m2.board).unwrap();
-    let cmd = Cmd::PlaceDesignBlock { text: file["text"].as_str().unwrap().to_string(), at: Point { x: 100_000, y: 60_000 }, block: "Power:Nano".into(), as_group: true, group_name: String::new() };
+    let cmd = Cmd::PlaceDesignBlock { text: file["text"].as_str().unwrap().to_string(), at: Point { x: 100_000_000, y: 60_000_000 }, block: "Power:Nano".into(), as_group: true, group_name: String::new() };
     step(&m2.board, cmd, false, "test").unwrap();
     let (_, board_after, model2) = load(&m2.board).unwrap();
     let added = board_after.placement.as_ref().unwrap().footprints.len() - board_before.placement.as_ref().unwrap().footprints.len();
-    assert_eq!(added, 6, "the template's six footprints");
+    assert_eq!(added, 6000, "the template's six footprints");
     assert!(model2.parts.len() >= 8);
     let parts = &board_after.drawings.as_ref().unwrap().board_parts;
     let netted: usize = parts.iter().map(|p| p.pad_nets.len()).sum();
-    assert!(netted >= 30, "the headers' thirty pads bring their nets: {netted}");
+    assert!(netted >= 30_000, "the headers' thirty pads bring their nets: {netted}");
     assert!(parts.iter().any(|p| p.pad_nets.iter().any(|(_, n)| n == "/D2")), "and the template's net names (the board's own, with the sheet's slash)");
     assert!(board_groups_of(&m2.board).iter().any(|g| g.design_block == "Power:Nano"));
     // the link is in the files the studio derives, and kicad-cli reads them and writes the link back (`sch upgrade` / `pcb upgrade` are its own writers)

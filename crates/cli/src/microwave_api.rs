@@ -59,9 +59,9 @@ mod tests {
 
     #[test]
     fn the_inductors_length_is_checked_before_its_value_is_asked() {
-        let ask = |length: i64| check_inductor(json!({ "start": {"x": 0, "y": 0}, "end": {"x": 0, "y": 10_000}, "length_nm": length, "track_width_nm": 250 }).to_string().as_bytes());
-        assert_eq!(ask(20_000), json!({ "ok": true }));
-        for (length, message) in [(9_000, "Requested length < minimum length"), (11_000, "Requested length too small"), (15_000, "Requested length can't be represented"), (100_000, "Requested length too large")] {
+        let ask = |length: i64| check_inductor(json!({ "start": {"x": 0, "y": 0}, "end": {"x": 0, "y": 10_000_000}, "length_nm": length, "track_width_nm": 250_000 }).to_string().as_bytes());
+        assert_eq!(ask(20_000_000), json!({ "ok": true }));
+        for (length, message) in [(9_000_000, "Requested length < minimum length"), (11_000_000, "Requested length too small"), (15_000_000, "Requested length can't be represented"), (100_000_000, "Requested length too large")] {
             assert_eq!(ask(length), json!({ "ok": false, "message": message }), "{length}");
         }
         assert_eq!(check_inductor(b"{}")["ok"], json!(false));

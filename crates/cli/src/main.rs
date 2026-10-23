@@ -405,7 +405,7 @@ fn score(design: &Design, model: &ConstraintModel) -> serde_json::Value {
                     }
                 }
                 if x0 == i64::MAX { continue }
-                let hp = ((x1 - x0) + (y1 - y0)).max(2000) as f64;
+                let hp = ((x1 - x0) + (y1 - y0)).max(2_000_000) as f64;
                 detours.push((len as f64 / hp, net.name.as_str()));
             }
             detours.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
@@ -852,7 +852,7 @@ fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
 }
 
 /// Bookshelf integer unit used for Cypress export/import (100 µm).
-const BOOKSHELF_UNIT_NM: i64 = 100;
+const BOOKSHELF_UNIT_NM: i64 = 100_000;
 
 /// A placement's shape, as numbers, for every candidate we log.
 ///
@@ -874,7 +874,7 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
     let (xs, ys): (Vec<_>, Vec<_>) = pl.outline.iter().map(|p| (p.x, p.y)).unzip();
     let (bx0, bx1) = (xs.iter().min().copied().unwrap_or(0), xs.iter().max().copied().unwrap_or(0));
     let (by0, by1) = (ys.iter().min().copied().unwrap_or(0), ys.iter().max().copied().unwrap_or(0));
-    let board_area = ((bx1 - bx0) as f64 / 1000.0) * ((by1 - by0) as f64 / 1000.0); // mm^2
+    let board_area = ((bx1 - bx0) as f64 / 1e6) * ((by1 - by0) as f64 / 1e6); // mm^2
 
     let mut court_area = 0.0f64;
     let mut pads = 0usize;
@@ -884,7 +884,7 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
         let Some(part) = model.part(&fp.id) else { continue };
         pads += part.pins.len();
         if let Some(r) = eda_model::footprint::placed_courtyard(model, part, fp) {
-            court_area += ((r.2 - r.0) as f64 / 1000.0) * ((r.3 - r.1) as f64 / 1000.0);
+            court_area += ((r.2 - r.0) as f64 / 1e6) * ((r.3 - r.1) as f64 / 1e6);
             rects.push((fp.id.clone(), r));
             if eda_model::footprint::is_edge_connector(part) {
                 worst_edge_gap = worst_edge_gap.max(eda_model::footprint::edge_connector_gap(r, (bx0, by0, bx1, by1)));
@@ -933,7 +933,7 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
         if !ok || area <= 0.0 {
             continue;
         }
-        let bound = (2.0 * area.sqrt()).max(6000.0);
+        let bound = (2.0 * area.sqrt()).max(6_000_000.0);
         let span = ((nx1 - nx0) + (ny1 - ny0)) as f64;
         worst_compact = worst_compact.max(span / bound);
     }
@@ -1100,14 +1100,14 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
         }
         "floorplan" => {
             let bb = board_bb(&cx.model);
-            let fp = eda_model::floorplan::plan(&cx.model, bb, 500, cx.args.seed)
+            let fp = eda_model::floorplan::plan(&cx.model, bb, 500_000, cx.args.seed)
                 .map_err(|e| vec![CheckResult::fail("floorplan", "arrange", e)])?;
             println!("{} modules, {} free parts, board {:.1} x {:.1} mm",
-                fp.modules.len(), fp.free.len(), (bb.2 - bb.0) as f64 / 1000.0, (bb.3 - bb.1) as f64 / 1000.0);
+                fp.modules.len(), fp.free.len(), (bb.2 - bb.0) as f64 / 1e6, (bb.3 - bb.1) as f64 / 1e6);
             for m in &fp.modules {
                 println!("  {:<10} {:>5.1} x {:>5.1} mm at ({:>5.1}, {:>5.1})  {} parts: {}",
-                    m.name, (m.rect.2 - m.rect.0) as f64 / 1000.0, (m.rect.3 - m.rect.1) as f64 / 1000.0,
-                    m.rect.0 as f64 / 1000.0, m.rect.1 as f64 / 1000.0, m.refs.len(), m.refs.join(" "));
+                    m.name, (m.rect.2 - m.rect.0) as f64 / 1e6, (m.rect.3 - m.rect.1) as f64 / 1e6,
+                    m.rect.0 as f64 / 1e6, m.rect.1 as f64 / 1e6, m.refs.len(), m.refs.join(" "));
             }
             if !fp.free.is_empty() {
                 println!("  free (no proximity rule ties them anywhere): {}", fp.free.join(" "));

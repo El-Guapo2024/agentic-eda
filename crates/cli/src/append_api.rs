@@ -280,20 +280,20 @@ mod tests {
     fn the_item_with_the_smallest_x_then_the_smallest_y_is_the_one_the_items_are_held_by() {
         let clip = eda_kicad::parse_pcb_clipboard(&board_file()).unwrap();
         // The gr_line at (10, 10) is the leftmost of every position: the footprint (50, 40), the segments (30, 60) and (30, 20), the via (70, 25), the text (20, 80).
-        assert_eq!(reference_point(&clip), p(10_000, 10_000));
+        assert_eq!(reference_point(&clip), p(10_000_000, 10_000_000));
         // Two items at the same x: the higher (smaller y) wins.
         let text = board_file().replace("(gr_line (start 10 10) (end 90 10)", "(gr_line (start 30 5) (end 90 10)").replace("(at 20 80 0)", "(at 31 80 0)");
         let clip = eda_kicad::parse_pcb_clipboard(&text).unwrap();
-        assert_eq!(reference_point(&clip), p(30_000, 5_000));
+        assert_eq!(reference_point(&clip), p(30_000_000, 5_000_000));
     }
 
     #[test]
     fn an_arcs_position_is_its_centre_and_a_circles_is_its_centre() {
-        assert_eq!(arc_center(p(10_000, 0), p(0, 10_000), p(-10_000, 0)), Some(p(0, 0)));
-        assert_eq!(arc_center(p(0, 0), p(10, 10), p(20, 20)), None, "collinear points have no centre");
-        let c = Shape::Circle { id: String::new(), layer: "Dwgs.User".into(), stroke_width: 100, filled: false, center: p(5, 6), end: p(9, 6) };
-        assert_eq!(shape_position(&c), p(5, 6));
-        let a = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 100, filled: false, start: p(10_000, 0), mid: p(0, 10_000), end: p(-10_000, 0) };
+        assert_eq!(arc_center(p(10_000_000, 0), p(0, 10_000_000), p(-10_000_000, 0)), Some(p(0, 0)));
+        assert_eq!(arc_center(p(0, 0), p(10_000, 10_000), p(20_000, 20_000)), None, "collinear points have no centre");
+        let c = Shape::Circle { id: String::new(), layer: "Dwgs.User".into(), stroke_width: 100_000, filled: false, center: p(5000, 6000), end: p(9000, 6000) };
+        assert_eq!(shape_position(&c), p(5000, 6000));
+        let a = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 100_000, filled: false, start: p(10_000_000, 0), mid: p(0, 10_000_000), end: p(-10_000_000, 0) };
         assert_eq!(shape_position(&a), p(0, 0));
     }
 
@@ -304,7 +304,7 @@ mod tests {
         // No board in the folder: the file is still read and its reference given, with no notes about a board that is not there.
         let r = read(&dir, json!({ "text": board_file(), "name": "other.kicad_pcb" }).to_string().as_bytes());
         assert_eq!(r["ok"], true, "{r}");
-        assert_eq!(r["reference"], json!({ "x": 10_000, "y": 10_000 }));
+        assert_eq!(r["reference"], json!({ "x": 10_000_000, "y": 10_000_000 }));
         assert_eq!(r["counts"], json!({ "footprints": 1, "tracks": 2, "vias": 1, "zones": 0, "shapes": 1, "texts": 1, "dimensions": 0, "groups": 0 }));
         assert_eq!(r["notes"], json!([]));
         let _ = std::fs::remove_dir_all(&dir);
@@ -317,8 +317,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eda_append_api_board_{}_{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "R0603".into(), pads: vec![pad("1", -800), pad("2", 800)], courtyard: Some((3000, 1500)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, 0), size: (800_000, 800_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "R0603".into(), pads: vec![pad("1", -800_000), pad("2", 800_000)], courtyard: Some((3_000_000, 1_500_000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part {
             reference: "R1".into(),
             mpn: None,
@@ -346,15 +346,15 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection {
-                outline: vec![p(0, 0), p(100_000, 0), p(100_000, 100_000), p(0, 100_000)],
-                footprints: vec![FootprintInstance { id: "R1".into(), at: p(20_000, 20_000), rot: 0, side: Side::Top, label: Default::default() }],
+                outline: vec![p(0, 0), p(100_000_000, 0), p(100_000_000, 100_000_000), p(0, 100_000_000)],
+                footprints: vec![FootprintInstance { id: "R1".into(), at: p(20_000_000, 20_000_000), rot: 0, side: Side::Top, label: Default::default() }],
                 modules: vec![],
             }),
             routing: None,
             drawings: None,
         };
         board::save(&dir, &design).unwrap();
-        std::fs::write(dir.join("board.json"), json!({ "intent": intent.display().to_string(), "snap_nm": 100, "spacing_nm": 300 }).to_string()).unwrap();
+        std::fs::write(dir.join("board.json"), json!({ "intent": intent.display().to_string(), "snap_nm": 100_000, "spacing_nm": 300_000 }).to_string()).unwrap();
         dir
     }
 
@@ -373,7 +373,7 @@ mod tests {
         assert!(notes.iter().any(|n| n == "1 copper item is on a net this board does not have and is added with no net."), "{notes:?}");
         assert!(notes.iter().any(|n| n == "1 footprint has a reference this board already uses: it shows the reference the file gives (as KiCad's Append Board leaves it) and is filed under the next free one here."), "{notes:?}");
         // The reference is still the leftmost item's position: the new segments at x = 11 sit right of the line at 10.
-        assert_eq!(r["reference"], json!({ "x": 10_000, "y": 10_000 }));
+        assert_eq!(r["reference"], json!({ "x": 10_000_000, "y": 10_000_000 }));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -384,13 +384,13 @@ mod tests {
         let text = board_file();
         let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
         let (rx, ry) = (r["reference"]["x"].as_i64().unwrap(), r["reference"]["y"].as_i64().unwrap());
-        let cursor = p(60_000, 70_000);
+        let cursor = p(60_000_000, 70_000_000);
         board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(cursor.x - rx, cursor.y - ry) }, false, "test").unwrap();
         let (_, d, model) = board::load(&dir).unwrap();
         let dr = d.drawings.as_ref().unwrap();
         let line = dr.shapes.iter().find(|s| s.layer() == "Edge.Cuts").expect("the file's Edge.Cuts line came in");
         assert_eq!(line.points()[0], cursor, "the top left item of the file is where the cursor was");
-        assert_eq!(line.points()[1], p(cursor.x + 80_000, cursor.y), "and the rest keeps its place relative to it");
+        assert_eq!(line.points()[1], p(cursor.x + 80_000_000, cursor.y), "and the rest keeps its place relative to it");
         // The file's footprint R1 met this board's R1: it is a part of its own now, filed under the next free reference.
         assert_eq!(d.placement.as_ref().unwrap().footprints.len(), 2);
         assert_eq!(model.parts.len(), 2, "{:?}", model.parts.iter().map(|p| p.reference.clone()).collect::<Vec<_>>());
@@ -413,7 +413,7 @@ mod tests {
         let text = board_file().replacen("(pad \"1\" smd rect (at -0.8 0)", art, 1).replace("Lib:R0603", "Custom:Widget_9x9");
         let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
         assert_eq!(r["ok"], true, "{r}");
-        let at = p(60_000, 70_000);
+        let at = p(60_000_000, 70_000_000);
         let (rx, ry) = (r["reference"]["x"].as_i64().unwrap(), r["reference"]["y"].as_i64().unwrap());
         board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(at.x - rx, at.y - ry) }, false, "test").unwrap();
         let (_, d, model) = board::load(&dir).unwrap();
@@ -438,7 +438,7 @@ mod tests {
         let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
         assert_eq!(r["ok"], true, "{r}");
         let (rx, ry) = (r["reference"]["x"].as_i64().unwrap(), r["reference"]["y"].as_i64().unwrap());
-        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(60_000 - rx, 70_000 - ry) }, false, "test").unwrap();
+        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(60_000_000 - rx, 70_000_000 - ry) }, false, "test").unwrap();
         let (_, d, model) = board::load(&dir).unwrap();
         let new_part = model.parts.iter().find(|p| p.reference != "R1").expect("the appended footprint is a part of its own");
         let fp = model.footprint_of(new_part).expect("and resolves");

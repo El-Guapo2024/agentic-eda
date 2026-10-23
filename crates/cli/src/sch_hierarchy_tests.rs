@@ -31,7 +31,7 @@ fn mcu30_board(name: &str) -> PathBuf {
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     dir
 }
@@ -53,8 +53,8 @@ fn import_cmd(source: &str, as_sheet: bool, keep: bool) -> Cmd {
         as_sheet,
         name: "LDO stage".into(),
         file: "ldo_stage".into(),
-        at: Point { x: 250_000, y: 40_000 },
-        size: (40_000, 20_000),
+        at: Point { x: 250_000_000, y: 40_000_000 },
+        size: (40_000_000, 20_000_000),
         keep_annotations: keep,
         order: eda_ops::AnnotateOrder::XThenY,
         options: Default::default(),
@@ -98,7 +98,7 @@ fn import_sheet_reads_the_file_into_the_command_and_the_sheet_is_one_undo_step()
     step(&dir, import_cmd("ldo_stage.kicad_sch", true, false), false, "test").unwrap();
     let (_, design, model) = load(&dir).unwrap();
     let sheet = design.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name == "LDO stage").expect("the sheet is on the root");
-    assert_eq!((sheet.file.as_str(), sheet.at, sheet.size), ("ldo_stage.kicad_sch", Point { x: 250_000, y: 40_000 }, (40_000, 20_000)));
+    assert_eq!((sheet.file.as_str(), sheet.at, sheet.size), ("ldo_stage.kicad_sch", Point { x: 250_000_000, y: 40_000_000 }, (40_000_000, 20_000_000)));
     let screen = &design.sheet_contents.as_ref().unwrap()["ldo_stage.kicad_sch"];
     assert!(screen.symbols.len() >= 6, "the LDO's six parts: {:?}", screen.symbols.iter().map(|s| &s.id).collect::<Vec<_>>());
 
@@ -213,7 +213,7 @@ fn a_copied_sheet_is_pasted_as_a_second_placement_of_its_screen() {
     assert!(parsed["fragment"]["sheet_screens"].get("ldo_stage.kicad_sch").is_some(), "the screens ride with the fragment");
 
     // paste it, as the studio sends it: the fragment from the parse, moved
-    let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 60_000, "dy": 0 })).unwrap();
+    let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 60_000_000, "dy": 0 })).unwrap();
     step(&dir, cmd, false, "test").unwrap();
     let (_, design, model) = load(&dir).unwrap();
     let sheets = &design.schematic.as_ref().unwrap().sheets;
@@ -316,13 +316,13 @@ fn slow_the_annotated_import_and_paste_leave_kicad_cli_with_no_reference_finding
     // fields the user placed and a look they gave, then mcu30 as module sheets: the places and looks are kept and the board is as clean as before
     let (_, flat, _) = load(&dir).unwrap();
     let r3 = flat.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R3").unwrap().at;
-    let edit: Cmd = serde_json::from_value(json!({ "op": "sch_edit", "verb": "edit_field", "id": "fld:R3:Reference", "at": { "x": r3.x - 12_700, "y": r3.y + 1_270 }, "h": "right", "size_nm": 1778, "bold": true })).unwrap();
+    let edit: Cmd = serde_json::from_value(json!({ "op": "sch_edit", "verb": "edit_field", "id": "fld:R3:Reference", "at": { "x": r3.x - 12_700_000, "y": r3.y + 1_270_000 }, "h": "right", "size_nm": 1_778_000, "bold": true })).unwrap();
     step(&dir, edit, false, "test").unwrap();
     step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
     let (_, sheets, _) = load(&dir).unwrap();
     let kept = sheets.sheet_contents.iter().flatten().flat_map(|(_, s)| s.symbols.iter().map(move |x| (s, x))).find(|(_, x)| x.id == "R3").unwrap();
     let place = kept.0.field_layout.get("R3").and_then(|f| f.iter().find(|p| p.name == "Reference")).expect("R3's Reference keeps a place of its own");
-    assert_eq!((place.dx, place.dy), (-12_700, 1_270), "the field is where the user put it from its symbol");
+    assert_eq!((place.dx, place.dy), (-12_700_000, 1_270_000), "the field is where the user put it from its symbol");
     assert_no_reference_findings(&dir, "reorganized");
     assert!(erc_kinds(&dir).is_empty(), "the reorganized board is clean: {:?}", erc_kinds(&dir));
     // Replace All over the sheets: values change, nothing else
@@ -336,7 +336,7 @@ fn slow_the_annotated_import_and_paste_leave_kicad_cli_with_no_reference_finding
     let id = design.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name == "LDO stage").unwrap().id.clone();
     let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [id] }).to_string().as_bytes());
     let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
-    let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000_000 })).unwrap();
     step(&dir, cmd, false, "test").unwrap();
     assert_only_flag_clashes(&dir, "after pasting the sheet");
     let all: Cmd = serde_json::from_value(json!({ "op": "annotate", "reset_existing": true, "order": "x_then_y", "options": { "scope": "all", "algo": "sheet_x100" } })).unwrap();
@@ -367,11 +367,11 @@ fn dual_opamp() -> (eda_model::symbol::LibSymbol, eda_model::Part) {
             pin("1", "OUT1", 1, 0.0, false),
             pin("2", "IN1-", 1, 2.54, true),
             pin("3", "IN1+", 1, -2.54, true),
-            pin("7", "OUT2", 2, 0.0, false),
-            pin("6", "IN2-", 2, 2.54, true),
-            pin("5", "IN2+", 2, -2.54, true),
-            pin("8", "V+", 3, 2.54, false),
-            pin("4", "V-", 3, -2.54, false),
+            pin("7", "OUT2", 2000, 0.0, false),
+            pin("6", "IN2-", 2000, 2.54, true),
+            pin("5", "IN2+", 2000, -2.54, true),
+            pin("8", "V+", 3000, 2.54, false),
+            pin("4", "V-", 3000, -2.54, false),
         ],
         power: false,
         in_bom: true,
@@ -414,10 +414,10 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     {
         let root = design.schematic.as_mut().unwrap();
-        for (unit, x) in [(1, 300_000), (2, 330_000), (3, 360_000)] {
+        for (unit, x) in [(1, 300_000_000), (2000, 330_000_000), (3000, 360_000)] {
             root.symbols.push(eda_model::ir::SymbolInstance {
                 id: "U9".into(),
-                at: Point { x, y: 20_000 },
+                at: Point { x, y: 20_000_000 },
                 rot: 0,
                 mirrored: false,
                 mirror_y: false,
@@ -435,7 +435,7 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
         root.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
     }
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 
     step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
@@ -505,7 +505,7 @@ fn slow_a_pasted_sheet_shares_its_screen_and_kicad_cli_makes_a_net_per_placement
     let first_refs: Vec<String> = design.sheet_contents.as_ref().unwrap()[&sheet.file].symbols.iter().map(|s| s.id.clone()).collect();
     let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
     let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
-    let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000_000 })).unwrap();
     step(&dir, cmd, false, "test").unwrap();
     let (_, design, _) = load(&dir).unwrap();
     let second = design.schematic.as_ref().unwrap().sheets[1].clone();
@@ -583,19 +583,19 @@ fn bus_board(name: &str, bus_label: &str) -> (PathBuf, String, Point) {
         let names = if refs[0] == "R1" { eda_kicad::expand_bus_members(bus_label, &[]).unwrap() } else { vec!["D0".to_string(), "D1".to_string()] };
         for (r, net) in refs.iter().zip(names) {
             let at = pin1(sec, r);
-            let end = Point { x: at.x - 5_080, y: at.y };
+            let end = Point { x: at.x - 5_080_000, y: at.y };
             sec.wires.push(wire(vec![at, end], false));
             sec.labels.push(label(&net, end, LabelKind::Local));
         }
     }
     // the child: a bus from the hierarchical label down
-    let hl = Point { x: 20_320, y: 20_320 };
-    child.wires.push(wire(vec![hl, Point { x: 20_320, y: 40_640 }], true));
+    let hl = Point { x: 20_320_000, y: 20_320_000 };
+    child.wires.push(wire(vec![hl, Point { x: 20_320_000, y: 40_640_000 }], true));
     // the root: the sheet, its bus pin, and a bus label on a stub of bus away from it
-    let sheet_at = Point { x: 152_400, y: 25_400 };
-    let pin_at = Point { x: sheet_at.x, y: sheet_at.y + 5_080 };
-    root.sheets.push(SheetInstance { id: String::new(), name: "child".into(), file: "child.kicad_sch".into(), at: sheet_at, size: (25_400, 20_320), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: pin_at }], page: String::new() });
-    let stub = Point { x: pin_at.x - 25_400, y: pin_at.y };
+    let sheet_at = Point { x: 152_400_000, y: 25_400_000 };
+    let pin_at = Point { x: sheet_at.x, y: sheet_at.y + 5_080_000 };
+    root.sheets.push(SheetInstance { id: String::new(), name: "child".into(), file: "child.kicad_sch".into(), at: sheet_at, size: (25_400_000, 20_320_000), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: pin_at }], page: String::new() });
+    let stub = Point { x: pin_at.x - 25_400_000, y: pin_at.y };
     root.wires.push(wire(vec![stub, pin_at], true));
     root.labels.push(label(bus_label, stub, LabelKind::Local));
     root.assign_missing_ids();
@@ -604,7 +604,7 @@ fn bus_board(name: &str, bus_label: &str) -> (PathBuf, String, Point) {
     design.schematic = Some(root);
     design.sheet_contents = Some([("child.kicad_sch".to_string(), child)].into_iter().collect());
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     (dir, sheet_id, hl)
 }
@@ -681,7 +681,7 @@ fn slow_a_labels_net_class_field_is_read_by_kicad_cli() {
     // the board defines the class: no finding, and the label's net is in it
     let (_, _, model) = load(&dir).unwrap();
     let defaults = eda_model::rules::net_class_settings_of(&model.board);
-    let power = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(400), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+    let power = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(400_000), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
     step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults } }, false, "test").unwrap();
     step(&dir, edit_label_fields(&label.id, vec![netclass("HighCurrent")]), false, "test").unwrap();
     assert_eq!(undefined(&dir), 0, "the class is defined");
@@ -713,7 +713,7 @@ fn slow_a_labels_net_class_field_is_read_by_kicad_cli() {
 fn define_high_current(dir: &Path) {
     let (_, _, model) = load(dir).unwrap();
     let defaults = eda_model::rules::net_class_settings_of(&model.board);
-    let class = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(400), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+    let class = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(400_000), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
     step(dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![class], ..defaults } }, false, "test").unwrap();
 }
 
@@ -770,7 +770,7 @@ fn slow_a_shared_screens_label_class_is_in_force_on_each_placement() {
     let sheet = design.schematic.as_ref().unwrap().sheets[0].clone();
     let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
     let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
-    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000_000 })).unwrap();
     step(&dir, paste, false, "test").unwrap();
     define_high_current(&dir);
     let (_, design, _) = load(&dir).unwrap();
@@ -816,8 +816,8 @@ fn slow_a_global_labels_sheet_references_read_as_kicad_cli_plots_them() {
     }
     let (dir, sheet_id, _) = bus_board("slow_isr", "D[0..1]");
     let global = || eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input };
-    step(&dir, Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: 50_800, y: 101_600 }, kind: global() }, false, "test").unwrap();
-    step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: 60_960, y: 101_600 }, kind: global() }) }, false, "test").unwrap();
+    step(&dir, Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: 50_800_000, y: 101_600_000 }, kind: global() }, false, "test").unwrap();
+    step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: 60_960_000, y: 101_600_000 }, kind: global() }) }, false, "test").unwrap();
     assert!(!plotted_texts(&dir).iter().any(|t| t.starts_with('[')), "not shown by default (`m_IntersheetRefsShow` is off)");
     let shown = |dir: &Path, sheet: &str| -> Vec<String> {
         let (_, d, m) = load(dir).unwrap();
@@ -849,7 +849,7 @@ fn a_deleted_placement_leaves_no_references_behind() {
     let sheet = design.schematic.as_ref().unwrap().sheets[0].clone();
     let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
     let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
-    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000_000 })).unwrap();
     step(&dir, paste.clone(), false, "test").unwrap();
     let (_, design, _) = load(&dir).unwrap();
     let second = design.schematic.as_ref().unwrap().sheets[1].id.clone();
@@ -883,7 +883,7 @@ fn the_references_of_a_shared_screen_follow_its_edits() {
     let sheet = design.schematic.as_ref().unwrap().sheets[0].clone();
     let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
     let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
-    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000_000 })).unwrap();
     step(&dir, paste, false, "test").unwrap();
     let (_, design, _) = load(&dir).unwrap();
     let second = design.schematic.as_ref().unwrap().sheets[1].id.clone();
@@ -899,7 +899,7 @@ fn the_references_of_a_shared_screen_follow_its_edits() {
     };
 
     // moved on the first placement
-    let mv: Cmd = serde_json::from_value(json!({ "op": "on_sheet", "sheet": sheet.id, "cmd": { "op": "sch_move", "verb": "move", "ids": [moved.id], "dx": 2_540, "dy": 0 } })).unwrap();
+    let mv: Cmd = serde_json::from_value(json!({ "op": "on_sheet", "sheet": sheet.id, "cmd": { "op": "sch_move", "verb": "move", "ids": [moved.id], "dx": 2_540_000, "dy": 0 } })).unwrap();
     step(&dir, mv, false, "test").unwrap();
     let (_, design, model) = load(&dir).unwrap();
     let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
@@ -910,7 +910,7 @@ fn the_references_of_a_shared_screen_follow_its_edits() {
     unique(&design);
 
     // a symbol added on the first placement: a reference of its own on the second
-    let add: Cmd = serde_json::from_value(json!({ "op": "on_sheet", "sheet": sheet.id, "cmd": { "op": "add_symbol", "id": "R90", "lib_id": "Device:R", "at": { "x": 120_000, "y": 120_000 }, "rot_millideg": 0, "value": "1k", "footprint": "" } })).unwrap();
+    let add: Cmd = serde_json::from_value(json!({ "op": "on_sheet", "sheet": sheet.id, "cmd": { "op": "add_symbol", "id": "R90", "lib_id": "Device:R", "at": { "x": 120_000_000, "y": 120_000_000 }, "rot_millideg": 0, "value": "1k", "footprint": "" } })).unwrap();
     step(&dir, add, false, "test").unwrap();
     let (_, design, model) = load(&dir).unwrap();
     let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
@@ -940,7 +940,7 @@ fn annotate_of_a_design_with_a_shared_screen_leaves_no_duplicate() {
     let sheet = design.schematic.as_ref().unwrap().sheets[0].clone();
     let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
     let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
-    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000_000 })).unwrap();
     step(&dir, paste, false, "test").unwrap();
     for reset in [false, true] {
         let annotate: Cmd = serde_json::from_value(json!({ "op": "annotate", "reset_existing": reset, "options": { "scope": "all" } })).unwrap();
@@ -960,7 +960,7 @@ fn write_twice_placed_tree(dir: &Path, file: &str) {
     let child = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     let mut design = child.clone();
     let mut root = eda_model::ir::SchematicSection { symbols: vec![], wires: vec![], labels: vec![], power_symbols: vec![], no_connects: vec![], ..child.schematic.clone().unwrap() };
-    root.sheets = ["a", "b"].iter().enumerate().map(|(i, n)| eda_model::ir::SheetInstance { id: format!("sh_{n}"), name: format!("LDO {n}"), file: "ldo.kicad_sch".into(), at: Point { x: 20_000 + 60_000 * i as i64, y: 20_000 }, size: (40_000, 20_000), pins: vec![], page: String::new() }).collect();
+    root.sheets = ["a", "b"].iter().enumerate().map(|(i, n)| eda_model::ir::SheetInstance { id: format!("sh_{n}"), name: format!("LDO {n}"), file: "ldo.kicad_sch".into(), at: Point { x: 20_000_000 + 60_000_000 * i as i64, y: 20_000_000 }, size: (40_000_000, 20_000_000), pins: vec![], page: String::new() }).collect();
     design.schematic = Some(root);
     design.sheet_contents = Some([("ldo.kicad_sch".to_string(), child.schematic.unwrap())].into_iter().collect());
     let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-23", title: "twice" }, file).unwrap();
@@ -1137,10 +1137,10 @@ fn a_board_without_a_stored_schematic_is_loaded_with_the_derived_one_and_keeps_i
     let (intent, model) = example("mcu_board_30plus.yaml");
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     design.schematic = None;
-    design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 35_000, y: 0 }, Point { x: 35_000, y: 35_000 }, Point { x: 0, y: 35_000 }], footprints: vec![], modules: vec![] });
+    design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 35_000_000, y: 0 }, Point { x: 35_000_000, y: 35_000_000 }, Point { x: 0, y: 35_000_000 }], footprints: vec![], modules: vec![] });
     design.drawings = Some(eda_model::ir::DrawingsSection::default());
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     let (d, _) = crate::kicad_engine::load_with_schematic(&dir).unwrap();
     assert!(d.schematic.as_ref().is_some_and(|s| !s.sheets.is_empty() || !s.symbols.is_empty()), "the derived schematic");
@@ -1201,7 +1201,7 @@ fn empty_board(name: &str) -> PathBuf {
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     dir
 }
@@ -1242,7 +1242,7 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
         // the click on a point of the 50 mil grid, as the tool snaps it
         let mut cmd = import_cmd(&file, std::env::var_os("EDA_QA_SCH_AS_SHEET").is_some(), true);
         if let Cmd::ImportSheet { at, .. } = &mut cmd {
-            *at = Point { x: 254_000, y: 50_800 };
+            *at = Point { x: 254_000_000, y: 50_800_000 };
         }
         if let Err(e) = step(&dir, cmd, false, "test") {
             println!("FAIL {rel}: Import Sheet refuses it: {e:?}");
@@ -1274,7 +1274,7 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
     // the ratchet: 87 of KiCad's 130 QA roots on 2026-10-23 (nightly 20261021); before the review of that day, 53 (turned and mirrored symbols were traced
     // and written otherwise than drawn, and one file hung Import Sheet)
     if only.is_none() {
-        assert!(same >= 87, "{same} judged alike, fewer than the 87 of 2026-10-23");
+        assert!(same >= 87_000, "{same} judged alike, fewer than the 87 of 2026-10-23");
     }
 }
 

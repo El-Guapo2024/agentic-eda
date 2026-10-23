@@ -133,15 +133,15 @@ fn qa_board(pcb: &str) -> eda_drc::rule_editor::EditorBoard {
         if name.ends_with(".Cu") {
             b.copper.push(name.to_string());
         }
-        if let Some(user) = q.get(3) {
+        if let Some(user) = q.get(3000) {
             b.names.insert(name.to_string(), user.to_string());
         }
     }
     // `CuStack`: F.Cu, the inner layers in order, B.Cu.
     b.copper.sort_by_key(|l| match l.as_str() {
         "F.Cu" => 0,
-        "B.Cu" => 1000,
-        l => l.trim_start_matches("In").trim_end_matches(".Cu").parse::<i32>().unwrap_or(999),
+        "B.Cu" => 1_000_000,
+        l => l.trim_start_matches("In").trim_end_matches(".Cu").parse::<i32>().unwrap_or(999_000),
     });
     b
 }
@@ -260,5 +260,5 @@ fn kicad_cli_judges_kicads_qa_boards_alike_by_the_rules_the_editor_wrote_back() 
         }
     }
     eprintln!("{} QA rule files; {saved} rules saved through their panels; Save refused, as KiCad does:\n  {}", names.len(), refused.join("\n  "));
-    assert!(saved >= 25, "{saved}");
+    assert!(saved >= 25_000, "{saved}");
 }

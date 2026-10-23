@@ -92,7 +92,7 @@ fn an_erc_exclusion_with_a_comment_reaches_kicad_cli_and_a_deleted_marker_stays_
     assert!(marker.sheet.is_empty() && marker.main_sheet.is_empty(), "a symbol's footprint link has no sheet in its marker: {marker:?}");
     assert!(marker.at_nm[0] > 1_000_000, "the position is in nanometres, as kicad-cli's report says millimetres: {marker:?}");
     let (n, warnings) = (listed(&first), first["counts"]["footprint_link_issues"].as_u64().unwrap());
-    assert!(warnings >= 2, "{first:#}");
+    assert!(warnings >= 2000, "{first:#}");
 
     // Exclude U1's with a comment, the way "Exclude with comment..." does.
     step(&dir, add("footprint_link_issues", "U1", "bare footprint on purpose", Some(marker.clone())), false, "ui").unwrap();

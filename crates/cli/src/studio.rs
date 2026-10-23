@@ -1863,7 +1863,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                         eda_model::kicad_font::HJustify::Right => "right",
                         eda_model::kicad_font::HJustify::Center => "center",
                     };
-                    json!({ "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "size_nm": 1270 })
+                    json!({ "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "size_nm": 1_270_000 })
                 })
                 .collect();
             json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields })
@@ -1967,7 +1967,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // The paper this sheet is drawn on: its full Page Settings when it has them (portrait, a user size), else the name its title block carries
     // (the layout engine writes it per sheet); A4 landscape when neither.
     let page = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or(""));
-    let (paper_w, paper_h) = page.size_nm().unwrap_or((297_000, 210_000));
+    let (paper_w, paper_h) = page.size_nm().unwrap_or((297_000_000, 210_000_000));
     let file = viewed_file(design, &breadcrumb);
 
     json!({
@@ -2517,8 +2517,8 @@ mod tests {
         let mut d = design(sch(vec![]), Default::default());
         d.routing = Some(
             serde_json::from_value(json!({
-                "tracks": [{ "net": "GND", "layer": "F.Cu", "width": 200, "pts": [{ "x": 0, "y": 0 }, { "x": 1000, "y": 0 }] }, { "net": "", "layer": "F.Cu", "width": 200, "pts": [{ "x": 0, "y": 0 }, { "x": 0, "y": 500 }] }],
-                "vias": [{ "net": "VDD", "at": { "x": 0, "y": 0 }, "diameter": 600, "drill": 300, "from_layer": "F.Cu", "to_layer": "B.Cu" }],
+                "tracks": [{ "net": "GND", "layer": "F.Cu", "width": 200_000, "pts": [{ "x": 0, "y": 0 }, { "x": 1_000_000, "y": 0 }] }, { "net": "", "layer": "F.Cu", "width": 200_000, "pts": [{ "x": 0, "y": 0 }, { "x": 0, "y": 500_000 }] }],
+                "vias": [{ "net": "VDD", "at": { "x": 0, "y": 0 }, "diameter": 600_000, "drill": 300_000, "from_layer": "F.Cu", "to_layer": "B.Cu" }],
                 "zones": []
             }))
             .expect("a routing section"),
@@ -2595,7 +2595,7 @@ mod tests {
 
     #[test]
     fn a_real_sheet_id_descends_and_builds_the_breadcrumb() {
-        let placement = SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![], page: String::new() };
+        let placement = SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (1_000_000, 1_000_000), pins: vec![], page: String::new() };
         let child = sch(vec![]);
         let mut screens = std::collections::BTreeMap::new();
         screens.insert("child.kicad_sch".to_string(), child);
@@ -2611,16 +2611,16 @@ mod tests {
     fn the_state_carries_the_outline_with_its_cutouts_and_its_errors() {
         use eda_model::ir::{DrawingsSection, PlacementSection, Shape};
         let p = |x, y| Point { x, y };
-        let line = |a: Point, b: Point| Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, start: a, end: b };
+        let line = |a: Point, b: Point| Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50_000, filled: false, start: a, end: b };
         let mut d = design(sch(vec![]), Default::default());
-        d.placement = Some(PlacementSection { outline: vec![p(0, 0), p(40_000, 0), p(40_000, 30_000), p(0, 30_000)], footprints: vec![], modules: vec![] });
+        d.placement = Some(PlacementSection { outline: vec![p(0, 0), p(40_000_000, 0), p(40_000_000, 30_000_000), p(0, 30_000_000)], footprints: vec![], modules: vec![] });
 
         // A plain polygon: one outline, no hole, nothing to report.
-        assert_eq!(outline_polys_json(&d), json!([{ "outer": [[0, 0], [40_000, 0], [40_000, 30_000], [0, 30_000]], "holes": [] }]));
+        assert_eq!(outline_polys_json(&d), json!([{ "outer": [[0, 0], [40_000_000, 0], [40_000_000, 30_000_000], [0, 30_000_000]], "holes": [] }]));
         assert_eq!(outline_errors_json(&d), json!([]));
 
         // A round hole drawn on Edge.Cuts is a hole of it.
-        let mut shapes = vec![Shape::Circle { id: "hole".into(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: p(20_000, 15_000), end: p(23_000, 15_000) }];
+        let mut shapes = vec![Shape::Circle { id: "hole".into(), layer: "Edge.Cuts".into(), stroke_width: 50_000, filled: false, center: p(20_000_000, 15_000_000), end: p(23_000_000, 15_000_000) }];
         d.drawings = Some(DrawingsSection { shapes: shapes.clone(), ..Default::default() });
         let polys = outline_polys_json(&d);
         assert_eq!(polys.as_array().map(Vec::len), Some(1));
@@ -2628,7 +2628,7 @@ mod tests {
         assert_eq!(outline_errors_json(&d), json!([]));
 
         // The same board with the outline made of shapes, one side of it missing: malformed, and the outline is the rectangle round the edges.
-        shapes = vec![line(p(0, 0), p(18_000, 0)), line(p(22_000, 0), p(40_000, 0)), line(p(40_000, 0), p(40_000, 30_000)), line(p(40_000, 30_000), p(0, 30_000)), line(p(0, 30_000), p(0, 0))];
+        shapes = vec![line(p(0, 0), p(18_000_000, 0)), line(p(22_000_000, 0), p(40_000_000, 0)), line(p(40_000_000, 0), p(40_000_000, 30_000_000)), line(p(40_000_000, 30_000_000), p(0, 30_000_000)), line(p(0, 30_000_000), p(0, 0))];
         for (i, sh) in shapes.iter_mut().enumerate() {
             sh.set_id(format!("edge{i}"));
         }
@@ -2636,7 +2636,7 @@ mod tests {
         let errors = outline_errors_json(&d);
         assert_eq!(errors.as_array().map(Vec::len), Some(1), "{errors}");
         assert_eq!(errors[0]["message"], "Board has malformed outline (not a closed shape)");
-        assert_eq!(errors[0]["at"], json!([20_000, 0]));
+        assert_eq!(errors[0]["at"], json!([20_000_000, 0]));
         let mut items: Vec<String> = errors[0]["items"].as_array().expect("items").iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
         items.sort();
         assert_eq!(items, vec!["edge0".to_string(), "edge1".to_string()], "the two pieces either side of the gap");

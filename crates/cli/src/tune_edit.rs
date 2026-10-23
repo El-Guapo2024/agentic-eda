@@ -1171,27 +1171,27 @@ mod tests {
     #[test]
     fn a_length_rule_sets_the_target_the_way_set_target_length_does() {
         let mut rules = BoardRules::default();
-        rules.custom_rules = vec![rule("all", "length", Some(99_900), Some(100_100), None, None)];
+        rules.custom_rules = vec![rule("all", "length", Some(99_900_000), Some(100_100_000), None, None)];
         let c = constraint_for(&rules, TuningMode::Single, "SIG", None, "F.Cu").expect("a rule");
         // Opt() with no opt is the minimum; the rule's own min and max win over the tolerance round it
-        assert_eq!(c.range, TargetRange { min: 99_900, opt: 99_900, max: 100_100 });
+        assert_eq!(c.range, TargetRange { min: 99_900_000, opt: 99_900_000, max: 100_100_000 });
         assert_eq!(c.name, "all");
         // a rule with an optimum only: the default tolerance either side
-        rules.custom_rules = vec![rule("opt", "length", None, None, Some(50_000), None)];
-        assert_eq!(constraint_for(&rules, TuningMode::DiffPair, "SIG", None, "F.Cu").unwrap().range, TargetRange { min: 49_900, opt: 50_000, max: 50_100 });
+        rules.custom_rules = vec![rule("opt", "length", None, None, Some(50_000_000), None)];
+        assert_eq!(constraint_for(&rules, TuningMode::DiffPair, "SIG", None, "F.Cu").unwrap().range, TargetRange { min: 49_900_000, opt: 50_000_000, max: 50_100_000 });
         // a skew rule is for the skew tuner only
-        rules.custom_rules = vec![rule("skew", "skew", None, Some(100), None, None)];
+        rules.custom_rules = vec![rule("skew", "skew", None, Some(100_000), None, None)];
         assert!(constraint_for(&rules, TuningMode::Single, "SIG", None, "F.Cu").is_none());
-        assert_eq!(constraint_for(&rules, TuningMode::DiffPairSkew, "USB_P", Some("USB_N"), "F.Cu").unwrap().range, TargetRange { min: -100, opt: 0, max: 100 });
+        assert_eq!(constraint_for(&rules, TuningMode::DiffPairSkew, "USB_P", Some("USB_N"), "F.Cu").unwrap().range, TargetRange { min: -100_000, opt: 0, max: 100_000 });
     }
 
     #[test]
     fn the_last_rule_that_applies_wins_and_a_condition_picks_the_nets() {
         let mut rules = BoardRules::default();
         rules.custom_rules = vec![
-            rule("first", "length", Some(10_000), Some(10_200), None, None),
-            rule("clk", "length", Some(20_000), Some(20_200), None, Some("A.NetName == 'CLK'")),
-            rule("never", "length", Some(30_000), Some(30_200), None, Some("A.NetName == 'OTHER'")),
+            rule("first", "length", Some(10_000_000), Some(10_200_000), None, None),
+            rule("clk", "length", Some(20_000_000), Some(20_200_000), None, Some("A.NetName == 'CLK'")),
+            rule("never", "length", Some(30_000_000), Some(30_200_000), None, Some("A.NetName == 'OTHER'")),
         ];
         assert_eq!(constraint_for(&rules, TuningMode::Single, "CLK", None, "F.Cu").unwrap().name, "clk");
         assert_eq!(constraint_for(&rules, TuningMode::Single, "SIG", None, "F.Cu").unwrap().name, "first");
@@ -1201,16 +1201,16 @@ mod tests {
 
     fn pattern_for_handles(mode: TuningMode) -> TuningPattern {
         let mut p = default_pattern(&ConstraintModel::default(), mode, "F.Cu");
-        p.origin = Point { x: 10_000, y: 5_000 };
-        p.end = Point { x: 30_000, y: 5_000 };
+        p.origin = Point { x: 10_000_000, y: 5_000_000 };
+        p.end = Point { x: 30_000_000, y: 5_000_000 };
         p.base_line = vec![p.origin, p.end];
-        p.last_track_width = 250;
-        p.max_amplitude = 1_000;
-        p.spacing = 600;
+        p.last_track_width = 250_000;
+        p.max_amplitude = 1_000_000;
+        p.spacing = 600_000;
         p.initial_side = PatternSide::Right;
         if mode == TuningMode::DiffPair {
-            p.base_line_coupled = vec![Point { x: 10_000, y: 5_700 }, Point { x: 30_000, y: 5_700 }];
-            p.last_diff_pair_gap = 450;
+            p.base_line_coupled = vec![Point { x: 10_000_000, y: 5_700_000 }, Point { x: 30_000_000, y: 5_700_000 }];
+            p.last_diff_pair_gap = 450_000;
         }
         p
     }
@@ -1219,19 +1219,19 @@ mod tests {
     fn the_edit_points_of_a_pattern_are_where_make_edit_points_puts_them() {
         let p = pattern_for_handles(TuningMode::Single);
         let h = handle_positions(&p);
-        assert_eq!(h[0], Point { x: 10_000, y: 5_000 });
-        assert_eq!(h[1], Point { x: 30_000, y: 5_000 });
+        assert_eq!(h[0], Point { x: 10_000_000, y: 5_000_000 });
+        assert_eq!(h[1], Point { x: 30_000_000, y: 5_000_000 });
         // the width handle is the amplitude and half the track away from the start of the baseline, on the side of the first meander: perpendicular is (-dy, dx), so +y for a baseline along +x
-        assert_eq!(h[2], Point { x: 10_000, y: 5_000 + 1_000 + 125 });
+        assert_eq!(h[2], Point { x: 10_000_000, y: 5_000_000 + 1_000_000 + 125_000 });
         // the spacing handle is one and a half spacings along from it
-        assert_eq!(h[3], Point { x: 10_000 + 900, y: 5_000 + 1_125 });
+        assert_eq!(h[3], Point { x: 10_000_000 + 900_000, y: 5_000_000 + 1_125_000 });
         let mut left = p.clone();
         left.initial_side = PatternSide::Left;
-        assert_eq!(handle_positions(&left)[2], Point { x: 10_000, y: 5_000 - 1_125 });
+        assert_eq!(handle_positions(&left)[2], Point { x: 10_000_000, y: 5_000_000 - 1_125_000 });
         // a pair's handles are on the centreline: half way to the partner's baseline, and the amplitude is counted from there
         let d = handle_positions(&pattern_for_handles(TuningMode::DiffPair));
-        assert_eq!(d[0], Point { x: 10_000, y: 5_350 });
-        assert_eq!(d[2], Point { x: 10_000, y: 5_350 + 1_000 + 125 + 250 + 450 });
+        assert_eq!(d[0], Point { x: 10_000_000, y: 5_350_000 });
+        assert_eq!(d[2], Point { x: 10_000_000, y: 5_350_000 + 1_000_000 + 125_000 + 250_000 + 450_000 });
     }
 
     #[test]
@@ -1247,25 +1247,25 @@ mod tests {
         }
         let mut p = pattern_for_handles(TuningMode::Single);
         // the width handle dragged to the other side and further out: a wider pattern that starts on the left
-        apply_handle(&mut p, 2, Point { x: 10_000, y: 5_000 - 1_525 });
-        assert_eq!((p.max_amplitude, p.initial_side), (1_400, PatternSide::Left));
+        apply_handle(&mut p, 2, Point { x: 10_000_000, y: 5_000_000 - 1_525_000 });
+        assert_eq!((p.max_amplitude, p.initial_side), (1_400_000, PatternSide::Left));
         // the spacing handle dragged two spacings along from the width handle's line
         let w = handle_positions(&p)[2];
-        apply_handle(&mut p, 3, Point { x: w.x + 1_500, y: w.y });
-        assert_eq!(p.spacing, 1_000);
-        apply_handle(&mut p, 1, Point { x: 25_000, y: 5_000 });
-        assert_eq!(p.end, Point { x: 25_000, y: 5_000 });
+        apply_handle(&mut p, 3, Point { x: w.x + 1_500_000, y: w.y });
+        assert_eq!(p.spacing, 1_000_000);
+        apply_handle(&mut p, 1, Point { x: 25_000_000, y: 5_000_000 });
+        assert_eq!(p.end, Point { x: 25_000_000, y: 5_000_000 });
     }
 
     #[test]
     fn settings_come_from_the_page_then_the_request() {
         let model = ConstraintModel::default();
         let mut p = default_pattern(&model, TuningMode::DiffPair, "F.Cu");
-        assert_eq!((p.min_amplitude, p.max_amplitude, p.spacing, p.corner_radius_percent, p.rounded), (200, 1_000, 1_000, 80, true), "the pair's page: a spacing of 1 mm");
-        apply_settings(&mut p, &json!({ "max_amplitude": 1500, "spacing": 800.0, "rounded": false, "initial_side": "right", "target_length": 52_000, "target_skew": { "max": 50 } }));
-        assert_eq!((p.max_amplitude, p.spacing, p.rounded, p.initial_side), (1_500, 800, false, PatternSide::Right));
-        assert_eq!(p.target_length, TargetRange { min: 51_900, opt: 52_000, max: 52_100 });
-        assert_eq!(p.target_skew, TargetRange { min: -100, opt: 0, max: 50 });
+        assert_eq!((p.min_amplitude, p.max_amplitude, p.spacing, p.corner_radius_percent, p.rounded), (200_000, 1_000_000, 1_000_000, 80, true), "the pair's page: a spacing of 1 mm");
+        apply_settings(&mut p, &json!({ "max_amplitude": 1_500_000, "spacing": 800_000.0, "rounded": false, "initial_side": "right", "target_length": 52_000_000, "target_skew": { "max": 50_000 } }));
+        assert_eq!((p.max_amplitude, p.spacing, p.rounded, p.initial_side), (1_500_000, 800_000, false, PatternSide::Right));
+        assert_eq!(p.target_length, TargetRange { min: 51_900_000, opt: 52_000_000, max: 52_100_000 });
+        assert_eq!(p.target_skew, TargetRange { min: -100_000, opt: 0, max: 50_000 });
         apply_settings(&mut p, &json!({ "target_length": null }));
         assert!(p.target_length.is_unconstrained());
         let ms = meander_settings(&p);
@@ -1307,7 +1307,7 @@ mod tests {
             }
             tuned_again += 1;
         }
-        assert_eq!(tuned_again, 4);
+        assert_eq!(tuned_again, 4000);
     }
 
     /// kicad-cli's own lengths for the nets of `qa/data/pcbnew/length_calculations.kicad_pcb` (a `.kicad_dru` rule `(constraint length (max 0.001mm))` that nothing can meet
@@ -1354,7 +1354,7 @@ mod tests {
                 .world
                 .iter()
                 .filter_map(|(id, it)| match it {
-                    Item::Segment(s) if s.net.is_some() && s.source_track.is_some() && ((s.b.x - s.a.x).abs() + (s.b.y - s.a.y).abs()) > 3_000 => Some((id, s.a, s.b, scene.layers.name_of(s.layer).to_string())),
+                    Item::Segment(s) if s.net.is_some() && s.source_track.is_some() && ((s.b.x - s.a.x).abs() + (s.b.y - s.a.y).abs()) > 3_000_000 => Some((id, s.a, s.b, scene.layers.name_of(s.layer).to_string())),
                     _ => None,
                 })
                 .collect();
@@ -1365,18 +1365,18 @@ mod tests {
                 }
                 let (_, a, b, layer) = candidates[next(candidates.len() as u64) as usize].clone();
                 let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-                let Some(pk) = pick(&scene, mid.x, mid.y, 60, Some(&layer)) else { continue };
+                let Some(pk) = pick(&scene, mid.x, mid.y, 60_000, Some(&layer)) else { continue };
                 for kind in [TuningMode::Single, TuningMode::DiffPair, TuningMode::DiffPairSkew] {
                     tried += 1;
                     // its length (or skew) now, and the target 3 mm longer
                     let Ok(h) = hover(&scene, kind, &pk, &Value::Null) else { continue };
-                    let target_nm = h.readout.current / 1000 + 3_000;
+                    let target_nm = h.readout.current / 1_000_000 + 3_000_000;
                     let settings = if kind == TuningMode::DiffPairSkew { json!({}) } else { json!({ "target_length": target_nm }) };
                     let Ok(mut t) = Tuner::start(scene.clone(), kind, &pk, pk.at, &settings) else { continue };
                     started += 1;
                     // the end of the stretch: an end of the picked segment, and the cursor a little off it
-                    let to = if next(2) == 0 { b } else { a };
-                    let cursor = Point { x: to.x + (next(400) as i64 - 200), y: to.y + (next(400) as i64 - 200) };
+                    let to = if next(2000) == 0 { b } else { a };
+                    let cursor = Point { x: to.x + (next(400_000) as i64 - 200_000), y: to.y + (next(400_000) as i64 - 200_000) };
                     let Ok(moved) = t.mv(cursor, true) else { continue };
                     let (was_moved, status, current) = (moved.moved && !moved.edits.is_empty(), moved.readout.status, moved.readout.current as f64 / 1e6);
                     let Ok(cmd) = t.command() else { continue };
@@ -1411,7 +1411,7 @@ mod tests {
                                 let removed = apply_cmd(&scene2, &reset_cmd(&scene2, &pat).unwrap_or_else(|e| panic!("{name}: {} cannot be removed: {e}", pk.net))).expect("the removal applies");
                                 let scene3 = Scene::of(removed, scene.model.clone());
                                 let back = scene3.world.iter().find_map(|(id, it)| match it {
-                                    Item::Segment(s3) if s3.net.as_deref() == Some(pk.net.as_str()) && s3.source_track.is_some() && Seg::new(s3.a, s3.b).squared_distance(pat.origin) <= 4 => Some(id),
+                                    Item::Segment(s3) if s3.net.as_deref() == Some(pk.net.as_str()) && s3.source_track.is_some() && Seg::new(s3.a, s3.b).squared_distance(pat.origin) <= 4000 => Some(id),
                                     _ => None,
                                 });
                                 if let Some(back) = back {
@@ -1430,6 +1430,6 @@ mod tests {
             }
         }
         eprintln!("tried {tried}, started {started}, committed {committed}, tuned and measured {measured} (left out, a meander in a pad: {in_pad})");
-        assert!(started > 20 && committed > 10, "the test is not testing much: {started} started, {committed} committed");
+        assert!(started > 20_000 && committed > 10_000, "the test is not testing much: {started} started, {committed} committed");
     }
 }

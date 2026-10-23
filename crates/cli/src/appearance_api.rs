@@ -15,8 +15,9 @@
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
-/// The file's version, bumped when a key changes meaning.
-pub const VERSION: u64 = 1;
+/// The file's version, bumped when a key changes meaning. 2: the saved viewports (`project.viewports[].x/y/w/h`) are in nanometres,
+/// the design's unit; a version 1 file's micrometre viewports are read x1000.
+pub const VERSION: u64 = 2;
 
 /// A write larger than this is refused: a project's presets and colours are kilobytes.
 const MAX_BYTES: usize = 2_000_000;
@@ -40,7 +41,20 @@ pub fn read(dir: &Path) -> Option<Value> {
     let v: Value = serde_json::from_str(&text).ok()?;
     let obj = v.as_object()?;
     let section = |k: &str| obj.get(k).filter(|s| s.is_object()).cloned().unwrap_or_else(|| json!({}));
-    Some(json!({ "version": obj.get("version").and_then(Value::as_u64).unwrap_or(VERSION), "local": section("local"), "project": section("project") }))
+    let version = obj.get("version").and_then(Value::as_u64).unwrap_or(VERSION);
+    let mut project = section("project");
+    if version < 2 {
+        if let Some(vps) = project.get_mut("viewports").and_then(Value::as_array_mut) {
+            for vp in vps.iter_mut().filter_map(Value::as_object_mut) {
+                for k in ["x", "y", "w", "h"] {
+                    if let Some(f) = vp.get(k).and_then(Value::as_f64) {
+                        vp.insert(k.into(), json!(f * 1000.0));
+                    }
+                }
+            }
+        }
+    }
+    Some(json!({ "version": VERSION, "local": section("local"), "project": project }))
 }
 
 /// `POST /api/appearance`: replace the sections `body` carries, keep the others, write the file, return it.
@@ -89,7 +103,7 @@ mod tests {
     #[test]
     fn nothing_saved_reads_as_an_empty_file() {
         let dir = scratch("empty");
-        assert_eq!(get(&dir), json!({ "version": 1, "local": {}, "project": {} }));
+        assert_eq!(get(&dir), json!({ "version": VERSION, "local": {}, "project": {} }));
         assert!(read(&dir).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -136,9 +150,24 @@ mod tests {
     fn a_file_somebody_else_wrote_is_read_with_both_sections_objects() {
         let dir = scratch("foreign");
         std::fs::write(dir.join("appearance.json"), r#"{"version":1,"local":7,"extra":true}"#).unwrap();
-        assert_eq!(get(&dir), json!({ "version": 1, "local": {}, "project": {} }));
+        assert_eq!(get(&dir), json!({ "version": VERSION, "local": {}, "project": {} }));
         std::fs::write(dir.join("appearance.json"), "{ not json").unwrap();
-        assert_eq!(get(&dir), json!({ "version": 1, "local": {}, "project": {} }));
+        assert_eq!(get(&dir), json!({ "version": VERSION, "local": {}, "project": {} }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_version_1_files_micrometre_viewports_are_read_as_nanometres_and_written_back_as_version_2() {
+        let dir = std::env::temp_dir().join(format!("eda-appearance-v1-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("appearance.json"), r#"{"version":1,"local":{"opacity":0.5},"project":{"viewports":[{"name":"Home","x":1500,"y":-2000,"w":30000,"h":40000}]}}"#).unwrap();
+        let v = get(&dir);
+        assert_eq!(v["version"], VERSION);
+        assert_eq!(v["project"]["viewports"][0], json!({ "name": "Home", "x": 1_500_000.0, "y": -2_000_000.0, "w": 30_000_000.0, "h": 40_000_000.0 }));
+        assert_eq!(v["local"]["opacity"], 0.5, "the local section has no lengths");
+        // a write keeps the converted viewports and stamps version 2; reading that is not converted again
+        post(&dir, r#"{"local":{"opacity":0.7}}"#);
+        assert_eq!(get(&dir)["project"]["viewports"][0]["w"], 30_000_000.0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

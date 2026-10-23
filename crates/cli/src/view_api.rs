@@ -16,12 +16,44 @@ fn view_path(dir: &Path) -> PathBuf {
 }
 
 /// The current view (defaults when nothing has been shared yet).
+///
+/// The camera is in the design's units: `center` a point in nanometres, `scale` pixels per nanometre. A `view.json` written before
+/// the design was in nanometres has no `"units": "nm"`; its micrometre camera is read as the same view (the centre x1000, the scale
+/// /1000), and the next write stores it in nanometres.
 pub fn get(dir: &Path) -> Value {
-    std::fs::read_to_string(view_path(dir))
+    let mut v = std::fs::read_to_string(view_path(dir))
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .filter(Value::is_object)
-        .unwrap_or_else(|| json!({ "rev": 0, "by": null, "tab": "pcb", "selection": [], "center": null, "scale": null, "zoom_to": null }))
+        .unwrap_or_else(|| json!({ "rev": 0, "by": null, "tab": "pcb", "selection": [], "center": null, "scale": null, "zoom_to": null, "units": "nm" }));
+    let obj = v.as_object_mut().expect("view is an object");
+    if obj.get("units").and_then(Value::as_str) != Some("nm") {
+        let times = |x: &Value, k: f64| x.as_f64().map(|f| json!(f * k));
+        if let Some(c) = obj.get_mut("center") {
+            match c {
+                Value::Array(a) => {
+                    for x in a.iter_mut() {
+                        if let Some(n) = times(x, 1000.0) {
+                            *x = n;
+                        }
+                    }
+                }
+                Value::Object(o) => {
+                    for k in ["x", "y"] {
+                        if let Some(n) = o.get(k).and_then(|x| times(x, 1000.0)) {
+                            o.insert(k.into(), n);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(n) = obj.get("scale").and_then(|x| times(x, 0.001)) {
+            obj.insert("scale".into(), n);
+        }
+        obj.insert("units".into(), json!("nm"));
+    }
+    v
 }
 
 /// Merge `patch`'s known fields into the view, bump `rev`, stamp `by`.
@@ -36,6 +68,7 @@ pub fn set(dir: &Path, patch: &Value, by: &str) -> Value {
         }
     }
     obj.insert("zoom_to".into(), patch.get("zoom_to").cloned().unwrap_or(Value::Null));
+    obj.insert("units".into(), json!("nm"));
     let rev = obj.get("rev").and_then(Value::as_u64).unwrap_or(0) + 1;
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     obj.insert("rev".into(), json!(rev));
@@ -92,10 +125,23 @@ mod tests {
         let a = set(&dir, &json!({ "selection": ["U1"], "zoom_to": ["U1"] }), "agent");
         assert_eq!(a["rev"], 1);
         assert_eq!(a["by"], "agent");
-        let b = set(&dir, &json!({ "center": [1, 2] }), "ui");
+        let b = set(&dir, &json!({ "center": [1, 2000] }), "ui");
         assert_eq!(b["rev"], 2);
         assert_eq!(b["selection"], json!(["U1"]), "unmentioned fields are kept");
         assert!(b["zoom_to"].is_null(), "zoom_to is one-shot");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_micrometre_view_is_read_as_the_same_view_in_nanometres_and_stored_so_once() {
+        let dir = std::env::temp_dir().join(format!("eda-view-um-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(view_path(&dir), r#"{"rev":3,"by":"ui","tab":"pcb","selection":[],"center":[12500,-4000],"scale":0.25,"zoom_to":null}"#).unwrap();
+        let v = get(&dir);
+        assert_eq!((v["center"].clone(), v["scale"].clone(), v["units"].clone()), (json!([12_500_000.0, -4_000_000.0]), json!(0.00025), json!("nm")));
+        let w = set(&dir, &json!({ "tab": "schematic" }), "ui");
+        assert_eq!(w["center"], json!([12_500_000.0, -4_000_000.0]), "a write stores the nanometres");
+        assert_eq!(get(&dir)["center"], json!([12_500_000.0, -4_000_000.0]), "and reading them again does not scale them twice");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -29,15 +29,15 @@ mod tests {
         let v = page_json(&PageSettings { paper: "A4".into(), portrait: true, user_size_nm: None });
         assert_eq!(v["paper"], "A4");
         assert_eq!(v["portrait"], true);
-        assert_eq!(v["size_nm"], json!([210_000, 297_000]));
+        assert_eq!(v["size_nm"], json!([210_000_000, 297_000_000]));
         assert_eq!(v["user_size_nm"], Value::Null);
     }
 
     #[test]
     fn a_user_paper_reports_the_size_it_was_given() {
-        let v = page_json(&PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((300_000, 200_000)) });
-        assert_eq!(v["size_nm"], json!([300_000, 200_000]));
-        assert_eq!(v["user_size_nm"], json!([300_000, 200_000]));
+        let v = page_json(&PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((300_000_000, 200_000_000)) });
+        assert_eq!(v["size_nm"], json!([300_000_000, 200_000_000]));
+        assert_eq!(v["user_size_nm"], json!([300_000_000, 200_000_000]));
     }
 
     #[test]

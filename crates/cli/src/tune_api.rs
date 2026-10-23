@@ -112,7 +112,7 @@ pub fn handles_json(p: &TuningPattern) -> Value {
 /// The cursor's pick for a request: `{x, y, tolerance, layer}`.
 fn pick_for(scene: &Scene, req: &Value) -> Option<Pick> {
     let at = xy(req)?;
-    let tolerance = req.get("tolerance").and_then(Value::as_f64).unwrap_or(150.0).round() as i64;
+    let tolerance = req.get("tolerance").and_then(Value::as_f64).unwrap_or(150_000.0).round() as i64;
     tune_edit::pick(scene, at.x, at.y, tolerance, req.get("layer").and_then(Value::as_str))
 }
 
@@ -525,14 +525,14 @@ mod tests {
 
     /// Two parts 20 mm apart, each with a pad above a pad (1 mm pitch): nets `<a>` and `<b>` run from one to the other as 20 mm tracks. `rules` are custom rules.
     fn setup(dir: &Path, nets: [&str; 2], rules: Vec<eda_model::CustomRule>) {
-        let straight = |y: i64| vec![p(5_000, y), p(25_000, y)];
-        setup_with(dir, nets, rules, vec![(nets[0], straight(9_500)), (nets[1], straight(10_500))]);
+        let straight = |y: i64| vec![p(5_000_000, y), p(25_000_000, y)];
+        setup_with(dir, nets, rules, vec![(nets[0], straight(9_500_000)), (nets[1], straight(10_500_000))]);
     }
 
     /// [`setup`] with the tracks the caller draws (each its own track).
     fn setup_with(dir: &Path, nets: [&str; 2], rules: Vec<eda_model::CustomRule>, tracks: Vec<(&str, Vec<Point>)>) {
-        let pad = |n: &str, y: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (0, y), size: (400, 400), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -500), pad("2", 500)], courtyard: Some((1000, 2000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, y: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (0, y), size: (400_000, 400_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -500_000), pad("2", 500_000)], courtyard: Some((1_000_000, 2_000_000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = |r: &str| Part {
             reference: r.into(),
             mpn: None,
@@ -565,10 +565,10 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection {
-                outline: vec![p(0, 0), p(40_000, 0), p(40_000, 20_000), p(0, 20_000)],
+                outline: vec![p(0, 0), p(40_000_000, 0), p(40_000_000, 20_000_000), p(0, 20_000_000)],
                 footprints: vec![
-                    FootprintInstance { id: "U1".into(), at: p(5_000, 10_000), rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "U2".into(), at: p(25_000, 10_000), rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "U1".into(), at: p(5_000_000, 10_000_000), rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "U2".into(), at: p(25_000_000, 10_000_000), rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: vec![],
             }),
@@ -576,10 +576,10 @@ mod tests {
             drawings: None,
         };
         board::save(dir, &design).unwrap();
-        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
         for (net, pts) in tracks {
-            let cmd = Cmd::AddTrack { net: net.into(), layer: "F.Cu".into(), width: 250, pts };
+            let cmd = Cmd::AddTrack { net: net.into(), layer: "F.Cu".into(), width: 250_000, pts };
             board::step(dir, cmd, false, "test").unwrap();
         }
     }
@@ -614,10 +614,10 @@ mod tests {
     #[test]
     fn hovering_a_track_reads_its_length_against_the_rule_and_places_nothing() {
         let dir = scratch("hover");
-        let rule = eda_model::CustomRule { name: "sig_length".into(), constraint_type: "length".into(), min: Some(21_900), max: Some(22_100), opt: None, layer: None, severity: None, condition: None };
+        let rule = eda_model::CustomRule { name: "sig_length".into(), constraint_type: "length".into(), min: Some(21_900_000), max: Some(22_100_000), opt: None, layer: None, severity: None, condition: None };
         setup(&dir, ["SIG", "OTHER"], vec![rule]);
         let before = std::fs::read_to_string(dir.join("design.json")).unwrap();
-        let r = hover(&dir, &body(json!({ "x": 15_000, "y": 9_550, "tolerance": 100, "layer": "F.Cu", "mode": "single" })));
+        let r = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
         assert_eq!(r["ok"], json!(true), "{r}");
         assert_eq!(r["hit"], json!(true), "{r}");
         assert_eq!(r["pick"]["net"], "SIG");
@@ -630,10 +630,10 @@ mod tests {
         assert!((r["readout"]["delta"].as_f64().unwrap() + 1.9).abs() < 0.01);
         assert_eq!(r["path"].as_array().unwrap().len(), 2);
         // a pattern that overrides the rules has its own target
-        let own = hover(&dir, &body(json!({ "x": 15_000, "y": 9_550, "layer": "F.Cu", "mode": "single", "settings": { "override_custom_rules": true, "target_length": 21_000 } })));
+        let own = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "layer": "F.Cu", "mode": "single", "settings": { "override_custom_rules": true, "target_length": 21_000_000 } })));
         assert_eq!((own["readout"]["opt"].as_f64(), own["readout"]["constraint"].is_null()), (Some(21.0), true), "{own}");
         // nothing under the cursor
-        assert_eq!(hover(&dir, &body(json!({ "x": 15_000, "y": 5_000, "layer": "F.Cu" })))["hit"], json!(false));
+        assert_eq!(hover(&dir, &body(json!({ "x": 15_000_000, "y": 5_000_000, "layer": "F.Cu" })))["hit"], json!(false));
         assert_eq!(std::fs::read_to_string(dir.join("design.json")).unwrap(), before, "hovering does not change the board");
     }
 
@@ -642,14 +642,14 @@ mod tests {
         let dir = scratch("single");
         setup(&dir, ["SIG", "OTHER"], vec![]);
         let before = design_of(&dir);
-        let s = start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000 } })));
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
         assert_eq!(s["ok"], json!(true), "{s}");
-        assert_eq!(s["origin"], json!({ "x": 8_000, "y": 9_500 }));
+        assert_eq!(s["origin"], json!({ "x": 8_000_000, "y": 9_500_000 }));
         // before the cursor moves there is nothing to put on the board
         assert_eq!(fix(&dir, &body(json!({}))).get("ok"), Some(&json!(false)));
-        let start_again = start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000 } })));
+        let start_again = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
         assert_eq!(start_again["ok"], json!(true));
-        let m = mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(m["ok"], json!(true), "{m}");
         assert_eq!(m["moved"], json!(true), "{m}");
         assert_eq!(m["readout"]["status"], "tuned", "{m}");
@@ -660,21 +660,21 @@ mod tests {
         assert_eq!(m["pattern"]["initial_side"], "left");
         // the keys step the amplitude and the spacing, and the meander is fitted again
         let k = step(&dir, &body(json!({ "what": "amplitude_down" })));
-        assert_eq!(k["pattern"]["max_amplitude"], json!(950), "{k}");
+        assert_eq!(k["pattern"]["max_amplitude"], json!(950_000), "{k}");
         let k = step(&dir, &body(json!({ "what": "spacing_up" })));
-        assert_eq!(k["pattern"]["spacing"], json!(650), "{k}");
+        assert_eq!(k["pattern"]["spacing"], json!(650_000), "{k}");
         assert!((k["readout"]["current"].as_f64().unwrap() - 22.0).abs() < 0.1, "still tuned: {k}");
 
-        let f = fix(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        let f = fix(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(f["ok"], json!(true), "{f}");
         let after = design_of(&dir);
         let patterns = tune_edit::patterns_of(&after);
         assert_eq!(patterns.len(), 1);
         let pat = &patterns[0];
         assert_eq!(f["pattern_id"], json!(pat.id));
-        assert_eq!((pat.mode, pat.layer.as_str(), pat.origin, pat.end), (TuningMode::Single, "F.Cu", p(8_000, 9_500), p(22_000, 9_500)));
-        assert_eq!(pat.base_line, vec![p(8_000, 9_500), p(22_000, 9_500)]);
-        assert_eq!((pat.max_amplitude, pat.spacing), (950, 650));
+        assert_eq!((pat.mode, pat.layer.as_str(), pat.origin, pat.end), (TuningMode::Single, "F.Cu", p(8_000_000, 9_500_000), p(22_000_000, 9_500_000)));
+        assert_eq!(pat.base_line, vec![p(8_000_000, 9_500_000), p(22_000_000, 9_500_000)]);
+        assert_eq!((pat.max_amplitude, pat.spacing), (950_000, 650_000));
         assert!(pat.member_ids.len() > 10, "the meander's tracks are the members: {}", pat.member_ids.len());
         let rt = after.routing.as_ref().unwrap();
         assert!(pat.member_ids.iter().all(|m| rt.tracks.iter().any(|t| &t.id == m)));
@@ -695,7 +695,7 @@ mod tests {
         use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile, TuningProfiles};
         let intent = dir.join("intent.yaml");
         let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
-        let entry = ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200, diff_pair_gap_nm: 0, delay_as_per_mm: 6_100_000 };
+        let entry = ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200_000, diff_pair_gap_nm: 0, delay_as_per_mm: 6_100_000 };
         let profile = TuningProfile { name: "FR4".into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: time_domain, layer_entries: vec![entry], via_propagation_delay_as: 0, via_overrides: vec![] };
         model.board.tuning_profiles = TuningProfiles { profiles: vec![profile], class_profiles: [("Default".to_string(), "FR4".to_string())].into() };
         std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
@@ -721,7 +721,7 @@ mod tests {
         with_profile(&dir, true);
         // 20 mm at 6.1 ps/mm is 122 ps
         assert!((net_ps(&dir, "SIG") - 122.0).abs() < 0.01);
-        let h = hover(&dir, &body(json!({ "x": 15_000, "y": 9_550, "tolerance": 100, "layer": "F.Cu", "mode": "single" })));
+        let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
         assert_eq!(h["ok"], json!(true), "{h}");
         assert_eq!(h["readout"]["time_domain"], json!(true), "the class names a profile with the time domain on: {h}");
         assert!((h["readout"]["delay"]["current"].as_f64().unwrap() - 122.0).abs() < 0.01, "{h}");
@@ -729,15 +729,15 @@ mod tests {
         assert_eq!(h["pattern"]["is_time_domain"], json!(true));
 
         // 150 ps is 24.59 mm of F.Cu track
-        let s = start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_delay": 150 } })));
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_delay": 150 } })));
         assert_eq!(s["ok"], json!(true), "{s}");
-        let m = mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(m["moved"], json!(true), "{m}");
         assert_eq!(m["readout"]["status"], "tuned", "{m}");
         let d = &m["readout"]["delay"];
         assert!((d["current"].as_f64().unwrap() - 150.0).abs() < 0.2, "{m}");
         assert_eq!((d["min"].as_f64().map(|v| (v * 10.0).round()), d["max"].as_f64().map(|v| (v * 10.0).round())), (Some(1499.0), Some(1501.0)), "0.1 ps either side of the target: {m}");
-        let f = fix(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        let f = fix(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(f["ok"], json!(true), "{f}");
         let after = design_of(&dir);
         let patterns = tune_edit::patterns_of(&after);
@@ -760,12 +760,12 @@ mod tests {
         let dir = scratch("delay_off");
         setup(&dir, ["SIG", "OTHER"], vec![]);
         with_profile(&dir, false);
-        let h = hover(&dir, &body(json!({ "x": 15_000, "y": 9_550, "tolerance": 100, "layer": "F.Cu", "mode": "single" })));
+        let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
         assert_eq!(h["readout"]["time_domain"], json!(false), "{h}");
         // the dialog's Delay radio makes it a time domain pattern all the same (every delay is zero without the profile's time domain: the target length is the net's own)
-        let s = start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "time_domain": true, "target_delay": 150 } })));
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "time_domain": true, "target_delay": 150_000 } })));
         assert_eq!(s["ok"], json!(true), "{s}");
-        let m = mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(m["readout"]["time_domain"], json!(true));
         assert!(m["readout"]["current"].as_f64().unwrap() - 20.0 < 0.01, "the net was not lengthened: {m}");
     }
@@ -774,8 +774,8 @@ mod tests {
     fn a_pattern_is_tuned_again_and_removed_and_each_is_one_undo_step() {
         let dir = scratch("retune");
         setup(&dir, ["SIG", "OTHER"], vec![]);
-        start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000 } })));
-        mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
+        mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         let f = fix(&dir, &body(json!({})));
         assert_eq!(f["ok"], json!(true), "{f}");
         let id = f["pattern_id"].as_str().unwrap().to_string();
@@ -791,13 +791,13 @@ mod tests {
         assert!(props["constraint"].is_null());
 
         // tuned again, longer: the same pattern, the same id, one step
-        let u = update(&dir, &body(json!({ "id": id, "settings": { "target_length": 24_000 } })));
+        let u = update(&dir, &body(json!({ "id": id, "settings": { "target_length": 24_000_000 } })));
         assert_eq!(u["ok"], json!(true), "{u}");
         let after = design_of(&dir);
         let patterns_after = tune_edit::patterns_of(&after);
         assert_eq!(patterns_after.len(), 1);
         assert_eq!(patterns_after[0].id, id, "a pattern tuned again keeps its id");
-        assert_eq!(patterns_after[0].target_length.opt, 24_000);
+        assert_eq!(patterns_after[0].target_length.opt, 24_000_000);
         assert!((net_mm(&dir, "SIG") - 24.0).abs() < 0.1, "{}", net_mm(&dir, "SIG"));
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned_once), "one undo puts the first tuning back");
@@ -817,7 +817,7 @@ mod tests {
         assert!(tune_edit::patterns_of(&gone).is_empty());
         assert!((net_mm(&dir, "SIG") - 20.0).abs() < 0.001, "{}", net_mm(&dir, "SIG"));
         let tracks: Vec<&eda_model::ir::Track> = gone.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == "SIG").collect();
-        assert!(tracks.iter().all(|t| t.pts.iter().all(|q| q.y == 9_500)), "all straight again: {tracks:?}");
+        assert!(tracks.iter().all(|t| t.pts.iter().all(|q| q.y == 9_500_000)), "all straight again: {tracks:?}");
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tune_edit::patterns_of(&design_of(&dir)).len(), 1, "one undo brings the pattern back");
     }
@@ -826,8 +826,8 @@ mod tests {
     fn a_pattern_is_edited_through_its_edit_points_and_the_edit_is_one_undo_step() {
         let dir = scratch("edit");
         setup(&dir, ["SIG", "OTHER"], vec![]);
-        start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000 } })));
-        mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
+        mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         let id = fix(&dir, &body(json!({})))["pattern_id"].as_str().unwrap().to_string();
         let tuned = design_of(&dir);
 
@@ -836,23 +836,23 @@ mod tests {
         assert_eq!(e["ok"], json!(true), "{e}");
         assert_eq!(e["editing"], json!(true));
         assert_eq!(e["handles"].as_array().unwrap().len(), 4);
-        assert_eq!(e["handles"][0], json!([8_000, 9_500]));
-        assert_eq!(e["handles"][1], json!([22_000, 9_500]));
+        assert_eq!(e["handles"][0], json!([8_000_000, 9_500_000]));
+        assert_eq!(e["handles"][1], json!([22_000_000, 9_500_000]));
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned));
         assert!((e["readout"]["current"].as_f64().unwrap() - 22.0).abs() < 0.1);
 
         // genUpdateEdit: the end handle dragged back to 18 mm, so the pattern is shorter: the same target, less room
-        let m = edit_move(&dir, &body(json!({ "handle": 1, "x": 18_000, "y": 9_500 })));
+        let m = edit_move(&dir, &body(json!({ "handle": 1, "x": 18_000_000, "y": 9_500_000 })));
         assert_eq!(m["ok"], json!(true), "{m}");
-        assert_eq!(m["pattern"]["end"], json!({ "x": 18_000, "y": 9_500 }), "{m}");
-        assert_eq!(m["handles"][1], json!([18_000, 9_500]));
+        assert_eq!(m["pattern"]["end"], json!({ "x": 18_000_000, "y": 9_500_000 }), "{m}");
+        assert_eq!(m["handles"][1], json!([18_000_000, 9_500_000]));
         // a settings change in the middle of the edit
-        let m = edit_move(&dir, &body(json!({ "settings": { "target_length": 21_000 } })));
+        let m = edit_move(&dir, &body(json!({ "settings": { "target_length": 21_000_000 } })));
         assert_eq!(m["ok"], json!(true), "{m}");
         assert!((m["readout"]["current"].as_f64().unwrap() - 21.0).abs() < 0.1, "{m}");
         // the amplitude handle: out to 0.8 mm (and the track's half width) on the other side
-        let m = edit_move(&dir, &body(json!({ "handle": 2, "x": 8_000, "y": 9_500 + 925 })));
-        assert_eq!((m["pattern"]["max_amplitude"].clone(), m["pattern"]["initial_side"].clone()), (json!(800), json!("right")), "{m}");
+        let m = edit_move(&dir, &body(json!({ "handle": 2, "x": 8_000_000, "y": 9_500_000 + 925_000 })));
+        assert_eq!((m["pattern"]["max_amplitude"].clone(), m["pattern"]["initial_side"].clone()), (json!(800_000), json!("right")), "{m}");
 
         // genFinishEdit
         let f = fix(&dir, &body(json!({})));
@@ -860,26 +860,26 @@ mod tests {
         assert_eq!(f["pattern_id"], json!(id));
         let after = tune_edit::patterns_of(&design_of(&dir));
         assert_eq!(after.len(), 1);
-        assert_eq!((after[0].id.as_str(), after[0].end, after[0].max_amplitude, after[0].target_length.opt), (id.as_str(), p(18_000, 9_500), 800, 21_000));
+        assert_eq!((after[0].id.as_str(), after[0].end, after[0].max_amplitude, after[0].target_length.opt), (id.as_str(), p(18_000_000, 9_500_000), 800_000, 21_000_000));
         assert!((net_mm(&dir, "SIG") - 21.0).abs() < 0.1);
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned), "the whole edit is one undo step");
 
         // genCacnelEdit: nothing is written
         edit_start(&dir, &body(json!({ "id": id })));
-        edit_move(&dir, &body(json!({ "handle": 1, "x": 15_000, "y": 9_500 })));
+        edit_move(&dir, &body(json!({ "handle": 1, "x": 15_000_000, "y": 9_500_000 })));
         assert_eq!(cancel(&dir)["had_session"], json!(true));
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned));
-        assert_eq!(edit_move(&dir, &body(json!({ "handle": 1, "x": 15_000, "y": 9_500 })))["ok"], json!(false), "the session is over");
+        assert_eq!(edit_move(&dir, &body(json!({ "handle": 1, "x": 15_000_000, "y": 9_500_000 })))["ok"], json!(false), "the session is over");
     }
 
     #[test]
     fn a_differential_pair_is_tuned_together_and_removed_together() {
         let dir = scratch("pair");
         setup(&dir, ["USB_P", "USB_N"], vec![]);
-        let s = start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "diffpair", "settings": { "target_length": 26_000 } })));
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "diffpair", "settings": { "target_length": 26_000_000 } })));
         assert_eq!(s["ok"], json!(true), "{s}");
-        let m = mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(m["moved"], json!(true), "{m}");
         assert_eq!(m["readout"]["partner"], "USB_N");
         assert_eq!(m["preview"]["hide"].as_array().unwrap().len(), 2, "both lines are replaced");
@@ -904,19 +904,19 @@ mod tests {
     fn the_skew_tuner_lengthens_the_clicked_line_until_it_matches_its_partner() {
         let dir = scratch("skew");
         // USB_N takes a 0.7 mm detour on the way: 1.4 mm longer than USB_P, which runs straight
-        let n_path = vec![p(5_000, 10_500), p(10_000, 10_500), p(10_000, 11_200), p(12_000, 11_200), p(12_000, 10_500), p(25_000, 10_500)];
-        setup_with(&dir, ["USB_P", "USB_N"], vec![], vec![("USB_P", vec![p(5_000, 9_500), p(25_000, 9_500)]), ("USB_N", n_path)]);
+        let n_path = vec![p(5_000_000, 10_500_000), p(10_000_000, 10_500_000), p(10_000_000, 11_200_000), p(12_000_000, 11_200_000), p(12_000_000, 10_500_000), p(25_000_000, 10_500_000)];
+        setup_with(&dir, ["USB_P", "USB_N"], vec![], vec![("USB_P", vec![p(5_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("USB_N", n_path)]);
         let (p_before, n_before) = (net_mm(&dir, "USB_P"), net_mm(&dir, "USB_N"));
         assert!((n_before - p_before - 1.4).abs() < 0.01, "P {p_before} N {n_before}");
-        let h = hover(&dir, &body(json!({ "x": 15_000, "y": 9_500, "layer": "F.Cu", "mode": "skew" })));
+        let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "skew" })));
         assert_eq!(h["readout"]["label"], "current skew", "{h}");
         assert!((h["readout"]["current"].as_f64().unwrap() + 1.4).abs() < 0.01, "P is 1.4 mm short of N: {h}");
         assert_eq!(h["readout"]["status"], "too_short");
         // the skew target is zero, 0.1 mm either side
         assert_eq!((h["readout"]["min"].as_f64(), h["readout"]["opt"].as_f64(), h["readout"]["max"].as_f64()), (Some(-0.1), Some(0.0), Some(0.1)));
-        let s = start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "skew" })));
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "skew" })));
         assert_eq!(s["ok"], json!(true), "{s}");
-        let m = mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(m["readout"]["status"], "tuned", "{m}");
         assert!(m["readout"]["current"].as_f64().unwrap().abs() < 0.1, "{m}");
         let f = fix(&dir, &body(json!({})));
@@ -941,13 +941,13 @@ mod tests {
             &dir,
             ["SIG", "OTHER"],
             vec![],
-            vec![("SIG", vec![p(5_000, 9_500), p(10_000, 9_500)]), ("SIG", vec![p(10_000, 9_500), p(15_000, 9_500), p(20_000, 9_500)]), ("SIG", vec![p(20_000, 9_500), p(25_000, 9_500)]), ("OTHER", vec![p(5_000, 10_500), p(25_000, 10_500)])],
+            vec![("SIG", vec![p(5_000_000, 9_500_000), p(10_000_000, 9_500_000)]), ("SIG", vec![p(10_000_000, 9_500_000), p(15_000_000, 9_500_000), p(20_000_000, 9_500_000)]), ("SIG", vec![p(20_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("OTHER", vec![p(5_000_000, 10_500_000), p(25_000_000, 10_500_000)])],
         );
         let before = design_of(&dir);
         let ids_before: Vec<String> = tracks_of(&before).iter().filter(|t| t.net == "SIG").map(|t| t.id.clone()).collect();
         assert_eq!(ids_before.len(), 3);
-        start(&dir, &body(json!({ "x": 12_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000 } })));
-        let m = mv(&dir, &body(json!({ "x": 18_000, "y": 9_000 })));
+        start(&dir, &body(json!({ "x": 12_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
+        let m = mv(&dir, &body(json!({ "x": 18_000_000, "y": 9_000_000 })));
         assert_eq!(m["readout"]["status"], "tuned", "{m}");
         let f = fix(&dir, &body(json!({})));
         assert_eq!(f["ok"], json!(true), "{f}");
@@ -966,7 +966,7 @@ mod tests {
     /// A track that is an arc, put on the board as KiCad's `PCB_ARC` (`Track::new_arc`).
     fn add_arc_track(dir: &Path, net: &str, start: Point, mid: Point, end: Point) {
         let (_, mut design, _) = board::load(dir).unwrap();
-        let mut t = eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), 250, start, mid, end);
+        let mut t = eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), 250_000, start, mid, end);
         t.id = format!("trk_arc_{net}");
         design.routing.as_mut().expect("the board has tracks").tracks.push(t);
         board::save(dir, &design).unwrap();
@@ -976,9 +976,9 @@ mod tests {
     fn a_track_that_is_an_arc_can_be_picked_and_a_pattern_is_tuned_along_it() {
         let dir = scratch("arc");
         // SIG: 7 mm straight, a quarter arc of radius 3 mm turning up, 5 mm straight on; the arc is a track of its own
-        let h = (3_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as i64;
-        let (arc_start, arc_mid, arc_end) = (p(12_000, 9_500), p(12_000 + h, 6_500 + h), p(15_000, 6_500));
-        setup_with(&dir, ["SIG", "OTHER"], vec![], vec![("SIG", vec![p(5_000, 9_500), p(12_000, 9_500)]), ("SIG", vec![p(15_000, 6_500), p(15_000, 1_500)]), ("OTHER", vec![p(5_000, 10_500), p(25_000, 10_500)])]);
+        let h = (3_000_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as i64;
+        let (arc_start, arc_mid, arc_end) = (p(12_000_000, 9_500_000), p(12_000_000 + h, 6_500_000 + h), p(15_000_000, 6_500_000));
+        setup_with(&dir, ["SIG", "OTHER"], vec![], vec![("SIG", vec![p(5_000_000, 9_500_000), p(12_000_000, 9_500_000)]), ("SIG", vec![p(15_000_000, 6_500_000), p(15_000_000, 1_500_000)]), ("OTHER", vec![p(5_000_000, 10_500_000), p(25_000_000, 10_500_000)])]);
         add_arc_track(&dir, "SIG", arc_start, arc_mid, arc_end);
         let before = design_of(&dir);
         let original = net_mm(&dir, "SIG");
@@ -986,15 +986,15 @@ mod tests {
         assert!((original - (7.0 + arc_len + 5.0)).abs() < 0.01, "the arc is measured as an arc: {original}");
 
         // hovering the arc picks it (its track), the pattern would start at the end of it the cursor is nearer to
-        let hov = hover(&dir, &body(json!({ "x": arc_mid.x, "y": arc_mid.y, "tolerance": 100, "layer": "F.Cu", "mode": "single" })));
+        let hov = hover(&dir, &body(json!({ "x": arc_mid.x, "y": arc_mid.y, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
         assert_eq!(hov["hit"], json!(true), "{hov}");
         assert_eq!(hov["pick"]["net"], "SIG");
         assert!((hov["readout"]["current"].as_f64().unwrap() - original).abs() < 0.01, "{hov}");
 
         // a pattern from the first straight, through the arc, along the second straight
-        let s = start(&dir, &body(json!({ "x": 6_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": (original * 1000.0).round() as i64 + 3_000 } })));
+        let s = start(&dir, &body(json!({ "x": 6_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": (original * 1e6).round() as i64 + 3_000_000 } })));
         assert_eq!(s["ok"], json!(true), "{s}");
-        let m = mv(&dir, &body(json!({ "x": 15_000, "y": 3_500 })));
+        let m = mv(&dir, &body(json!({ "x": 15_000_000, "y": 3_500_000 })));
         assert_eq!(m["ok"], json!(true), "{m}");
         assert_eq!(m["readout"]["status"], "tuned", "{m}");
         let f = fix(&dir, &body(json!({})));
@@ -1014,12 +1014,12 @@ mod tests {
         let dir = scratch("refuse");
         setup(&dir, ["SIG", "OTHER"], vec![]);
         // a pair tuner on a net that is not half of a pair
-        let s = start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "diffpair" })));
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "diffpair" })));
         assert_eq!(s["ok"], json!(false));
         assert!(s["message"].as_str().unwrap().contains("complementary differential pair"), "{s}");
-        let s = start(&dir, &body(json!({ "x": 8_000, "y": 1_000, "layer": "F.Cu", "mode": "single" })));
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 1_000_000, "layer": "F.Cu", "mode": "single" })));
         assert_eq!(s["message"], "Select a track to tune first.");
-        assert_eq!(mv(&dir, &body(json!({ "x": 1, "y": 2 })))["message"], NO_SESSION);
+        assert_eq!(mv(&dir, &body(json!({ "x": 1_000, "y": 2000 })))["message"], NO_SESSION);
         assert_eq!(cancel(&dir)["had_session"], json!(false));
     }
 
@@ -1027,9 +1027,9 @@ mod tests {
     fn a_session_on_a_board_that_changed_is_refused() {
         let dir = scratch("stale");
         setup(&dir, ["SIG", "OTHER"], vec![]);
-        start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000 } })));
-        mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
-        board::step(&dir, Cmd::AddTrack { net: "OTHER".into(), layer: "F.Cu".into(), width: 250, pts: vec![p(2_000, 3_000), p(4_000, 3_000)] }, false, "test").unwrap();
+        start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
+        mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        board::step(&dir, Cmd::AddTrack { net: "OTHER".into(), layer: "F.Cu".into(), width: 250_000, pts: vec![p(2_000_000, 3_000_000), p(4_000_000, 3_000_000)] }, false, "test").unwrap();
         let f = fix(&dir, &body(json!({})));
         assert_eq!(f["ok"], json!(false));
         assert!(f["message"].as_str().unwrap().contains("changed"), "{f}");
@@ -1062,8 +1062,8 @@ mod tests {
         let sig = |c: &str| rule("sig", "A.NetName == 'SIG'", c);
         let untuned = judge(&one, &sig("length (min 21.9mm) (max 22.1mm)"), "length_out_of_range");
         assert_eq!(untuned.len(), 1, "the control: the straight 20 mm track is out of the range: {untuned:?}");
-        start(&one, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000 } })));
-        mv(&one, &body(json!({ "x": 22_000, "y": 9_000 })));
+        start(&one, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
+        mv(&one, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(fix(&one, &body(json!({})))["ok"], json!(true));
         let tuned = judge(&one, &sig("length (min 21.9mm) (max 22.1mm)"), "length_out_of_range");
         assert!(tuned.is_empty(), "kicad-cli measures the tuned track within 21.9..22.1 mm: {tuned:?}");
@@ -1086,8 +1086,8 @@ mod tests {
         let pair = scratch("kicad_pair");
         setup(&pair, ["USB_P", "USB_N"], vec![]);
         let usb = |c: &str| rule("usb", "A.NetName == 'USB_P' || A.NetName == 'USB_N'", c);
-        start(&pair, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "diffpair", "settings": { "target_length": 26_000 } })));
-        mv(&pair, &body(json!({ "x": 22_000, "y": 9_000 })));
+        start(&pair, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "diffpair", "settings": { "target_length": 26_000_000 } })));
+        mv(&pair, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(fix(&pair, &body(json!({})))["ok"], json!(true));
         let len = judge(&pair, &usb("length (min 25.9mm) (max 26.1mm)"), "length_out_of_range");
         assert!(len.is_empty(), "both nets of the pair are 26 mm to kicad-cli: {len:?}");
@@ -1096,12 +1096,12 @@ mod tests {
 
         // the skew tuner: USB_N takes a 0.7 mm detour (1.4 mm longer than USB_P), the skew is tuned away
         let sk = scratch("kicad_skew");
-        let n_path = vec![p(5_000, 10_500), p(10_000, 10_500), p(10_000, 11_200), p(12_000, 11_200), p(12_000, 10_500), p(25_000, 10_500)];
-        setup_with(&sk, ["USB_P", "USB_N"], vec![], vec![("USB_P", vec![p(5_000, 9_500), p(25_000, 9_500)]), ("USB_N", n_path)]);
+        let n_path = vec![p(5_000_000, 10_500_000), p(10_000_000, 10_500_000), p(10_000_000, 11_200_000), p(12_000_000, 11_200_000), p(12_000_000, 10_500_000), p(25_000_000, 10_500_000)];
+        setup_with(&sk, ["USB_P", "USB_N"], vec![], vec![("USB_P", vec![p(5_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("USB_N", n_path)]);
         let rule_skew = usb("skew (max 0.15mm) (within_diff_pairs)");
         assert_eq!(judge(&sk, &rule_skew, "skew_out_of_range").len(), 1, "the control: 1.4 mm of skew is flagged, on the shorter net (the longest has none against itself)");
-        start(&sk, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "skew" })));
-        mv(&sk, &body(json!({ "x": 22_000, "y": 9_000 })));
+        start(&sk, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "skew" })));
+        mv(&sk, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(fix(&sk, &body(json!({})))["ok"], json!(true));
         let after = judge(&sk, &rule_skew, "skew_out_of_range");
         assert!(after.is_empty(), "after the skew tuner kicad-cli finds the pair within 0.15 mm: {after:?}");
@@ -1132,8 +1132,8 @@ mod tests {
         let untuned = judge(&dir, &rule("(min 149.5ps) (max 150.5ps)"));
         assert_eq!(untuned.len(), 1, "the control: the straight 20 mm track takes 122 ps, out of 149.5..150.5: {untuned:?}");
         assert!(untuned[0].contains("ps"), "kicad-cli reports a time: {untuned:?}");
-        start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_delay": 150 } })));
-        mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_delay": 150 } })));
+        mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(fix(&dir, &body(json!({})))["ok"], json!(true));
         let tuned = judge(&dir, &rule("(min 149.5ps) (max 150.5ps)"));
         assert!(tuned.is_empty(), "kicad-cli measures the tuned track within 149.5..150.5 ps: {tuned:?}");

@@ -149,41 +149,41 @@ mod tests {
     }
 
     fn seg(layer: &str, a: (Nm, Nm), b: (Nm, Nm)) -> Shape {
-        Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 100, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
+        Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 100_000, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
     }
 
     #[test]
     fn the_body_is_the_fab_graphics_box_not_the_silkscreen_or_courtyard() {
-        let g = vec![seg("F.Fab", (-800, -400), (800, -400)), seg("F.Fab", (800, -400), (800, 400)), seg("F.SilkS", (-3000, -3000), (3000, 3000)), seg("F.CrtYd", (-2000, -1000), (2000, 1000))];
-        assert_eq!(fab_bbox(&g), Some((-800, -400, 800, 400)));
-        assert_eq!(fab_bbox(&[seg("F.SilkS", (0, 0), (1000, 1000))]), None, "no fab graphics, no body: the caller falls back to the courtyard");
-        assert_eq!(fab_bbox(&[seg("F.Fab", (0, 0), (1000, 0))]), None, "a single line is not a body");
+        let g = vec![seg("F.Fab", (-800_000, -400_000), (800_000, -400_000)), seg("F.Fab", (800_000, -400_000), (800_000, 400_000)), seg("F.SilkS", (-3_000_000, -3_000_000), (3_000_000, 3_000_000)), seg("F.CrtYd", (-2_000_000, -1_000_000), (2_000_000, 1_000_000))];
+        assert_eq!(fab_bbox(&g), Some((-800_000, -400_000, 800_000, 400_000)));
+        assert_eq!(fab_bbox(&[seg("F.SilkS", (0, 0), (1_000_000, 1_000_000))]), None, "no fab graphics, no body: the caller falls back to the courtyard");
+        assert_eq!(fab_bbox(&[seg("F.Fab", (0, 0), (1_000_000, 0))]), None, "a single line is not a body");
     }
 
     #[test]
     fn a_circle_and_a_polygon_count_too() {
-        let c = Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, center: Point { x: 0, y: 0 }, end: Point { x: 1500, y: 0 } };
-        assert_eq!(fab_bbox(&[c]), Some((-1500, -1500, 1500, 1500)));
-        let p = Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, pts: vec![Point { x: -1950, y: -4950 }, Point { x: 1950, y: -4950 }, Point { x: 1950, y: 4950 }, Point { x: -1950, y: 4950 }] };
-        assert_eq!(fab_bbox(&[p]), Some((-1950, -4950, 1950, 4950)));
+        let c = Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, center: Point { x: 0, y: 0 }, end: Point { x: 1_500_000, y: 0 } };
+        assert_eq!(fab_bbox(&[c]), Some((-1_500_000, -1_500_000, 1_500_000, 1_500_000)));
+        let p = Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, pts: vec![Point { x: -1_950_000, y: -4_950_000 }, Point { x: 1_950_000, y: -4_950_000 }, Point { x: 1_950_000, y: 4_950_000 }, Point { x: -1_950_000, y: 4_950_000 }] };
+        assert_eq!(fab_bbox(&[p]), Some((-1_950_000, -4_950_000, 1_950_000, 4_950_000)));
     }
 
     #[test]
     fn a_project_library_entry_of_that_name_is_the_body_before_anything_installed() {
         let mut fp = eda_model::ir::LibraryFootprint::new_empty("0603");
-        fp.graphics.push(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, start: Point { x: -500, y: -250 }, end: Point { x: 500, y: 250 } });
+        fp.graphics.push(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, start: Point { x: -500_000, y: -250_000 }, end: Point { x: 500_000, y: 250_000 } });
         let d = design(Some(eda_model::ir::FootprintLibrarySection { footprints: vec![fp], ..Default::default() }));
         let part = Part { reference: "R1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
-        assert_eq!(local_body(&Libs::of_source(Arc::new(PathBuf::new())), &d, &part), Some((-500, -250, 500, 250)), "the entry the Footprint Editor edits, not the KiCad 0603 it was copied from");
+        assert_eq!(local_body(&Libs::of_source(Arc::new(PathBuf::new())), &d, &part), Some((-500_000, -250_000, 500_000, 250_000)), "the entry the Footprint Editor edits, not the KiCad 0603 it was copied from");
     }
 
     #[test]
     fn the_placed_body_follows_rotation_and_position() {
-        let fp = FootprintInstance { id: "R1".into(), at: Point { x: 10_000, y: 5_000 }, rot: 90_000, side: Side::Top, label: Default::default() };
+        let fp = FootprintInstance { id: "R1".into(), at: Point { x: 10_000_000, y: 5_000_000 }, rot: 90_000, side: Side::Top, label: Default::default() };
         // A 1600 x 800 body turned a quarter turn is 800 wide and 1600 tall about the part's position.
-        let corners = [to_board(&fp, (-800, -400)), to_board(&fp, (800, 400))];
-        assert_eq!(corners[0].x.min(corners[1].x), 10_000 - 400);
-        assert_eq!(corners[0].y.min(corners[1].y), 5_000 - 800);
+        let corners = [to_board(&fp, (-800_000, -400_000)), to_board(&fp, (800_000, 400_000))];
+        assert_eq!(corners[0].x.min(corners[1].x), 10_000_000 - 400_000);
+        assert_eq!(corners[0].y.min(corners[1].y), 5_000_000 - 800_000);
     }
 
     /// The brief's four parts, with KiCad.app installed: their bodies are the real footprints' F.Fab boxes.
@@ -197,12 +197,12 @@ mod tests {
         let libs = Libs::of_source(Arc::new(eda_kicad::default_footprint_library_root()));
         let size = |p: Part| local_body(&libs, &design, &p).map(|b| (b.2 - b.0, b.3 - b.1));
         // The fab outline of R_0603_1608Metric is 1.6 x 0.826 mm (the file draws the body slightly taller than the 0.8 mm nominal).
-        let near = |got: Option<(Nm, Nm)>, w: Nm, h: Nm| got.is_some_and(|(gw, gh)| (gw - w).abs() <= 60 && (gh - h).abs() <= 60);
-        assert!(near(size(part("R1", "0603", Some("330"))), 1600, 800), "R_0603_1608Metric: a 1.6 x 0.8 mm body");
-        assert!(near(size(part("D1", "0603", Some("LED"))), 1600, 800), "LED_0603_1608Metric");
+        let near = |got: Option<(Nm, Nm)>, w: Nm, h: Nm| got.is_some_and(|(gw, gh)| (gw - w).abs() <= 60_000 && (gh - h).abs() <= 60_000);
+        assert!(near(size(part("R1", "0603", Some("330"))), 1_600_000, 800_000), "R_0603_1608Metric: a 1.6 x 0.8 mm body");
+        assert!(near(size(part("D1", "0603", Some("LED"))), 1_600_000, 800_000), "LED_0603_1608Metric");
         let soic = size(part("U1", "SOIC-16", None)).expect("SOIC-16 has a fab outline");
-        assert!((soic.0 - 3900).abs() <= 200 && (soic.1 - 9900).abs() <= 200, "SOIC-16_3.9x9.9mm: {soic:?}");
+        assert!((soic.0 - 3_900_000).abs() <= 200_000 && (soic.1 - 9_900_000).abs() <= 200_000, "SOIC-16_3.9x9.9mm: {soic:?}");
         let header = size(part("J1", "PINHEADER-4", None)).expect("a 1x04 header has a fab outline");
-        assert!(header.1 >= 10_000 && header.0 <= 3_000, "PinHeader_1x04_P2.54mm_Vertical is about 2.5 x 10 mm: {header:?}");
+        assert!(header.1 >= 10_000_000 && header.0 <= 3_000_000, "PinHeader_1x04_P2.54mm_Vertical is about 2.5 x 10 mm: {header:?}");
     }
 }

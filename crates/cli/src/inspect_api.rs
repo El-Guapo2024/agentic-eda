@@ -21,11 +21,11 @@ fn fail(message: impl Into<String>) -> Value {
     json!({ "ok": false, "message": message.into() })
 }
 
-/// `[x, y]` in millimetres as the IR's micrometres.
+/// `[x, y]` in millimetres as the IR's nanometres.
 fn at_of(req: &Value, key: &str) -> Option<Point> {
     let a = req.get(key)?.as_array()?;
     let (x, y) = (a.first()?.as_f64()?, a.get(1)?.as_f64()?);
-    Some(Point { x: (x * 1000.0).round() as i64, y: (y * 1000.0).round() as i64 })
+    Some(Point { x: eda_model::units::from_mm(x), y: eda_model::units::from_mm(y) })
 }
 
 fn units_of(req: &Value) -> Units {
@@ -110,8 +110,8 @@ mod tests {
     /// One footprint, `U1`, with a pad `1` on net HV above a pad `2` on net GND `pitch` micrometres apart (0.4 mm square copper: the copper gap is `pitch - 400`),
     /// the board's rules as given.
     pub(crate) fn setup(dir: &Path, pitch: i64, rules: eda_model::BoardRules) {
-        let pad = |n: &str, y: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (0, y), size: (400, 400), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -pitch / 2), pad("2", pitch - pitch / 2)], courtyard: Some((2000, pitch + 1000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, y: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (0, y), size: (400_000, 400_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -pitch / 2), pad("2", pitch - pitch / 2)], courtyard: Some((2_000_000, pitch + 1_000_000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part {
             reference: "U1".into(),
             mpn: None,
@@ -144,22 +144,22 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection {
-                outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
-                footprints: vec![FootprintInstance { id: "U1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 0, side: Side::Top, label: Default::default() }],
+                outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }],
+                footprints: vec![FootprintInstance { id: "U1".into(), at: Point { x: 10_000_000, y: 10_000_000 }, rot: 0, side: Side::Top, label: Default::default() }],
                 modules: vec![],
             }),
             routing: None,
             drawings: None,
         };
         board::save(dir, &design).unwrap();
-        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: 100, spacing_nm: 300 };
+        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
     fn hv_rules(dru: Option<&str>) -> eda_model::BoardRules {
         eda_model::BoardRules {
-            clearance: 200,
-            net_classes: vec![NetClass { name: "HV".into(), nets: vec!["HV".into()], track_width: None, clearance: Some(500), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
+            clearance: 200_000,
+            net_classes: vec![NetClass { name: "HV".into(), nets: vec!["HV".into()], track_width: None, clearance: Some(500_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
             custom_rules_text: dru.map(String::from),
             ..Default::default()
         }
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn the_clearance_report_names_the_winner_and_the_rules_it_considered() {
         let dir = scratch("net_class");
-        setup(&dir, 1_000, hv_rules(None));
+        setup(&dir, 1_000_000, hv_rules(None));
         let reply = clearance(&dir, &body(json!({"a": "U1.1", "b": "U1.2", "active_layer": "F.Cu"})));
         assert_eq!(reply["ok"], json!(true), "{reply}");
         assert_eq!(reply["title"], "Clearance Report");
@@ -197,14 +197,14 @@ mod tests {
     #[test]
     fn a_rules_file_rule_beats_the_net_class_and_a_bad_file_is_reported() {
         let dir = scratch("dru");
-        setup(&dir, 1_000, hv_rules(Some("(version 1)\n(rule \"hv pads\"\n\t(condition \"A.NetClass == 'HV' && B.Type == 'Pad'\")\n\t(constraint clearance (min 0.6mm)))\n")));
+        setup(&dir, 1_000_000, hv_rules(Some("(version 1)\n(rule \"hv pads\"\n\t(condition \"A.NetClass == 'HV' && B.Type == 'Pad'\")\n\t(constraint clearance (min 0.6mm)))\n")));
         let reply = clearance(&dir, &body(json!({"a": "U1.1", "b": "U1.2"})));
         assert_eq!(resolved_min(&reply), Some(600_000), "{reply}");
         assert_eq!(reply["pages"][0]["resolutions"][0]["rule"], "rule 'hv pads'");
         assert_eq!(reply["compile_error"], json!(null));
         // a file with a mistake in it: the implicit rules alone, and the report says so
         let bad = scratch("dru_bad");
-        setup(&bad, 1_000, hv_rules(Some("(version 1)\n(rule x (constraint clearance (min 1)))\n")));
+        setup(&bad, 1_000_000, hv_rules(Some("(version 1)\n(rule x (constraint clearance (min 1)))\n")));
         let reply = clearance(&bad, &body(json!({"a": "U1.1", "b": "U1.2"})));
         assert_eq!(resolved_min(&reply), Some(500_000), "{reply}");
         assert!(reply["compile_error"].as_str().unwrap().starts_with("ERROR: Missing units"), "{reply}");
@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn same_net_items_have_no_clearance_and_the_other_pages_come_with_the_items() {
         let dir = scratch("pages");
-        setup(&dir, 1_000, hv_rules(None));
+        setup(&dir, 1_000_000, hv_rules(None));
         // a footprint with two different pads is itself; two pads on different nets get the per-layer clearance page and the physical clearances page
         let reply = clearance(&dir, &body(json!({"a": "U1.1", "b": "U1.2"})));
         let titles: Vec<_> = reply["pages"].as_array().unwrap().iter().map(|p| p["title"].as_str().unwrap().to_string()).collect();
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn the_constraints_report_of_a_pad_has_the_pages_a_pad_has() {
         let dir = scratch("constraints");
-        setup(&dir, 1_000, hv_rules(Some("(version 1)(rule \"fat pads\" (condition \"A.Type == 'Pad'\") (constraint assertion \"A.Size_X >= 0.5mm\"))")));
+        setup(&dir, 1_000_000, hv_rules(Some("(version 1)(rule \"fat pads\" (condition \"A.Type == 'Pad'\") (constraint assertion \"A.Size_X >= 0.5mm\"))")));
         let reply = constraints(&dir, &body(json!({"item": "U1.1"})));
         assert_eq!(reply["ok"], json!(true), "{reply}");
         assert_eq!(reply["title"], "Constraints Report");
@@ -247,10 +247,10 @@ mod tests {
     fn a_track_is_the_segment_the_click_was_nearest_to_and_the_report_follows_the_frames_units() {
         use eda_ops::Cmd;
         let dir = scratch("track");
-        setup(&dir, 3_000, hv_rules(None));
+        setup(&dir, 3_000_000, hv_rules(None));
         // a two-segment track on GND: 4 mm up, then 6 mm along
-        let pts = vec![Point { x: 2_000, y: 2_000 }, Point { x: 2_000, y: 6_000 }, Point { x: 8_000, y: 6_000 }];
-        board::step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 250, pts }, false, "test").unwrap();
+        let pts = vec![Point { x: 2_000_000, y: 2_000_000 }, Point { x: 2_000_000, y: 6_000_000 }, Point { x: 8_000_000, y: 6_000_000 }];
+        board::step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 250_000, pts }, false, "test").unwrap();
         let (_, design, _) = board::load(&dir).unwrap();
         let id = design.routing.unwrap().tracks[0].id.clone();
         let first = clearance(&dir, &body(json!({"a": "U1.1", "b": id, "b_at": [2.0, 3.0]})));
@@ -273,7 +273,7 @@ mod tests {
         assert!(t.contains("Resolved width constraints: min 7.87402 mils; opt 7.87402 mils; max <i>undefined</i>."), "{t}");
         assert!(t.contains("length 157.48 mils"), "a track's description is in the frame's units too: {t}");
         // a via: the pages of a via, its description by its layers
-        board::step(&dir, Cmd::AddVia { net: "GND".into(), x: 9_000, y: 3_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        board::step(&dir, Cmd::AddVia { net: "GND".into(), x: 9_000_000, y: 3_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
         let (_, design, _) = board::load(&dir).unwrap();
         let via = design.routing.unwrap().vias[0].id.clone();
         let v = constraints(&dir, &body(json!({"item": via})));
@@ -299,22 +299,22 @@ mod tests {
             return;
         }
         let cases: [(&str, Option<&str>, i64); 3] = [
-            ("net class", None, 500),
-            ("explicit rule", Some("(version 1)\n(rule \"hv pads\"\n\t(condition \"A.NetClass == 'HV' && B.Type == 'Pad'\")\n\t(constraint clearance (min 0.65mm)))\n"), 650),
-            ("loosening rule", Some("(version 1)\n(rule \"loose\"\n\t(condition \"A.NetName == 'HV'\")\n\t(constraint clearance (min 0.3mm)))\n"), 300),
+            ("net class", None, 500_000),
+            ("explicit rule", Some("(version 1)\n(rule \"hv pads\"\n\t(condition \"A.NetClass == 'HV' && B.Type == 'Pad'\")\n\t(constraint clearance (min 0.65mm)))\n"), 650_000),
+            ("loosening rule", Some("(version 1)\n(rule \"loose\"\n\t(condition \"A.NetName == 'HV'\")\n\t(constraint clearance (min 0.3mm)))\n"), 300_000),
         ];
         for (name, dru, expected_nm) in cases {
             // what the report says, on a board whose pads are far apart
             let dir = scratch(&format!("proof_{}", name.replace(' ', "_")));
-            setup(&dir, 3_000, hv_rules(dru));
+            setup(&dir, 3_000_000, hv_rules(dru));
             let reply = clearance(&dir, &body(json!({"a": "U1.1", "b": "U1.2"})));
             let resolved = resolved_min(&reply).unwrap_or_else(|| panic!("{name}: {reply}"));
-            assert_eq!(resolved, expected_nm * 1000, "{name}: {reply}");
-            let um = resolved / 1000;
+            assert_eq!(resolved, expected_nm, "{name}: {reply}");
+            let um = resolved;
             // kicad-cli on the same board with the pads (copper gap) 10 um under and 10 um over it
-            for (delta, violation) in [(-10, true), (10, false)] {
+            for (delta, violation) in [(-10_000, true), (10_000, false)] {
                 let board_dir = scratch(&format!("proof_{}_{delta}", name.replace(' ', "_")));
-                setup(&board_dir, 400 + um + delta, hv_rules(dru));
+                setup(&board_dir, 400_000 + um + delta, hv_rules(dru));
                 let (_, design, model) = board::load(&board_dir).unwrap();
                 let report = eda_kicad_engine::drc_scratch(&design, &model).unwrap_or_else(|e| panic!("{name}: kicad-cli: {e:?}"));
                 let clearance_violations: Vec<_> = report.violations.iter().filter(|v| v.kind == "clearance").collect();

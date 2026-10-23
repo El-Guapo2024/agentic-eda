@@ -231,16 +231,16 @@ pub fn lint(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 // ------------------------------------------------------------- board statistics
 
 /// kicad-cli prints a length as `"26.3850 mm"` and an area as `"664.401 mm²"`
-/// (or `in`/`in²`): the number and its unit, in micrometres / square
-/// micrometres, which is what the studio keeps everything in.
+/// (or `in`/`in²`): the number and its unit, in nanometres / square
+/// nanometres, which is what the studio keeps everything in.
 fn quantity_nm(s: &str, area: bool) -> f64 {
     let s = s.trim();
     let split = s.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E')).unwrap_or(s.len());
     let n: f64 = s[..split].parse().unwrap_or(0.0);
     let per_unit = match s[split..].trim().trim_end_matches(['²', '2']) {
-        "in" => 25_400.0,
-        "mil" => 25.4,
-        _ => 1_000.0,
+        "in" => 25_400_000.0,
+        "mil" => 25_400.0,
+        _ => 1_000_000.0,
     };
     if area { n * per_unit * per_unit } else { n * per_unit }
 }
@@ -291,11 +291,11 @@ pub(crate) fn stats_reply(j: &Value) -> Value {
             "has_outline": b["has_outline"].as_bool().unwrap_or(false),
             "width_nm": len("width"),
             "height_nm": len("height"),
-            "area_um2": area("area"),
-            "front_copper_area_um2": area("front_copper_area"),
-            "back_copper_area_um2": area("back_copper_area"),
-            "front_courtyard_area_um2": area("front_footprint_area"),
-            "back_courtyard_area_um2": area("back_footprint_area"),
+            "area_nm2": area("area"),
+            "front_copper_area_nm2": area("front_copper_area"),
+            "back_copper_area_nm2": area("back_copper_area"),
+            "front_courtyard_area_nm2": area("front_footprint_area"),
+            "back_courtyard_area_nm2": area("back_footprint_area"),
             "front_density_pct": pct("front_component_density"),
             "back_density_pct": pct("back_component_density"),
             "min_track_width_nm": len("min_track_width"),
@@ -371,12 +371,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kicad_clis_quantities_become_micrometres() {
-        assert_eq!(quantity_nm("26.3850 mm", false), 26_385.0);
-        assert_eq!(quantity_nm("0.2000 mm", false), 200.0);
-        assert_eq!(quantity_nm("664.401 mm\u{b2}", true), 664_401_000.0);
-        assert_eq!(quantity_nm("0.5 in", false), 12_700.0);
-        assert_eq!(quantity_nm("1 in\u{b2}", true), 25_400.0 * 25_400.0);
+    fn kicad_clis_quantities_become_nanometres() {
+        assert_eq!(quantity_nm("26.3850 mm", false), 26_385_000.0);
+        assert_eq!(quantity_nm("0.2000 mm", false), 200_000.0);
+        assert_eq!(quantity_nm("664.401 mm\u{b2}", true), 664_401_000_000_000.0);
+        assert_eq!(quantity_nm("0.5 in", false), 12_700_000.0);
+        assert_eq!(quantity_nm("1 in\u{b2}", true), 25_400_000.0 * 25_400_000.0);
     }
 
     #[test]
@@ -395,12 +395,12 @@ mod tests {
         });
         let r = stats_reply(&j);
         assert_eq!(r["ok"], true);
-        assert_eq!(r["board"]["width_nm"], 26_385.0);
-        assert_eq!(r["board"]["area_um2"], 664_401_000.0);
+        assert_eq!(r["board"]["width_nm"], 26_385_000.0);
+        assert_eq!(r["board"]["area_nm2"], 664_401_000_000_000.0);
         assert_eq!(r["board"]["front_density_pct"], 2.18);
-        assert_eq!(r["board"]["min_clearance_nm"], 203.0);
-        assert_eq!(r["board"]["thickness_nm"], 1_600.0);
-        assert_eq!(r["board"]["front_courtyard_area_um2"], 14_498_000.0);
+        assert_eq!(r["board"]["min_clearance_nm"], 203_000.0);
+        assert_eq!(r["board"]["thickness_nm"], 1_600_000.0);
+        assert_eq!(r["board"]["front_courtyard_area_nm2"], 14_498_000_000_000.0);
         assert_eq!(r["footprints"][0], json!({ "title": "THT:", "front": 1, "back": 2 }));
         assert_eq!(r["footprints"][2]["front"], 30);
         assert_eq!(r["pads"][0], json!({ "title": "Through hole:", "qty": 4 }));

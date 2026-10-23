@@ -25,18 +25,18 @@ fn slow() -> bool {
 
 /// Where the footprints go (um): channel 1 compact, the others in their own ways.
 const PLACE: [(&str, i64, i64); 12] = [
-    ("U1", 5_500, 9_000),
-    ("R1", 3_500, 4_200),
-    ("R2", 7_700, 4_200),
-    ("C1", 5_500, 13_200),
-    ("U2", 18_000, 9_000),
-    ("R3", 20_200, 4_200),
-    ("R4", 15_800, 4_200),
-    ("C2", 18_000, 14_000),
-    ("U3", 30_500, 9_000),
-    ("R5", 30_500, 4_200),
-    ("R6", 32_500, 13_500),
-    ("C3", 28_000, 13_500),
+    ("U1", 5_500_000, 9_000_000),
+    ("R1", 3_500_000, 4_200_000),
+    ("R2", 7_700_000, 4_200_000),
+    ("C1", 5_500_000, 13_200_000),
+    ("U2", 18_000_000, 9_000_000),
+    ("R3", 20_200_000, 4_200_000),
+    ("R4", 15_800_000, 4_200_000),
+    ("C2", 18_000_000, 14_000_000),
+    ("U3", 30_500_000, 9_000_000),
+    ("R5", 30_500_000, 4_200_000),
+    ("R6", 32_500_000, 13_500_000),
+    ("C3", 28_000_000, 13_500_000),
 ];
 
 const CH1: [&str; 4] = ["U1", "R1", "R2", "C1"];
@@ -72,7 +72,7 @@ fn design(placed: &[(&str, i64, i64)]) -> Design {
         schematic: None,
         nets: None,
         placement: Some(PlacementSection {
-            outline: vec![Point { x: 0, y: 0 }, Point { x: 36_000, y: 0 }, Point { x: 36_000, y: 25_000 }, Point { x: 0, y: 25_000 }],
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 36_000_000, y: 0 }, Point { x: 36_000_000, y: 25_000_000 }, Point { x: 0, y: 25_000_000 }],
             footprints: placed.iter().map(|(id, x, y)| FootprintInstance { id: id.to_string(), at: Point { x: *x, y: *y }, rot: 0, side: Side::Top, label: Default::default() }).collect(),
             modules: vec![],
         }),
@@ -97,7 +97,7 @@ fn channels(dir: &Path) {
 /// `design` as the board folder `dir`'s design, with the intent of the three channels.
 fn write_board(dir: &Path, design: &Design) {
     save(dir, design).unwrap();
-    let meta = Meta { intent: intent_path().canonicalize().unwrap().display().to_string(), snap_nm: 100, spacing_nm: 600 };
+    let meta = Meta { intent: intent_path().canonicalize().unwrap().display().to_string(), snap_nm: 100_000, spacing_nm: 600_000 };
     std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 }
 
@@ -136,8 +136,8 @@ fn enclose_the_routing(dir: &Path) {
     for t in &design.routing.as_ref().unwrap().tracks {
         all.extend(t.pts.iter().copied());
     }
-    let (x0, x1) = (all.iter().map(|p| p.x).min().unwrap() - 500, all.iter().map(|p| p.x).max().unwrap() + 500);
-    let (y0, y1) = (all.iter().map(|p| p.y).min().unwrap() - 500, all.iter().map(|p| p.y).max().unwrap() + 500);
+    let (x0, x1) = (all.iter().map(|p| p.x).min().unwrap() - 500_000, all.iter().map(|p| p.x).max().unwrap() + 500_000);
+    let (y0, y1) = (all.iter().map(|p| p.y).min().unwrap() - 500_000, all.iter().map(|p| p.y).max().unwrap() + 500_000);
     let rect = vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }];
     step(dir, Cmd::SetZoneOutline { id: id.clone(), outline: rect }, false, "test").unwrap();
 }
@@ -215,7 +215,7 @@ fn strict_refuses_neither_the_areas_nor_the_repeat_on_a_board_that_is_not_routed
     // the same board, a copper pour on it instead: the gate does judge that (it is what the exemption is not)
     let other = scratch("p24_strict_pour");
     write_board(&other, &design(&PLACE));
-    let pour = Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 1_000, y: 16_000 }, Point { x: 8_000, y: 16_000 }, Point { x: 8_000, y: 20_000 }, Point { x: 1_000, y: 20_000 }] };
+    let pour = Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 1_000_000, y: 16_000_000 }, Point { x: 8_000_000, y: 16_000_000 }, Point { x: 8_000_000, y: 20_000_000 }, Point { x: 1_000_000, y: 20_000_000 }] };
     assert_eq!(step(&other, pour, true, "test").unwrap_err()[0].check, "board_worse", "the first pour of a board with no routing is judged, a rule area is not");
 }
 

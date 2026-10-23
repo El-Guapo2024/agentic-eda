@@ -52,8 +52,8 @@ pub(crate) fn sch_table_json(t: &Table, sheet: &Resolver) -> Value {
     table_value(t, &|row, col| sch_cell_draw(t, row, col, sheet), true)
 }
 
-/// The width a stroke of width 0 draws with on a sheet: 6 mils (`DEFAULT_LINE_WIDTH_MILS`), micrometres.
-const SCH_DEFAULT_LINE_NM: f64 = 152.4;
+/// The width a stroke of width 0 draws with on a sheet: 6 mils (`DEFAULT_LINE_WIDTH_MILS`), nanometres.
+const SCH_DEFAULT_LINE_NM: f64 = 152_400.0;
 
 fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: bool) -> Value {
     if !t.is_well_formed() {
@@ -133,28 +133,28 @@ mod tests {
             id: "tbl_x".into(),
             uuid: String::new(),
             layer: "F.SilkS".into(),
-            at: Point { x: 1_000, y: 2_000 },
+            at: Point { x: 1_000_000, y: 2_000_000 },
             angle: 0,
-            col_widths: vec![20_000],
-            row_heights: vec![6_000],
+            col_widths: vec![20_000_000],
+            row_heights: vec![6_000_000],
             cells: vec![cell],
-            border: TableBorder { external: true, header: true, stroke: TableStroke::solid(100) },
+            border: TableBorder { external: true, header: true, stroke: TableStroke::solid(100_000) },
             separators: TableSeparators::default(),
         };
         let v = table_json(&t, &PcbBoard::default());
         assert_eq!(v["id"], "tbl_x");
-        assert_eq!(v["bbox"], json!([1_000, 2_000, 21_000, 8_000]));
+        assert_eq!(v["bbox"], json!([1_000_000, 2_000_000, 21_000_000, 8_000_000]));
         assert_eq!(v["borders"].as_array().unwrap().len(), 4);
         let c = &v["cells"][0];
         assert_eq!(c["id"], "tbl_x:0:0");
-        assert_eq!(c["corners"], json!([[1_000, 2_000], [21_000, 2_000], [21_000, 8_000], [1_000, 8_000]]));
+        assert_eq!(c["corners"], json!([[1_000_000, 2_000_000], [21_000_000, 2_000_000], [21_000_000, 8_000_000], [1_000_000, 8_000_000]]));
         assert_eq!(c["shown"], "R1 A1");
         assert_eq!(c["lines"][0]["text"], "R1 A1");
     }
 
     #[test]
     fn a_sheets_table_counts_from_zero_resolves_the_sheets_variables_and_draws_a_stroke_of_width_zero_at_the_default_width() {
-        let mut t = Table::new_sch_grid(Point { x: 10_000, y: 20_000 }, 2, 1, 30_000, 5_000, 1_270);
+        let mut t = Table::new_sch_grid(Point { x: 10_000_000, y: 20_000_000 }, 2, 1, 30_000_000, 5_000_000, 1_270_000);
         t.cells[0].text = "${ADDR} ${ROW}/${COL}".into();
         t.cells[1].text = "${TITLE}".into();
         t.cells[1].fill = eda_model::sch_extras::SchFill::Color;
@@ -167,8 +167,8 @@ mod tests {
         assert_eq!((v["cells"][1]["fill"].as_str(), &v["cells"][1]["fill_color"]), (Some("color"), &json!([1, 2, 3, 255])));
         assert_eq!(v["cells"][0]["fill"], "none");
         assert_eq!(v["cells"][0]["exclude_from_sim"], false);
-        assert!(v["borders"].as_array().unwrap().iter().all(|b| b["width"] == 152.4), "a stroke of width 0 is the sheet's default width");
+        assert!(v["borders"].as_array().unwrap().iter().all(|b| b["width"] == 152_400.0), "a stroke of width 0 is the sheet's default width");
         // the placed text uses the sheet's pen, not an eighth of the glyph
-        assert_eq!(v["cells"][0]["pen"], 152.4);
+        assert_eq!(v["cells"][0]["pen"], 152_400.0);
     }
 }

@@ -545,17 +545,17 @@ mod tests {
     #[test]
     fn the_preview_is_the_footprint_at_the_origin_with_its_pads_and_drawings() {
         use eda_model::footprint::{Pad, PadKind, PadShape};
-        let pad = |n: &str, x: i64, y: i64| Pad { number: n.into(), at: (x, y), size: (800, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        let pad = |n: &str, x: i64, y: i64| Pad { number: n.into(), at: (x, y), size: (800_000, 600_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
         let mut art = eda_model::fp_art::FpArt::default();
-        art.shapes.push(eda_model::fp_art::FpShape::new(eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: -1_000, y: -900 }, end: Point { x: 1_000, y: -900 } }));
-        let footprint = eda_model::Footprint { name: "T:Two".into(), pads: vec![pad("1", -1_000, 0), pad("2", 1_000, 0)], courtyard: Some((2_400, 1_000)), art, ..Default::default() };
+        art.shapes.push(eda_model::fp_art::FpShape::new(eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120_000, filled: false, start: Point { x: -1_000_000, y: -900_000 }, end: Point { x: 1_000_000, y: -900_000 } }));
+        let footprint = eda_model::Footprint { name: "T:Two".into(), pads: vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)], courtyard: Some((2_400_000, 1_000_000)), art, ..Default::default() };
         let probe = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("v".into()), package: None, footprint: Some("T:Two".into()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
         let model = ConstraintModel { parts: vec![probe.clone()], footprints: vec![footprint], ..Default::default() };
         let p = preview_part(&model, &probe).unwrap();
         assert_eq!((p["side"].as_str(), p["at"].clone(), p["rot"].as_f64()), (Some("top"), json!([0, 0]), Some(0.0)));
         let pads: Vec<(i64, i64, i64, i64)> = p["pads"].as_array().unwrap().iter().map(|q| (q["x"].as_i64().unwrap(), q["y"].as_i64().unwrap(), q["w"].as_i64().unwrap(), q["h"].as_i64().unwrap())).collect();
-        assert_eq!(pads, [(-1_000, 0, 800, 600), (1_000, 0, 800, 600)], "in the footprint's own frame");
+        assert_eq!(pads, [(-1_000_000, 0, 800_000, 600_000), (1_000_000, 0, 800_000, 600_000)], "in the footprint's own frame");
         assert_eq!(p["graphics"].as_array().unwrap().len(), 1);
-        assert_eq!(p["courtyard"], json!([-2_400, -1_000, 2_400, 1_000]));
+        assert_eq!(p["courtyard"], json!([-2_400_000, -1_000_000, 2_400_000, 1_000_000]));
     }
 }

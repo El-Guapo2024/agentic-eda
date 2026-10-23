@@ -191,7 +191,7 @@ pub(crate) fn report(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckRes
             let mut zone = json!({
                 "id": z.id, "net": z.net, "layer": layer,
                 "filled": filled,
-                "area_um2": fill.map(|f| f.area()).unwrap_or(0.0),
+                "area_nm2": fill.map(|f| f.area()).unwrap_or(0.0),
                 "fragments": fragments,
             });
             if with_polys {
@@ -226,7 +226,7 @@ mod tests {
 
     fn square(id: &str, uuid: &str, layer: &str, x: i64) -> Zone {
         let p = |x, y| Point { x, y };
-        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: layer.into(), outline: vec![p(x, 0), p(x + 10_000, 0), p(x + 10_000, 10_000), p(x, 10_000)], ..Default::default() }
+        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: layer.into(), outline: vec![p(x, 0), p(x + 10_000_000, 0), p(x + 10_000_000, 10_000_000), p(x, 10_000_000)], ..Default::default() }
     }
 
     /// A board directory with an intent of two nets, no part, and `zones`.
@@ -237,7 +237,7 @@ mod tests {
         let model = ConstraintModel { nets: vec![Net { name: "GND".into(), pins: vec![] }, Net { name: "VCC".into(), pins: vec![] }], ..Default::default() };
         std::fs::write(dir.join("intent.yaml"), serde_yaml::to_string(&model).unwrap()).unwrap();
         write_zones(&dir, zones);
-        std::fs::write(dir.join("board.json"), serde_json::to_string(&json!({ "intent": dir.join("intent.yaml").display().to_string(), "snap_nm": 100, "spacing_nm": 500 })).unwrap()).unwrap();
+        std::fs::write(dir.join("board.json"), serde_json::to_string(&json!({ "intent": dir.join("intent.yaml").display().to_string(), "snap_nm": 100_000, "spacing_nm": 500_000 })).unwrap()).unwrap();
         dir
     }
 
@@ -247,7 +247,7 @@ mod tests {
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
-            placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 40_000, y: 0 }, Point { x: 40_000, y: 20_000 }, Point { x: 0, y: 20_000 }], footprints: vec![], modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 40_000_000, y: 0 }, Point { x: 40_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }], footprints: vec![], modules: vec![] }),
             routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
             footprint_library: None,
@@ -286,9 +286,9 @@ mod tests {
     /// and counts as out of date in the source, and a rule area, or an outline with fewer than three corners, is not in the report at all.
     #[test]
     fn the_report_says_which_zones_have_a_current_fill_and_leaves_rule_areas_and_degenerate_outlines_out() {
-        let mut keepout = square("ka", "", "F.Cu", 20_000);
+        let mut keepout = square("ka", "", "F.Cu", 20_000_000);
         keepout.is_rule_area = true;
-        let mut line = square("zl", "", "F.Cu", 40_000);
+        let mut line = square("zl", "", "F.Cu", 40_000_000);
         line.outline.truncate(2);
         let (a, b) = (square("za", "", "F.Cu", 0), square("zb", "", "B.Cu", 0));
         let dir = board_dir("report", vec![a.clone(), b.clone(), keepout.clone(), line.clone()]);
@@ -300,20 +300,20 @@ mod tests {
         let mut ids: Vec<&str> = r["zones"].as_array().unwrap().iter().map(|z| z["id"].as_str().unwrap()).collect();
         ids.sort();
         assert_eq!(ids, ["za", "zb"], "the rule area has no fill, ever, and two corners enclose nothing");
-        assert!(r["zones"].as_array().unwrap().iter().all(|z| z["filled"] == false && z["fragments"].as_array().unwrap().is_empty() && z["area_um2"] == 0.0));
+        assert!(r["zones"].as_array().unwrap().iter().all(|z| z["filled"] == false && z["fragments"].as_array().unwrap().is_empty() && z["area_nm2"] == 0.0));
 
         let fills = KicadFills::new("kicad-cli 10.99.0".into(), "rev".into(), 2_500, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]));
         zone_fills::store(&dir, &fills).unwrap();
         let r = report(&dir, true).unwrap();
         let za = by_id(&r, "za");
-        assert_eq!((za["filled"].clone(), za["fragments"][0][2].clone(), za["area_um2"].as_f64()), (json!(true), json!([9_000, 9_000]), Some(64_000_000.0)), "{za}");
+        assert_eq!((za["filled"].clone(), za["fragments"][0][2].clone(), za["area_nm2"].as_f64()), (json!(true), json!([9_000_000, 9_000_000]), Some(64_000_000_000_000.0)), "{za}");
         assert_eq!(za["polys"][0]["outline"].as_array().unwrap().len(), 4, "with `polys` the unfractured islands");
         assert_eq!(by_id(&r, "zb")["filled"], false, "zb was never filled");
         assert_eq!(r["source"], json!({ "engine": "kicad-cli 10.99.0", "revision": "rev", "seconds": 2.5, "zones": 1, "stale": 0 }));
 
         // Zone A is edited: its fill is no longer its own.
         let mut edited = a.clone();
-        edited.min_thickness += 10;
+        edited.min_thickness += 10_000;
         write_zones(&dir, vec![edited, b, keepout, line]);
         let r = report(&dir, false).unwrap();
         assert_eq!(by_id(&r, "za")["filled"], false);
@@ -331,7 +331,7 @@ mod tests {
         zone_fills::store(&dir, &KicadFills::new("kicad-cli 10.99.0".into(), String::new(), 1, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]))).unwrap();
         assert!(ensure_filled(&dir).is_ok(), "every pour is current: kicad-cli is not started");
         // A footprint's own zone is not one kicad-cli fills (`FillAllZones` walks the board's zones): it is not waited for, and not in the report.
-        let mut inside = square("zf", "", "F.Cu", 30_000);
+        let mut inside = square("zf", "", "F.Cu", 30_000_000);
         inside.parent_footprint = Some("U1".into());
         let with_footprint_zone = board_dir("ensure_footprint_zone", vec![a.clone(), inside]);
         zone_fills::store(&with_footprint_zone, &KicadFills::new("kicad-cli 10.99.0".into(), String::new(), 1, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]))).unwrap();
@@ -379,7 +379,7 @@ mod tests {
         };
         let scanned = vec![
             ScannedFill { zone: "uuid-a".into(), layer: "F.Cu".into(), island: false, pts: vec![[0, 0], [1_000_000, 0], [1_000_000, 1_000_000]] },
-            ScannedFill { zone: "uuid-a".into(), layer: "F.Cu".into(), island: true, pts: vec![[5_000_000, 5_000_000], [6_000_000, 5_000_000], [6_000_000, 6_000_000]] },
+            ScannedFill { zone: "uuid-a".into(), layer: "F.Cu".into(), island: true, pts: vec![[5_000_000_000, 5_000_000_000], [6_000_000_000, 5_000_000_000], [6_000_000_000, 6_000_000_000]] },
             ScannedFill { zone: "somebody else".into(), layer: "F.Cu".into(), island: false, pts: vec![[0, 0], [1, 0], [1, 1]] },
         ];
         keep_imported(&dir, &design, scanned);

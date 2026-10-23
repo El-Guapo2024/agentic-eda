@@ -39,7 +39,7 @@ fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
     while let Some(i) = rest.find("<g class=\"stroked-text\">") {
         bare.push_str(&rest[..i]);
         let after = &rest[i..];
-        let end = after.find("</g>").map(|e| e + 4).unwrap_or(after.len());
+        let end = after.find("</g>").map(|e| e + 4000).unwrap_or(after.len());
         rest = &after[end..];
     }
     bare.push_str(rest);
@@ -90,9 +90,9 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
     }
     let dir = scratch("tables_plot");
     setup(&dir);
-    step(&dir, Cmd::Table(TableCmd::PlaceStackup { layer: "Dwgs.User".into(), at: Point { x: 2_000, y: 2_000 }, units: None }), false, "test").unwrap();
+    step(&dir, Cmd::Table(TableCmd::PlaceStackup { layer: "Dwgs.User".into(), at: Point { x: 2_000_000, y: 2_000_000 }, units: None }), false, "test").unwrap();
     let characteristics: Cmd = serde_json::from_value(serde_json::json!({
-        "op": "table", "verb": "place_characteristics", "layer": "Cmts.User", "at": { "x": 2_000, "y": 100_000 }, "units": "mm",
+        "op": "table", "verb": "place_characteristics", "layer": "Cmts.User", "at": { "x": 2_000_000, "y": 100_000_000 }, "units": "mm",
         "numbers": { "thickness_nm": 1_600_000, "width_nm": 20_000_000, "height_nm": 20_000_000, "min_track_nm": 200_000, "min_clearance_nm": 200_000, "min_drill_nm": 300_000, "castellated_pads": 0, "press_fit_pads": 2 }
     }))
     .unwrap();
@@ -100,7 +100,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
     let tables = the_tables(&dir);
     assert_eq!(tables.len(), 2, "both tables are on the board");
     let (stackup, chars) = (&tables[0], &tables[1]);
-    assert_eq!((stackup.col_count(), chars.col_count()), (7, 4));
+    assert_eq!((stackup.col_count(), chars.col_count()), (7000, 4000));
 
     // The stackup table, on Dwgs.User (no footprint draws its text there): every cell's text drawn whole on one line, and the lines of its borders.
     let svg = plot(&dir, "Dwgs.User");
@@ -119,7 +119,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
         .collect();
     assert!(!expected.is_empty());
     for line in &expected {
-        assert!(lines.iter().any(|l| l.iter().zip(line).all(|(a, b)| (a - b).abs() <= 2)), "kicad-cli draws no line {line:?} of the table's border; it drew {lines:?}");
+        assert!(lines.iter().any(|l| l.iter().zip(line).all(|(a, b)| (a - b).abs() <= 2000)), "kicad-cli draws no line {line:?} of the table's border; it drew {lines:?}");
     }
     assert_eq!(lines.len(), expected.len(), "and no other line: {lines:?} against {expected:?}");
 
@@ -138,7 +138,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
 fn the_move_preview_carries_a_held_sheet_table_where_it_would_be() {
     let dir = scratch("sch_table_preview");
     setup(&dir);
-    let mut t = Table::new_sch_grid(Point { x: 20_000, y: 30_000 }, 2, 2, 20_000, 5_000, 1_270);
+    let mut t = Table::new_sch_grid(Point { x: 20_000_000, y: 30_000_000 }, 2, 2, 20_000_000, 5_000_000, 1_270_000);
     t.cells[0].text = "TITLE ${ROW}".into();
     step(&dir, Cmd::SchTable(TableCmd::Add { table: t }), false, "test").unwrap();
     let (_, design, _) = load(&dir).expect("the board loads");
@@ -146,14 +146,14 @@ fn the_move_preview_carries_a_held_sheet_table_where_it_would_be() {
     let cell = eda_model::table::cell_item_id(&id, 1, 1);
     let preview = |cmd: serde_json::Value| crate::sch_move_api::move_preview(&dir, serde_json::json!({ "sheet": "", "cmds": [cmd] }).to_string().as_bytes());
     let before = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": [cell], "dx": 0, "dy": 0 }));
-    let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": [cell], "dx": 2_540, "dy": 1_270 }));
+    let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": [cell], "dx": 2_540_000, "dy": 1_270_000 }));
     assert_eq!(v["ok"], serde_json::json!(true), "{v}");
     let corner = |v: &serde_json::Value| v["tables"][0]["cells"][0]["corners"][0].clone();
     assert_eq!(v["tables"][0]["id"], serde_json::json!(id), "{v}");
-    assert_eq!((corner(&before), corner(&v)), (serde_json::json!([20_000, 30_000]), serde_json::json!([22_540, 31_270])), "the cell held the table: it moved by the offset");
+    assert_eq!((corner(&before), corner(&v)), (serde_json::json!([20_000_000, 30_000_000]), serde_json::json!([22_540_000, 31_270_000])), "the cell held the table: it moved by the offset");
     // the text lines go with it, and what a variable stands for in the cell is shown, not the variable
     let line = |v: &serde_json::Value| (v["tables"][0]["cells"][0]["lines"][0]["x"].as_f64().unwrap(), v["tables"][0]["cells"][0]["lines"][0]["text"].clone());
-    assert!((line(&v).0 - line(&before).0 - 2_540.0).abs() < 1.0, "{}", v["tables"][0]["cells"][0]);
+    assert!((line(&v).0 - line(&before).0 - 2_540_000.0).abs() < 1.0, "{}", v["tables"][0]["cells"][0]);
     assert_eq!(line(&v).1, serde_json::json!("TITLE 0"), "${{ROW}} of the first row of a sheet table is 0");
     let _ = std::fs::remove_dir_all(&dir);
 }

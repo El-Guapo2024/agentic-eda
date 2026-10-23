@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(r["counts"]["circle"], 1);
         assert_eq!(r["messages"][0]["text"], "DXF hatches not currently supported.");
         // Scaled by 2, the circle at (5, -5) with radius 2 reaches x 6..14 mm and y -14..-6 mm; the line is x 0..20.
-        assert_eq!(r["bbox_nm"], json!([0, -14_000, 20_000, 0]));
+        assert_eq!(r["bbox_nm"], json!([0, -14_000_000, 20_000_000, 0]));
         assert_eq!(r["fits"], true);
     }
 
