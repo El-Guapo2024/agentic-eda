@@ -25,7 +25,9 @@ use crate::line_placer::{FixOutcome, LinePlacer, Preview, EXACT_UM};
 use crate::node::Node;
 use crate::settings::RoutingSettings;
 use eda_model::ir::{Design, Point, Um};
+use eda_model::via_extra::ViaKind;
 use eda_model::ConstraintModel;
+use std::collections::HashMap;
 
 /// `ANCHOR_SNAP_UM`-equivalent used for picking a *start* item -- see
 /// `line_placer::SNAP_UM` for the same radius used at the route's end.
@@ -51,6 +53,22 @@ struct Session {
     world: Option<Node>,
     /// The tracks the session cut at its start, for the commit.
     splits: Vec<TrackSplit>,
+    /// The type of the via armed with [`Router::toggle_via_typed`] (`SIZES_SETTINGS::ViaType()`), for the next fix.
+    pending_via_kind: ViaKind,
+    /// The vias the session's fixes placed, in order: where, on which layers, how big, and of which type (`VIA::ViaType()`, which
+    /// `PNS_KICAD_IFACE::AddItem` gives the board via: "`via_board->SetViaType( via->ViaType() )`"). The commit finds the via of each change of
+    /// layer here; one Backspace took away is no longer at a run's end, and so is not found.
+    placed_vias: Vec<PlacedVia>,
+}
+
+/// A via a fix of the session placed: see [`Session::placed_vias`].
+#[derive(Debug, Clone, Copy)]
+struct PlacedVia {
+    at: Point,
+    layers: LayerRange,
+    diameter: Um,
+    drill: Um,
+    kind: ViaKind,
 }
 
 /// What a route starts from (`TOOL_BASE::updateStartItem`, `snapToItem`).
@@ -77,6 +95,9 @@ pub struct RouteCommit {
     pub remove_via_ids: Vec<String>,
     /// The indices into `tracks` of the ones that are locked: the halves of a locked track a route started or ended in the middle of.
     pub lock_tracks: Vec<usize>,
+    /// The vias of `vias` that are not through vias, by index, and their type: the blind/buried and micro vias the route placed
+    /// (`ROUTER_TOOL::handleLayerSwitch`'s `sizes.SetViaType( viaType )`), and a displaced via keeps the type it had.
+    pub via_kinds: Vec<(usize, ViaKind)>,
 }
 
 /// Where "Route From Other End" restarts and what it commits on the way (`ROUTER::ContinueFromEnd`): see
@@ -118,12 +139,28 @@ pub struct Router {
     /// This session restarted from the other end of a route whose fixed part was committed (`ROUTER::ContinueFromEnd`): what it commits
     /// is one undo step with that earlier commit (`APPEND_UNDO`). The caller that applies the commits keeps it.
     pub append_undo: bool,
+    /// The type of every via of the board that is not a through via, by id (`DrawingsSection::via_extras`): a via a shove or a drag moves
+    /// is removed and put back, and keeps its type (`PNS_KICAD_IFACE::syncVia` reads `aVia->GetViaType()` into the router's via).
+    via_kinds: HashMap<String, ViaKind>,
 }
 
 impl Router {
     pub fn new(design: &Design, model: &ConstraintModel) -> Self {
         let (world, layers) = crate::from_ir::build_node(design, model);
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false }
+        let via_kinds = design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|e| e.kind != ViaKind::Through).map(|e| (e.id.clone(), e.kind)).collect();
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, via_kinds }
+    }
+
+    /// The type of the board's via `id` (a through via unless the board says otherwise).
+    fn kind_of_via(&self, id: Option<&str>) -> ViaKind {
+        id.and_then(|id| self.via_kinds.get(id)).copied().unwrap_or_default()
+    }
+
+    /// Records the type of the via just pushed onto `commit.vias`, if it is not a through via.
+    fn note_via_kind(commit: &mut RouteCommit, kind: ViaKind) {
+        if kind != ViaKind::Through && !commit.vias.is_empty() {
+            commit.via_kinds.push((commit.vias.len() - 1, kind));
+        }
     }
 
     pub fn is_routing(&self) -> bool {
@@ -193,7 +230,7 @@ impl Router {
         }
         self.drag = None;
         self.diff = None;
-        self.session = Some(Session { placer, pending_via_layer: None, world, splits });
+        self.session = Some(Session { placer, pending_via_layer: None, world, splits, pending_via_kind: ViaKind::Through, placed_vias: Vec::new() });
         Ok(())
     }
 
@@ -272,11 +309,21 @@ impl Router {
     /// continues on after that via -- the layer-switch half of the task's
     /// "live via placement (V with layer switch)" requirement.
     pub fn toggle_via(&mut self, enabled: bool, diameter: Um, drill: Um, to_layer: Option<i32>) {
+        self.toggle_via_typed(enabled, diameter, drill, to_layer, None, ViaKind::Through);
+    }
+
+    /// [`Self::toggle_via`] with the via's type and its own layers, as `ROUTER_TOOL::handleLayerSwitch` arms one: `sizes.SetViaType( viaType )`,
+    /// `sizes.AddLayerPair( currentLayer, targetLayer )`, then `ToggleViaPlacement()`. `span` is the layers the via spans (`LINE_PLACER::makeVia`:
+    /// `F_Cu` .. `B_Cu` for a through via, the pair for any other); `None` is from the layer being routed to `to_layer`. The via commits with
+    /// `kind` (`RouteCommit::via_kinds`).
+    pub fn toggle_via_typed(&mut self, enabled: bool, diameter: Um, drill: Um, to_layer: Option<i32>, span: Option<(i32, i32)>, kind: ViaKind) {
         if let Some(s) = &mut self.session {
             s.placer.toggle_via(enabled, diameter, drill);
             // the via spans from the layer being routed to the one the route goes on to (`makeVia`): the shove and the collision check see both
             s.placer.via_to_layer = if enabled { to_layer } else { None };
+            s.placer.via_span = if enabled { span.map(|(a, b)| LayerRange::new(a, b)) } else { None };
             s.pending_via_layer = if enabled { to_layer } else { None };
+            s.pending_via_kind = if enabled { kind } else { ViaKind::Through };
         }
     }
 
@@ -291,7 +338,10 @@ impl Router {
         let world = s.world.as_ref().unwrap_or(&self.world);
         if let Some(to_layer) = s.pending_via_layer.take() {
             let (diameter, drill) = (s.placer.via_diameter, s.placer.via_drill);
+            let layers = s.placer.via_span.unwrap_or_else(|| LayerRange::new(s.placer.current_layer, to_layer));
             s.placer.switch_layer(world, &self.rules, &self.settings, at, to_layer, diameter, drill);
+            let kind = std::mem::take(&mut s.pending_via_kind);
+            s.placed_vias.push(PlacedVia { at: s.placer.fixed_start(), layers, diameter, drill, kind });
             return Some(FixOutcome::Fixed { real_end: false });
         }
         Some(s.placer.fix(world, &self.rules, &self.settings, at))
@@ -592,15 +642,20 @@ impl Router {
                 // A real via changes layer; a same-layer shared endpoint is
                 // just an intermediate fix click (D1).
                 if w[0].layer != w[1].layer && w[0].last() == w[1].first() {
+                    let at = w[0].last().unwrap();
+                    // the via the fix placed there, with its own layers, size and type (the last one, should Backspace have taken one back there)
+                    let placed = s.placed_vias.iter().rev().find(|v| v.at == at && v.layers.overlaps(&LayerRange::single(w[0].layer)) && v.layers.overlaps(&LayerRange::single(w[1].layer)));
+                    let (layers, diameter, drill, kind) = placed.map_or((LayerRange::new(w[0].layer, w[1].layer), s.placer.via_diameter, s.placer.via_drill, ViaKind::Through), |v| (v.layers, v.diameter, v.drill, v.kind));
                     commit.vias.push(eda_model::ir::Via {
                         id: String::new(),
                         net: net_name.clone(),
-                        at: w[0].last().unwrap(),
-                        drill: s.placer.via_drill.max(1),
-                        diameter: s.placer.via_diameter.max(1),
-                        from_layer: self.layer_name(w[0].layer).to_string(),
-                        to_layer: self.layer_name(w[1].layer).to_string(),
+                        at,
+                        drill: drill.max(1),
+                        diameter: diameter.max(1),
+                        from_layer: self.layer_name(layers.start()).to_string(),
+                        to_layer: self.layer_name(layers.end()).to_string(),
                     });
+                    Self::note_via_kind(&mut commit, kind);
                 }
             }
             for (track_id, lines) in s.placer.displaced_tracks() {
@@ -613,6 +668,7 @@ impl Router {
                 commit.remove_via_ids.push(via_id.to_string());
                 if let Some(v) = self.find_via_by_source(via_id) {
                     commit.vias.push(eda_model::ir::Via { id: String::new(), net: v.net.as_deref().unwrap_or("").to_string(), at: pos, drill: v.drill, diameter: v.diameter, from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
+                    Self::note_via_kind(&mut commit, self.kind_of_via(Some(via_id)));
                 }
             }
         }
@@ -748,6 +804,7 @@ impl Router {
                 .map(|v| (v.net.as_deref().unwrap_or("").to_string(), self.layer_name(v.layers.start()).to_string(), self.layer_name(v.layers.end()).to_string(), v.diameter, v.drill))
                 .unwrap_or_else(|| ("".to_string(), self.layer_name(0).to_string(), self.layer_name(self.layers.count() as i32 - 1).to_string(), *diameter, *drill));
             commit.vias.push(eda_model::ir::Via { id: String::new(), net, at: *pos, drill: resolved_drill, diameter: resolved_diameter, from_layer, to_layer });
+            Self::note_via_kind(&mut commit, self.kind_of_via(source_via.as_deref()));
         }
         self.drop_redundant(&mut commit);
         self.drag = None;
@@ -869,6 +926,7 @@ impl Router {
             commit.remove_via_ids.push(via_id.clone());
             if let Some(v) = self.find_via_by_source(via_id) {
                 commit.vias.push(eda_model::ir::Via { id: String::new(), net: v.net.as_deref().unwrap_or("").to_string(), at: *pos, drill: v.drill, diameter: v.diameter, from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
+                Self::note_via_kind(&mut commit, self.kind_of_via(Some(via_id)));
             }
         }
         commit
@@ -979,6 +1037,28 @@ mod tests {
         assert_eq!(moved_via.diameter, 600, "a shoved via's real diameter must survive, not the 0 placeholder");
         assert_eq!(moved_via.drill, 300);
         assert_eq!(moved_via.net, "GND");
+    }
+
+    /// `PNS_KICAD_IFACE::syncVia` reads the board via's type (`aVia->GetViaType()`) and `AddItem` writes it back: a blind via a shove moves comes back as
+    /// a new via of the commit with its type in `via_kinds`, a through via without an entry.
+    #[test]
+    fn a_shoved_blind_via_keeps_its_type() {
+        let (mut design, model) = track_and_via_board();
+        design.drawings = Some(eda_model::ir::DrawingsSection { via_extras: vec![eda_model::via_extra::ViaExtra { id: "viaA".into(), kind: ViaKind::Blind, tokens: vec![] }], ..Default::default() });
+        let mut router = Router::new(&design, &model);
+        router.settings.mode = crate::settings::Mode::Shove;
+        router.drag_start(Point { x: 1000, y: 0 }, "F.Cu").unwrap();
+        let to = Point { x: 10_000, y: 0 };
+        router.drag_preview(to).expect("preview while dragging");
+        let commit = router.drag_finish(to).expect("the shoved drag commits");
+        let i = commit.vias.iter().position(|v| v.net == "GND").expect("the via is put back");
+        assert_eq!(commit.via_kinds, vec![(i, ViaKind::Blind)]);
+        let (design, model) = track_and_via_board();
+        let mut router = Router::new(&design, &model);
+        router.settings.mode = crate::settings::Mode::Shove;
+        router.drag_start(Point { x: 1000, y: 0 }, "F.Cu").unwrap();
+        router.drag_preview(to);
+        assert!(router.drag_finish(to).unwrap().via_kinds.is_empty(), "a through via has no entry");
     }
 
     /// An imported board has one IR track per segment, so a pushed line stands on several. The commit

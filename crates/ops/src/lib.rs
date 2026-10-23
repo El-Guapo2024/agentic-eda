@@ -964,6 +964,11 @@ pub enum Cmd {
         /// locked as it was (`PNS_KICAD_IFACE::AddItem`: "`if( aItem->IsLocked() ) newBoardItem->SetLocked( true )`").
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         lock_tracks: Vec<usize>,
+        /// The new vias of `vias` that are not through vias, as (index into `vias`, type): a blind/buried or micro via the router placed
+        /// (`ROUTER_TOOL::handleLayerSwitch`: `sizes.SetViaType( viaType )`; `PNS_KICAD_IFACE::AddItem`: "`via_board->SetViaType( via->ViaType() )`"), or a
+        /// displaced via that keeps its type. They go into `DrawingsSection::via_extras`, in the same step.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        via_kinds: Vec<(usize, eda_model::via_extra::ViaKind)>,
     },
 
     /// What the length tuner (`crates/pns`'s `MeanderPlacer`, `GENERATOR_TOOL::GenEditAction`) makes, as one undo step: remove the tracks of
@@ -2853,7 +2858,7 @@ impl<'a> Board<'a> {
             Cmd::ExchangeFootprints { references, footprint, options, library } => self.exchange_footprints(references, footprint.as_deref(), options, library),
             Cmd::ReannotateBoard { options, selection } => self.reannotate_board(options, selection),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
-            Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias, lock_tracks } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone(), lock_tracks),
+            Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias, lock_tracks, via_kinds } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone(), lock_tracks, via_kinds),
             Cmd::CommitTuning { pattern, remove_pattern, remove_track_ids, tracks, member_indices } => self.commit_tuning(pattern.as_ref(), remove_pattern.as_deref(), remove_track_ids, tracks.clone(), member_indices),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
             Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
@@ -4317,7 +4322,8 @@ impl<'a> Board<'a> {
     /// (unlike `insert_copies`, whose items are always copies of something
     /// already on the board and so already known-good) -- this router's
     /// output is new geometry, not a copy, so the same guard applies.
-    fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>, lock_tracks: &[usize]) -> Result<(), Vec<CheckResult>> {
+    #[allow(clippy::too_many_arguments)] // the fields of `Cmd::CommitRoute`, one argument each, as the other verbs take theirs
+    fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>, lock_tracks: &[usize], via_kinds: &[(usize, eda_model::via_extra::ViaKind)]) -> Result<(), Vec<CheckResult>> {
         for t in &tracks {
             self.known_net(&t.net)?;
             self.known_layer(&t.layer)?;
@@ -4338,6 +4344,10 @@ impl<'a> Board<'a> {
                 rt.tracks.retain(|t| !remove_track_ids.iter().any(|id| id == &t.id));
                 rt.vias.retain(|v| !remove_via_ids.iter().any(|id| id == &v.id));
             }
+            // a removed via's extras go with it (a displaced via comes back under a new id, its type in `via_kinds`)
+            if let Some(dr) = self.design.drawings.as_mut() {
+                dr.via_extras.retain(|e| !remove_via_ids.iter().any(|id| id == &e.id));
+            }
         }
         for t in &mut tracks {
             t.id.clear();
@@ -4348,12 +4358,24 @@ impl<'a> Board<'a> {
         if !tracks.is_empty() || !vias.is_empty() {
             let rt = self.routing_mut();
             let first_new = rt.tracks.len();
+            let first_new_via = rt.vias.len();
             rt.tracks.append(&mut tracks);
             rt.vias.append(&mut vias);
             rt.assign_missing_ids();
             // the new tracks that are locked (the ids are the ones just assigned: the new tracks are the last ones, before the routing is sorted)
             let locked_now: Vec<String> = lock_tracks.iter().filter_map(|&i| rt.tracks.get(first_new + i).map(|t| t.id.clone())).collect();
+            // and the new vias that are not through vias, with their type
+            let kinds_now: Vec<(String, eda_model::via_extra::ViaKind)> = via_kinds.iter().filter(|(_, k)| *k != eda_model::via_extra::ViaKind::Through).filter_map(|&(i, k)| rt.vias.get(first_new_via + i).map(|v| (v.id.clone(), k))).collect();
             self.sort_routing();
+            if !kinds_now.is_empty() {
+                let dr = self.drawings_mut();
+                for (id, kind) in kinds_now {
+                    match dr.via_extras.iter_mut().find(|e| e.id == id) {
+                        Some(e) => e.kind = kind,
+                        None => dr.via_extras.push(eda_model::via_extra::ViaExtra { id, kind, tokens: vec![] }),
+                    }
+                }
+            }
             if !locked_now.is_empty() {
                 let dr = self.drawings_mut();
                 let mut set: BTreeSet<String> = dr.locked_ids.iter().cloned().collect();
