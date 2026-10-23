@@ -178,6 +178,21 @@ fn move_items_moves_every_kind_by_the_same_delta_and_keeps_their_ids() {
     assert_eq!((pose(&b, "U2").rot, pose(&b, "U2").side), (90_000, Side::Top));
 }
 
+/// `FOOTPRINT::Move` (`m_pos + aMoveVector`) and `FOOTPRINT::Rotate` put the footprint exactly where the edit says: Move Exactly by 1.25 mm, or the
+/// Properties panel's Position X typed as 12.95, moves it by 1.25 mm, not to the placer's 0.1 mm grid (the tool snapped the pointer already).
+#[test]
+fn move_and_rotate_items_put_a_footprint_where_the_edit_says_off_the_placement_grid() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&Cmd::MoveItems { ids: ids(&["U1"]), dx: 1_250, dy: -30 }).unwrap();
+    assert_eq!(pose(&b, "U1").at, p(31_250, 19_970), "moved by the delta, to the um");
+    // Turned about a pivot the footprint is not on: the position is the rotated one, unrounded.
+    b.apply(&Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(30_000, 20_000), angle_millideg: 90_000 }).unwrap();
+    let at = pose(&b, "U1").at;
+    assert_eq!((at.x - 30_000).abs() + (at.y - 20_000).abs(), 1_250 + 30, "about the pivot, the offset kept: {at:?}");
+    assert!(at.x % 100 != 0 || at.y % 100 != 0, "not snapped to the 0.1 mm placement grid: {at:?}");
+}
+
 #[test]
 fn move_items_moves_a_groups_members_and_a_member_named_twice_only_once() {
     let m = model(&["F.Cu", "B.Cu"]);
