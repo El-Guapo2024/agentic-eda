@@ -15,6 +15,8 @@
 //     `move_to` on drop (see state/store.tsx `commitMove`); M starts the
 //     same preview without holding the button, click commits, Esc cancels.
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
+import { openViaStitchDialog } from "../../state/kicad10Dialogs";
+import { newViaStitch } from "../../kicad-port/viaStitchTool";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
@@ -263,7 +265,7 @@ export function Canvas() {
   const gridList = useGridSettings("pcb").grids;
   const gridOverrides = useGridOverrides("pcb");
   const [, bumpSnap] = useState(0);
-  snap.update({ board, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer });
+  snap.update({ board, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer, selection: state.selection });
   snap.onChange = () => bumpSnap((n) => n + 1);
   // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
   useEffect(() => {
@@ -618,6 +620,9 @@ export function Canvas() {
           void api.cmd({ op: "zone_cutout", id: source.id, cutout: draw.pts.map(([x, y]) => ({ x, y })) }).then(() => dispatch({ type: "SET_SELECTION", refs: [] }));
         } else if (mode?.mode === "similar" && source) {
           void api.addZone(source.net, source.layer, draw.pts, zoneSettingsOf(source), { layers: [...zoneLayers(source)] });
+        } else if (mode?.mode === "stitch") {
+          // KiCad 10's `ZONE_MODE::STITCH` (zone_create_helper.cpp): a via stitching with the outline, its defaults filled in (`InitializeDefaults`), and its properties dialog before any via is made.
+          openViaStitchDialog(null, newViaStitch(draw.pts, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0));
         } else {
           dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
         }

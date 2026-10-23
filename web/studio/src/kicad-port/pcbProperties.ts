@@ -13,6 +13,7 @@
 // `BOARD_COMMIT::Push( "Edit Properties" )`.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
+import { stitchPosition } from "./viaStitch";
 import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PlacementArea, PlacementSourceType, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
@@ -24,9 +25,10 @@ import { shapeToCmd } from "./pcbPointEdit";
 import { circumcircle } from "./trackArc";
 import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
-import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import type { BoardBarcode, BoardDrillMap, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
 import { registerExtraItemProperties } from "./pcbItemProperties";
 import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
+import { NO_ENDING, type LineEnding, type LineEndingStyle } from "./lineEnding";
 import { registerTableProperties, tableItemOf, tableItemsOf } from "./pcbTableProperties";
 import { PLACEMENT_SOURCE_CHOICES } from "./multichannel";
 
@@ -53,6 +55,9 @@ export type PcbType =
   | "PCB_REFERENCE_IMAGE"
   | "PCB_POINT"
   | "PCB_BARCODE"
+  | "PCB_GRID_ITEM"
+  | "PCB_VIA_STITCH"
+  | "PCB_DRILL_MAP"
   | "PCB_TABLE"
   | "PCB_TABLECELL";
 
@@ -75,6 +80,12 @@ export interface PcbItem {
   readonly image?: BoardRefImage;
   readonly point?: BoardPoint;
   readonly barcode?: BoardBarcode;
+  /** KiCad 10's grid item. */
+  readonly grid?: BoardGridItem;
+  /** KiCad 10's via stitching (a generator). */
+  readonly stitch?: BoardViaStitch;
+  /** KiCad 10's drill map. */
+  readonly drillMap?: BoardDrillMap;
   /** A table (`PCB_TABLE`), or the table a cell (`PCB_TABLECELL`) is in. */
   readonly table?: BoardTable;
   readonly cell?: BoardTableCell;
@@ -153,6 +164,12 @@ export function pcbItemOf(board: BoardState, id: string): PcbItem | null {
   if (point) return { type: "PCB_POINT", id, point };
   const barcode = dr?.barcodes?.find((b) => b.id === id);
   if (barcode) return { type: "PCB_BARCODE", id, barcode };
+  const grid = dr?.grid_items?.find((g) => g.id === id);
+  if (grid) return { type: "PCB_GRID_ITEM", id, grid };
+  const stitch = dr?.via_stitches?.find((v) => v.id === id);
+  if (stitch) return { type: "PCB_VIA_STITCH", id, stitch };
+  const drillMap = dr?.drill_maps?.find((m) => m.id === id);
+  if (drillMap) return { type: "PCB_DRILL_MAP", id, drillMap };
   const tableItem = tableItemOf(board, id);
   if (tableItem) return tableItem;
   const pad = id.includes(".") ? padById(board, id) : null;
@@ -184,6 +201,9 @@ function indexOf(board: BoardState): Map<string, PcbItem> {
   for (const image of dr?.images ?? []) put({ type: "PCB_REFERENCE_IMAGE", id: image.id, image });
   for (const point of dr?.points ?? []) put({ type: "PCB_POINT", id: point.id, point });
   for (const barcode of dr?.barcodes ?? []) put({ type: "PCB_BARCODE", id: barcode.id, barcode });
+  for (const grid of dr?.grid_items ?? []) put({ type: "PCB_GRID_ITEM", id: grid.id, grid });
+  for (const stitch of dr?.via_stitches ?? []) put({ type: "PCB_VIA_STITCH", id: stitch.id, stitch });
+  for (const drillMap of dr?.drill_maps ?? []) put({ type: "PCB_DRILL_MAP", id: drillMap.id, drillMap });
   for (const item of tableItemsOf(board)) put(item);
   return out;
 }
@@ -234,6 +254,12 @@ export function typeName(item: PcbItem): string {
       return "Point";
     case "PCB_BARCODE":
       return "Barcode";
+    case "PCB_GRID_ITEM":
+      return "Grid";
+    case "PCB_VIA_STITCH":
+      return "Generator";
+    case "PCB_DRILL_MAP":
+      return "Drill Map";
     case "PCB_TABLE":
       return "Table";
     case "PCB_TABLECELL":
@@ -244,7 +270,7 @@ export function typeName(item: PcbItem): string {
 }
 
 /** Every `KICAD_T` name an item here can have (the choices of the Type property). */
-export const TYPE_NAMES: readonly string[] = ["Barcode", "Dimension", "Footprint", "Graphic", "Group", "Leader", "Pad", "Point", "Reference Image", "Table", "Table Cell", "Text", "Text Box", "Track", "Via", "Zone"];
+export const TYPE_NAMES: readonly string[] = ["Barcode", "Dimension", "Drill Map", "Footprint", "Generator", "Graphic", "Grid", "Group", "Leader", "Pad", "Point", "Reference Image", "Table", "Table Cell", "Text", "Text Box", "Track", "Via", "Zone"];
 
 /** `GetFriendlyName()`: the caption of a single selected item (`EDA_ITEM::GetFriendlyName`, `PCB_TRACK::`, `ZONE::`). */
 export function pcbFriendlyName(item: PcbItem): string {
@@ -283,6 +309,12 @@ export function pcbFriendlyName(item: PcbItem): string {
       return "Point";
     case "PCB_BARCODE":
       return "Barcode";
+    case "PCB_GRID_ITEM":
+      return "Grid";
+    case "PCB_VIA_STITCH":
+      return "Via Stitching";
+    case "PCB_DRILL_MAP":
+      return "Drill Map";
     case "PCB_TABLE":
       return "Table";
     case "PCB_TABLECELL":
@@ -375,6 +407,9 @@ export function positionOf(i: PcbItem): [number, number] {
   if (i.image) return [i.image.x, i.image.y];
   if (i.point) return [i.point.x, i.point.y];
   if (i.barcode) return [i.barcode.x, i.barcode.y];
+  if (i.grid) return [i.grid.x, i.grid.y];
+  if (i.stitch) return stitchPosition(i.stitch);
+  if (i.drillMap) return [i.drillMap.offset.x, i.drillMap.offset.y];
   const s = i.shape;
   if (s) {
     if (s.kind === "arc") return arcShapeCenter(s) ?? [s.start[0], s.start[1]];
@@ -1337,6 +1372,62 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     SHAPE
   );
+
+  // KiCad 10's line endings (`_EDA_SHAPE_DESC`, after Fill Color): Start Shape, Start Length, Start Width, Start Stroke Width and the End ones, on an open shape (`isOpenShape`).
+  // The enum lists the styles in `ENUM_MAP<LINE_ENDING_STYLE>`'s order: None, Arrow, Circle, Square, Open Arrow.
+  const ENDING_STYLES: { label: string; value: LineEndingStyle }[] = [
+    { label: "None", value: "none" },
+    { label: "Arrow", value: "arrow" },
+    { label: "Circle", value: "circle" },
+    { label: "Square", value: "square" },
+    { label: "Open Arrow", value: "arrow_open" },
+  ];
+  const isOpenShape = (i: PcbItem): boolean => kindOf(i) === "segment" || kindOf(i) === "arc" || kindOf(i) === "bezier";
+  const endingOf = (i: PcbItem, side: "start" | "end"): LineEnding => (side === "start" ? i.shape!.start_ending : i.shape!.end_ending) ?? NO_ENDING;
+  const endingSet = (i: PcbItem, side: "start" | "end", next: LineEnding): Cmd[] => {
+    const cur = endingOf(i, side);
+    if (cur.style === next.style && cur.length === next.length && cur.width === next.width && cur.stroke_width === next.stroke_width) return [];
+    const ending = { style: next.style, length_um: next.length, width_um: next.width, stroke_width_um: next.stroke_width };
+    return [{ op: "pcb_item", verb: "set_shape_style", ids: [i.id], ...(side === "start" ? { start_ending: ending } : { end_ending: ending }) }];
+  };
+  for (const [side, cap] of [
+    ["start", "Start"],
+    ["end", "End"],
+  ] as const) {
+    add(
+      {
+        owner: "EDA_SHAPE",
+        name: `${cap} Shape`,
+        kind: "enum",
+        choices: () => ENDING_STYLES.map((c, n) => ({ label: c.label, value: n })),
+        get: (i) => Math.max(0, ENDING_STYLES.findIndex((c) => c.value === endingOf(i, side).style)),
+        available: isOpenShape,
+        set: (i, v) => {
+          const style = ENDING_STYLES[Math.round(num(v))]?.value;
+          return style === undefined ? [] : endingSet(i, side, { ...endingOf(i, side), style });
+        },
+      },
+      SHAPE
+    );
+    for (const [prop, field] of [
+      ["Length", "length"],
+      ["Width", "width"],
+      ["Stroke Width", "stroke_width"],
+    ] as const) {
+      add(
+        {
+          owner: "EDA_SHAPE",
+          name: `${cap} ${prop}`,
+          kind: "int",
+          display: "size",
+          get: (i) => endingOf(i, side)[field],
+          available: isOpenShape,
+          set: (i, v) => endingSet(i, side, { ...endingOf(i, side), [field]: Math.max(0, Math.round(num(v))) }),
+        },
+        SHAPE
+      );
+    }
+  }
 
   pm.inheritsAfter("PCB_SHAPE", "BOARD_CONNECTED_ITEM");
   pm.inheritsAfter("PCB_SHAPE", "EDA_SHAPE");

@@ -4,7 +4,11 @@
 // the whole box (`edit_text_box`) -- the free text's setters are the text's own verbs and a field's the footprint's.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BarcodeEcc, BarcodeKind, BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
+import type { BarcodeEcc, BarcodeKind, BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
+import type { BoardDrillChart, BoardDrillMap, TableUnits } from "../api/pcbItemTypes";
+import { spanChoiceOf, spanChoices, withSpanChoice } from "./drillChart";
+import { LAYOUT_PROPERTY_CHOICES, layoutOf, MODE_CHOICES, modeOf, viaStitchCmd, withLayoutAndMode, type StitchLayout, type StitchMode } from "./viaStitch";
+import { gridItemCmd, normalizedGridItem } from "./gridItem";
 import type { Cmd } from "../api/types";
 import { BARCODE_KINDS, barcodeToCmd, clampEcc, eccChoices, hasErrorCorrection } from "./barcodeShapes";
 import type { PcbCtx, PcbItem } from "./pcbProperties";
@@ -195,7 +199,178 @@ function registerBarcode(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]
 }
 
 /** Register `PCB_TEXTBOX` and its properties, and the other classes of the family. */
+/** The cmd that replaces grid item `g` with `g` changed by `patch`, through the item's setters (`edit_grid_item`). */
+function gridCmd(g: BoardGridItem, patch: Partial<BoardGridItem>): Cmd[] {
+  return [{ op: "pcb_item", verb: "edit_grid_item", id: g.id, grid_item: gridItemCmd(normalizedGridItem({ ...g, ...patch })) }];
+}
+
+/**
+ * Register KiCad 10's `PCB_GRID_ITEM` (`PCB_GRIDITEM_DESC`, pcbnew/pcb_grid_item.cpp of KiCad 25ec2335): a board item without a layer (the Layer row is not available), then Grid Type,
+ * Orientation, the cartesian Extent X / Y (the whole width, twice the half-extent the item keeps) and Spacing X / Y, the polar Radius Extent, Radius Spacing, Phi Extent and Phi Spacing,
+ * Priority, Tick Interval and what it affects.
+ */
+function registerGridItem(pm: PM, add: Add): void {
+  pm.registerType("PCB_GRID_ITEM");
+  pm.inheritsAfter("PCB_GRID_ITEM", "BOARD_ITEM");
+  pm.overrideAvailability("PCB_GRID_ITEM", "BOARD_ITEM", "Layer", () => false);
+  const own = (i: PcbItem): BoardGridItem => i.grid!;
+  const isCartesian = (i: PcbItem): boolean => own(i).kind === "cartesian";
+  const isPolar = (i: PcbItem): boolean => own(i).kind === "polar";
+  const same = (a: BoardGridItem, b: BoardGridItem): boolean => JSON.stringify(gridItemCmd(a)) === JSON.stringify(gridItemCmd(b));
+  const edit = (i: PcbItem, patch: Partial<BoardGridItem>): Cmd[] => (same(normalizedGridItem({ ...own(i), ...patch }), own(i)) ? [] : gridCmd(own(i), patch));
+  const GRID_TYPES: Choice[] = [
+    { label: "Cartesian", value: "cartesian" },
+    { label: "Polar", value: "polar" },
+  ];
+  add({ owner: "PCB_GRID_ITEM", name: "Grid Type", kind: "enum", choices: () => GRID_TYPES, get: (i) => own(i).kind, set: (i, v) => edit(i, { kind: String(v) as BoardGridItem["kind"] }) });
+  add({ owner: "PCB_GRID_ITEM", name: "Orientation", kind: "double", display: "degree", get: (i) => own(i).angle, set: (i, v) => edit(i, { angle: num(v) }) });
+  const size = (name: string, available: (i: PcbItem) => boolean, get: (g: BoardGridItem) => number, patch: (g: BoardGridItem, v: number) => Partial<BoardGridItem>): void =>
+    add({ owner: "PCB_GRID_ITEM", name, kind: "int", display: "size", available, get: (i) => get(own(i)), set: (i, v) => edit(i, patch(own(i), Math.round(num(v)))) });
+  // `GetExtentX` / `SetExtentX`: "2x to show total width to the user".
+  size("Extent X", isCartesian, (g) => g.extent[0] * 2, (g, v) => ({ extent: [Math.abs(Math.trunc(v / 2)), g.extent[1]] }));
+  size("Extent Y", isCartesian, (g) => g.extent[1] * 2, (g, v) => ({ extent: [g.extent[0], Math.abs(Math.trunc(v / 2))] }));
+  size("Spacing X", isCartesian, (g) => g.spacing[0], (g, v) => ({ spacing: [Math.max(v, 1), g.spacing[1]] }));
+  size("Spacing Y", isCartesian, (g) => g.spacing[1], (g, v) => ({ spacing: [g.spacing[0], Math.max(v, 1)] }));
+  size("Radius Extent", isPolar, (g) => g.extent[0], (g, v) => ({ extent: [Math.abs(v), g.extent[1]] }));
+  size("Radius Spacing", isPolar, (g) => g.spacing[0], (g, v) => ({ spacing: [Math.max(v, 1), g.spacing[1]] }));
+  add({ owner: "PCB_GRID_ITEM", name: "Phi Extent", kind: "double", display: "degree", available: isPolar, get: (i) => own(i).phi_extent, set: (i, v) => edit(i, { phi_extent: num(v) }) });
+  add({ owner: "PCB_GRID_ITEM", name: "Phi Spacing", kind: "double", display: "degree", available: isPolar, get: (i) => own(i).phi_spacing, set: (i, v) => edit(i, { phi_spacing: num(v) }) });
+  add({ owner: "PCB_GRID_ITEM", name: "Priority", kind: "int", get: (i) => own(i).priority, set: (i, v) => edit(i, { priority: Math.max(0, Math.trunc(num(v))) }) });
+  add({ owner: "PCB_GRID_ITEM", name: "Tick Interval", kind: "int", get: (i) => own(i).tick_interval, set: (i, v) => edit(i, { tick_interval: Math.max(0, Math.trunc(num(v))) }) });
+  const affects = (name: string, key: keyof BoardGridItem["affects"]): void =>
+    add({ owner: "PCB_GRID_ITEM", name, kind: "bool", get: (i) => own(i).affects[key], set: (i, v) => edit(i, { affects: { ...own(i).affects, [key]: Boolean(v) } }) });
+  affects("Affects Cursor Snap", "cursor");
+  affects("Affects Routing", "routing");
+  affects("Affects Placement", "placement");
+}
+
+/**
+ * Register KiCad 10's `PCB_VIA_STITCH` (`PCB_VIA_STITCH_DESC`): a board item with its Layer masked ("The stitch lives on its own GAL layer"), then Size, Drill, Pitch, Layout (a stitch's),
+ * Mode, Seed (a Poisson stitch's), Net and Guarded Net (a guard's). Each edit gives the stitching the setting and makes its vias again (`set_via_stitch`, the server placing them).
+ */
+function registerViaStitch(pm: PM, add: Add): void {
+  pm.registerType("PCB_VIA_STITCH");
+  pm.inheritsAfter("PCB_VIA_STITCH", "BOARD_ITEM");
+  pm.mask("PCB_VIA_STITCH", "BOARD_ITEM", "Layer");
+  const own = (i: PcbItem): BoardViaStitch => i.stitch!;
+  const edit = (i: PcbItem, next: BoardViaStitch): Cmd[] => (JSON.stringify(next) === JSON.stringify(own(i)) ? [] : [viaStitchCmd(own(i).id, next)]);
+  const via = (i: PcbItem) => own(i).via ?? { size_um: 0, drill_um: 0, from_layer: "F.Cu", to_layer: "B.Cu" };
+  add({ owner: "PCB_VIA_STITCH", name: "Size", kind: "int", display: "size", get: (i) => via(i).size_um, set: (i, v) => edit(i, { ...own(i), via: { ...via(i), size_um: Math.round(num(v)) } }) });
+  add({ owner: "PCB_VIA_STITCH", name: "Drill", kind: "int", display: "size", get: (i) => via(i).drill_um, set: (i, v) => edit(i, { ...own(i), via: { ...via(i), drill_um: Math.round(num(v)) } }) });
+  add({ owner: "PCB_VIA_STITCH", name: "Pitch", kind: "int", display: "size", get: (i) => own(i).pitch_um ?? 0, set: (i, v) => edit(i, { ...own(i), pitch_um: Math.round(num(v)) }) });
+  add({
+    owner: "PCB_VIA_STITCH",
+    name: "Layout",
+    kind: "enum",
+    choices: () => LAYOUT_PROPERTY_CHOICES.map((c) => ({ label: c.label, value: c.value })),
+    available: (i) => modeOf(own(i)) === "stitch",
+    get: (i) => layoutOf(own(i)),
+    set: (i, v) => edit(i, withLayoutAndMode(own(i), String(v) as StitchLayout, modeOf(own(i)))),
+  });
+  add({
+    owner: "PCB_VIA_STITCH",
+    name: "Mode",
+    kind: "enum",
+    choices: () => MODE_CHOICES.map((c) => ({ label: c.label, value: c.value })),
+    get: (i) => modeOf(own(i)),
+    set: (i, v) => edit(i, withLayoutAndMode(own(i), layoutOf(own(i)), String(v) as StitchMode)),
+  });
+  add({
+    owner: "PCB_VIA_STITCH",
+    name: "Seed",
+    kind: "int",
+    available: (i) => modeOf(own(i)) === "stitch" && layoutOf(own(i)) === "poisson",
+    get: (i) => own(i).seed ?? 0,
+    set: (i, v) => edit(i, { ...own(i), seed: Math.max(0, Math.trunc(num(v))) >>> 0 }),
+  });
+  const netChoices = (c: PcbCtx): Choice[] => [{ label: "<no net>", value: "" }, ...c.nets.map((n) => ({ label: n, value: n }))];
+  add({ owner: "PCB_VIA_STITCH", name: "Net", kind: "net", choices: (_i, c) => netChoices(c), get: (i) => own(i).net ?? "", set: (i, v) => edit(i, { ...own(i), net: String(v) }) });
+  add({
+    owner: "PCB_VIA_STITCH",
+    name: "Guarded Net",
+    kind: "net",
+    choices: (_i, c) => netChoices(c),
+    available: (i) => modeOf(own(i)) === "guard",
+    get: (i) => own(i).guarded_net ?? "",
+    set: (i, v) => edit(i, { ...own(i), guarded_net: String(v) }),
+  });
+}
+
+/**
+ * Register KiCad 10's `PCB_DRILL_MAP` (`PCB_DRILL_MAP_DESC`): a board item with Position X / Y masked ("Relative, not absolute"), then Offset X, Offset Y, Symbol Size, Hole Span (the
+ * spans the board has, `PCB_PROPERTIES_PANEL::updateLists`), Outline Slots and Guide Cross, under "Drill Map Properties". Each is one `edit_drill_map`.
+ */
+function registerDrillMap(pm: PM, add: Add): void {
+  pm.registerType("PCB_DRILL_MAP");
+  pm.inheritsAfter("PCB_DRILL_MAP", "BOARD_ITEM");
+  pm.mask("PCB_DRILL_MAP", "BOARD_ITEM", "Position X");
+  pm.mask("PCB_DRILL_MAP", "BOARD_ITEM", "Position Y");
+  const GROUP = "Drill Map Properties";
+  const own = (i: PcbItem): BoardDrillMap => i.drillMap!;
+  const edit = (i: PcbItem, next: BoardDrillMap): Cmd[] => (JSON.stringify(next) === JSON.stringify(own(i)) ? [] : [{ op: "pcb_item", verb: "edit_drill_map", id: own(i).id, map: next }]);
+  add({ owner: "PCB_DRILL_MAP", name: "Offset X", kind: "int", display: "size", get: (i) => own(i).offset.x, set: (i, v) => edit(i, { ...own(i), offset: { ...own(i).offset, x: Math.round(num(v)) } }) }, GROUP);
+  add({ owner: "PCB_DRILL_MAP", name: "Offset Y", kind: "int", display: "size", get: (i) => own(i).offset.y, set: (i, v) => edit(i, { ...own(i), offset: { ...own(i).offset, y: Math.round(num(v)) } }) }, GROUP);
+  add({ owner: "PCB_DRILL_MAP", name: "Symbol Size", kind: "int", display: "size", get: (i) => own(i).size_um, set: (i, v) => edit(i, { ...own(i), size_um: Math.max(1, Math.round(num(v))) }) }, GROUP);
+  const spans = (c: PcbCtx) => c.board.drawings?.drill_spans ?? [];
+  add(
+    {
+      owner: "PCB_DRILL_MAP",
+      name: "Hole Span",
+      kind: "enum",
+      choices: (_i, c) => spanChoices(spans(c)).map((s) => ({ label: s.label, value: s.value })),
+      get: (i, c) => spanChoiceOf(own(i), spans(c)),
+      set: (i, v, c) => edit(i, withSpanChoice(own(i), spans(c), Number(v))),
+    },
+    GROUP
+  );
+  add({ owner: "PCB_DRILL_MAP", name: "Outline Slots", kind: "bool", get: (i) => own(i).outline_slots !== false, set: (i, v) => edit(i, { ...own(i), outline_slots: Boolean(v) }) }, GROUP);
+  add({ owner: "PCB_DRILL_MAP", name: "Guide Cross", kind: "bool", get: (i) => !!own(i).guide_cross, set: (i, v) => edit(i, { ...own(i), guide_cross: Boolean(v) }) }, GROUP);
+}
+
+/**
+ * KiCad 10's `PCB_GENERATED_TABLE` and `PCB_DRILL_CHART` rows of a table that is a drill chart: Units and Decimal Places ("Table Generator"), Show Totals ("Drill Chart Properties").
+ * Each edit is one `set_drill_chart`, which builds the chart again from the board.
+ */
+function registerDrillChart(add: Add): void {
+  const chartOf = (i: PcbItem, c: PcbCtx): BoardDrillChart | undefined => (i.type === "PCB_TABLE" ? c.board.drawings?.drill_charts?.find((x) => x.table_id === i.id) : undefined);
+  const isChart = (i: PcbItem, c?: PcbCtx): boolean => !!c && !!chartOf(i, c);
+  const edit = (i: PcbItem, c: PcbCtx, patch: { units?: TableUnits; precision?: number; show_totals?: boolean }): Cmd[] => {
+    const ch = chartOf(i, c);
+    if (!ch) return [];
+    const cur = { units: ch.units ?? "mm", precision: ch.precision ?? 3, show_totals: ch.show_totals ?? true };
+    const next = { ...cur, ...patch };
+    if (JSON.stringify(next) === JSON.stringify(cur)) return [];
+    return [{ op: "pcb_item", verb: "set_drill_chart", id: ch.table_id, ...next, filter: ch.filter ?? { plated: true, non_plated: true, vias: true, slots: true, backdrills: true, castellated: true } }];
+  };
+  const UNITS: Choice[] = [
+    { label: "Millimeters", value: "mm" },
+    { label: "Mils", value: "mils" },
+    { label: "Inches", value: "inch" },
+  ];
+  add(
+    { owner: "PCB_TABLE", name: "Units", kind: "enum", choices: () => UNITS, available: (i, c) => isChart(i, c), get: (i, c) => chartOf(i, c)?.units ?? "mm", set: (i, v, c) => edit(i, c, { units: String(v) as TableUnits }) },
+    "Table Generator"
+  );
+  add(
+    {
+      owner: "PCB_TABLE",
+      name: "Decimal Places",
+      kind: "int",
+      available: (i, c) => isChart(i, c),
+      get: (i, c) => chartOf(i, c)?.precision ?? 3,
+      // `SetPrecision`: clamped to 0..6.
+      set: (i, v, c) => edit(i, c, { precision: Math.min(6, Math.max(0, Math.trunc(num(v)))) }),
+    },
+    "Table Generator"
+  );
+  add({ owner: "PCB_TABLE", name: "Show Totals", kind: "bool", available: (i, c) => isChart(i, c), get: (i, c) => chartOf(i, c)?.show_totals ?? true, set: (i, v, c) => edit(i, c, { show_totals: Boolean(v) }) }, "Drill Chart Properties");
+}
+
 export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
+  registerGridItem(pm, add);
+  registerViaStitch(pm, add);
+  registerDrillMap(pm, add);
+  registerDrillChart(add);
   registerReferenceImage(pm, add, layerChoices);
   registerPoint(pm, add, layerChoices);
   registerBarcode(pm, add, layerChoices);

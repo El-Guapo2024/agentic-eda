@@ -11,11 +11,12 @@
 
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
-import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox, PcbItemCmd } from "./pcbItemTypes";
+import type { BoardBarcode, BoardDrillChart, BoardDrillMap, BoardDrillMark, BoardDrillProfile, BoardDrillSpan, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch, PcbItemCmd } from "./pcbItemTypes";
 import type { MicrowaveCmd } from "./microwaveTypes";
 import type { EmbeddedCmd } from "./embeddedTypes";
 import type { TableCmdWire } from "./tableTypes";
 import type { TuningPattern } from "./tuneTypes";
+import type { LineEnding } from "../kicad-port/lineEnding";
 
 export type Um = number;
 export type Degrees = number;
@@ -559,6 +560,11 @@ interface ShapeCommon {
   /** The lines `EDA_SHAPE::UpdateHatching` makes of that hatch from the board as it is, and the width they are drawn with (the shape's line width). */
   hatch_lines?: HatchLine[];
   hatch_width?: Um;
+  /** KiCad 10's line endings of a line, an arc or a curve (`(start_shape ..)`, `(end_shape ..)`; kicad-port/lineEnding.ts); absent for none. */
+  start_ending?: LineEnding;
+  end_ending?: LineEnding;
+  /** The net of a shape on a copper layer; absent for none. */
+  net?: string;
 }
 
 export type Shape =
@@ -604,6 +610,16 @@ export interface Drawings {
   images?: BoardRefImage[];
   /** The board's points (`PCB_POINT`) and barcodes (`PCB_BARCODE`) -- see api/pcbItemTypes.ts. */
   points?: BoardPoint[];
+  /** KiCad 10's grid items (`PCB_GRID_ITEM`) -- see api/pcbItemTypes.ts. */
+  grid_items?: BoardGridItem[];
+  /** KiCad 10's via stitchings (`PCB_VIA_STITCH`) -- see api/pcbItemTypes.ts. */
+  via_stitches?: BoardViaStitch[];
+  /** KiCad 10's drill charts (what makes a table one), drill maps, drill symbol profile, and -- when the board has a map -- every hole's mark and the spans a map can show. */
+  drill_charts?: BoardDrillChart[];
+  drill_maps?: BoardDrillMap[];
+  drill_profile?: BoardDrillProfile;
+  drill_marks?: BoardDrillMark[];
+  drill_spans?: BoardDrillSpan[];
   barcodes?: BoardBarcode[];
   /** The tables of the board (`PCB_TABLE`, crates/model/src/table.rs), with the geometry `crates/cli/src/table_json.rs` works out. Absent when the board has none. */
   tables?: BoardTable[];
@@ -862,6 +878,8 @@ export interface LibraryPad {
   thermal_spoke_angle_mdeg?: number | null;
   /** The padstack: the shapes of the pad's other copper layers and what becomes of the layers nothing connects to; the fields above are the front. Absent: one shape for every layer, every layer kept. */
   stack?: PadStack | null;
+  /** What the pad's file form says that the editor does not edit (an edge connector, the fabrication property, the margins, ...), carried back. */
+  kicad?: LibraryKeep;
 }
 
 /** `crates/model/src/ir.rs` `FootprintAttributes` (`FOOTPRINT_ATTR_T` plus the dialog's two related non-attribute-bit checkboxes). */
@@ -905,7 +923,13 @@ export interface FootprintPropertiesFields {
   reference?: FieldLayoutCmd | null;
   value?: FieldLayoutCmd | null;
   fields?: FootprintField[];
+  /** The grid's third and fourth mandatory rows, the Datasheet and the Description fields (`FIELD_T::DATASHEET`, `DESCRIPTION`), each with its text in `text`. Left out, the footprint keeps what it has. */
+  datasheet?: FieldLayoutCmd | null;
+  description_field?: FieldLayoutCmd | null;
 }
+
+/** `crates/model/src/lib_keep.rs`: what a library item's file says that the editors do not edit, kept for the writers. The studio only carries it back. */
+export type LibraryKeep = Record<string, unknown>;
 
 /**
  * `crates/model/src/ir.rs` `LibraryFootprint` -- the Footprint Editor's
@@ -925,6 +949,7 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
   published: boolean;
   /** `PAD_TOOL::InPadEditMode`: the pad being edited as graphic shapes (Edit Pad as Graphic Shapes), until Finish Pad Edit recombines it (kicad-port/padEditMode.ts). Absent when none is. */
   pad_edit?: PadEditMode | null;
+  kicad?: LibraryKeep;
 }
 
 /** `crates/model/src/ir.rs` `PadEditMode`: the pad flagged `ENTERED`, and what its explode set aside (the custom pad's zone option and proxy items, which the recombine gives back). */
@@ -2837,6 +2862,8 @@ export interface LibrarySymbolField {
   italic?: boolean;
   h_align?: FieldHAlign;
   v_align?: FieldVAlign;
+  /** `(property private ..)`: a field of the library symbol only (`SCH_FIELD::IsPrivate`). */
+  private?: boolean;
 }
 
 /** The fields `edit_symbol_properties` commits all at once (`dialog_lib_symbol_properties.cpp`'s General + Units&&Body Styles tabs) -- factored out so the `Cmd` variant and the Symbol Properties dialog's own form state share one field list, same pattern `FootprintPropertiesFields` already sets. */
@@ -2854,6 +2881,14 @@ export interface SymbolPropertiesFields {
   unit_count: number;
   has_alternate_body_style: boolean;
   footprint_filters: string[];
+  /** "All units are interchangeable" unchecked (`LIB_SYMBOL::UnitsLocked`, the file's `ki_locked`); only for a symbol of several units. Absent: false (in a command, kept). */
+  units_locked?: boolean;
+  /** "Define as local power symbol" (`(power local)`), with `power`. */
+  power_local?: boolean;
+  /** "Exclude from simulation". */
+  exclude_from_sim?: boolean;
+  /** "Exclude from position files". */
+  exclude_from_pos_files?: boolean;
 }
 
 /**
@@ -2871,6 +2906,7 @@ export interface LibrarySymbol extends SymbolPropertiesFields {
   extends?: string | null;
   /** The symbol's fields beyond the text members above (`crates/model/src/sym_fields.rs`): the layout of each field, `Value`, `Footprint` and the user fields. Empty for a symbol that never had one. */
   fields?: LibrarySymbolField[];
+  kicad?: LibraryKeep;
 }
 
 /** `GET /api/symbol_editor/names`'s one field: every `lib_id` available to open (already-opened library entries, every lib_id the project's intent already resolved, and the small builtin catalog), sorted. */

@@ -319,8 +319,9 @@ impl ShapeFill {
     }
 }
 
-/// What a board shape has beyond what [`crate::ir::Shape`] holds, by the shape's id: today its hatch. A shape without an entry is as `Shape::filled` says (solid or not
-/// filled). The entry is kept with the board, not with the shape, because `Shape` is built field by field in a good many places and a new field there is a change at every one.
+/// What a board shape has beyond what [`crate::ir::Shape`] holds, by the shape's id: its hatch, the line endings of a line, an arc or a curve, and the net of a shape on
+/// copper. A shape without an entry is as `Shape::filled` says (solid or not filled), has no endings and is on no net. The entry is kept with the board, not with the shape,
+/// because `Shape` is built field by field in a good many places and a new field there is a change at every one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShapeStyle {
@@ -329,6 +330,24 @@ pub struct ShapeStyle {
     /// The hatch of a rectangle, a circle or a polygon that is not filled solid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hatch: Option<HatchKind>,
+    /// KiCad 10's `(start_shape ..)` and `(end_shape ..)` of an open shape (`EDA_SHAPE::m_startEnding`, `m_endEnding`) -- see [`crate::line_ending`]. Additive.
+    #[serde(default, skip_serializing_if = "crate::line_ending::LineEndings::is_none")]
+    pub endings: crate::line_ending::LineEndings,
+    /// The net of a shape on a copper layer (`(net "name")`, `BOARD_CONNECTED_ITEM::GetNetname`): kicad-cli's DRC takes it as copper of that net. `None` is no net. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net: Option<String>,
+}
+
+impl ShapeStyle {
+    /// The style of `id` that says nothing.
+    pub fn empty(id: &str) -> ShapeStyle {
+        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None }
+    }
+
+    /// Says nothing beyond the shape itself: not kept.
+    pub fn is_empty(&self) -> bool {
+        self.hatch.is_none() && self.endings.is_none() && self.net.is_none()
+    }
 }
 
 /// The items this module adds to a board. See the module doc.
@@ -344,24 +363,43 @@ pub struct BoardItems {
     /// The board's points (`point`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub points: Vec<PcbPoint>,
-    /// The hatch of the board's shapes, by the id of the shape ([`ShapeStyle`]). Not items of their own: see [`BoardItems::ids`].
+    /// The hatch, the line endings and the net of the board's shapes, by the id of the shape ([`ShapeStyle`]). Not items of their own: see [`BoardItems::ids`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shape_styles: Vec<ShapeStyle>,
+    /// KiCad 10's grid items (`grid_item`, `PCB_GRID_ITEM`) -- see [`crate::grid_item`]. Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grid_items: Vec<crate::grid_item::GridItem>,
+    /// KiCad 10's via stitching generators (`(generated (type via_stitch) ..)`, `PCB_VIA_STITCH`) -- see [`crate::via_stitch`]. Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via_stitches: Vec<crate::via_stitch::ViaStitch>,
+    /// KiCad 10's drill charts: what makes a table of the board one (`drill_chart`, `PCB_DRILL_CHART`), keyed by the table's id -- see [`crate::drill_chart`]. Not items of
+    /// their own: the table is. Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drill_charts: Vec<crate::drill_chart::DrillChart>,
+    /// KiCad 10's drill maps (`drill_map`, `PCB_DRILL_MAP`). Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drill_maps: Vec<crate::drill_chart::DrillMap>,
+    /// The board's drill symbol profile (`(setup (drill_symbol_profile ..))`); `None` is KiCad's default one. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drill_profile: Option<crate::drill_chart::DrillSymbolProfile>,
 }
 
 impl BoardItems {
     pub fn is_empty(&self) -> bool {
-        self.text_boxes.is_empty() && self.images.is_empty() && self.points.is_empty() && self.shape_styles.is_empty()
+        self.text_boxes.is_empty() && self.images.is_empty() && self.points.is_empty() && self.shape_styles.is_empty() && self.grid_items.is_empty() && self.via_stitches.is_empty()
+            && self.drill_charts.is_empty()
+            && self.drill_maps.is_empty()
+            && self.drill_profile.is_none()
     }
 
     /// Every id of the items, for the id sets that name them (a shape's style is the shape's, not an item).
     pub fn ids(&self) -> impl Iterator<Item = &str> {
-        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.points.iter().map(|p| p.id.as_str()))
+        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.points.iter().map(|p| p.id.as_str())).chain(self.grid_items.iter().map(|g| g.id.as_str())).chain(self.via_stitches.iter().map(|v| v.id.as_str())).chain(self.drill_maps.iter().map(|m| m.id.as_str()))
     }
 
     /// The ids of the items the lock (`(locked yes)`) applies to: every kind but the point, whose file form has no lock.
     pub fn lockable_ids(&self) -> impl Iterator<Item = &str> {
-        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str()))
+        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.grid_items.iter().map(|g| g.id.as_str())).chain(self.via_stitches.iter().map(|v| v.id.as_str())).chain(self.drill_maps.iter().map(|m| m.id.as_str()))
     }
 
     /// Give each item without an id the deterministic one the others get (`next_item_id`), in an order that does not depend on how they were listed.
@@ -369,6 +407,9 @@ impl BoardItems {
         assign_ids(&mut self.text_boxes, "tbx", existing, |t| &mut t.id, TextBox::id_seed, |t| (t.text.clone(), t.start, t.end));
         assign_ids(&mut self.images, "img", existing, |i| &mut i.id, RefImage::id_seed, |i| (i.layer.clone(), i.at, i.data.len() as i64));
         assign_ids(&mut self.points, "pnt", existing, |p| &mut p.id, PcbPoint::id_seed, |p| (p.layer.clone(), p.at, p.size_um));
+        assign_ids(&mut self.grid_items, "grd", existing, |g| &mut g.id, crate::grid_item::GridItem::id_seed, |g| (g.at, g.extent, g.spacing));
+        assign_ids(&mut self.via_stitches, "vst", existing, |v| &mut v.id, crate::via_stitch::ViaStitch::id_seed, |v| (v.outline.clone(), v.net.clone()));
+        assign_ids(&mut self.drill_maps, "dmap", existing, |m| &mut m.id, crate::drill_chart::DrillMap::id_seed, |m| (m.layer.clone(), m.offset));
     }
 
     /// Sort the collections by id (the canonical form a design is hashed in).
@@ -377,6 +418,10 @@ impl BoardItems {
         self.images.sort_by(|a, b| a.id.cmp(&b.id));
         self.points.sort_by(|a, b| a.id.cmp(&b.id));
         self.shape_styles.sort_by(|a, b| a.id.cmp(&b.id));
+        self.grid_items.sort_by(|a, b| a.id.cmp(&b.id));
+        self.via_stitches.sort_by(|a, b| a.id.cmp(&b.id));
+        self.drill_charts.sort_by(|a, b| a.table_id.cmp(&b.table_id));
+        self.drill_maps.sort_by(|a, b| a.id.cmp(&b.id));
     }
 
     /// The hatch of the shape `shape_id`, if it has one.
@@ -386,17 +431,60 @@ impl BoardItems {
 
     /// Hatch the shape `shape_id` as `hatch` says, or take its hatch away (`None`); an entry that says nothing is not kept.
     pub fn set_hatch(&mut self, shape_id: &str, hatch: Option<HatchKind>) {
-        match (self.shape_styles.iter().position(|st| st.id == shape_id), hatch) {
-            (Some(i), Some(h)) => self.shape_styles[i].hatch = Some(h),
-            (Some(i), None) => {
-                self.shape_styles[i].hatch = None;
-                if self.shape_styles[i] == (ShapeStyle { id: shape_id.to_string(), hatch: None }) {
-                    self.shape_styles.remove(i);
-                }
+        self.edit_style(shape_id, |st| st.hatch = hatch);
+    }
+
+    /// The style of the shape `shape_id`, if it has one.
+    pub fn style_of(&self, shape_id: &str) -> Option<&ShapeStyle> {
+        self.shape_styles.iter().find(|st| st.id == shape_id)
+    }
+
+    /// The line endings of the shape `shape_id` (none when it has no style).
+    pub fn endings_of(&self, shape_id: &str) -> crate::line_ending::LineEndings {
+        self.style_of(shape_id).map(|st| st.endings).unwrap_or_default()
+    }
+
+    /// The net of the shape `shape_id`, if it is on one.
+    pub fn net_of(&self, shape_id: &str) -> Option<&str> {
+        self.style_of(shape_id).and_then(|st| st.net.as_deref())
+    }
+
+    /// Give the shape `shape_id` the endings `endings` (none takes them away).
+    pub fn set_endings(&mut self, shape_id: &str, endings: crate::line_ending::LineEndings) {
+        self.edit_style(shape_id, |st| st.endings = endings);
+    }
+
+    /// Put the shape `shape_id` on the net `net` (`None`: on no net).
+    pub fn set_net(&mut self, shape_id: &str, net: Option<String>) {
+        self.edit_style(shape_id, |st| st.net = net);
+    }
+
+    /// Change the style of `shape_id` by `edit`, making the entry when it has none and dropping one that ends up saying nothing.
+    fn edit_style(&mut self, shape_id: &str, edit: impl FnOnce(&mut ShapeStyle)) {
+        let i = match self.shape_styles.iter().position(|st| st.id == shape_id) {
+            Some(i) => i,
+            None => {
+                self.shape_styles.push(ShapeStyle::empty(shape_id));
+                self.shape_styles.len() - 1
             }
-            (None, Some(h)) => self.shape_styles.push(ShapeStyle { id: shape_id.to_string(), hatch: Some(h) }),
-            (None, None) => {}
+        };
+        edit(&mut self.shape_styles[i]);
+        if self.shape_styles[i].is_empty() {
+            self.shape_styles.remove(i);
         }
+    }
+
+    /// Give the shape `shape_id` the style `style` (a copy's, from another shape): its hatch, endings and net, under this shape's id.
+    pub fn set_style(&mut self, shape_id: &str, style: Option<&ShapeStyle>) {
+        self.forget_shape(shape_id);
+        if let Some(st) = style.filter(|st| !st.is_empty()) {
+            self.shape_styles.push(ShapeStyle { id: shape_id.to_string(), ..st.clone() });
+        }
+    }
+
+    /// Forget everything the board kept of the shape `shape_id` beyond `Shape` (its hatch, endings and net): the shape is gone.
+    pub fn forget_shape(&mut self, shape_id: &str) {
+        self.shape_styles.retain(|st| st.id != shape_id);
     }
 
     /// Forget the styles of shapes that are gone (`live` says which ids there are), so a shape made later under the same id does not take a hatch that was not its own.

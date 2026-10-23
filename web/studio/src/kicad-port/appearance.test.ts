@@ -62,8 +62,8 @@ test("COLOR4D::UNSPECIFIED is (0, 0, 0, 0): clearing a swatch writes rgba(0,0,0,
   assert.equal(specifiedColor("junk"), null);
 });
 
-test("the 22 objects, and what a new project has on (GAL_SET::DefaultVisible): all but DRC exclusions and the board area shadow -- and the drawing sheet, which this studio keeps off", () => {
-  assert.equal(OBJECT_IDS.length, 22);
+test("the 24 objects (KiCad 10 adds Grids and Via Stitching), and what a new project has on (GAL_SET::DefaultVisible): all but DRC exclusions and the board area shadow -- and the drawing sheet, which this studio keeps off", () => {
+  assert.equal(OBJECT_IDS.length, 24);
   const off = OBJECT_IDS.filter((id) => !DEFAULT_OBJECT_VISIBILITY[id]);
   assert.deepEqual(off, ["drc_exclusions", "board_outline_area", "drawing_sheet"]);
 });
@@ -72,7 +72,7 @@ test("the Objects rows are s_objectSettings', Filled Shapes has a slider and no 
   const ids = OBJECT_ROWS.filter((r) => r.id !== null).map((r) => r.id);
   assert.deepEqual(ids, [
     "tracks", "vias", "pads", "zones", "shapes", "bitmaps", "footprints_front", "footprints_back", "footprint_values", "footprint_references", "footprint_text",
-    "ratsnest", "drc_warnings", "drc_errors", "drc_exclusions", "footprint_anchors", "ly_points", "locked_item_shadows", "conflict_shadows", "board_outline_area", "drawing_sheet", "grid",
+    "ratsnest", "drc_warnings", "drc_errors", "drc_exclusions", "footprint_anchors", "ly_points", "subgrids", "via_stitching", "locked_item_shadows", "conflict_shadows", "board_outline_area", "drawing_sheet", "grid",
   ]);
   const shapes = OBJECT_ROWS.find((r) => r.id === "shapes")!;
   assert.equal(shapes.checkbox, false);
@@ -122,7 +122,7 @@ test("the inactive-layer and net colour modes cycle as PCB_CONTROL does and use 
 
 test("visibleObjects merges the ratsnest and the grid switches in, in the order of OBJECT_IDS", () => {
   const a = defaultAppearance();
-  assert.equal(visibleObjects(a, true, true).length, 19, "the 22 less the three that are off by default");
+  assert.equal(visibleObjects(a, true, true).length, 21, "the 24 less the three that are off by default");
   const none = visibleObjects(a, false, false);
   assert.equal(none.includes("ratsnest"), false);
   assert.equal(none.includes("grid"), false);

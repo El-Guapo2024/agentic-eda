@@ -350,7 +350,7 @@ use eda_model::ir::Shape;
 use eda_model::pcb_items::{HatchKind, ShapeFill};
 
 fn style(b: &mut Board<'_>, shape_ids: &[&str], fill: ShapeFill) -> Result<(), Vec<CheckResult>> {
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: Some(fill) }))
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: Some(fill), start_ending: None, end_ending: None }))
 }
 
 fn hatch_of(b: &Board<'_>, id: &str) -> Option<HatchKind> {
@@ -395,7 +395,7 @@ fn several_shapes_are_given_a_fill_together_or_not_at_all() {
     assert_eq!(style(&mut b, &[], ShapeFill::None).unwrap_err()[0].check, "ops_bad_shape_style");
     assert_eq!(serde_json::to_value(b.design()).unwrap(), before, "a refused command changes nothing");
     // No fill given is no change.
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(&["shp_rect"]), fill: None })).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(&["shp_rect"]), fill: None, start_ending: None, end_ending: None })).unwrap();
     assert_eq!(hatch_of(&b, "shp_rect"), Some(HatchKind::Hatch));
 }
 
@@ -448,7 +448,7 @@ fn a_shape_added_where_a_hatched_one_was_deleted_is_not_hatched() {
 #[test]
 fn the_shape_style_command_has_one_wire_form() {
     let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_shape_style", "ids": ["shp_a", "shp_b"], "fill": "reverse_hatch"})).unwrap();
-    let Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: shape_ids, fill }) = &c else { panic!("{c:?}") };
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: shape_ids, fill, .. }) = &c else { panic!("{c:?}") };
     assert_eq!((shape_ids.as_slice(), *fill), (&["shp_a".to_string(), "shp_b".to_string()][..], Some(ShapeFill::ReverseHatch)));
     assert_eq!(c.domain(), Domain::Pcb);
     assert_eq!(c.subjects(), vec!["shp_a", "shp_b"]);
@@ -625,4 +625,335 @@ fn the_barcode_commands_have_one_wire_form_and_describe_themselves() {
     assert_eq!(c.describe(), "barcode edit bar_x --layer F.Cu --at 0.001,0.002 --size 5.000x6.000 --kind qr --text \"T\"");
     let back: Cmd = serde_json::from_value(serde_json::to_value(&add).unwrap()).unwrap();
     assert_eq!(back, add);
+}
+
+// ------------------------------------------------------------------------------------------------------------------ line endings (KiCad 10)
+
+use eda_model::line_ending::{LineEnding, LineEndingStyle, LineEndings};
+
+fn endings(b: &mut Board<'_>, shape_ids: &[&str], start: Option<LineEnding>, end: Option<LineEnding>) -> Result<(), Vec<CheckResult>> {
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: None, start_ending: start, end_ending: end }))
+}
+
+fn endings_of(b: &Board<'_>, id: &str) -> LineEndings {
+    drawings(b).board_items.endings_of(id)
+}
+
+#[test]
+fn a_line_an_arc_and_a_curve_get_line_endings_and_a_closed_shape_none() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_um: 3_000, width_um: 2_000, ..Default::default() };
+    endings(&mut b, &["shp_seg", "shp_arc"], Some(arrow), None).unwrap();
+    assert_eq!(endings_of(&b, "shp_seg"), LineEndings { start: arrow, end: LineEnding::default() });
+    assert_eq!(endings_of(&b, "shp_arc").start, arrow);
+    // The end alone, and the start as it was.
+    endings(&mut b, &["shp_seg"], None, Some(LineEnding::new(LineEndingStyle::Circle))).unwrap();
+    assert_eq!(endings_of(&b, "shp_seg"), LineEndings { start: arrow, end: LineEnding::new(LineEndingStyle::Circle) });
+    // A size below 0 is 0 (`std::max( 0, .. )`).
+    endings(&mut b, &["shp_seg"], Some(LineEnding { style: LineEndingStyle::Square, length_um: -5, width_um: 1_000, stroke_width_um: -1, ..Default::default() }), None).unwrap();
+    assert_eq!(endings_of(&b, "shp_seg").start, LineEnding { style: LineEndingStyle::Square, width_um: 1_000, ..Default::default() });
+
+    let before = serde_json::to_value(b.design()).unwrap();
+    assert_eq!(endings(&mut b, &["shp_seg", "shp_rect"], Some(arrow), None).unwrap_err()[0].check, "ops_bad_shape_style", "a rectangle is closed");
+    assert_eq!(serde_json::to_value(b.design()).unwrap(), before, "a refused command changes nothing");
+
+    // None takes them away, and a style that says nothing is not kept.
+    endings(&mut b, &["shp_seg", "shp_arc"], Some(LineEnding::default()), Some(LineEnding::default())).unwrap();
+    assert!(drawings(&b).board_items.shape_styles.is_empty());
+}
+
+#[test]
+fn a_shape_keeps_its_endings_through_a_move_a_turn_a_flip_and_a_duplicate_and_loses_them_when_it_is_deleted() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let open = LineEnding::new(LineEndingStyle::ArrowOpen);
+    endings(&mut b, &["shp_seg"], Some(open), Some(open)).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&["shp_seg"]), dx: 1_000, dy: 2_000 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["shp_seg"]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&["shp_seg"]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!(endings_of(&b, "shp_seg").end, open);
+    b.apply(&Cmd::Duplicate { ids: ids(&["shp_seg"]) }).unwrap();
+    let with = drawings(&b).shapes.iter().filter(|s| !endings_of(&b, s.id()).is_none()).count();
+    assert_eq!(with, 2, "the copy has the endings too");
+    b.apply(&Cmd::DeleteShape { id: "shp_seg".into() }).unwrap();
+    assert!(endings_of(&b, "shp_seg").is_none());
+}
+
+#[test]
+fn the_endings_have_one_wire_form() {
+    let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_shape_style", "ids": ["shp_a"], "start_ending": {"style": "arrow_open", "length_um": 3000, "width_um": 3000, "stroke_width_um": 600}})).unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { start_ending, end_ending, fill, .. }) = &c else { panic!("{c:?}") };
+    assert_eq!((*start_ending, *end_ending, *fill), (Some(LineEnding { style: LineEndingStyle::ArrowOpen, length_um: 3_000, width_um: 3_000, stroke_width_um: 600, ..Default::default() }), None, None));
+    let Cmd::PcbItem(p) = &c else { panic!() };
+    assert_eq!(p.describe(), "shape style shp_a --fill unchanged --start-shape arrow_open --start-size 3.000x3.000 --start-stroke 0.600");
+    let back: Cmd = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+    assert_eq!(back, c);
+}
+
+// ------------------------------------------------------------------------------------------------------------------ grid items (KiCad 10)
+
+use eda_model::grid_item::{GridItem, GridKind};
+
+fn grids<'a>(b: &'a Board<'_>) -> &'a [GridItem] {
+    &drawings(b).board_items.grid_items
+}
+
+#[test]
+fn a_grid_item_is_placed_edited_turned_flipped_locked_and_deleted() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let g = GridItem { id: "caller".into(), extent: p(-3_000, 2_000), priority: 0, ..GridItem::new(p(10_000, 0)) };
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddGridItem { grid_item: g })).unwrap();
+    let id = grids(&b)[0].id.clone();
+    assert!(id.starts_with("grd_"), "{id}");
+    assert_eq!((grids(&b)[0].extent, grids(&b)[0].priority), (p(3_000, 2_000), 1), "the setters' ranges");
+
+    let edited = GridItem { kind: GridKind::Polar, phi_extent_deg: 90.0, angle: -30.0, ..grids(&b)[0].clone() };
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditGridItem { id: id.clone(), grid_item: edited })).unwrap();
+    assert_eq!((grids(&b)[0].kind, grids(&b)[0].angle, grids(&b)[0].id.as_str()), (GridKind::Polar, 330.0, id.as_str()));
+
+    // A clockwise quarter turn about the origin takes 90 from KiCad's counter-clockwise orientation.
+    b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    assert_eq!((grids(&b)[0].at, grids(&b)[0].angle), (p(0, 10_000), 240.0));
+    b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!(grids(&b)[0].angle, 300.0, "180 - 240");
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: 1_000, dy: 0 }).unwrap();
+    assert_eq!(grids(&b)[0].at, p(1_000, 10_000));
+    b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: true }).unwrap();
+    assert!(drawings(&b).locked_ids.contains(&id));
+
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteGridItem { id: "grd_nope".into() })).unwrap_err()[0].check, "ops_unknown_grid_item");
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteGridItem { id })).unwrap();
+    assert!(grids(&b).is_empty());
+}
+
+#[test]
+fn the_grid_item_commands_have_one_wire_form() {
+    let add: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "add_grid_item", "grid_item": {
+        "kind": "polar", "at": {"x": 1000, "y": 2000}, "extent": {"x": 5000, "y": 0}, "spacing": {"x": 500, "y": 500}, "angle": 45.5,
+        "phi_extent_deg": 180.0, "phi_spacing_deg": 15.0, "priority": 2, "tick_interval": 4, "affects": {"cursor": true, "routing": false, "placement": true}}})).unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::AddGridItem { grid_item }) = &add else { panic!("{add:?}") };
+    assert_eq!((grid_item.kind, grid_item.angle, grid_item.phi_extent_deg, grid_item.affects.routing), (GridKind::Polar, 45.5, 180.0, false));
+    let Cmd::PcbItem(c) = &add else { panic!() };
+    assert_eq!(c.describe(), "grid-item add --polar --at 1.000,2.000 --extent 5.000x0.000 --spacing 0.500x0.500");
+    let back: Cmd = serde_json::from_value(serde_json::to_value(&add).unwrap()).unwrap();
+    assert_eq!(back, add);
+}
+
+// ------------------------------------------------------------------------------------------------------------------ via stitching (KiCad 10)
+
+use eda_model::via_stitch::{StitchLayout, ViaStitch, ViaTemplate};
+use pcb_items::PlannedVia;
+
+fn stitch() -> ViaStitch {
+    let mut v = ViaStitch::new(vec![p(0, 0), p(10_000, 0), p(10_000, 10_000), p(0, 10_000)]);
+    v.net = "GND".into();
+    v.pitch_um = 2_000;
+    v.via = ViaTemplate { size_um: 600, drill_um: 300, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() };
+    v
+}
+
+fn planned(cells: &[(i64, i64)]) -> Vec<PlannedVia> {
+    cells.iter().map(|&(c, r)| PlannedVia { cell: (c, r), at: p(c * 2_000, r * 2_000) }).collect()
+}
+
+fn set_stitch(b: &mut Board<'_>, id: Option<&str>, v: ViaStitch, cells: &[(i64, i64)]) -> Result<(), Vec<CheckResult>> {
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetViaStitch { id: id.map(str::to_string), stitch: v, vias: Some(planned(cells)) }))
+}
+
+fn stitches<'a>(b: &'a Board<'_>) -> &'a [ViaStitch] {
+    &drawings(b).board_items.via_stitches
+}
+
+fn member_vias(b: &Board<'_>) -> Vec<(String, eda_model::ir::Point)> {
+    let ids = &stitches(b)[0].member_ids;
+    let mut out: Vec<_> = b.design().routing.as_ref().unwrap().vias.iter().filter(|v| ids.contains(&v.id)).map(|v| (v.id.clone(), v.at)).collect();
+    out.sort_by_key(|(_, at)| (at.x, at.y));
+    out
+}
+
+#[test]
+fn a_stitching_makes_its_vias_and_churns_as_few_as_update_does() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let before = b.design().routing.as_ref().unwrap().vias.len();
+    set_stitch(&mut b, None, stitch(), &[(1, 1), (2, 1), (3, 1)]).unwrap();
+    let id = stitches(&b)[0].id.clone();
+    assert!(id.starts_with("vst_"), "{id}");
+    assert_eq!(b.design().routing.as_ref().unwrap().vias.len(), before + 3);
+    let first = member_vias(&b);
+    assert_eq!(first.iter().map(|(_, at)| *at).collect::<Vec<_>>(), vec![p(2_000, 2_000), p(4_000, 2_000), p(6_000, 2_000)]);
+    // "Vias must be marked free".
+    assert!(drawings(&b).via_extras.iter().any(|x| x.id == first[0].0 && x.tokens == ["(free yes)"]));
+
+    // The same cells again: nothing changes, the ids stay (`UpdateDeltaStability`).
+    let cur = stitches(&b)[0].clone();
+    set_stitch(&mut b, Some(&id), cur, &[(1, 1), (2, 1), (3, 1)]).unwrap();
+    assert_eq!(member_vias(&b), first);
+    // One cell gone and one new: the two kept keep their ids.
+    let cur = stitches(&b)[0].clone();
+    set_stitch(&mut b, Some(&id), cur, &[(1, 1), (2, 1), (4, 1)]).unwrap();
+    let after = member_vias(&b);
+    assert_eq!((after[0].0.as_str(), after[1].0.as_str()), (first[0].0.as_str(), first[1].0.as_str()));
+    assert!(!after.iter().any(|(vid, _)| *vid == first[2].0), "the via of the cell that went is gone");
+    assert_eq!(after[2].1, p(8_000, 2_000));
+    // A new stitch net keeps the vias (`SetNetCode` gives the members the net), ids and all.
+    let mut vcc = stitches(&b)[0].clone();
+    vcc.net = "VCC".into();
+    set_stitch(&mut b, Some(&id), vcc, &[(1, 1), (2, 1), (4, 1)]).unwrap();
+    assert_eq!(member_vias(&b), after, "the same vias");
+    assert!(b.design().routing.as_ref().unwrap().vias.iter().filter(|v| stitches(&b)[0].member_ids.contains(&v.id)).all(|v| v.net == "VCC"));
+    let mut gnd = stitches(&b)[0].clone();
+    gnd.net = "GND".into();
+    set_stitch(&mut b, Some(&id), gnd, &[(1, 1), (2, 1), (4, 1)]).unwrap();
+    // A new via size makes them again.
+    let mut bigger = stitches(&b)[0].clone();
+    bigger.via.size_um = 800;
+    set_stitch(&mut b, Some(&id), bigger, &[(1, 1), (2, 1), (4, 1)]).unwrap();
+    assert!(member_vias(&b).iter().all(|(vid, _)| !after.iter().any(|(o, _)| o == vid)));
+    assert!(b.design().routing.as_ref().unwrap().vias.iter().filter(|v| stitches(&b)[0].member_ids.contains(&v.id)).all(|v| v.diameter == 800));
+
+    // `Remove`: the stitching and its vias.
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteViaStitch { id })).unwrap();
+    assert!(stitches(&b).is_empty());
+    assert_eq!(b.design().routing.as_ref().unwrap().vias.len(), before);
+}
+
+#[test]
+fn a_nudged_via_is_put_back_on_its_cell_and_a_stitching_without_a_plan_is_refused() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    set_stitch(&mut b, None, stitch(), &[(1, 1)]).unwrap();
+    let id = stitches(&b)[0].id.clone();
+    let vid = member_vias(&b)[0].0.clone();
+    b.apply(&Cmd::MoveVia { id: vid.clone(), x: 2_300, y: 2_000 }).unwrap();
+    // The plan has the cell at its place: the via is "just nudged" back, not made again.
+    let cur = stitches(&b)[0].clone();
+    set_stitch(&mut b, Some(&id), cur, &[(1, 1)]).unwrap();
+    assert_eq!(member_vias(&b), vec![(vid, p(2_000, 2_000))]);
+    let err = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetViaStitch { id: Some(id.clone()), stitch: stitch(), vias: None })).unwrap_err();
+    assert_eq!(err[0].check, "ops_via_stitch_unplanned");
+    let mut odd = stitch();
+    odd.via.drill_um = 700;
+    assert_eq!(set_stitch(&mut b, Some(&id), odd, &[]).unwrap_err()[0].check, "ops_bad_via_stitch");
+    let mut poisson = stitch();
+    poisson.layout = StitchLayout::Poisson;
+    assert!(set_stitch(&mut b, Some(&id), poisson, &[]).is_ok());
+}
+
+/// A via stitching is a group: Rotate and Flip take its vias along (`PCB_GROUP::Rotate`, `Flip`) and a Flip takes it to the other side (`PCB_GENERATOR::Flip`'s
+/// `SetLayer( GetFlippedLayer( GetLayer() ) )`); a Move moves them too, before the board directory regenerates the stitching.
+#[test]
+fn a_stitching_turns_and_flips_with_its_vias() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    set_stitch(&mut b, None, stitch(), &[(1, 1)]).unwrap();
+    let id = stitches(&b)[0].id.clone();
+    b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    let at = member_vias(&b)[0].1;
+    assert_eq!((at.x.abs(), at.y.abs()), (2_000, 2_000), "turned about the origin with the outline");
+    assert_ne!(at, p(2_000, 2_000));
+    b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!(stitches(&b)[0].layer, "B.Cu");
+    assert_eq!(member_vias(&b)[0].1.x, -at.x, "mirrored with it");
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: 500, dy: 0 }).unwrap();
+    assert_eq!(member_vias(&b)[0].1.x, -at.x + 500);
+}
+
+#[test]
+fn the_via_stitching_commands_have_one_wire_form() {
+    let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_via_stitch", "stitch": {
+        "outline": [{"x": 0, "y": 0}, {"x": 1000, "y": 0}, {"x": 1000, "y": 1000}], "net": "GND", "pitch_um": 1000, "layout": "staggered",
+        "via": {"size_um": 600, "drill_um": 300, "from_layer": "F.Cu", "to_layer": "B.Cu"}}})).unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::SetViaStitch { id, stitch, vias }) = &c else { panic!("{c:?}") };
+    assert_eq!((id.as_deref(), stitch.layout, vias.is_none()), (None, StitchLayout::Staggered, true));
+    let back: Cmd = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+    assert_eq!(back, c);
+}
+
+// ------------------------------------------------------------------------------------------------------------------ drill maps (KiCad 10)
+
+#[test]
+fn a_drill_map_is_placed_once_a_layer_and_moves_its_marks_not_its_holes() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let place = |b: &mut Board<'_>, layer: &str| b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillMap { layer: layer.into() }));
+    place(&mut b, "F.Fab").unwrap();
+    // "Two maps on one layer would overdraw each other's marks"; copper is no documentation layer.
+    assert_eq!(place(&mut b, "F.Fab").unwrap_err()[0].hint.as_deref(), Some("Every documentation layer already has a drill map."));
+    assert!(place(&mut b, "F.Cu").is_err());
+    let map = drawings(&b).board_items.drill_maps[0].clone();
+    assert!(map.id.starts_with("dmap_"), "{}", map.id);
+    assert_eq!((map.size_um, map.span.is_none(), map.outline_slots, map.guide_cross), (1_500, true, true, false), "PCB_DRILL_MAP's defaults");
+    // Move slides the marks (`m_offset`); a turn has nothing to turn; a flip takes the map to the other side's layer.
+    b.apply(&Cmd::MoveItems { ids: ids(&[&map.id]), dx: 50_000, dy: 0 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&[&map.id]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&[&map.id]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    let moved = drawings(&b).board_items.drill_maps[0].clone();
+    assert_eq!((moved.offset, moved.layer.as_str()), (p(50_000, 0), "B.Fab"));
+    let mut edited = moved.clone();
+    edited.guide_cross = true;
+    edited.size_um = 0;
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditDrillMap { id: map.id.clone(), map: edited })).unwrap();
+    assert_eq!((drawings(&b).board_items.drill_maps[0].guide_cross, drawings(&b).board_items.drill_maps[0].size_um), (true, 1), "`SetSymbolSize`: at least one");
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteDrillMap { id: map.id })).unwrap();
+    assert!(drawings(&b).board_items.drill_maps.is_empty());
+}
+
+#[test]
+fn a_drill_chart_is_refused_off_the_documentation_layers_and_lists_the_holes() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let err = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "F.SilkS".into(), at: p(0, 0) })).unwrap_err();
+    assert_eq!(err[0].hint.as_deref(), Some("No documentation layer is enabled to hold a drill chart."));
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 10_000, y: 10_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "Dwgs.User".into(), at: p(5_000, 6_000) })).unwrap();
+    let dr = drawings(&b);
+    let chart = &dr.board_items.drill_charts[0];
+    let t = dr.tables.iter().find(|t| t.id == chart.table_id).unwrap();
+    assert_eq!((t.col_count(), t.at), (6, p(5_000, 6_000)));
+    let texts: Vec<&str> = t.cells.iter().map(|c| c.text.as_str()).collect();
+    assert!(texts.contains(&"0.300") && texts.contains(&"F.Cu / B.Cu"), "{texts:?}");
+    assert_eq!(chart.row_shapes.get(&1), Some(&0), "the first shape");
+    assert!(dr.board_items.drill_profile.as_ref().is_some_and(|p| p.assignments.len() == 1), "the new mark is the board's");
+    // Nothing changed: nothing is rebuilt. Another via of the size: the chart counts it.
+    let ops_before: usize = t.cells[6 + 4].text.parse().unwrap();
+    assert!(!b.refresh_drill_charts());
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 20_000, y: 10_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    assert!(b.refresh_drill_charts());
+    let dr = drawings(&b);
+    let t = dr.tables.iter().find(|t| t.id == dr.board_items.drill_charts[0].table_id).unwrap();
+    assert_eq!(t.cells[6 + 4].text, (ops_before + 1).to_string(), "the OPS of the 0.3 mm row");
+}
+
+/// `PCB_DRILL_CHART::IsStale` is the drill generation, not the cells: a chart that was read (no generation) is rebuilt by the first command, a cell edited by hand keeps its
+/// text until the holes change, and the Properties panel's edit rebuilds the chart whatever its generation (`PCB_PROPERTIES_PANEL::valueChanged`'s `RebuildCells`).
+#[test]
+fn a_drill_chart_is_stale_by_the_drill_generation_not_by_its_text() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 10_000, y: 10_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "Dwgs.User".into(), at: p(5_000, 6_000) })).unwrap();
+    let id = drawings(&b).board_items.drill_charts[0].table_id.clone();
+    let cell = |b: &Board, i: usize| drawings(b).tables.iter().find(|t| t.id == id).unwrap().cells[i].text.clone();
+    b.apply(&Cmd::Table(crate::TableCmd::EditCells { id: id.clone(), cells: vec![(1, 1)], edit: eda_model::table_edit::CellEdit { text: Some("by hand".into()), ..Default::default() } })).unwrap();
+    assert!(!b.refresh_drill_charts(), "the holes are as they were: the chart is not stale");
+    assert_eq!(cell(&b, 6 + 1), "by hand");
+    // A chart as a file has it: no generation, stale.
+    let mut read = b.design().clone();
+    read.drawings.as_mut().unwrap().board_items.drill_charts[0].built_generation = None;
+    let mut b = Board::new(read, &m, 100, 300);
+    assert!(b.refresh_drill_charts(), "a chart that was read is rebuilt");
+    assert_eq!(cell(&b, 6 + 1), "0.300");
+    b.apply(&Cmd::Table(crate::TableCmd::EditCells { id: id.clone(), cells: vec![(1, 1)], edit: eda_model::table_edit::CellEdit { text: Some("by hand".into()), ..Default::default() } })).unwrap();
+    // The via moved: a via changed, the generation with it.
+    let via = b.design().routing.as_ref().unwrap().vias[0].id.clone();
+    b.apply(&Cmd::MoveItems { ids: ids(&[&via]), dx: 1_000, dy: 0 }).unwrap();
+    assert!(b.refresh_drill_charts(), "a via changed");
+    assert_eq!(cell(&b, 6 + 1), "0.300");
+    b.apply(&Cmd::Table(crate::TableCmd::EditCells { id: id.clone(), cells: vec![(1, 1)], edit: eda_model::table_edit::CellEdit { text: Some("by hand".into()), ..Default::default() } })).unwrap();
+    let c = drawings(&b).board_items.drill_charts[0].clone();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetDrillChart { id: id.clone(), units: c.units, precision: c.precision, show_totals: c.show_totals, filter: c.filter })).unwrap();
+    assert_eq!(cell(&b, 6 + 1), "0.300", "the Properties panel rebuilds its chart");
 }

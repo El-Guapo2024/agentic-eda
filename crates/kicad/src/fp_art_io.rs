@@ -184,6 +184,7 @@ fn read_shape(item: &[Sexpr], tag: &str, side: Side) -> Option<FpShape> {
         radius,
         layers: if layers.len() > 1 { layers } else { Vec::new() },
         mask_margin: sexpr::find(item, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(mm_to_um),
+        endings: crate::line_ending_io::read(item),
     })
 }
 
@@ -368,6 +369,7 @@ fn write_shape(out: &mut String, s: &FpShape, fp: &FootprintInstance, uuid: &str
         Shape::Bezier { start, c1, c2, end, .. } => write!(out, "(fp_curve (pts (xy {}) (xy {}) (xy {}) (xy {}))", pt(*start), pt(*c1), pt(*c2), pt(*end)).unwrap(),
     }
     write!(out, " (stroke (width {}) (type {}))", mm(s.shape.stroke_width().max(0)), s.style.token()).unwrap();
+    out.push_str(&crate::line_ending_io::words(&s.endings, matches!(s.shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. })));
     // The fill is written for the three shapes that have an inside only (`format( PCB_SHAPE )`).
     if matches!(s.shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. }) {
         match s.hatch {

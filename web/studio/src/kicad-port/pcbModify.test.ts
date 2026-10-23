@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CmdShape, Shape } from "../api/types";
 import { healShapes, modifyLines, pointInRings, simplifyChain, simplifyPolygonRing, testSegmentHit } from "./pcbModify";
+import { modifyResultCmds } from "./shapeFill";
 
 const seg = (id: string, ax: number, ay: number, bx: number, by: number, layer = "F.SilkS", w = 150): Shape => ({ kind: "segment", id, layer, stroke_width: w, filled: false, start: [ax, ay], end: [bx, by] });
 const rect = (id: string, ax: number, ay: number, bx: number, by: number): Shape => ({ kind: "rect", id, layer: "F.Fab", stroke_width: 100, filled: false, start: [ax, ay], end: [bx, by] });
@@ -221,4 +222,17 @@ test("heal shapes ignores shapes it cannot chain (rectangles, polygons)", () => 
   const r = healShapes([rect("r", 0, 0, 10, 10), poly("p", [[0, 0], [1, 0], [0, 1]])], 100);
   assert.deepEqual(r.remove, []);
   assert.deepEqual(r.add, []);
+});
+
+test("a filleted line keeps its endings and net: it is changed in place, as EDIT_TOOL::ModifyLines edits the same PCB_SHAPE", () => {
+  const a = { ...seg("a", 0, 0, 10000, 0), end_ending: { style: "arrow" } } as unknown as Shape;
+  const b = seg("b", 0, 0, 0, 10000);
+  const r = modifyLines([a, b], { kind: "fillet", radiusUm: 1000 });
+  const board = { drawings: { shapes: [a, b] } } as never;
+  const { cmds, removed } = modifyResultCmds(board, r);
+  assert.deepEqual(removed, ["b"], "only the plain line is deleted and added");
+  const ops = cmds.map((c) => `${c.op}${"id" in c ? `:${c.id}` : ""}`);
+  assert.deepEqual(ops, ["delete_shape:b", "replace_shape:a", "add_shape", "add_shape"], "the arc and line b's new version are added");
+  const heal = healShapes([a, seg("c", 10100, 0, 10100, 5000)], 500);
+  assert.ok(modifyResultCmds(board, heal).cmds.some((c) => c.op === "replace_shape" && c.id === "a"), "Heal Shapes too");
 });

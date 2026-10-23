@@ -252,6 +252,11 @@ mod tests {
             published: false,
             extends: None,
             fields: vec![],
+            units_locked: false,
+            power_local: false,
+            exclude_from_sim: false,
+            exclude_from_pos_files: false,
+            kicad: Default::default(),
         };
         let (kept, clashes) = unique_by_name(vec![("A:R".into(), sym("A:R")), ("B:C".into(), sym("B:C")), ("C:R".into(), sym("C:R"))]);
         assert_eq!(kept.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["C:R", "B:C"]);

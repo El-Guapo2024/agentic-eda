@@ -510,18 +510,14 @@ pub fn resolve_library_symbols_with(model: &mut ConstraintModel, mut find: impl 
 ///
 /// Units/body styles: KiCad's own `"<name>_<unit>_<style>"` sub-block
 /// convention has no file-level "unit count" field at all -- a reader
-/// (this crate's own, and real KiCad's) infers it from which `_<N>_1`
-/// sub-blocks exist, so `style == 1` always emits one sub-block per
-/// declared unit (`1..=unit_count`), even an empty one, so a unit count
-/// set in the Symbol Properties dialog with nothing yet drawn on a unit
-/// still round-trips; `style == 2` (only emitted when
-/// `has_alternate_body_style`) only covers units that actually have
-/// alternate-style content, a narrower, documented simplification. An
-/// item whose own `body_style` is `0` (this editor's "common to every
-/// style" convention, not a real sub-block suffix -- see
-/// `LibrarySymbolGraphic`'s own doc) is duplicated into every concrete
-/// style's own sub-block rather than left out, so it actually appears
-/// under whichever alternate style(s) exist.
+/// (this crate's own, and real KiCad's) infers it from the units the
+/// sub-blocks name, so every declared unit (`1..=unit_count`) gets a
+/// sub-block, even an empty one, and a unit count set in the Symbol
+/// Properties dialog with nothing yet drawn on a unit still round-trips.
+/// Otherwise the sub-blocks are `SaveSymbol`'s: one for each unit and body
+/// style that has items (`GetUnitDrawItems`, sorted by unit, then style),
+/// an item common to every body style in `_<unit>_0` and one common to
+/// every unit in `_0_<style>`, as KiCad writes them.
 pub fn export_kicad_sym(sym: &eda_model::ir::LibrarySymbol) -> String {
     export_kicad_sym_library(&[sym])
 }
@@ -532,12 +528,17 @@ pub fn export_kicad_sym_library(syms: &[&eda_model::ir::LibrarySymbol]) -> Strin
     export_kicad_sym_library_with(syms, &std::collections::BTreeMap::new())
 }
 
+/// The `(version ..)` of a library this writer makes.
+pub const LIBRARY_VERSION: i64 = 20250324;
+
 /// [`export_kicad_sym_library`] for symbols that embed files (`embedded`, by `lib_id`): each symbol's `(embedded_fonts ..)` and `(embedded_files ..)` with the data
 /// (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`, where `aIncludeData` is true for a library).
 pub fn export_kicad_sym_library_with(syms: &[&eda_model::ir::LibrarySymbol], embedded: &std::collections::BTreeMap<String, eda_model::embedded_files::EmbeddedFiles>) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
-    writeln!(out, "(kicad_symbol_lib (version 20231120) (generator \"eda\") (generator_version \"1.0\")").unwrap();
+    // 20250324 (jumper pin groups): a version where `~` is a text of its own (from 20250318; an empty text is `""`) and where the body styles are still told from the
+    // sub-symbols (before 20250827 `(body_styles ..)` was not needed)
+    writeln!(out, "(kicad_symbol_lib (version {LIBRARY_VERSION}) (generator \"eda\") (generator_version \"1.0\")").unwrap();
     for sym in syms {
         write_symbol(&mut out, sym, embedded.get(&sym.lib_id));
     }
@@ -580,32 +581,51 @@ pub(crate) fn write_symbol_named_with(out: &mut String, sym: &eda_model::ir::Lib
     }
 
     writeln!(out, "\t(symbol {}", crate::sexpr_str(outer_name)).unwrap();
+    // `(power global)` / `(power local)` (`IsGlobalPower`, `IsLocalPower`)
+    if sym.power {
+        writeln!(out, "\t\t(power {})", if sym.power_local { "local" } else { "global" }).unwrap();
+    }
     writeln!(out, "\t\t(pin_numbers (hide {}))", yn(sym.pin_numbers_hidden)).unwrap();
     writeln!(out, "\t\t(pin_names (offset {}) (hide {}))", crate::fmt_mm_f(sym.pin_name_offset_mm), yn(sym.pin_names_hidden)).unwrap();
-    writeln!(out, "\t\t(in_bom {}) (on_board {})", yn(sym.in_bom), yn(sym.on_board)).unwrap();
-    if sym.power {
-        writeln!(out, "\t\t(power)").unwrap();
+    writeln!(out, "\t\t(exclude_from_sim {}) (in_bom {}) (on_board {}) (in_pos_files {})", yn(sym.exclude_from_sim), yn(sym.in_bom), yn(sym.on_board), yn(!sym.exclude_from_pos_files)).unwrap();
+    writeln!(out, "\t\t(duplicate_pin_numbers_are_jumpers {})", yn(sym.kicad.duplicate_pin_numbers_are_jumpers)).unwrap();
+    if !sym.kicad.jumper_pin_groups.is_empty() {
+        write!(out, "\t\t(jumper_pin_groups").unwrap();
+        for g in &sym.kicad.jumper_pin_groups {
+            write!(out, " ({})", g.iter().map(|n| crate::sexpr_str(n)).collect::<Vec<_>>().join(" ")).unwrap();
+        }
+        writeln!(out, ")").unwrap();
     }
     write_fields(out, sym);
 
-    for style in 1..=max_style {
-        let mut units: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-        if style == 1 {
-            units.extend(1..=sym.unit_count.max(1));
+    // `GetUnitDrawItems`, sorted by unit and then body style: one sub-symbol for each (unit, body style) that has items -- body style 0 is an item common to every
+    // body style (`Name_<unit>_0`), unit 0 one common to every unit. A unit up to the unit count that draws nothing still gets its (empty) sub-symbol, so that the count
+    // reads back.
+    let mut blocks: std::collections::BTreeSet<(u32, u32)> = std::collections::BTreeSet::new();
+    // (an item of the alternate body style of a symbol that has none is not written, as it never was)
+    blocks.extend(sym.graphics.iter().filter(|g| g.body_style() <= max_style).map(|g| (g.unit(), g.body_style())));
+    blocks.extend(sym.pins.iter().filter(|p| p.body_style <= max_style).map(|p| (p.unit, p.body_style)));
+    blocks.extend(sym.kicad.items.iter().filter(|k| k.body_style <= max_style).map(|k| (k.unit, k.body_style)));
+    for unit in 1..=sym.unit_count.max(1) {
+        if !blocks.iter().any(|(u, _)| *u == unit) {
+            blocks.insert((unit, 1));
         }
-        units.extend(sym.graphics.iter().filter(|g| g.body_style() == 0 || g.body_style() == style).map(|g| g.unit()));
-        units.extend(sym.pins.iter().filter(|p| p.body_style == 0 || p.body_style == style).map(|p| p.unit));
-
-        for unit in units {
-            writeln!(out, "\t\t(symbol \"{block_name}_{unit}_{style}\"").unwrap();
-            for g in sym.graphics.iter().filter(|g| g.unit() == unit && (g.body_style() == 0 || g.body_style() == style)) {
-                write_symbol_graphic(out, g);
-            }
-            for p in sym.pins.iter().filter(|p| p.unit == unit && (p.body_style == 0 || p.body_style == style)) {
-                write_symbol_pin(out, p);
-            }
-            writeln!(out, "\t\t)").unwrap();
+    }
+    for (unit, style) in blocks {
+        writeln!(out, "\t\t(symbol \"{block_name}_{unit}_{style}\"").unwrap();
+        if let Some(name) = sym.kicad.unit_names.get(&unit) {
+            writeln!(out, "\t\t\t(unit_name {})", crate::sexpr_str(name)).unwrap();
         }
+        for g in sym.graphics.iter().filter(|g| g.unit() == unit && g.body_style() == style) {
+            write_symbol_graphic(out, g, sym.kicad.stroke_types.get(g.id()).map(String::as_str), sym.kicad.text_styles.get(g.id()));
+        }
+        for k in sym.kicad.items.iter().filter(|k| k.unit == unit && k.body_style == style) {
+            writeln!(out, "\t\t\t{}", k.text).unwrap();
+        }
+        for p in sym.pins.iter().filter(|p| p.unit == unit && p.body_style == style) {
+            write_symbol_pin(out, p);
+        }
+        writeln!(out, "\t\t)").unwrap();
     }
 
     if let Some(list) = embedded {
@@ -618,6 +638,10 @@ pub(crate) fn write_symbol_named_with(out: &mut String, sym: &eda_model::ir::Lib
 fn write_fields(out: &mut String, sym: &eda_model::ir::LibrarySymbol) {
     for f in sym.all_fields() {
         write_field(out, &f);
+    }
+    // "a custom lock property is used to preserve the locked flag state": a root symbol's, after its fields
+    if sym.units_locked && sym.extends.is_none() {
+        write_field(out, &eda_model::sym_fields::LibrarySymbolField::named("ki_locked", ""));
     }
     if !sym.keywords.is_empty() {
         write_field(out, &hidden_field("ki_keywords", &sym.keywords));
@@ -662,7 +686,8 @@ fn write_field(out: &mut String, f: &eda_model::sym_fields::LibrarySymbolField) 
     let do_not_autoplace = if f.do_not_autoplace { " (do_not_autoplace yes)" } else { "" };
     writeln!(
         out,
-        "\t\t(property {} {} (at {} {} {}){show_name}{do_not_autoplace} (effects {font}{justify}{hide}))",
+        "\t\t(property {}{} {} (at {} {} {}){show_name}{do_not_autoplace} (effects {font}{justify}{hide}))",
+        if f.private { "private " } else { "" },
         crate::sexpr_str(&f.name),
         crate::sexpr_str(&f.text),
         crate::fmt_mm_f(f.at.x),
@@ -672,7 +697,7 @@ fn write_field(out: &mut String, f: &eda_model::sym_fields::LibrarySymbolField) 
     .unwrap();
 }
 
-fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphic) {
+fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphic, stroke_type: Option<&str>, text_style: Option<&eda_model::lib_keep::KeptTextStyle>) {
     use eda_model::ir::{LibraryFill, LibrarySymbolGraphic as G};
     use std::fmt::Write as _;
     let fill_tok = |f: LibraryFill| match f {
@@ -680,7 +705,8 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
         LibraryFill::Outline => "outline",
         LibraryFill::Background => "background",
     };
-    let stroke = |s: f64| format!("(stroke (width {}) (type default))", crate::fmt_mm_f(s));
+    let kind = stroke_type.unwrap_or("default");
+    let stroke = |s: f64| format!("(stroke (width {}) (type {kind}))", crate::fmt_mm_f(s));
     let fill = |f: LibraryFill| format!("(fill (type {}))", fill_tok(f));
     let pt = |p: eda_model::symbol::SPoint| format!("{} {}", crate::fmt_mm_f(p.x), crate::fmt_mm_f(p.y));
     match g {
@@ -701,7 +727,21 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
             writeln!(out, "\t\t\t(arc (start {}) (mid {}) (end {}) {} {})", pt(*start), pt(*mid), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
         }
         G::Text { text, at, angle_deg, size_mm, .. } => {
-            writeln!(out, "\t\t\t(text {} (at {} {} {}) (effects (font (size {} {}))))", crate::sexpr_str(text), crate::fmt_mm_f(at.x), crate::fmt_mm_f(at.y), crate::fmt_mm_f(*angle_deg), crate::fmt_mm_f(*size_mm), crate::fmt_mm_f(*size_mm)).unwrap();
+            // `EDA_TEXT::Format`: the size, then what the file said beyond it (the pen, bold, italic, the justification, hidden)
+            let style = text_style.cloned().unwrap_or_default();
+            let mut font = format!("(size {} {})", crate::fmt_mm_f(*size_mm), crate::fmt_mm_f(*size_mm));
+            if let Some(t) = style.thickness_mm {
+                font.push_str(&format!(" (thickness {})", crate::fmt_mm_f(t)));
+            }
+            if style.bold {
+                font.push_str(" bold");
+            }
+            if style.italic {
+                font.push_str(" italic");
+            }
+            let justify = if style.justify.is_empty() { String::new() } else { format!(" (justify {})", style.justify.join(" ")) };
+            let hide = if style.hidden { " (hide yes)" } else { "" };
+            writeln!(out, "\t\t\t(text {} (at {} {} {}) (effects (font {font}){justify}{hide}))", crate::sexpr_str(text), crate::fmt_mm_f(at.x), crate::fmt_mm_f(at.y), crate::fmt_mm_f(*angle_deg)).unwrap();
         }
         // `SCH_IO_KICAD_SEXPR_LIB_CACHE::saveTextBox`: the box is its start, its angle and the size from the start to the opposite corner (both in the symbol's Y-up mm), the four margins, the
         // stroke and the fill, and `EDA_TEXT::Format`'s effects. A border of no width is the width -1 of a schematic's units, 0.0001 mm (`STROKE_PARAMS`); the file's default
@@ -725,7 +765,7 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
             let size = crate::fmt_mm_f(*size_mm);
             writeln!(
                 out,
-                "\t\t\t(text_box {} (at {} {} {}) (size {} {}) (margins {margin} {margin} {margin} {margin}) (stroke (width {width}) (type default)) {} (effects (font (size {size} {size}){}{}){justify}))",
+                "\t\t\t(text_box {} (at {} {} {}) (size {} {}) (margins {margin} {margin} {margin} {margin}) (stroke (width {width}) (type {kind})) {} (effects (font (size {size} {size}){}{}){justify}))",
                 crate::sexpr_str(text),
                 crate::fmt_mm_f(start.x),
                 crate::fmt_mm_f(start.y),
@@ -752,7 +792,8 @@ fn write_symbol_pin(out: &mut String, p: &eda_model::ir::LibrarySymbolPin) {
     write!(
         out,
         " (name {} (effects (font (size {} {})))) (number {} (effects (font (size {} {}))))",
-        crate::sexpr_str(if p.name.is_empty() { "~" } else { &p.name }),
+        // an empty name is `""` (a `~` would be read as one in a file before 20250318, and as the text `~` in one after)
+        crate::sexpr_str(&p.name),
         crate::fmt_mm_f(name_size),
         crate::fmt_mm_f(name_size),
         crate::sexpr_str(&p.number),
@@ -1099,6 +1140,11 @@ mod tests {
             published: false,
             extends: None,
             fields: vec![],
+            units_locked: false,
+            power_local: false,
+            exclude_from_sim: false,
+            exclude_from_pos_files: false,
+            kicad: Default::default(),
         };
 
         let text = export_kicad_sym(&sym);
@@ -1141,6 +1187,11 @@ mod tests {
             published: false,
             extends: None,
             fields: vec![],
+            units_locked: false,
+            power_local: false,
+            exclude_from_sim: false,
+            exclude_from_pos_files: false,
+            kicad: Default::default(),
         };
         let (a, b) = (mk("eda:Alpha", "1"), mk("eda:Beta", "7"));
         let text = export_kicad_sym_library(&[&a, &b]);
@@ -1177,6 +1228,11 @@ mod tests {
             published: false,
             extends: None,
             fields: vec![],
+            units_locked: false,
+            power_local: false,
+            exclude_from_sim: false,
+            exclude_from_pos_files: false,
+            kicad: Default::default(),
         };
         let text = export_kicad_sym(&sym);
         assert!(text.contains("(property \"Footprint\" \"\" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))"), "{text}");

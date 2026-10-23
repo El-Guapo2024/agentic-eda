@@ -24,6 +24,8 @@ import { isAnyFill } from "../../kicad-port/shapeFill";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { zonePickLayer } from "../../kicad-port/zoneLayers";
 import { extraHitDistance, extraItems, type ExtraKind } from "../../kicad-port/pcbExtraItems";
+import { gridArea } from "../../kicad-port/gridItem";
+import { stitchArea } from "../../kicad-port/viaStitch";
 import { cellArea, cellHitDistance, isSelectableCell } from "../../kicad-port/tables";
 
 export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | "table" | "tablecell" | ExtraKind;
@@ -57,9 +59,11 @@ export interface SelectionFilter {
   /** `m_filter.points` (`PCB_POINT`) and `m_filter.otherItems` (a barcode). */
   points: boolean;
   otherItems: boolean;
+  /** KiCad 10's `m_filter.gridItems` (Grid Items); absent is on. */
+  gridItems?: boolean;
 }
 
-export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true, pads: true, points: true, otherItems: true };
+export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true, pads: true, points: true, otherItems: true, gridItems: true };
 
 function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
   switch (kind) {
@@ -92,6 +96,13 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
     case "point":
       return filter.points;
     case "barcode":
+      return filter.otherItems;
+    // `PCB_GRID_ITEM_T` has `m_filter.gridItems` (KiCad 10).
+    case "grid":
+      return filter.gridItems !== false;
+    // A generator (`PCB_GENERATOR_T`) has no case of its own: `m_filter.otherItems`; nor has KiCad 10's drill map (`PCB_DRILL_MAP_T`).
+    case "via_stitch":
+    case "drill_map":
       return filter.otherItems;
   }
 }
@@ -166,6 +177,12 @@ function objectSelectable(kind: SelectableKind, layerVisible: Record<string, boo
       return objectOn(layerVisible, "pads");
     case "zone":
       return objectOn(layerVisible, "zones");
+    // `PCB_SELECTION_TOOL::Selectable`: a grid item while Grids (`LAYER_SUBGRIDS`) is shown.
+    case "grid":
+      return objectOn(layerVisible, "subgrids");
+    // A via stitching is drawn on `LAYER_VIA_STITCHING` (Via Stitching).
+    case "via_stitch":
+      return objectOn(layerVisible, "via_stitching");
     default:
       return true;
   }
@@ -281,10 +298,19 @@ export function collectSelectionCandidates(
   // The text boxes, images, points and barcodes (GAPS.md item 24): a text box is hit anywhere in its bounding box (`PCB_TEXTBOX::HitTest`).
   for (const item of extraItems(board)) {
     const [x0, y0, x1, y1] = item.bounds;
-    consider(item.kind, item.id, extraHitDistance(item, xUm, yUm), Math.max((x1 - x0) * (y1 - y0), 1), item.layer);
+    // A grid item is on no layer, and its area is the one it covers (`GetCoverageArea`).
+    if (item.grid) consider(item.kind, item.id, extraHitDistance(item, xUm, yUm), Math.max(gridArea(item.grid), 1), null);
+    else if (item.stitch) consider(item.kind, item.id, extraHitDistance(item, xUm, yUm), Math.max(stitchArea(item.stitch), 1), null);
+    else consider(item.kind, item.id, extraHitDistance(item, xUm, yUm), Math.max((x1 - x0) * (y1 - y0), 1), item.layer);
   }
   // `PCB_TABLE`: a click finds a cell, not the table ("Tables should defer to their table cells"); a cell another one covers is not an item. The table is locked as a whole.
   for (const tb of board.drawings?.tables ?? []) {
+    // KiCad 10: "A generated table says what the board says, so a click on it is a click on the table" -- a drill chart is picked whole.
+    if (board.drawings?.drill_charts?.some((c) => c.table_id === tb.id)) {
+      const cells = tb.cells.filter(isSelectableCell);
+      if (cells.length > 0) consider("table", tb.id, Math.min(...cells.map((c) => cellHitDistance(c, xUm, yUm))), cells.reduce((a, c) => a + cellArea(c), 0), tb.layer);
+      continue;
+    }
     for (const c of tb.cells) {
       if (!isSelectableCell(c)) continue;
       consider("tablecell", c.id, cellHitDistance(c, xUm, yUm), cellArea(c), tb.layer, tb.id);
@@ -403,7 +429,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   for (const dim of board.drawings?.dimensions ?? []) {
     consider("dimension", dim.id, dimensionHit(dim, dim.text_at[0], dim.text_at[1]).box, dim.layer);
   }
-  for (const item of extraItems(board)) consider(item.kind, item.id, item.bounds, item.layer);
+  for (const item of extraItems(board)) consider(item.kind, item.id, item.bounds, item.grid || item.stitch ? null : item.layer);
   // A window takes tables, whole (`PCB_TABLE::HitTest( aRect, aContained, aAccuracy )` on the box round the first and the last cell), not their cells.
   for (const tb of board.drawings?.tables ?? []) {
     consider("table", tb.id, tb.bbox, tb.layer);

@@ -39,6 +39,43 @@ pub(crate) fn zones_asked(body: &[u8]) -> Option<Vec<String>> {
 /// or `{ ok: false, message }`. kicad-cli fills every zone whatever is asked (a zone is knocked out by the zones above it); the fills of the zones not asked for are
 /// the ones they had.
 pub(crate) fn refill(dir: &Path, only: Option<Vec<String>>) -> Value {
+    let done = refill_once(dir, only.clone());
+    // `ZONE_FILLER_TOOL`'s fill: `regenerateDirtyGenerators` (a via stitching whose net's zone was refilled under it is dirty, `OnZoneFillChanged`, and is updated over
+    // the new fill), then `refillAroundGenerators` (the zones round the vias it made filled again, so they clear them).
+    if done["ok"] == true && regenerate_stitchings(dir, only.as_deref()) {
+        return refill_once(dir, only);
+    }
+    done
+}
+
+/// The via stitchings the fill just stored has made dirty (`PCB_VIA_STITCH::OnZoneFillChanged`: a refilled zone of its net whose box meets its own), updated
+/// (`eda_drc::via_stitch::plan` over the new fills) in one step when their vias move. True when a stitching's vias changed.
+fn regenerate_stitchings(dir: &Path, only: Option<&[String]>) -> bool {
+    let Ok((_, design, model)) = board::load(dir) else { return false };
+    let bbox = |pts: &[eda_model::ir::Point]| pts.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |(a, b, c, d), p| (a.min(p.x), b.min(p.y), c.max(p.x), d.max(p.y)));
+    let meets = |a: (i64, i64, i64, i64), b: (i64, i64, i64, i64)| a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3;
+    let zones: Vec<&eda_model::ir::Zone> = design.routing.iter().flat_map(|r| r.zones.iter()).filter(|z| zone_fills::fillable(z) && only.is_none_or(|ids| ids.contains(&z.id))).collect();
+    let vias = |ids: &[String]| -> std::collections::BTreeSet<(i64, i64)> { design.routing.iter().flat_map(|r| r.vias.iter()).filter(|v| ids.contains(&v.id)).map(|v| (v.at.x, v.at.y)).collect() };
+    let mut cmds = Vec::new();
+    for v in design.drawings.iter().flat_map(|d| d.board_items.via_stitches.iter()) {
+        if v.net.is_empty() || v.outline.len() < 3 {
+            continue;
+        }
+        let own = bbox(&v.outline);
+        if !zones.iter().any(|z| z.net == v.net && z.outline.len() >= 3 && meets(bbox(&z.outline), own)) {
+            continue;
+        }
+        let p = crate::via_stitch_api::plan(dir, &design, &model, v);
+        if p.vias.iter().map(|(_, at)| (at.x, at.y)).collect::<std::collections::BTreeSet<_>>() == vias(&v.member_ids) {
+            continue;
+        }
+        let planned = p.vias.into_iter().map(|(cell, at)| eda_ops::pcb_items::PlannedVia { cell, at }).collect();
+        cmds.push(eda_ops::Cmd::PcbItem(eda_ops::pcb_items::PcbItemCmd::SetViaStitch { id: Some(v.id.clone()), stitch: p.stitch, vias: Some(planned) }));
+    }
+    !cmds.is_empty() && board::step(dir, eda_ops::Cmd::Batch { cmds }, false, "fill").is_ok()
+}
+
+fn refill_once(dir: &Path, only: Option<Vec<String>>) -> Value {
     let revision = design_stamp(dir);
     let (_, design, model) = match board::load(dir) {
         Ok(loaded) => loaded,

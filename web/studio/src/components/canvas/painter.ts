@@ -24,6 +24,7 @@ import { ancestors } from "../../kicad-port/groupTree";
 import type { LengthUnit } from "../../state/units";
 import { measureLabel } from "../../kicad-port/measureRuler";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import { endingInks, hasEndings, kicadArc, shortenArc, shortenBezier, shortenSegment } from "../../kicad-port/lineEnding";
 import { drawArcPreview } from "./arcPreview";
 import { drawBezierPreview } from "./bezierPreview";
 import { BEZIER_MAX_ERROR_UM } from "./itemHitTest";
@@ -37,6 +38,10 @@ import { drawFootprintArt } from "./fpArtPaint";
 import { isAnyFill } from "../../kicad-port/shapeFill";
 import { orderedStackLayers } from "../../kicad-port/padStack";
 import { drawPcbItems, drawRefImages } from "./pcbItemsPaint";
+import { drawGridItems, gridItemCovers, shownGridItems } from "./gridItemPaint";
+import { drawViaStitches } from "./viaStitchPaint";
+import { drawDrillItems } from "./drillPaint";
+import { gridGeometry, type GridGeometry } from "../../kicad-port/gridItem";
 import { drawTablePreview, drawTables } from "./tablePaint";
 import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
 import type { TuneHoverReply } from "../../api/tuneTypes";
@@ -798,6 +803,11 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
 
 /** `sketch` is `pcbnew.Control.graphicOutlines` ("Sketch Graphic Items", `m_DisplayGraphicsFill` off): a filled shape is drawn as its outline only. */
 export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketch = false) {
+  // KiCad 10's line endings: the body stops short of an arrow, a circle or a square, and the endings are drawn after it in the same colour (`PCB_PAINTER::draw( PCB_SHAPE )`).
+  if ((s.kind === "segment" || s.kind === "arc" || s.kind === "bezier") && hasEndings(s)) {
+    drawShapeWithEndings(ctx, s);
+    return;
+  }
   ctx.beginPath();
   switch (s.kind) {
     case "segment":
@@ -847,6 +857,68 @@ export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketc
   if (s.filled && !sketch) ctx.fill();
   ctx.stroke();
   drawHatchLines(ctx, s);
+}
+
+/**
+ * A line, an arc or a curve with line endings, as `PCB_PAINTER::draw( PCB_SHAPE )` draws it: `ShortenSegmentForEndings` / `ShortenArcForEndings` / `ShortenedBezierCurve` take off what
+ * the endings cover (nothing is drawn of a body they cover whole), then each ending is drawn at its end (`LINE_ENDING::Draw`): filled, and stroked at its own outline width when it has
+ * one; an open arrow is a polyline stroked at its outline width or the line's. The pen colour is the one the caller set.
+ */
+function drawShapeWithEndings(ctx: CanvasRenderingContext2D, s: Extract<Shape, { kind: "segment" | "arc" | "bezier" }>) {
+  const lw = s.stroke_width;
+  ctx.beginPath();
+  if (s.kind === "segment") {
+    const body = shortenSegment(s.start, s.end, s.start_ending, s.end_ending, lw);
+    if (body) {
+      ctx.moveTo(body[0][0], body[0][1]);
+      ctx.lineTo(body[1][0], body[1][1]);
+      ctx.stroke();
+    }
+  } else if (s.kind === "arc") {
+    const k = kicadArc(s.start, s.mid, s.end);
+    if (k) {
+      const r = Math.hypot(k.start[0] - k.centre[0], k.start[1] - k.centre[1]);
+      const a0 = (Math.atan2(k.start[1] - k.centre[1], k.start[0] - k.centre[0]) * 180) / Math.PI;
+      let a1 = (Math.atan2(k.end[1] - k.centre[1], k.end[0] - k.centre[0]) * 180) / Math.PI;
+      if (a1 === a0) a1 = a0 + 360;
+      while (a1 < a0) a1 += 360;
+      const body = shortenArc(a0, a1 - a0, r, s.start_ending, s.end_ending, lw);
+      if (body) {
+        const rad = Math.PI / 180;
+        ctx.arc(k.centre[0], k.centre[1], r, body[0] * rad, (body[0] + body[1]) * rad, body[1] < 0);
+        ctx.stroke();
+      }
+    }
+  } else {
+    const body = shortenBezier({ start: s.start, c1: s.c1, c2: s.c2, end: s.end }, s.start_ending, s.end_ending, lw);
+    if (body) {
+      bezierPolyline(body.start, body.c1, body.c2, body.end, BEZIER_MAX_ERROR_UM).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.stroke();
+    }
+  }
+  // `LINE_ENDING::Draw`: the ending is always solid (only the body takes the line style) and the GAL strokes its polylines and polygon outlines with round joins and caps.
+  ctx.save();
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.setLineDash([]);
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  for (const ink of endingInks(s)) {
+    ctx.beginPath();
+    ink.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    if (ink.fill) {
+      ctx.closePath();
+      ctx.fill();
+      if (ink.stroke > 0) {
+        ctx.lineWidth = ink.stroke;
+        ctx.stroke();
+      }
+    } else {
+      // `SetLineWidth( m_stroke.GetWidth() > 0 ? m_stroke.GetWidth() : aLineWidth )`: an open arrow's own pen, thinner than the line or not.
+      if (ink.stroke > 0) ctx.lineWidth = ink.stroke;
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 /**
@@ -1012,7 +1084,7 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
  * (computeVisibleGridSize) is the behaviorally important part and IS
  * ported exactly; see PARITY-pcb.md.
  */
-function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number, origin: readonly [number, number] = [0, 0]) {
+function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number, origin: readonly [number, number] = [0, 0], covered: readonly GridGeometry[] = []) {
   const visible = computeVisibleGridSize(gridUm, view.scale, DEFAULT_GRID_STYLE);
   const stepPx = visible * view.scale;
   if (!(stepPx > 0)) return; // gridUm <= 0 or a degenerate scale -- nothing sane to draw
@@ -1033,6 +1105,8 @@ function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: n
     const tickX = isMajorGridLine(i);
     for (let j = firstIndexY; j <= lastIndexY; j++) {
       const y = origin[1] + j * visible;
+      // A grid item's coverage hides the editor grid (`drawGridSource`'s wash): see gridItemPaint.ts.
+      if (covered.length > 0 && gridItemCovers(covered, x, y)) continue;
       ctx.beginPath();
       ctx.arc(x, y, tickX && isMajorGridLine(j) ? majorR : minorR, 0, Math.PI * 2);
       ctx.fill();
@@ -1347,7 +1421,13 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   });
   const copperPasses = passes.map((pass) => ({ alpha: pass.alpha, layers: copper(pass.b) }));
   const byLayer: Record<string, () => void> = {
-    grid: () => opts.gridVisible && drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0]),
+    // The editor grid and KiCad 10's grid items (`drawGridSources`), the one leaving out what the others cover.
+    grid: () => {
+      const grids = shownGridItems(board, opts.layerVisible);
+      if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0], grids.map(gridGeometry));
+      const box: [number, number, number, number] = [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale];
+      drawGridItems(ctx, view, board, opts.layerVisible, opts.selection, DEFAULT_GRID_STYLE, box);
+    },
     // The drawing sheet and the board area shadow lie under everything else, the outline on top of them.
     // When the Edge.Cuts shapes are the outline (arcs, circles, cutouts), they are drawn as the shapes they are, below; the polygon is only their summary.
     background: () => {
@@ -1383,6 +1463,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawShapes(ctx, view, pass.b, opts);
       drawTexts(ctx, view, pass.b, opts);
       drawTables(ctx, view, pass.b, opts);
+      // KiCad 10's drill charts' marks and drill maps (`drawChartSymbols`, `draw( PCB_DRILL_MAP )`).
+      drawDrillItems(ctx, view, pass.b, opts.layerVisible, opts.selection);
       drawDimensions(ctx, view, pass.b, opts);
       drawPcbItems(ctx, view, pass.b, opts);
     });
@@ -1391,6 +1473,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   drawLockedShadows(ctx, board, opts);
   drawConflicts(ctx, fullBoard, opts.movePreview, opts);
   drawAnchors(ctx, view, board, opts);
+  // KiCad 10's via stitching outlines (`LAYER_VIA_STITCHING`, above the items with the anchors and points).
+  drawViaStitches(ctx, view, board, opts.layerVisible, opts.selection);
   // The carried items, in the same order, through the transform the drop would apply.
   if (carry && preview) {
     const own = { ...opts, movePreview: null };
@@ -1398,6 +1482,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     ctx.save();
     ctx.transform(a, b, c, d, e, f);
     const moving = copper(carry.moving);
+    drawGridItems(ctx, view, carry.moving, own.layerVisible, own.selection, DEFAULT_GRID_STYLE, [-Infinity, -Infinity, Infinity, Infinity]);
     drawRefImages(ctx, view, carry.moving, own);
     for (const key of drawOrder()) moving[key]?.();
     for (const part of carry.moving.parts) drawFootprint(ctx, view, part, own);
@@ -1405,9 +1490,11 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     drawShapes(ctx, view, carry.moving, own);
     drawTexts(ctx, view, carry.moving, own);
     drawTables(ctx, view, carry.moving, own);
+    drawDrillItems(ctx, view, carry.moving, own.layerVisible, own.selection);
     drawDimensions(ctx, view, carry.moving, own);
     drawPcbItems(ctx, view, carry.moving, own);
     drawAnchors(ctx, view, carry.moving, own);
+    drawViaStitches(ctx, view, carry.moving, own.layerVisible, own.selection);
     drawSelectedGroups(ctx, view, carry.moving, own);
     ctx.restore();
   }

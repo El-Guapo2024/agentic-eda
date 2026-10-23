@@ -10,7 +10,8 @@
       "pcbnew/router/router_tool.cpp",
       "common/hotkey_store.cpp",
       "eeschema/tools/sch_actions.cpp"
-    ]
+    ],
+    "kicad10Additions": "pcbnew.GridItem.place, pcbnew.InteractiveDrawing.drawViaStitchArea, pcbnew.Generator.excludeStitchVia, pcbnew.Generator.clearStitchViaExclusions, pcbnew.InteractiveDrawing.placeDrillChart, pcbnew.InteractiveDrawing.placeDrillMap: from pcbnew/tools/pcb_actions.cpp of KiCad 25ec2335 (the commit of the box's kicad-cli), for the KiCad 10 items 8303b2ad predates"
   },
   "actions": [
     {
@@ -12111,6 +12112,102 @@
       "macAltHotkeyRaw": null,
       "icon": "zone_unfill",
       "flags": []
+    },
+    {
+      "name": "pcbnew.GridItem.place",
+      "label": "Place Sub-grid",
+      "tooltip": "Adds a subgrid to the board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "add_grid_item",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.drawViaStitchArea",
+      "label": "Draw Via Stitch area",
+      "tooltip": "Draw a via stitch area",
+      "hotkey": "Ctrl+Shift+N",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + MD_CTRL + 'N'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "add_via_stitch",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.Generator.excludeStitchVia",
+      "label": "Exclude From Stitching",
+      "tooltip": "Remove the selected via from its via-stitch generator and prevent it from being regenerated",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Generator.clearStitchViaExclusions",
+      "label": "Clear Via Stitching Exclusions",
+      "tooltip": "Restore all vias previously excluded from the selected via-stitch generators",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.placeDrillChart",
+      "label": "Add Drill Chart",
+      "tooltip": "Add a drill chart that tracks the board's holes",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.placeDrillMap",
+      "label": "Add Drill Map",
+      "tooltip": "Draw drill symbols at the holes on a documentation layer",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE"
+      ]
     }
   ]
 }

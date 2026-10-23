@@ -31,4 +31,5 @@ pub mod rule_item;
 pub mod rtree;
 mod shape_poly;
 pub mod stroke_font;
+pub mod via_stitch;
 pub mod zone_copper;

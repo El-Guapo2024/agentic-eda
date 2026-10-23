@@ -34,6 +34,7 @@ fn pad(number: &str, x: Um, y: Um) -> LibraryPad {
         zone_connection: None,
         thermal_spoke_angle_mdeg: None,
         stack: Default::default(),
+        kicad: Default::default(),
     }
 }
 

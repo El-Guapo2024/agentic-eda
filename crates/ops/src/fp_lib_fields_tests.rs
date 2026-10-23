@@ -33,6 +33,8 @@ fn panel_shown(name: &str, description: &str, reference_visible: bool, value_vis
         reference,
         value,
         fields,
+        datasheet: None,
+        description_field: None,
     }
 }
 

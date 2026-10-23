@@ -3186,6 +3186,10 @@ pub struct LibraryPad {
     /// (`UNCONNECTED_LAYER_MODE`); the fields above are the front shape. See [`crate::padstack`].
     #[serde(default, skip_serializing_if = "crate::padstack::PadStack::is_default")]
     pub stack: crate::padstack::PadStack,
+    /// What the pad's file form says that the editor does not edit (an edge connector pad, the fabrication property, the mask and paste margins, ...), kept for the
+    /// writer ([`crate::lib_keep::LibraryPadKeep`]). A copy of the pad (Duplicate, Create Array) has it too, as `FOOTPRINT::DuplicateItem` copies the pad whole.
+    #[serde(default, skip_serializing_if = "crate::lib_keep::LibraryPadKeep::is_empty")]
+    pub kicad: crate::lib_keep::LibraryPadKeep,
 }
 
 /// `PAD_SHAPE` (`pcbnew/padstack.h`) as the Footprint Editor exposes it --
@@ -3327,6 +3331,7 @@ impl LibraryPad {
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
             stack: p.ext.stack.clone(),
+            kicad: Default::default(),
         }
     }
 }
@@ -3449,6 +3454,17 @@ pub struct LibraryFootprint {
     /// The pad being edited as graphic shapes, if one is (`PAD_TOOL::InPadEditMode`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pad_edit: Option<PadEditMode>,
+    /// The Datasheet field (`FIELD_T::DATASHEET`, the third mandatory row of Footprint Properties' fields grid): its text (`FieldLayout::text`, empty when none) and its
+    /// layout. `None` for a footprint that never had one: KiCad gives it a hidden empty one on F.Fab ([`crate::fp_edit::default_library_datasheet_layout`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datasheet: Option<crate::fp_edit::FieldLayout>,
+    /// The Description field (`FIELD_T::DESCRIPTION`, the fourth mandatory row), as [`Self::datasheet`]. Not [`Self::description`], which is the library
+    /// description, `(descr ..)` (`FOOTPRINT::GetLibDescription`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_field: Option<crate::fp_edit::FieldLayout>,
+    /// What the file says that the editor does not edit, kept for the writer ([`crate::lib_keep::LibraryFootprintKeep`]).
+    #[serde(default, skip_serializing_if = "crate::lib_keep::LibraryFootprintKeep::is_empty")]
+    pub kicad: crate::lib_keep::LibraryFootprintKeep,
 }
 
 impl Default for LibraryFootprint {
@@ -3473,6 +3489,9 @@ impl Default for LibraryFootprint {
             published: false,
             zone_connection: None,
             pad_edit: None,
+            datasheet: None,
+            description_field: None,
+            kicad: Default::default(),
         }
     }
 }
@@ -3572,47 +3591,24 @@ impl LibraryFootprint {
         }
     }
 
-    /// `FOOTPRINT::GetNextPadNumber` (`pad_tool.cpp`'s `PAD_PLACER`,
-    /// `footprint.cpp:3357`): split `last` into its non-numeric prefix and
-    /// trailing integer (ASCII digits only -- a non-ASCII pad number, rare
-    /// in practice, keeps its whole prefix), then increment the integer
-    /// until `prefix+integer` collides with no existing pad number on this
-    /// footprint -- not just "+1": a manually-renumbered or out-of-order
-    /// board is still handled correctly, same as source.
+    /// `FOOTPRINT::GetNextPadNumber( aLastPadNumber )` (`footprint.cpp:3357`): the prefix of `last` (`UTIL::GetRefDesPrefix`: its trailing digits and `?` taken off) and
+    /// its trailing integer (`GetTrailingInt`), then the first `prefix + n` (`%s%d`) from that integer up that no pad of this footprint has -- `last` itself when it is
+    /// free.
     pub fn next_pad_number_after(&self, last: &str) -> String {
+        let prefix = last.trim_end_matches(|c: char| c == '?' || c.is_ascii_digit());
         let digit_count = last.chars().rev().take_while(|c| c.is_ascii_digit()).count();
-        let split_at = last.len() - digit_count;
-        let prefix = &last[..split_at];
-        let mut num: u64 = last[split_at..].parse().unwrap_or(0);
+        let mut num: u64 = last[last.len() - digit_count..].parse().unwrap_or(0);
         let used: std::collections::BTreeSet<&str> = self.pads.iter().map(|p| p.number.as_str()).collect();
-        loop {
+        while used.contains(format!("{prefix}{num}").as_str()) {
             num += 1;
-            let candidate = format!("{prefix}{num}");
-            if !used.contains(candidate.as_str()) {
-                return candidate;
-            }
         }
+        format!("{prefix}{num}")
     }
 
-    /// `next_pad_number_after`, seeded from this footprint's own
-    /// highest-numbered existing pad (KiCad's `PAD_TOOL::m_lastPadNumber`,
-    /// which this editor has no standing interactive-session state to
-    /// carry between Cmds for -- the highest existing number is the same
-    /// "continue the sequence" answer in the overwhelmingly common case of
-    /// placing pads in order). `"1"` for the first pad on an empty
-    /// footprint, matching `m_lastPadNumber`'s own `"1"` reset default.
+    /// What the pad tool numbers the next pad with on a footprint just loaded: `GetNextPadNumber( m_lastPadNumber )` with the last number `PAD_TOOL::Reset( MODEL_RELOAD )`
+    /// gives it, "1" -- the first free number from 1 up.
     pub fn next_pad_number(&self) -> String {
-        let last = self
-            .pads
-            .iter()
-            .max_by_key(|p| {
-                let n = p.number.as_str();
-                let digit_count = n.chars().rev().take_while(|c| c.is_ascii_digit()).count();
-                n[n.len() - digit_count..].parse::<u64>().unwrap_or(0)
-            })
-            .map(|p| p.number.as_str())
-            .unwrap_or("0");
-        self.next_pad_number_after(last)
+        self.next_pad_number_after("1")
     }
 }
 
@@ -4217,6 +4213,23 @@ pub struct LibrarySymbol {
     /// a symbol that was never given one: it has the five mandatory fields at their default places.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<crate::sym_fields::LibrarySymbolField>,
+    /// `LIB_SYMBOL::UnitsLocked` (the file's hidden `ki_locked` property, `SaveSymbol`): the units are not interchangeable -- Symbol Properties' "All units are
+    /// interchangeable" unchecked on a symbol of several units (`TransferDataFromWindow`: `LockUnits( GetUnitCount() > 1 && !interchangeable )`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub units_locked: bool,
+    /// `(power local)` (`LIB_SYMBOL::IsLocalPower`, "Define as local power symbol"): with [`Self::power`], a power symbol whose net is local to its sheet; `(power)` and
+    /// `(power global)` are a global one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub power_local: bool,
+    /// `(exclude_from_sim yes)` ("Exclude from simulation").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_from_sim: bool,
+    /// `(in_pos_files no)` ("Exclude from position files").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_from_pos_files: bool,
+    /// What the file says that the editor does not edit, kept for the writer ([`crate::lib_keep::LibrarySymbolKeep`]).
+    #[serde(default, skip_serializing_if = "crate::lib_keep::LibrarySymbolKeep::is_empty")]
+    pub kicad: crate::lib_keep::LibrarySymbolKeep,
 }
 
 impl Default for LibrarySymbol {
@@ -4241,6 +4254,11 @@ impl Default for LibrarySymbol {
             published: false,
             extends: None,
             fields: Vec::new(),
+            units_locked: false,
+            power_local: false,
+            exclude_from_sim: false,
+            exclude_from_pos_files: false,
+            kicad: Default::default(),
         }
     }
 }
@@ -4710,6 +4728,7 @@ mod tests {
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
             stack: Default::default(),
+            kicad: Default::default(),
         }
     }
 
@@ -4727,7 +4746,7 @@ mod tests {
     }
 
     #[test]
-    fn next_pad_number_increments_and_skips_collisions() {
+    fn next_pad_number_is_the_first_free_number_from_the_last_one() {
         let empty = LibraryFootprint::new_empty("Test:Lib");
         assert_eq!(empty.next_pad_number(), "1");
 
@@ -4735,10 +4754,17 @@ mod tests {
         fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1000, 0)];
         assert_eq!(fp.next_pad_number(), "3");
 
-        // A manually-added "4" alongside a hole left at "3" must still
-        // skip the now-occupied "4" when continuing from "3".
+        // `GetNextPadNumber( "3" )` with "3" free is "3" (it was "5": the integer was counted up before it was tried); with "3" taken, the next free one
         fp.pads.push(lib_pad("4", 2000, 0));
+        assert_eq!(fp.next_pad_number_after("3"), "3");
+        fp.pads.push(lib_pad("3", 3000, 0));
         assert_eq!(fp.next_pad_number_after("3"), "5");
+        // the last number "1" of a footprint just loaded fills the first gap, as KiCad's pad tool does
+        fp.pads.retain(|p| p.number != "1");
+        assert_eq!(fp.next_pad_number(), "1");
+        // `GetRefDesPrefix` takes trailing `?` off with the digits; `%d` drops leading zeros
+        assert_eq!(fp.next_pad_number_after("A07"), "A7");
+        assert_eq!(fp.next_pad_number_after("B?"), "B0");
     }
 
     #[test]
