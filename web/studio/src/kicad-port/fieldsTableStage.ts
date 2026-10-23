@@ -92,12 +92,15 @@ export function specRenameColumn(spec: FieldsTableSpec, from: string, to: string
   };
 }
 
-/** A column's name is valid for a new/renamed user field: non-blank, not a mandatory/generated name, not already a column (case-insensitive, like `FindFieldCaseInsensitive`). */
+/**
+ * A column's name is valid for a new/renamed user field (`DIALOG_SYMBOL_FIELDS_TABLE::OnAddField`): "Field must have a name." for a blank one, "Field name '%s' already
+ * in use." for the name of a column, a mandatory field's among them, compared without regard to case (`CmpNoCase`); a generated name (`${...}`) is no user field.
+ */
 export function validNewFieldName(spec: FieldsTableSpec, name: string): string | null {
   const t = name.trim();
-  if (t === "") return "A field needs a name.";
-  if (["Reference", "Value", "Footprint", "Datasheet"].includes(t) || (t.startsWith("${") && t.endsWith("}"))) return `"${t}" is a built-in field.`;
-  if (spec.columns.some((c) => c.name.toLowerCase() === t.toLowerCase())) return `A field named "${t}" already exists.`;
+  if (t === "") return "Field must have a name.";
+  if (["reference", "value", "footprint", "datasheet", "description"].includes(t.toLowerCase()) || spec.columns.some((c) => c.name.toLowerCase() === t.toLowerCase())) return `Field name '${t}' already in use.`;
+  if (t.startsWith("${") && t.endsWith("}")) return `"${t}" is a built-in field.`;
   return null;
 }
 

@@ -304,16 +304,15 @@ impl<'a> Board<'a> {
         match (ctx.kind, name) {
             (OwnerKind::Symbol, "Reference") => {
                 if blank {
-                    return Err(fail("ops_bad_symbol", &ctx.key, "A reference cannot be empty."));
+                    // `GetFieldValidationErrorMessage( FIELD_T::REFERENCE, "" )`
+                    return Err(fail("ops_bad_symbol", &ctx.key, "The value of the field cannot be empty."));
                 }
                 let sym = ctx.symbol().expect("a symbol");
                 self.rename_symbol(&sym.id, text.trim())?;
                 Ok(field_key(text.trim(), sym.unit))
             }
+            // `DIALOG_FIELD_PROPERTIES::init` gives the Value no `FIELD_VALIDATOR` (only Reference, Footprint, Datasheet and the sheet's fields), so it may be emptied
             (OwnerKind::Symbol, "Value") => {
-                if blank {
-                    return Err(fail("ops_bad_field", &ctx.key, "A value cannot be empty."));
-                }
                 let id = ctx.symbol().expect("a symbol").id.clone();
                 self.edit_symbol_fields(&id, Some(text), None, None)?;
                 Ok(ctx.key.clone())
@@ -368,7 +367,8 @@ impl<'a> Board<'a> {
             return Err(fail("ops_locked", id, "the symbol is locked"));
         }
         if name.is_empty() {
-            return Err(fail("ops_bad_field", id, "A field needs a name."));
+            // `DIALOG_SYMBOL_PROPERTIES::Validate`
+            return Err(fail("ops_bad_field", id, "Fields must have a name."));
         }
         // the table's rule (`FIELDS_EDITOR_GRID_DATA_MODEL`): a name that is generated (`${...}`) is no field of the symbol
         if eda_model::text_vars::has_text_vars(name) || name.contains('{') {
@@ -376,7 +376,8 @@ impl<'a> Board<'a> {
         }
         let taken = eda_engine::fields::STANDARD_FIELDS.iter().any(|n| n.eq_ignore_ascii_case(name)) || sch.user_fields.get(id).is_some_and(|m| m.keys().any(|n| n.eq_ignore_ascii_case(name)));
         if taken {
-            return Err(fail("ops_field_exists", id, format!("A field named '{name}' already exists.")));
+            // `OnGridCellChanging` (`CmpNoCase`)
+            return Err(fail("ops_field_exists", id, format!("Field name '{name}' already in use.")));
         }
         sch.user_fields.entry(id.to_string()).or_default().insert(name.to_string(), text.to_string());
         Ok(())

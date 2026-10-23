@@ -343,6 +343,9 @@ fn add_user_field_makes_a_hidden_field_and_refuses_a_name_that_is_taken() {
         let e = add(start.clone(), name, "x").unwrap_err();
         assert!(matches!(e[0].check.as_str(), "ops_field_exists" | "ops_bad_field"), "{why}: {e:?}");
     }
+    // KiCad's words: `Validate`'s "Fields must have a name." and `OnGridCellChanging`'s "Field name '%s' already in use."
+    assert_eq!(add(start.clone(), "  ", "x").unwrap_err()[0].hint.as_deref(), Some("Fields must have a name."));
+    assert_eq!(add(start.clone(), "mpn", "x").unwrap_err()[0].hint.as_deref(), Some("Field name 'mpn' already in use."));
     let e = run(start.clone(), Cmd::SchEdit(SchCmd::AddUserField { id: "R9".into(), name: "A".into(), text: String::new() })).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_item");
     let mut locked = start;

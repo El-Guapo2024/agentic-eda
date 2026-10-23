@@ -104,7 +104,7 @@ export function LabelDialog() {
       net: text,
       at: { x: pending.at[0], y: pending.at[1] },
       kind,
-      ...(spin || plainSpin ? { spin: spin || plainSpin } : {}),
+      ...(spin || plainSpin ? { spin: (spin || plainSpin) as LabelSpinName } : {}),
       ...(sizeUm !== null && sizeUm !== 1270 ? { size_um: sizeUm } : {}),
       ...(bold ? { bold: true } : {}),
       ...(italic ? { italic: true } : {}),

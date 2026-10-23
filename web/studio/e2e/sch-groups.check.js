@@ -664,7 +664,7 @@
       await sleep(100);
       buttonText(dialog(), "OK").click();
       await sleep(500);
-      t(!!dialog() && /already exists/.test(dialog().textContent), "a name a standard field has is refused in the dialog");
+      t(!!dialog() && /already in use/.test(dialog().textContent), "a name a standard field has is refused in the dialog");
       setValue(dialog().querySelector('input[aria-label="New field name"]'), "MPN");
       await sleep(100);
       setValue(dialog().querySelector('input[aria-label="MPN value"]'), "CL05B104KO5NNNC");
@@ -744,7 +744,7 @@
       await select([id]);
       await __eda.run("eeschema.InteractiveEdit.properties");
       await sleep(600);
-      t(!!dialog() && /Edit MPN Field/.test(dialog().textContent), "Properties on the field opens Field Properties");
+      t(!!dialog() && /Edit 'MPN' Field/.test(dialog().textContent), "Properties on the field opens Field Properties");
       const text = dialog().querySelector(".kv-grid input");
       t(text.value === "CL05B104" && !text.disabled, "the text is editable");
       setValue(text, "CL05B104KO5NNNC");
