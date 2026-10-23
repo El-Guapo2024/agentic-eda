@@ -364,8 +364,15 @@ export async function startSimulation(overrides?: Map<string, number>): Promise<
     }
     fftTran = { command: tran.command, options: tran.options };
   } else if (f.tabs.indexOf(tab) === 0) {
+    // busy from here: the schematic's analysis is read first (kicad-cli)
+    f.running = true;
+    emit();
     const sch = (await loadCircuit())?.sch_sim_command ?? null;
-    if (sch === null) return;
+    f.running = false;
+    if (sch === null) {
+      emit();
+      return;
+    }
     if (sch !== tab.lastSchText) {
       const yes = tab.lastSchText === "" || (await ask("Confirmation", "Schematic sheet simulation command directive has changed.  Do you wish to update the Simulation Command?", ["Yes", "No"])) === "Yes";
       if (yes) {
@@ -377,6 +384,7 @@ export async function startSimulation(overrides?: Map<string, number>): Promise<
   }
   if (host?.unannotated()) {
     message("Simulator", "Simulator requires a fully annotated schematic.");
+    emit();
     return;
   }
   // `OnSimUpdate`: the scales reset, the console cleared, the tuners applied.

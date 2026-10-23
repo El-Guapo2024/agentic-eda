@@ -1,0 +1,23 @@
+# The board web/studio/e2e/simulator.check.js runs on (package P21, the SPICE simulator): KiCad's built-in op-amp (`Simulation_SPICE:OPAMP`, the
+# `kicad_builtin_opamp` subcircuit of Simulation_SPICE.sp) as a non-inverting amplifier with a gain of 11, fed a tenth of a volt by a divider of its 12 V
+# supply (`Simulation_SPICE:VDC`), and an RC (1k, 1u) charging from the same supply. `eda board new web/studio/e2e/simulator-board.yaml -o <dir>`, then
+# `eda board serve -C <dir>`. ngspice must be installed (EDA_NGSPICE or PATH).
+parts:
+  - { reference: V1, value: "12", symbol: "Simulation_SPICE:VDC", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - reference: U1
+    value: OPAMP
+    symbol: "Simulation_SPICE:OPAMP"
+    pins: [{ number: "1", kind: signal }, { number: "2", kind: signal }, { number: "3", kind: power }, { number: "4", kind: power }, { number: "5", kind: signal }]
+  - { reference: R1, value: 10k, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: R2, value: 100k, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: R3, value: 119k, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: R4, value: 1k, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: R5, value: 1k, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: C1, value: 1u, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+nets:
+  - { name: VCC, pins: [V1.1, U1.3, R3.1, R5.1] }
+  - { name: GND, pins: [V1.2, U1.4, R4.2, R1.2, C1.2] }
+  - { name: IN, pins: [R3.2, R4.1, U1.1] }
+  - { name: FB, pins: [U1.2, R2.1, R1.1] }
+  - { name: OUT, pins: [U1.5, R2.2] }
+  - { name: RC, pins: [R5.2, C1.1] }

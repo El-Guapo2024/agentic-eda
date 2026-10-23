@@ -356,7 +356,11 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
   const onPointerDown = (e: React.PointerEvent) => {
     setMenu(null);
     const p = pos(e);
-    canvas.current?.setPointerCapture(e.pointerId);
+    try {
+      canvas.current?.setPointerCapture(e.pointerId);
+    } catch {
+      // a pointer the page did not see go down
+    }
     if (e.button === 1) {
       drag.current = { kind: "pan", x: p.x, y: p.y };
       return;

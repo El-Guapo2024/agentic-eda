@@ -47,6 +47,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-simulator` | P21, the SPICE simulator: kicad-cli's SPICE netlist, `ngspice -b`, its raw files, the Simulation window (tabs, plots, cursors, measurements, user-defined signals, tuners, workbook), Probe and Tune on the sheet, the OP on the sheet, the exports | done: every simulator row of `ui-parity-missing.json` wired; `e2e/simulator.check.js` on `e2e/simulator-board.yaml`; PARITY-sch.md section 38, GAPS.md item 34 | live plotting while ngspice runs (a batch run), the auto-completion of user-defined signals, the probe cursors; needs ngspice (`EDA_NGSPICE` or `PATH`) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

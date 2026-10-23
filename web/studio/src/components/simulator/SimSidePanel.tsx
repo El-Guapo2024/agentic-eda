@@ -11,6 +11,32 @@ import { getSimUi, rerunIfFinished, removeTuner, saveTunerValue, setSimDialog, t
 import { useStudioState } from "../../state/store";
 import type { Tuner } from "../../kicad-port/sim/simFrame";
 
+/** A grid cell typed into: committed by Enter or by leaving it, when it changed (a `wxGrid` cell editor's `CELL_CHANGED`). */
+function CommitInput({ value, label, disabled, onCommit }: { value: string; label: string; disabled?: boolean; onCommit: (v: string) => void }) {
+  const [text, setText] = useState(value);
+  const [shown, setShown] = useState(value);
+  if (shown !== value) {
+    setShown(value);
+    setText(value);
+  }
+  const commit = () => {
+    if (text !== value) onCommit(text);
+  };
+  return (
+    <input
+      className="sim-cell"
+      aria-label={label}
+      disabled={disabled}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+      }}
+      onBlur={commit}
+    />
+  );
+}
+
 type Menu = { x: number; y: number; items: { label: string; fn?: () => void }[] } | null;
 
 function ContextMenu({ menu, close }: { menu: Menu; close: () => void }) {
@@ -196,13 +222,9 @@ function CursorsGrid() {
               <td>{r.name}</td>
               <td>{r.signal}</td>
               <td onContextMenu={(e) => formatMenu(i, 0, e)}>
-                <input className="sim-cell" aria-label={`Cursor ${r.name} ${xLabel}`} defaultValue={r.x} key={r.x} onKeyDown={(e) => {
-                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                }} onBlur={(e) => {
-                  if (e.target.value !== r.x) {
-                    setCursorX(f, r, e.target.value);
-                    touch();
-                  }
+                <CommitInput label={`Cursor ${r.name} ${xLabel}`} value={r.x} onCommit={(v) => {
+                  setCursorX(f, r, v);
+                  touch();
                 }} />
               </td>
               <td onContextMenu={(e) => formatMenu(i, 1, e)}>{r.y}</td>
@@ -253,13 +275,9 @@ function MeasurementsGrid() {
               setMenu({ x: e.clientX, y: e.clientY, items });
             }}>
               <td>
-                <input className="sim-cell" aria-label={`Measurement ${row + 1}`} defaultValue={m.expr} onKeyDown={(e) => {
-                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                }} onBlur={(e) => {
-                  if (e.target.value !== m.expr) {
-                    setMeasurement(f, row, e.target.value);
-                    void rerunIfFinished();
-                  }
+                <CommitInput label={`Measurement ${row + 1}`} value={m.expr} onCommit={(v) => {
+                  setMeasurement(f, row, v);
+                  void rerunIfFinished();
                 }} />
               </td>
               <td>{row < ms.length ? (f.finished || tab.measured.size > 0 ? measurementValue(tab.measured.get(row), m.format) : "?") : ""}</td>
@@ -295,17 +313,15 @@ function TunerView({ t }: { t: Tuner }) {
           ×
         </button>
       </div>
-      <input className="sim-cell" aria-label={`${t.ref} maximum`} defaultValue={t.max.toOrigString()} key={`max${t.max.toOrigString()}`} onBlur={(e) => range("max", e.target.value)} />
+      <CommitInput label={`${t.ref} maximum`} value={t.max.toOrigString()} onCommit={(v) => range("max", v)} />
       <input type="range" min={0} max={100} aria-label={`${t.ref} value slider`} disabled={t.multi} value={sliderOf(t)} onChange={(e) => {
         setTunerSlider(t, Number(e.target.value));
         touch(true);
       }} onPointerUp={() => void tunerChanged()} onKeyUp={() => void tunerChanged()} />
-      <input className="sim-cell" aria-label={`${t.ref} minimum`} defaultValue={t.min.toOrigString()} key={`min${t.min.toOrigString()}`} onBlur={(e) => range("min", e.target.value)} />
-      <input className="sim-cell" aria-label={`${t.ref} value`} disabled={t.multi} defaultValue={t.text} key={`v${t.text}`} onKeyDown={(e) => {
-        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-      }} onBlur={(e) => {
-        const v = SpiceValue.parse(e.target.value);
-        if (v && e.target.value !== t.text) {
+      <CommitInput label={`${t.ref} minimum`} value={t.min.toOrigString()} onCommit={(v) => range("min", v)} />
+      <CommitInput label={`${t.ref} value`} disabled={t.multi} value={t.text} onCommit={(text) => {
+        const v = SpiceValue.parse(text);
+        if (v) {
           setTunerValue(t, v);
           touch(true);
           void tunerChanged();

@@ -32,7 +32,7 @@ import { currentTab } from "../kicad-port/sim/simFrame";
 import { addTuner, probeTrace, setSimFocused, toggleOp } from "../state/simulator";
 import { picker } from "./pcbPicker";
 import { hitPin, pinItems } from "../kicad-port/schPins";
-import { hitSymbol } from "../components/schematic/schHit";
+import { pickItem } from "../components/schematic/schPick";
 import { measureStrokeText } from "../components/text/strokeFont";
 import type { Schematic } from "../api/types";
 import { saveTextAs } from "../api/client";
@@ -191,7 +191,11 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
       onPoint: (at) => {
         const sch = api.getState().schematic;
         if (!sch) return true;
-        const ref = hitSymbol(sch, at.x, at.y);
+        // `SelectPoint( aPosition, { SCH_SYMBOL_T, SCH_FIELD_T } )`: a symbol, or a field's symbol
+        const s = api.getState();
+        const hit = pickItem(sch, at.x, at.y, s.schematicView.scale, () => true);
+        const owner = hit?.startsWith("fld:") ? hit.split(":")[1] : hit;
+        const ref = owner && sch.symbols.some((x) => x.id === owner) ? owner : null;
         if (ref) void addTuner(ref);
         return true;
       },

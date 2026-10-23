@@ -191,7 +191,11 @@ export function SimulatorWindow() {
           onPointerDown={(e) => {
             const r = root.current!.getBoundingClientRect();
             move.current = { dx: e.clientX - r.left, dy: e.clientY - r.top };
-            (e.target as Element).setPointerCapture(e.pointerId);
+            try {
+              (e.target as Element).setPointerCapture(e.pointerId);
+            } catch {
+              // a pointer the page did not see go down
+            }
           }}
           onPointerMove={(e) => move.current && setPos({ x: Math.max(0, e.clientX - move.current.dx), y: Math.max(0, e.clientY - move.current.dy) })}
           onPointerUp={() => (move.current = null)}
