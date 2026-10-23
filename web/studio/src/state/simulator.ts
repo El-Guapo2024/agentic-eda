@@ -69,6 +69,9 @@ export interface SimUi {
   focused: boolean;
   /** The operating point the schematic shows (`SCHEMATIC::SetOperatingPoint`): by net or device. */
   opPoints: Map<string, number>;
+  /** View > Show OP Voltages / Show OP Currents (`appearance.show_op_voltages` / `show_op_currents`, both on by default). */
+  showOpVoltages: boolean;
+  showOpCurrents: boolean;
   /** Bumped on every change, so a canvas redraws. */
   version: number;
 }
@@ -84,25 +87,46 @@ export interface SimHost {
 const DEFAULT_SETTINGS: NgspiceSettings = { workbook_filename: "", fix_include_paths: true, model_mode: 4 };
 const STORAGE_KEY = "eda-studio.simulator";
 
-function savedDark(): boolean {
+/** The viewer's settings KiCad keeps in its own (`simulator.white_background`, `appearance.show_op_voltages`, `show_op_currents`): this browser's. */
+interface SavedSettings {
+  white_background?: boolean;
+  show_op_voltages?: boolean;
+  show_op_currents?: boolean;
+}
+
+function savedSettings(): SavedSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    const v = raw ? (JSON.parse(raw) as { white_background?: boolean }) : {};
-    return v.white_background !== true;
+    return raw ? (JSON.parse(raw) as SavedSettings) : {};
   } catch {
-    return true;
+    return {};
   }
 }
 
-function saveDark(dark: boolean): void {
+function saveSetting(patch: SavedSettings): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ white_background: !dark }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...savedSettings(), ...patch }));
   } catch {
     // no storage
   }
 }
 
-let current: SimUi = { open: false, frame: newFrame(savedDark()), settings: DEFAULT_SETTINGS, savedWorkbook: null, project: "", dialog: null, infobar: null, focused: false, opPoints: new Map(), version: 0 };
+const savedDark = () => savedSettings().white_background !== true;
+
+let current: SimUi = {
+  open: false,
+  frame: newFrame(savedDark()),
+  settings: DEFAULT_SETTINGS,
+  savedWorkbook: null,
+  project: "",
+  dialog: null,
+  infobar: null,
+  focused: false,
+  opPoints: new Map(),
+  showOpVoltages: savedSettings().show_op_voltages !== false,
+  showOpCurrents: savedSettings().show_op_currents !== false,
+  version: 0,
+};
 const listeners = new Set<() => void>();
 let host: SimHost | null = null;
 
@@ -639,6 +663,10 @@ export function simChecked(name: string, s: SimUi = current): boolean | undefine
       return !!plot?.dotted;
     case "eeschema.Simulator.toggleDarkModePlots":
       return s.frame.dark;
+    case "eeschema.EditorControl.showOperatingPointVoltages":
+      return s.showOpVoltages;
+    case "eeschema.EditorControl.showOperatingPointCurrents":
+      return s.showOpCurrents;
     case "common.Control.toggleGrid":
       return s.open && s.focused && plot ? gridShown(plot) : undefined;
     default:
@@ -649,7 +677,19 @@ export function simChecked(name: string, s: SimUi = current): boolean | undefine
 /** `SIMULATOR_FRAME_UI::ToggleDarkModePlots`, remembered as the setting `simulator.white_background`. */
 export function toggleDarkMode(): void {
   current.frame.dark = !current.frame.dark;
-  saveDark(current.frame.dark);
+  saveSetting({ white_background: !current.frame.dark });
+  emit();
+}
+
+/** `SCH_EDITOR_CONTROL::ToggleOPVoltages` / `ToggleOPCurrents`. */
+export function toggleOp(which: "voltages" | "currents"): void {
+  if (which === "voltages") {
+    current.showOpVoltages = !current.showOpVoltages;
+    saveSetting({ show_op_voltages: current.showOpVoltages });
+  } else {
+    current.showOpCurrents = !current.showOpCurrents;
+    saveSetting({ show_op_currents: current.showOpCurrents });
+  }
   emit();
 }
 

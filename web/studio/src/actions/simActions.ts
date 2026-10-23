@@ -29,6 +29,12 @@ import {
   touch,
 } from "../state/simulator";
 import { currentTab } from "../kicad-port/sim/simFrame";
+import { addTuner, probeTrace, toggleOp } from "../state/simulator";
+import { picker } from "./pcbPicker";
+import { hitPin, pinItems } from "../kicad-port/schPins";
+import { hitSymbol } from "../components/schematic/schHit";
+import { measureStrokeText } from "../components/text/strokeFont";
+import type { Schematic } from "../api/types";
 import { fitWithUndo, zoomIn, zoomOut, zoomRedo, zoomUndo } from "../kicad-port/sim/mathPlot";
 import { gridShown, setGrid } from "../kicad-port/sim/simPlotTab";
 
@@ -65,6 +71,32 @@ const focusedPlot = () => {
   return s.open && s.focused ? (currentTab(s.frame)?.plot ?? null) : null;
 };
 
+/** The wire nearest a point, within `tol` (`SCH_SELECTION_TOOL::GetNode` for `SCH_ITEM_LOCATE_WIRE_T`); a bus is no node. */
+function wireAt(sch: Schematic, x: number, y: number, tol: number): Schematic["wires"][number] | null {
+  let best: { w: Schematic["wires"][number]; d: number } | null = null;
+  for (const w of sch.wires) {
+    if (w.bus) continue;
+    for (let i = 0; i + 1 < w.pts.length; i++) {
+      const [x1, y1] = w.pts[i]!;
+      const [x2, y2] = w.pts[i + 1]!;
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const k = Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy || 1)));
+      const d = Math.hypot(x - (x1 + k * dx), y - (y1 + k * dy));
+      if (d <= tol && (!best || d < best.d)) best = { w, d };
+    }
+  }
+  return best?.w ?? null;
+}
+
+/** The SPICE net a net of the sheet is: through a pin the wire lands on, else any pin on the net (kicad-cli's XML netlist names the pins' nets). */
+function spiceNetOf(sch: Schematic, wire: Schematic["wires"][number]): string | null {
+  const nets = getSimUi().frame.circuit?.pin_nets ?? {};
+  for (const p of wire.pins) if (nets[p]) return nets[p]!;
+  for (const p of pinItems(sch)) if (p.net === wire.net && nets[`${p.reference}.${p.number}`]) return nets[`${p.reference}.${p.number}`]!;
+  return null;
+}
+
 export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
   const { dispatch, api } = ctx;
   setSimHost({
@@ -88,6 +120,54 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
   m.set("eeschema.Simulation.stopSimulation", () => {
     if (getSimUi().frame.running) void stop();
   });
+  // SIMULATOR_CONTROL::Probe -> SCH_EDITOR_CONTROL::SimProbe: a pick on the sheet until Escape. A pin is a current (`SPICE_GENERATOR::CurrentNames`, the one
+  // of the model pin the symbol pin is when the device has several), a wire or a junction the voltage of its net (`V(<net>)`).
+  m.set("eeschema.Simulation.probe", () => {
+    picker.start({
+      kind: "point",
+      prompt: "Probe: a wire for its voltage, a pin for its current",
+      onPoint: (at) => {
+        const s = api.getState();
+        const sch = s.schematic;
+        if (!sch) return true;
+        const tol = Math.max(5 / (s.schematicView.scale || 1), 254);
+        const pin = pinItems(sch).find((p) => hitPin(p, [at.x, at.y], tol / 2, measureStrokeText));
+        if (pin) {
+          const item = getSimUi().frame.circuit?.items.find((i) => i.ref === pin.reference);
+          if (!item || item.currents.length === 0) return true;
+          if (item.currents.length === 1) probeTrace(item.currents[0]!, true);
+          else {
+            const idx = item.pin_index[pin.number];
+            if (idx !== undefined && item.currents[idx]) probeTrace(item.currents[idx]!, true);
+          }
+          return true;
+        }
+        const wire = wireAt(sch, at.x, at.y, tol);
+        if (wire) {
+          const net = spiceNetOf(sch, wire);
+          if (net) probeTrace(`V(${net})`, false);
+        }
+        return true;
+      },
+    });
+  });
+  // SIMULATOR_CONTROL::Tune -> SCH_EDITOR_CONTROL::SimTune: a symbol picked (or one of its fields), a tuner added for it.
+  m.set("eeschema.Simulation.tune", () => {
+    picker.start({
+      kind: "point",
+      prompt: "Tune: a symbol whose value to tune",
+      onPoint: (at) => {
+        const sch = api.getState().schematic;
+        if (!sch) return true;
+        const ref = hitSymbol(sch, at.x, at.y);
+        if (ref) void addTuner(ref);
+        return true;
+      },
+    });
+  });
+  // SCH_EDITOR_CONTROL::ToggleOPVoltages / ToggleOPCurrents
+  m.set("eeschema.EditorControl.showOperatingPointVoltages", () => toggleOp("voltages"));
+  m.set("eeschema.EditorControl.showOperatingPointCurrents", () => toggleOp("currents"));
   m.set("eeschema.Simulation.editUserDefinedSignals", () => setSimDialog({ kind: "userSignals" }));
   m.set("eeschema.Simulation.showNetlist", () => void showNetlist());
 

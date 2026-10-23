@@ -275,3 +275,38 @@ test("tuners range, round and step as KiCad's", () => {
   const steps = multiRunSteps([{ ...t, steps: 3, multi: true }]);
   assert.deepEqual(steps.map((s) => s.get("R1")), [500, 1250, 2000]);
 });
+
+test("the operating point goes on the longest wire of a net and on a pin", async () => {
+  const { opLabels, operatingPoint, opTextSize } = await import("./opOverlay");
+  const { spiceNetName } = await import("./simNames");
+  assert.equal(spiceNetName("Net-(C1-Pad1)"), "Net-_C1-Pad1_");
+  assert.equal(spiceNetName("/V_{OUT}"), "/VOUT");
+  assert.equal(spiceNetName("//x"), "/root/x");
+  const points = new Map<string, number>([["/out", 0.98946], ["r1", 1e-4]]);
+  assert.equal(operatingPoint(points, "/OUT", 3, "~V"), "989mV");
+  assert.equal(operatingPoint(points, "GND", 3, "~V"), "");
+  assert.equal(operatingPoint(points, "/x", 3, "~V"), "?");
+  assert.equal(operatingPoint(new Map(), "/x", 3, "~V"), "--");
+  assert.equal(opTextSize(1), Math.round((1270 + 14) / 3));
+  const c: Circuit = { ...circuit, pin_nets: { "R1.2": "/out" }, items: [{ ...circuit.items[0]!, ref: "R1" }] };
+  const labels = opLabels({
+    wires: [
+      { net: "OUT", pins: ["R1.2"], pts: [[0, 0], [10_000, 0]] },
+      { net: "OUT", pins: [], pts: [[10_000, 0], [10_000, 2_000]] },
+    ],
+    pins: [
+      { reference: "R1", number: "1", tip: [0, -10_000], root: [0, -7_000], net: "IN" },
+      { reference: "R1", number: "2", tip: [0, 0], root: [0, -3_000], net: "OUT" },
+    ],
+    circuit: c,
+    points,
+    voltages: true,
+    currents: true,
+    scale: 1,
+  });
+  const v = labels.find((l) => l.kind === "voltage")!;
+  assert.deepEqual([v.text, v.x, v.h, v.v], ["989mV", 5_000, "center", "bottom"], "on the middle of the longest wire, above a horizontal one");
+  const i = labels.find((l) => l.kind === "current")!;
+  assert.equal(i.text, "100uA");
+  assert.equal(i.vertical, false, "a vertical pin's current reads across");
+});
