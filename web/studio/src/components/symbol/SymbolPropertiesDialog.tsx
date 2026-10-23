@@ -7,8 +7,12 @@
 // attributes are its parent's -- and, here, the units: the drawing is the parent's. Its grid also lists the parent's fields as inherited rows, and a reference may be empty.
 // OK is one undo step: `set_symbol_parent`, `edit_symbol_properties` and `edit_library_symbol_fields`.
 //
-// Not ported: "Exclude from simulation" / "from position files" (no simulation or position-file concept for a schematic symbol in this app), "Define as local power symbol",
-// per-body-style custom names (KiCad's "Custom" body-style mode beyond plain DeMorgan Standard/Alternate), jumper pin groups and embedded files.
+// The lower General panel has KiCad's groups and words: General (Define as power symbol, Define as local power symbol), Attributes (the four "Exclude from" boxes, checked and
+// disabled for a power symbol, `onPowerCheckBox`), Pin Text Options (Show pin number, Show pin name, Place pin names inside with its Position offset), Symbol Units (Number of units,
+// All units are interchangeable -- `LockUnits`) and Body Styles (single or De Morgan).
+//
+// Not ported: per-body-style custom names (KiCad's "Custom" body-style mode beyond plain DeMorgan Standard/Alternate), the unit display names grid (the names are kept in the
+// file, `LibrarySymbolKeep::unit_names`), the Pin Connections tab (jumper pin groups, kept in the file too) and embedded files.
 //
 // Named `LibrarySymbolPropertiesDialog` (not `SymbolPropertiesDialog`, already taken by the top-level placed-instance Reference/Value/Footprint/Datasheet dialog) -- same naming
 // split `components/footprint/FootprintPropertiesDialog.tsx`'s own `FootprintLibraryPropertiesDialog` already establishes for the Footprint Editor.
@@ -22,11 +26,17 @@ import { notifyLibraryChanged } from "../library/useLibraryNames";
 import { SymbolFieldsGrid } from "./SymbolFieldsGrid";
 
 const FORM_KEYS: (keyof SymbolPropertiesFields)[] = ["reference_prefix", "description", "keywords", "datasheet", "power", "in_bom", "on_board", "pin_numbers_hidden", "pin_names_hidden", "pin_name_offset_mm", "unit_count", "has_alternate_body_style", "footprint_filters"];
+/** The flags the backend leaves out of the JSON when they are off. */
+const FLAG_KEYS = ["units_locked", "power_local", "exclude_from_sim", "exclude_from_pos_files"] as const;
+
+/** `DEFAULT_PIN_NAME_OFFSET`'s 20 mils: the offset "Place pin names inside" gives a symbol whose offset is 0 ("We interpret an offset of 0 as outside"). */
+const DEFAULT_PIN_NAME_OFFSET_MM = 0.508;
 
 /** The properties `edit_symbol_properties` takes, from a symbol. */
 function formOf(sym: LibrarySymbol): SymbolPropertiesFields {
   const out: Record<string, unknown> = {};
   for (const k of FORM_KEYS) out[k] = sym[k];
+  for (const k of FLAG_KEYS) out[k] = sym[k] ?? false;
   return out as unknown as SymbolPropertiesFields;
 }
 
@@ -47,11 +57,14 @@ export function LibrarySymbolPropertiesDialog() {
   const [candidates, setCandidates] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** "Place pin names inside": `m_PinsNameInsideButt->SetValue( GetPinNameOffset() != 0 )`. */
+  const [namesInside, setNamesInside] = useState(true);
 
   useEffect(() => {
     if (!subject || !state.propertiesOpen) return;
     let stopped = false;
     setForm(formOf(subject));
+    setNamesInside(subject.pin_name_offset_mm !== 0);
     setFiltersText(subject.footprint_filters.join(" "));
     setError(null);
     setParent(subject.extends ?? "");
@@ -75,6 +88,10 @@ export function LibrarySymbolPropertiesDialog() {
   if (!state.propertiesOpen || !subject || !form) return null;
 
   const set = <K extends keyof SymbolPropertiesFields>(key: K, value: SymbolPropertiesFields[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
+  /** `onPowerCheckBox`: a power symbol is excluded from simulation, the BOM, the board and the position files (the boxes checked and disabled); unchecked, they are enabled
+   * again as they are. */
+  const setPower = (power: boolean) =>
+    setForm((f) => (f ? (power ? { ...f, power, exclude_from_sim: true, in_bom: false, on_board: false, exclude_from_pos_files: true } : { ...f, power }) : f));
 
   const submit = async () => {
     const problem = gridProblem(rows, !derived);
@@ -87,7 +104,12 @@ export function LibrarySymbolPropertiesDialog() {
     // "Power symbols must have value matching name for now"
     const out = !derived && form.power ? rows.map((r) => (r.name === "Value" ? { ...r, text: bareName(subject.lib_id) } : r)) : rows;
     const text = (name: string) => out.find((r) => r.name === name)?.text ?? "";
-    const props: SymbolPropertiesFields = { ...form, reference_prefix: text("Reference"), description: text("Description"), datasheet: text("Datasheet"), footprint_filters };
+    // "Place pin names inside": the offset, or 20 mils for one of 0; unchecked, 0 (outside)
+    const pin_name_offset_mm = namesInside ? (form.pin_name_offset_mm === 0 ? DEFAULT_PIN_NAME_OFFSET_MM : form.pin_name_offset_mm) : 0;
+    // `LockUnits( GetUnitCount() > 1 && !interchangeable )`; `SetLocalPower` only for a power symbol
+    const units_locked = form.unit_count > 1 && !!form.units_locked;
+    const power_local = form.power && !!form.power_local;
+    const props: SymbolPropertiesFields = { ...form, pin_name_offset_mm, units_locked, power_local, reference_prefix: text("Reference"), description: text("Description"), datasheet: text("Datasheet"), footprint_filters };
     const cmds: Cmd[] = [];
     if (derived && parent !== subject.extends) cmds.push({ op: "set_symbol_parent", lib_id: subject.lib_id, parent });
     cmds.push({ op: "edit_symbol_properties", lib_id: subject.lib_id, ...props });
@@ -96,6 +118,8 @@ export function LibrarySymbolPropertiesDialog() {
     try {
       const ok = await api.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
       notifyLibraryChanged();
+      // "if units are locked, graphic items are specific to each unit": `SetDrawSpecificUnit( symbol->UnitsLocked() )` after OK
+      if (ok && !derived) dispatch({ type: "SET_DRAW_SPECIFIC", unit: units_locked });
       if (ok) close();
     } finally {
       setBusy(false);
@@ -112,10 +136,10 @@ export function LibrarySymbolPropertiesDialog() {
         <div className="dialog-body" style={{ maxHeight: "74vh", overflowY: "auto" }}>
           <SymbolFieldsGrid rows={rows} onChange={setRows} parentName={parent ? bareName(parent) : undefined} onError={setError} initialField={state.propertiesField} />
           <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr", marginTop: 10 }}>
-            <span>Keywords</span>
+            <span>Keywords:</span>
             <input value={form.keywords} onChange={(e) => set("keywords", e.target.value)} style={{ width: 300 }} data-testid="props-keywords" />
             <span title={"Select symbol to derive this symbol from or select\n<None> for root symbol."} style={{ opacity: derived ? 1 : 0.5 }}>
-              Derive from symbol
+              Derive from symbol:
             </span>
             <select value={derived ? parent : ""} disabled={!derived} onChange={(e) => setParent(e.target.value)} aria-label="Derive from symbol" data-testid="props-parent" style={{ width: 306 }}>
               {!derived && <option value="">&lt;None&gt;</option>}
@@ -128,35 +152,84 @@ export function LibrarySymbolPropertiesDialog() {
             </select>
           </div>
           {!derived && (
-            <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr", marginTop: 10 }}>
-              <span>Define as power symbol</span>
-              <label>
-                <input type="checkbox" checked={form.power} onChange={(e) => set("power", e.target.checked)} data-testid="props-power" />
-              </label>
-              <span>Show pin numbers</span>
-              <label>
-                <input type="checkbox" checked={!form.pin_numbers_hidden} onChange={(e) => set("pin_numbers_hidden", !e.target.checked)} />
-              </label>
-              <span>Show pin names</span>
-              <label>
-                <input type="checkbox" checked={!form.pin_names_hidden} onChange={(e) => set("pin_names_hidden", !e.target.checked)} />
-              </label>
-              <span>Pin name offset (mm)</span>
-              <input type="number" step="any" min={0} value={form.pin_name_offset_mm} onChange={(e) => Number.isFinite(Number(e.target.value)) && set("pin_name_offset_mm", Number(e.target.value))} style={{ width: 80 }} />
-              <span>In BOM</span>
-              <label>
-                <input type="checkbox" checked={form.in_bom} onChange={(e) => set("in_bom", e.target.checked)} />
-              </label>
-              <span>On board</span>
-              <label>
-                <input type="checkbox" checked={form.on_board} onChange={(e) => set("on_board", e.target.checked)} />
-              </label>
-              <span>Number of units</span>
-              <input type="number" min={1} max={64} value={form.unit_count} onChange={(e) => set("unit_count", Math.max(1, Math.min(64, Math.round(Number(e.target.value) || 1))))} style={{ width: 60 }} />
-              <span>Has alternate body style (DeMorgan)</span>
-              <label>
-                <input type="checkbox" checked={form.has_alternate_body_style} onChange={(e) => set("has_alternate_body_style", e.target.checked)} />
-              </label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", marginTop: 10 }}>
+              <fieldset>
+                <legend>General</legend>
+                <label title={"Power symbols define a global net with the value as a netname.\nThey will not be included in the BOM and cannot be assigned a footprint."}>
+                  <input type="checkbox" checked={form.power} onChange={(e) => setPower(e.target.checked)} data-testid="props-power" /> Define as power symbol
+                </label>
+                <br />
+                <label title="Local power symbols create labels that are limited to the sheet in which they are used" style={{ opacity: form.power ? 1 : 0.5 }}>
+                  <input type="checkbox" checked={!!form.power_local} disabled={!form.power} onChange={(e) => set("power_local", e.target.checked)} data-testid="props-power-local" /> Define as local power symbol
+                </label>
+              </fieldset>
+              <fieldset>
+                <legend>Attributes</legend>
+                {(
+                  [
+                    ["exclude_from_sim", "Exclude from simulation", !!form.exclude_from_sim],
+                    ["in_bom", "Exclude from bill of materials", !form.in_bom],
+                    ["on_board", "Exclude from board", !form.on_board],
+                    ["exclude_from_pos_files", "Exclude from position files", !!form.exclude_from_pos_files],
+                  ] as const
+                ).map(([key, label, checked]) => (
+                  <div key={key}>
+                    <label style={{ opacity: form.power ? 0.5 : 1 }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={form.power}
+                        data-testid={`props-${key}`}
+                        onChange={(e) => (key === "in_bom" || key === "on_board" ? set(key, !e.target.checked) : set(key, e.target.checked))}
+                      />{" "}
+                      {label}
+                    </label>
+                  </div>
+                ))}
+              </fieldset>
+              <fieldset>
+                <legend>Pin Text Options</legend>
+                <label title="Show or hide pin numbers">
+                  <input type="checkbox" checked={!form.pin_numbers_hidden} onChange={(e) => set("pin_numbers_hidden", !e.target.checked)} /> Show pin number
+                </label>
+                <br />
+                <label title="Show or hide pin names">
+                  <input type="checkbox" checked={!form.pin_names_hidden} onChange={(e) => set("pin_names_hidden", !e.target.checked)} /> Show pin name
+                </label>
+                <br />
+                <label title={"Check this option to have pin names inside the body and pin number outside.\nIf not checked pins names and pins numbers are outside."}>
+                  <input type="checkbox" checked={namesInside} onChange={(e) => setNamesInside(e.target.checked)} data-testid="props-names-inside" /> Place pin names inside
+                </label>
+                <br />
+                <label title="Margin between the pin name position and the symbol body." style={{ opacity: namesInside ? 1 : 0.5 }}>
+                  Position offset:{" "}
+                  <input type="number" step="any" min={0} disabled={!namesInside} value={form.pin_name_offset_mm} onChange={(e) => Number.isFinite(Number(e.target.value)) && set("pin_name_offset_mm", Number(e.target.value))} style={{ width: 80 }} data-testid="props-pin-name-offset" />{" "}
+                  mm
+                </label>
+              </fieldset>
+              <fieldset>
+                <legend>Symbol Units</legend>
+                <label title="Enter the number of units for a symbol that contains more than one unit">
+                  Number of units: <input type="number" min={1} max={64} value={form.unit_count} onChange={(e) => set("unit_count", Math.max(1, Math.min(64, Math.round(Number(e.target.value) || 1))))} style={{ width: 60 }} data-testid="props-unit-count" />
+                </label>
+                <br />
+                <label
+                  title={"Check this option when all symbol units have the same function.\nFor instance, this should be checked for a quad NAND gate, while it should not be checked for a dual triode (where unit C is the filament)."}
+                  style={{ opacity: form.unit_count > 1 ? 1 : 0.5 }}
+                >
+                  <input type="checkbox" checked={!form.units_locked || form.unit_count === 1} disabled={form.unit_count <= 1} onChange={(e) => set("units_locked", !e.target.checked)} data-testid="props-interchangeable" /> All units are interchangeable
+                </label>
+              </fieldset>
+              <fieldset>
+                <legend>Body Styles</legend>
+                <label>
+                  <input type="radio" name="body-styles" checked={!form.has_alternate_body_style} onChange={() => set("has_alternate_body_style", false)} /> Single body style
+                </label>
+                <br />
+                <label>
+                  <input type="radio" name="body-styles" checked={form.has_alternate_body_style} onChange={() => set("has_alternate_body_style", true)} data-testid="props-demorgan" /> ‘Standard’ and ‘Alternate’ De Morgan body styles
+                </label>
+              </fieldset>
             </div>
           )}
           <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr", marginTop: 10 }}>

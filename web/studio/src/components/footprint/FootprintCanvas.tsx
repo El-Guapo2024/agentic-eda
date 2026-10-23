@@ -452,7 +452,7 @@ export function FootprintCanvas() {
     // (none for a pad that cannot have one), and the pad placed is pushed back into the default pad.
     if (state.activeTool === "pad" && fp) {
       const master = state.defaultPad;
-      const number = padCanHaveNumber(master) ? nextPadNumber(fp.pads) : "";
+      const number = padCanHaveNumber(master) ? nextPadNumber(fp.pads, state.lastPadNumber) : "";
       const pad: LibraryPad = newPadFromMaster(master, number, { x: sx, y: sy });
       void api.addPad(pad);
       dispatch({ type: "SET_DEFAULT_PAD", pad: settingsOf(pad) });

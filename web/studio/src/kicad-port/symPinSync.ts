@@ -12,14 +12,16 @@ const samePos = (a: MmPoint, b: MmPoint) => Math.abs(a.x - b.x) < EPS && Math.ab
 const norm360 = (deg: number) => ((Math.round(deg) % 360) + 360) % 360;
 const sameAngle = (a: number, b: number) => norm360(a) === norm360(b);
 
-/** `SYMBOL_EDIT_FRAME::SynchronizePins`: the mode is on and the symbol has more than one unit (units are never "locked" here: the symbol has no such flag). */
-export function synchronizePins(syncMode: boolean, unitCount: number): boolean {
-  return syncMode && unitCount > 1;
+/** `SYMBOL_EDIT_FRAME::SynchronizePins`: `m_SyncPinEdit && m_symbol->IsMultiUnit() && !m_symbol->UnitsLocked()` -- the mode is on, the symbol has more than one unit and they
+ * are interchangeable. */
+export function synchronizePins(syncMode: boolean, unitCount: number, unitsLocked = false): boolean {
+  return syncMode && unitCount > 1 && !unitsLocked;
 }
 
-/** `m_SyncPinEdit = IsMultiUnit() && !UnitsLocked()`: the mode a symbol starts in when it is opened. */
-export function defaultSyncMode(unitCount: number): boolean {
-  return unitCount > 1;
+/** `m_SyncPinEdit = IsMultiUnit() && !UnitsLocked()`: the mode a symbol starts in when it is opened -- off for a symbol whose units are not interchangeable
+ * (`LibrarySymbol::units_locked`, the file's `ki_locked`). */
+export function defaultSyncMode(unitCount: number, unitsLocked = false): boolean {
+  return unitCount > 1 && !unitsLocked;
 }
 
 /**

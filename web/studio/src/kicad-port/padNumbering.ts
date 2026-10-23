@@ -1,60 +1,42 @@
-// Port of `FOOTPRINT::GetNextPadNumber` (pcbnew/footprint.cpp:3357,
-// pad_tool.cpp's `PAD_PLACER`): split a pad number into its non-numeric
-// prefix and trailing integer, then increment the integer until
-// `prefix+integer` collides with no existing pad number on the footprint
-// -- not just "+1", so a manually-renumbered or out-of-order footprint
-// still gets a sane next number, same as source.
+// Port of `FOOTPRINT::GetNextPadNumber` (pcbnew/footprint.cpp:3357) and of how
+// pad_tool.cpp's `PAD_PLACER` and edit_tool.cpp's Duplicate and Increment use it:
+// the prefix (`GetRefDesPrefix`) and trailing integer (`GetTrailingInt`) of the
+// tool's last pad number, then the integer counted up from there until
+// `prefix + integer` is a number no pad has. The last number is "1" each time a
+// footprint is loaded (`PAD_TOOL::Reset( MODEL_RELOAD )`) and then the number
+// of each pad placed or duplicated with increment.
 //
-// Mirrors `crates/model/src/ir.rs`'s `LibraryFootprint::
-// next_pad_number_after`/`next_pad_number` exactly (same algorithm, same
-// "ASCII digits only" simplification for a non-numeric trailing run) so
-// this client-side "what number will the next pad get" preview (shown
-// while the Pad tool is armed, before the `add_pad` Cmd round-trip ever
-// reaches the backend) can never disagree with the backend's own
-// authoritative answer.
+// Mirrors `crates/model/src/ir.rs`'s `LibraryFootprint::next_pad_number_after`.
 import type { LibraryPad } from "../api/types";
 
-/** `s`'s non-numeric prefix and trailing integer (0 if there is none). */
-function splitTrailingNumber(s: string): { prefix: string; num: number } {
-  const m = /^(.*?)(\d*)$/.exec(s);
-  const prefix = m?.[1] ?? s;
-  const num = m?.[2] ? parseInt(m[2], 10) : 0;
-  return { prefix, num };
+/** `UTIL::GetRefDesPrefix` (common/refdes_utils.cpp): what is left of `s` once its trailing digits and `?` are taken off. */
+function refDesPrefix(s: string): string {
+  let i = s.length;
+  while (i > 0 && (s[i - 1] === "?" || (s[i - 1]! >= "0" && s[i - 1]! <= "9"))) i--;
+  return s.slice(0, i);
 }
 
-/** `FOOTPRINT::GetNextPadNumber(last)` -- the first `prefix+integer` after `last` not already used by `pads`. */
+/** `GetTrailingInt` (common/string_utils.cpp): the number the trailing digits of `s` make, 0 when there are none. */
+function trailingInt(s: string): number {
+  let i = s.length;
+  while (i > 0 && s[i - 1]! >= "0" && s[i - 1]! <= "9") i--;
+  return i < s.length ? parseInt(s.slice(i), 10) : 0;
+}
+
+/** `FOOTPRINT::GetNextPadNumber( aLastPadNumber )`: from the prefix and the trailing number of `last`, the first `prefix + n` (`%s%d`) that no pad of `pads` has -- `last`
+ * itself when it is free (the pad tool's last number starts as "1", so a footprint whose pad 1 is gone gets it back), else the next free one. */
 export function nextPadNumberAfter(pads: ReadonlyArray<Pick<LibraryPad, "number">>, last: string): string {
-  const { prefix, num: startNum } = splitTrailingNumber(last);
+  const prefix = refDesPrefix(last);
   const used = new Set(pads.map((p) => p.number));
-  let num = startNum;
-  let candidate: string;
-  do {
-    num += 1;
-    candidate = `${prefix}${num}`;
-  } while (used.has(candidate));
-  return candidate;
+  let num = trailingInt(last);
+  while (used.has(`${prefix}${num}`)) num++;
+  return `${prefix}${num}`;
 }
 
-/**
- * `nextPadNumberAfter`, seeded from `pads`' own highest-numbered entry
- * (this editor has no standing "last placed" session state to carry
- * between placements the way KiCad's interactive tool does -- see the
- * Rust port's own doc). `"1"` for an empty footprint.
- */
-export function nextPadNumber(pads: ReadonlyArray<Pick<LibraryPad, "number">>): string {
-  return nextPadNumberAfter(pads, highestPadNumber(pads));
-}
+/** `PAD_TOOL::m_lastPadNumber` when the editor has none yet: `PAD_TOOL::Reset( MODEL_RELOAD )` sets it to "1" each time a footprint is loaded. */
+export const FIRST_LAST_PAD_NUMBER = "1";
 
-/** The number of the pad whose trailing integer is highest ("0" for none) -- this editor's stand-in for `PAD_TOOL::m_lastPadNumber` (see `nextPadNumber`'s own doc). */
-export function highestPadNumber(pads: ReadonlyArray<Pick<LibraryPad, "number">>): string {
-  let bestLast = "0";
-  let bestNum = -1;
-  for (const p of pads) {
-    const { num } = splitTrailingNumber(p.number);
-    if (num > bestNum) {
-      bestNum = num;
-      bestLast = p.number;
-    }
-  }
-  return bestLast;
+/** The number the pad tool gives the next pad (`PAD_PLACER::CreateItem`): `GetNextPadNumber( m_lastPadNumber )`, the last number being "1" until a pad is placed. */
+export function nextPadNumber(pads: ReadonlyArray<Pick<LibraryPad, "number">>, lastPadNumber: string | null = null): string {
+  return nextPadNumberAfter(pads, lastPadNumber ?? FIRST_LAST_PAD_NUMBER);
 }

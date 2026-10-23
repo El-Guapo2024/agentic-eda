@@ -862,6 +862,8 @@ export interface LibraryPad {
   thermal_spoke_angle_mdeg?: number | null;
   /** The padstack: the shapes of the pad's other copper layers and what becomes of the layers nothing connects to; the fields above are the front. Absent: one shape for every layer, every layer kept. */
   stack?: PadStack | null;
+  /** What the pad's file form says that the editor does not edit (an edge connector, the fabrication property, the margins, ...), carried back. */
+  kicad?: LibraryKeep;
 }
 
 /** `crates/model/src/ir.rs` `FootprintAttributes` (`FOOTPRINT_ATTR_T` plus the dialog's two related non-attribute-bit checkboxes). */
@@ -905,7 +907,13 @@ export interface FootprintPropertiesFields {
   reference?: FieldLayoutCmd | null;
   value?: FieldLayoutCmd | null;
   fields?: FootprintField[];
+  /** The grid's third and fourth mandatory rows, the Datasheet and the Description fields (`FIELD_T::DATASHEET`, `DESCRIPTION`), each with its text in `text`. Left out, the footprint keeps what it has. */
+  datasheet?: FieldLayoutCmd | null;
+  description_field?: FieldLayoutCmd | null;
 }
+
+/** `crates/model/src/lib_keep.rs`: what a library item's file says that the editors do not edit, kept for the writers. The studio only carries it back. */
+export type LibraryKeep = Record<string, unknown>;
 
 /**
  * `crates/model/src/ir.rs` `LibraryFootprint` -- the Footprint Editor's
@@ -925,6 +933,7 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
   published: boolean;
   /** `PAD_TOOL::InPadEditMode`: the pad being edited as graphic shapes (Edit Pad as Graphic Shapes), until Finish Pad Edit recombines it (kicad-port/padEditMode.ts). Absent when none is. */
   pad_edit?: PadEditMode | null;
+  kicad?: LibraryKeep;
 }
 
 /** `crates/model/src/ir.rs` `PadEditMode`: the pad flagged `ENTERED`, and what its explode set aside (the custom pad's zone option and proxy items, which the recombine gives back). */
@@ -2837,6 +2846,8 @@ export interface LibrarySymbolField {
   italic?: boolean;
   h_align?: FieldHAlign;
   v_align?: FieldVAlign;
+  /** `(property private ..)`: a field of the library symbol only (`SCH_FIELD::IsPrivate`). */
+  private?: boolean;
 }
 
 /** The fields `edit_symbol_properties` commits all at once (`dialog_lib_symbol_properties.cpp`'s General + Units&&Body Styles tabs) -- factored out so the `Cmd` variant and the Symbol Properties dialog's own form state share one field list, same pattern `FootprintPropertiesFields` already sets. */
@@ -2854,6 +2865,14 @@ export interface SymbolPropertiesFields {
   unit_count: number;
   has_alternate_body_style: boolean;
   footprint_filters: string[];
+  /** "All units are interchangeable" unchecked (`LIB_SYMBOL::UnitsLocked`, the file's `ki_locked`); only for a symbol of several units. Absent: false (in a command, kept). */
+  units_locked?: boolean;
+  /** "Define as local power symbol" (`(power local)`), with `power`. */
+  power_local?: boolean;
+  /** "Exclude from simulation". */
+  exclude_from_sim?: boolean;
+  /** "Exclude from position files". */
+  exclude_from_pos_files?: boolean;
 }
 
 /**
@@ -2871,6 +2890,7 @@ export interface LibrarySymbol extends SymbolPropertiesFields {
   extends?: string | null;
   /** The symbol's fields beyond the text members above (`crates/model/src/sym_fields.rs`): the layout of each field, `Value`, `Footprint` and the user fields. Empty for a symbol that never had one. */
   fields?: LibrarySymbolField[];
+  kicad?: LibraryKeep;
 }
 
 /** `GET /api/symbol_editor/names`'s one field: every `lib_id` available to open (already-opened library entries, every lib_id the project's intent already resolved, and the small builtin catalog), sorted. */
