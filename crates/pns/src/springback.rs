@@ -18,9 +18,14 @@
 //!   [`crate::router::RouteCommit`]), and the segments and vias the clicks fixed. [`World::apply`] makes the `NODE` from it when a shove
 //!   starts from the frame, and [`Springback::reduce`] asks the frame's collision question without making it (the session's world minus
 //!   what the frame moved, plus a small node of what it moved to). The preview and the commit are therefore the same world, always.
-//! - **The fixed segments are locked in the frame.** KiCad's `FixRoute` adds them to `m_lastNode` as ordinary segments, so a later shove
-//!   may push the route's own tail (and `CommitPlacement` commits the node, tail and all). The commit here is built from the placer's
-//!   runs, which a shove cannot reach, so the tail is a solid to the shove (`SH_TRY_WALK`: what runs into it is walked round it).
+//! - **The fixed runs are tracks of the frame, as in KiCad** (`FixRoute`: `m_lastNode->Add( segment )`): a later leg's shove may push the
+//!   route's own tail (a track the head pushes into it pushes it on), and `CommitPlacement` commits the node, tail and all. Here a run
+//!   carries a [`run_tag`] in the frame's world, so what a shove made of it is in the frame's [`World::tracks`] under that tag, and the
+//!   preview and the commit draw the runs from there ([`World::placed_runs`]). Its ends are locked joints (`LockJoint`, which `SHOVE::Run`
+//!   does to each head's start and which the frames inherit), so a pushed run keeps its ends and a shoved line never runs on into the
+//!   head. The vias the clicks placed are locked (KiCad's are not: a shove could push one that is not at the head's start; here the commit
+//!   puts a via where two runs on different layers meet). (Until the review of 2026-10-23 the runs were locked here, and what a later leg
+//!   pushed into the tail was walked round it or stopped the head.)
 //! - `SetSpringbackDoNotTouchNode` (the node that owns the placer's end item) has no counterpart: the end item is always picked from the
 //!   session's world, which is not a frame. The dragged vias of a frame (`m_draggedVias`) are the dragger's, which does not use this.
 
@@ -34,8 +39,24 @@ use eda_model::ir::Point;
 use eda_model::BoardRules;
 use std::collections::BTreeMap;
 
+/// The track id the `i`th fixed run of the route carries in a frame's world ([`World::fixed`]): not an IR track's (it starts with a control
+/// character no IR id has), so that a shove that pushes the route's own tail names it the way it names a track it pushes ([`World::tracks`]),
+/// and what the run has become is found again ([`World::placed_runs`]).
+pub fn run_tag(i: usize) -> String {
+    format!("\u{1}run{i}")
+}
+
+/// [`run_tag`]'s ids.
+pub fn is_run_tag(id: &str) -> bool {
+    id.starts_with('\u{1}')
+}
+
 /// What a frame's world is, against the session's world: every IR track a shove replaced (by `Track::id`, with every line that replaces
-/// it -- none: the track is gone), every IR via a shove moved (by `Via::id`, to where), and what the clicks fixed (locked).
+/// it -- none: the track is gone), every IR via a shove moved (by `Via::id`, to where), and what the clicks fixed. A fixed run is an ordinary
+/// track of the world, as `FixRoute`'s `m_lastNode->Add( segment )` makes it: a later shove may push it (it is then in `tracks`, under its
+/// [`run_tag`]), and its ends are locked joints (`SHOVE::Run`'s `LockJoint` of each head's start, which the frames keep: every leg's start
+/// stays a locked joint of the worlds after it), so a pushed run keeps its ends and the shove never runs on into the head. The vias the
+/// clicks placed are locked.
 #[derive(Debug, Clone, Default)]
 pub struct World {
     pub tracks: BTreeMap<String, Vec<Line>>,
@@ -70,9 +91,10 @@ impl World {
     /// The tracks and vias this world has moved, as a preview reports them (`Preview::displaced_lines` / `displaced_vias`): a track gone
     /// with nothing in its place is one empty line.
     /// `base` is the session's world, where the net, layer and width of a track that is gone are found.
+    /// The route's own runs, pushed or not, are not among them ([`Self::placed_runs`]).
     pub fn displaced_lines(&self, base: &Node) -> Vec<DisplacedLine> {
         let mut out = Vec::new();
-        for (track, lines) in &self.tracks {
+        for (track, lines) in self.tracks.iter().filter(|(t, _)| !is_run_tag(t)) {
             if lines.is_empty() {
                 let template = base.iter().find_map(|(_, it)| match it {
                     Item::Segment(s) if s.source_track.as_ref().is_some_and(|(t, _)| t == track) => Some(Line::new(s.net.clone(), s.layer, s.width)),
@@ -92,6 +114,24 @@ impl World {
 
     pub fn displaced_vias(&self) -> Vec<DisplacedVia> {
         self.vias.iter().map(|(id, &pos)| DisplacedVia { source_via: id.clone(), pos }).collect()
+    }
+
+    /// The IR tracks this world has replaced, without the route's own runs.
+    pub fn moved_tracks(&self) -> BTreeMap<String, Vec<Line>> {
+        self.tracks.iter().filter(|(t, _)| !is_run_tag(t)).map(|(t, l)| (t.clone(), l.clone())).collect()
+    }
+
+    /// `runs` (the route's fixed runs, in order) as this world has them: a run a shove pushed is the lines that replace it (none, where the
+    /// line that took it in stood on an earlier run too), any other as it was fixed. What the preview draws and the commit writes.
+    pub fn placed_runs(&self, runs: &[Line]) -> Vec<Line> {
+        let mut out = Vec::new();
+        for (i, r) in runs.iter().enumerate() {
+            match self.tracks.get(&run_tag(i)) {
+                Some(lines) => out.extend(lines.iter().filter(|l| l.point_count() >= 2).cloned()),
+                None => out.push(r.clone()),
+            }
+        }
+        out
     }
 
     /// The items of `base` this world has taken away: the segments and arcs of every IR track it replaced, and the vias it moved.
@@ -127,11 +167,17 @@ impl World {
                 node.add(Item::Via(Via { pos, ..v }));
             }
         }
-        for l in self.fixed.iter().filter(|l| l.point_count() >= 2) {
-            node.add_line(l, None, true);
+        for (i, l) in self.fixed.iter().enumerate().filter(|(i, l)| l.point_count() >= 2 && !self.tracks.contains_key(&run_tag(*i))) {
+            node.add_line_tagged(l, &run_tag(i));
         }
         for v in &self.fixed_vias {
             node.add(Item::Via(Via { locked: true, ..v.clone() }));
+        }
+        // every leg's start (and so every run's end) is a locked joint, as `LockJoint` left it in the frame each leg was routed in
+        for l in &self.fixed {
+            for p in [l.first(), l.last()].into_iter().flatten() {
+                node.lock_joint(p, &l.net);
+            }
         }
     }
 
@@ -260,8 +306,15 @@ impl Springback {
     }
 
     /// `SHOVE::RewindSpringbackTo( aNode )` for the frame at `len - 1`: erase it and every frame after it (`m_nodeStack.erase( start, end )`).
+    /// **Differs:** when that frame is a locked one -- the undone leg's stage was fixed in the world the click before left, because no shove
+    /// of the leg succeeded (`Run` fell back to its parent) -- KiCad erases it too, and with it the leg before, which is still fixed (and which
+    /// `CommitPlacement`, `RewindToLastLockedNode`, then does not commit). Here only the frames after it go.
     pub fn rewind_to(&mut self, len: usize) {
-        self.stack.truncate(len.saturating_sub(1));
+        let keep = match len.checked_sub(1).and_then(|i| self.stack.get(i)) {
+            Some(t) if t.locked => len,
+            _ => len.saturating_sub(1),
+        };
+        self.stack.truncate(keep);
     }
 
     /// `SHOVE::RewindToLastLockedNode()`: pop to the newest locked frame (or the last one).
@@ -332,8 +385,14 @@ mod tests {
         sb.push(&b, moved(3000), None);
         sb.reduce(&b, &head(&far, &a), &r);
         assert_eq!(sb.len(), 2, "popped down to the locked frame");
+        // the stage of the fix was the frame the shove pushed before it (the stack's length then: 1)
+        let mut undo = sb.clone();
+        undo.rewind_to(1);
+        assert_eq!(undo.len(), 0, "Backspace erases the frame the fix was made in and what came after");
+        // a stage fixed in a locked frame (the click before's) keeps that frame
+        sb.add_locked(&b, moved(3000));
         sb.rewind_to(2);
-        assert_eq!(sb.len(), 1, "Backspace erases the frame the fix was made in and what came after");
+        assert_eq!(sb.len(), 2, "the locked frame of the click before stays");
     }
 
     #[test]
@@ -343,7 +402,9 @@ mod tests {
         let segs: Vec<_> = n.iter().filter_map(|(_, it)| match it { Item::Segment(s) => Some((s.a.y, s.locked, s.source_track.as_ref().map(|t| t.0.clone()))), _ => None }).collect();
         assert_eq!(segs.len(), 2);
         assert!(segs.contains(&(2000, false, Some("t1".into()))), "{segs:?}");
-        assert!(segs.contains(&(-3000, true, None)), "the fixed run is in it, locked: {segs:?}");
+        assert!(segs.contains(&(-3000, false, Some(run_tag(0)))), "the fixed run is in it, a track a shove may push: {segs:?}");
+        let ends = [Point { x: 0, y: -3000 }, Point { x: 5000, y: -3000 }];
+        assert!(ends.iter().all(|&e| n.joint_at(e, &net_of("A")).is_some_and(|j| j.locked)), "its ends are locked joints (`LockJoint`)");
     }
 
     #[test]

@@ -593,7 +593,8 @@ impl<'a> Shove<'a> {
 
     /// `SHOVE::assembleLine`: a line of one width, stopping in front of a locked segment.
     fn assemble(&self, seg: ItemId) -> Option<SLine> {
-        let mut line = self.node.assemble_line_with(seg, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false })?;
+        // `m_currentNode->AssembleLine( aSeg, aIndex, true )`: stopping at a locked joint (the ends of the line placer's head, `LockJoint`)
+        let mut line = self.node.assemble_line_with(seg, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: true })?;
         // `NODE::AssembleLine` does not link vias: a line ends in a via only when
         // a push made it a tadpole.
         line.via_at_start = None;

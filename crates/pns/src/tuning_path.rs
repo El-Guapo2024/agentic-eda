@@ -193,7 +193,7 @@ fn lines_from_via(world: &Node, via_id: ItemId, visited: &HashSet<ItemId>) -> Ve
 /// The line `AssembleLine( seg )` gives the tuner: not through a locked segment, and it stops where the track width changes -- KiCad's call
 /// lets a line cross a width change and rewrites the whole of it at the start segment's width, which would change the tracks it does not tune.
 pub fn assemble_opts() -> AssembleOpts {
-    AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }
+    AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }
 }
 
 struct WalkResult {

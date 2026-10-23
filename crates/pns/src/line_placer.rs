@@ -282,7 +282,13 @@ impl LinePlacer {
                 // `m_currentNode = parent->Branch()`: the shove starts from the world the newest frame the head still presses on left
                 let head_set = HeadSet { pts: &walked.pts, net: &self.net, layer: self.current_layer, width: self.width, via: head_via.as_ref() };
                 let (parent, prior_area) = self.springback.borrow_mut().reduce(node, &head_set, rules);
-                let parent_node = parent.apply(node);
+                let mut parent_node = parent.apply(node);
+                // `SHOVE::Run`: "m_currentNode->LockJoint( head.CPoint( 0 ), &head, true ); if( !head.EndsWithVia() ) m_currentNode->LockJoint(
+                // head.CLastPoint(), &head, true )" -- a line of the head's net the shove pushes (the route's own tail) ends there
+                parent_node.lock_joint(start, &self.net);
+                if let (None, Some(&end)) = (&head_via, walked.pts.last()) {
+                    parent_node.lock_joint(end, &self.net);
+                }
                 let outcome = match &head_via {
                     Some(via) => crate::shove::shove_heads_after(&parent_node, vec![crate::shove::ShoveHead { line: walked.clone(), via: Some(via.clone()) }], rules, settings, prior_area),
                     None => crate::shove::shove_line_after(&parent_node, &walked, rules, settings, prior_area),
@@ -442,7 +448,7 @@ impl LinePlacer {
         if let Some(w) = head.pts.windows(2).find(|w| w[0] != w[1]) {
             self.last_head_dir.set(Direction45::from_seg(w[0], w[1]));
         }
-        Preview { runs: self.runs.clone(), head, colliding, via, snapped_end, snapped_segment, displaced_lines: head_result.displaced_lines, displaced_vias: head_result.displaced_vias }
+        Preview { runs: head_result.world.placed_runs(&self.runs), head, colliding, via, snapped_end, snapped_segment, displaced_lines: head_result.displaced_lines, displaced_vias: head_result.displaced_vias }
     }
 
     /// Where a cursor at `p` ends the route, if it does (`TOOL_BASE::updateEndItem`, `pickSingleItem` for the net, `snapToItem`): on
@@ -488,8 +494,15 @@ impl LinePlacer {
     /// What the commit replaces and moves is what the world of the last `Move` has moved against the session's world (the springback
     /// frame the head was resolved in: every shove since the route began that is still in it, the earlier legs' included).
     fn take_displacement(&mut self, world: &World) {
-        self.displaced_tracks = world.tracks.clone();
+        self.displaced_tracks = world.moved_tracks();
         self.displaced_vias = world.vias.clone();
+    }
+
+    /// The fixed runs as the world of the last `Move` has them (a later leg's shove may have pushed the route's own tail, as KiCad's does:
+    /// [`World::placed_runs`]): what the preview draws and the commit writes. [`Self::runs`] are the runs as they were fixed, whose ends -- the
+    /// points each leg started from, locked joints for every shove -- are where they were.
+    pub fn placed_runs(&self) -> Vec<Line> {
+        self.last_world.borrow().placed_runs(&self.runs)
     }
 
     /// `FixRoute`: `m_shove->AddLockedSpringbackNode( m_lastNode )` -- the world of the last `Move` with the head just fixed in it (and the
@@ -679,7 +692,7 @@ impl LinePlacer {
         if settings.remove_loops && real_end {
             self.remove_loops(node);
         }
-        Some(self.runs.clone())
+        Some(self.placed_runs())
     }
 
     /// `LINE_PLACER::removeLoops`, adapted to this port's "one commit per
@@ -1033,7 +1046,7 @@ mod tests {
         let world = World {
             tracks: placer.displaced_tracks().map(|(t, l)| (t.to_string(), l.to_vec())).collect(),
             vias: placer.displaced_vias().map(|(v, p)| (v.to_string(), p)).collect(),
-            fixed: placer.runs.clone(),
+            fixed: placer.placed_runs(),
             fixed_vias: Vec::new(),
         };
         world.apply(node)
@@ -1114,6 +1127,67 @@ mod tests {
         assert!(placer.undo_last_segment());
         assert_eq!(placer.displaced_tracks().count(), 0, "the leg and its push are gone");
         assert!(placer.preview(&node, &rules, &settings, Point { x: 1500, y: 0 }).displaced_lines.is_empty());
+    }
+
+    /// `UnfixRoute`: `RewindSpringbackTo( st.commit )`. When no shove of the undone leg succeeded, its stage's `commit` is the locked frame the
+    /// click before left (`m_currentNode` was the parent `Run` fell back to), and KiCad erases that frame too: the earlier leg is gone from the
+    /// world while it is still fixed, and `CommitPlacement` (`RewindToLastLockedNode`) then commits a frame without it. Here the earlier leg's
+    /// frame stays.
+    #[test]
+    fn backspace_after_a_leg_whose_shoves_all_failed_keeps_the_leg_before() {
+        let (node, rules) = (Node::new(), rules());
+        let settings = RoutingSettings { mode: Mode::Shove, fix_all_segments: true, ..RoutingSettings::default() };
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        placer.preview(&node, &rules, &settings, Point { x: 500, y: 0 });
+        placer.preview(&node, &rules, &settings, Point { x: 5000, y: 0 });
+        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: 5000, y: 0 }), FixOutcome::Fixed { real_end: false });
+        // the second leg: every shove fails (the iteration limit), so the head is walked in the first click's world
+        let failing = RoutingSettings { shove_iteration_limit: 1, ..settings.clone() };
+        let len = placer.springback.borrow().len();
+        placer.preview(&node, &rules, &failing, Point { x: 5000, y: -1000 });
+        assert_eq!(placer.springback.borrow().len(), len, "no shove succeeded, no frame was pushed");
+        assert_eq!(placer.fix(&node, &rules, &failing, Point { x: 5000, y: -1000 }), FixOutcome::Fixed { real_end: false });
+        assert!(placer.undo_last_segment());
+        let world = placer.springback.borrow().locked_top();
+        assert_eq!(world.fixed.len(), 1, "the first leg is still in the world");
+        assert_eq!(world.fixed[0].pts, placer.runs[0].pts);
+    }
+
+    /// `FixRoute` adds the fixed segments to the world as ordinary tracks (`m_lastNode->Add( segment )`), so a later leg's shove that pushes
+    /// another net's track into the route's own tail pushes the tail on; the ends of each run stay (`LockJoint` of each head's start). Here:
+    /// three legs (east, north, west), then a fourth heads south onto GND's track between it and the first leg: GND is pushed into the first
+    /// leg, which bulges away, the head reaches the cursor, the preview draws the pushed run and the commit is clean. (With the runs locked, the
+    /// review found, the head stopped 150 um short of the cursor.)
+    #[test]
+    fn a_later_leg_pushes_the_routes_own_tail_as_kicads_shove_does() {
+        use crate::item::Segment;
+        let rules = rules();
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 3000, y: -700 }, b: Point { x: 7000, y: -700 }, width: 200, source_track: Some(("B".into(), 0)), locked: false }));
+        let settings = RoutingSettings { mode: Mode::Shove, fix_all_segments: true, ..RoutingSettings::default() };
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        for (moves, fix) in [(vec![(500, 0), (5000, 0)], (10000, 0)), (vec![(10000, -1000)], (10000, -3000)), (vec![(9000, -3000)], (5000, -3000))] {
+            for m in moves {
+                placer.preview(&node, &rules, &settings, Point { x: m.0, y: m.1 });
+            }
+            assert_eq!(placer.fix(&node, &rules, &settings, Point { x: fix.0, y: fix.1 }), FixOutcome::Fixed { real_end: false });
+        }
+        let mut last = None;
+        for y in [-2500, -2000, -1500, -1200, -1000, -900, -800, -700, -650] {
+            last = Some(placer.preview(&node, &rules, &settings, Point { x: 5000, y }));
+        }
+        let pv = last.unwrap();
+        assert!(!pv.colliding);
+        assert_eq!(pv.head.last(), Some(Point { x: 5000, y: -650 }), "the head reaches the cursor: {:?}", pv.head.pts);
+        assert_eq!(pv.displaced_lines.len(), 1, "GND's track, not the route's own run: {:?}", pv.displaced_lines);
+        let first = &pv.runs[0];
+        assert_eq!((first.first(), first.last()), (Some(Point { x: 0, y: 0 }), Some(Point { x: 10000, y: 0 })), "its ends stay: {:?}", first.pts);
+        assert!(first.pts.iter().any(|q| q.y > 0), "the first leg bulges away from the push: {:?}", first.pts);
+        assert_eq!(pv.runs.len(), 3);
+        placer.finish(&node, &rules, &settings, Point { x: 5000, y: -650 }).expect("finishes");
+        assert!(placer.placed_runs()[0].pts.iter().any(|q| q.y > 0), "and the commit writes it pushed");
+        let board = committed_world(&node, &placer);
+        assert!(violations(&board, &rules).is_empty(), "the commit is clean: {:?}", violations(&board, &rules));
     }
 
     /// `CORNER_MODE` (`buildInitialLine`: `BuildInitialTrace( m_p_start, aP, false, cornerMode )`): arc 45 makes the diagonal leg a 45-degree arc

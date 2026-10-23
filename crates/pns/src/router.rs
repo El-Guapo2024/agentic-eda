@@ -315,10 +315,11 @@ impl Router {
         let head = &preview.head;
         // what the session has fixed, in the world: segments, and a via where two runs on different layers meet
         let mut node = world.branch();
-        for run in &placer.runs {
+        let runs = placer.placed_runs();
+        for run in &runs {
             node.add_line(run, None, false);
         }
-        for w in placer.runs.windows(2) {
+        for w in runs.windows(2) {
             if w[0].layer != w[1].layer && w[0].last() == w[1].first() {
                 let (l0, l1) = (w[0].layer, w[1].layer);
                 node.add(Item::Via(crate::item::Via { net: net.clone(), layers: LayerRange::new(l0, l1), pos: w[0].last().unwrap(), diameter: placer.via_diameter.max(1), drill: placer.via_drill.max(1), source_via: None, locked: false, is_virtual: false }));

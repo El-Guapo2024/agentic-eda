@@ -112,12 +112,14 @@ pub struct AssembleOpts {
     /// Continue through a change of track width. When false the line stops at the
     /// joint where the width changes, so a line never has two widths.
     pub allow_width_mismatch: bool,
+    /// `aStopAtLockedJoints`: end the line at a locked joint ([`crate::joint::Joint::locked`], `NODE::LockJoint`).
+    pub stop_at_locked_joints: bool,
 }
 
 impl Default for AssembleOpts {
     /// What the plain [`Node::assemble_line`] has always done: through everything.
     fn default() -> Self {
-        AssembleOpts { follow_locked_segments: true, allow_width_mismatch: true }
+        AssembleOpts { follow_locked_segments: true, allow_width_mismatch: true, stop_at_locked_joints: false }
     }
 }
 
@@ -328,6 +330,14 @@ impl Node {
         self.joints.get(&JointKey::new(pos, net))
     }
 
+    /// `NODE::LockJoint( aPos, aItem, true )`: lock the joint of `net` at `pos`, if there is one (KiCad's `touchJoint` makes an empty one where
+    /// there is none, which nothing can stop at and which goes when an item links to it and leaves again).
+    pub fn lock_joint(&mut self, pos: Point, net: &Net) {
+        if let Some(j) = self.joints.get_mut(&JointKey::new(pos, net)) {
+            j.locked = true;
+        }
+    }
+
     /// `NODE::QueryJoints( bbox, joints, layers, ITEM::SOLID_T )` for what the optimizer's `KEEP_TOPOLOGY_CONSTRAINT` asks: the position and net of the joint of
     /// every pad (`Solid`) that is inside `bbox` (`x0, y0, x1, y1`) and on one of `layers`.
     pub fn solid_joints_in(&self, bbox: (Um, Um, Um, Um), layers: LayerRange) -> Vec<(Point, Net)> {
@@ -439,6 +449,10 @@ impl Node {
         let guard = b0;
         let mut guard_hit = false;
         while let Some(joint) = self.joint_at(cur_end, &net) {
+            // `followLine`: "bool locked = aStopAtLockedJoints ? jt->IsLocked() : false; if( locked || .. ) break;"
+            if opts.stop_at_locked_joints && joint.locked {
+                break;
+            }
             if let Some(next_id) = self.next_segment(joint, cur, &net, layers, opts.follow_locked_segments) {
                 if !opts.allow_width_mismatch && self.items[&next_id].width() != width {
                     break; // the line ends where the track width changes
@@ -476,6 +490,9 @@ impl Node {
         // walked all the way round going forward.
         if !guard_hit {
             while let Some(joint) = self.joint_at(cur_end, &net) {
+                if opts.stop_at_locked_joints && joint.locked {
+                    break;
+                }
                 if let Some(next_id) = self.next_segment(joint, cur, &net, layers, opts.follow_locked_segments) {
                     if !opts.allow_width_mismatch && self.items[&next_id].width() != width {
                         break;
@@ -1385,14 +1402,14 @@ mod tests {
         let locked = n.add(Item::Segment(Segment { net: net_of("N"), layer: 0, a: p(0, 0), b: p(-1000, 0), width: 200, source_track: None, locked: true }));
         let loose = n.assemble_line(a).unwrap();
         assert_eq!(loose.pts, vec![p(-1000, 0), p(0, 0), p(1000, 0), p(2000, 0), p(3000, 0)], "the plain assembly goes through everything");
-        let strict = n.assemble_line_with(a, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }).unwrap();
+        let strict = n.assemble_line_with(a, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }).unwrap();
         assert_eq!(strict.pts, vec![p(0, 0), p(1000, 0), p(2000, 0)]);
         assert_eq!(strict.segment_ids, vec![a, b]);
         assert_eq!(strict.width, 200);
-        let from_wide = n.assemble_line_with(wide, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }).unwrap();
+        let from_wide = n.assemble_line_with(wide, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }).unwrap();
         assert_eq!(from_wide.pts, vec![p(2000, 0), p(3000, 0)], "the wide part is a line of its own");
         // a line seeded on the locked segment itself still contains it (so `HasLockedSegments` can say so)
-        let from_locked = n.assemble_line_with(locked, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }).unwrap();
+        let from_locked = n.assemble_line_with(locked, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }).unwrap();
         assert!(from_locked.segment_ids.contains(&locked));
     }
 

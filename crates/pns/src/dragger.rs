@@ -181,7 +181,7 @@ pub const LOCKED_MESSAGE: &str = "The selected item is locked.";
 /// `m_world->AssembleLine( aSeg, &m_draggedSegmentIndex )`: the defaults of `NODE::AssembleLine` -- the line stops in front of a locked segment (`aFollowLockedSegments`
 /// false), so a locked track next to the dragged line stays where it is -- and goes on through a change of track width.
 fn assemble(node: &Node, id: ItemId) -> Option<Line> {
-    node.assemble_line_with(id, crate::node::AssembleOpts { follow_locked_segments: false, allow_width_mismatch: true })
+    node.assemble_line_with(id, crate::node::AssembleOpts { follow_locked_segments: false, allow_width_mismatch: true, stop_at_locked_joints: false })
 }
 
 fn dist(a: Point, b: Point) -> f64 {
