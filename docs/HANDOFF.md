@@ -68,7 +68,7 @@ Gates for any of them:
    - the schematic: copying and pasting whole sheets, buses across sheets, a label's own fields;
    - KiCad 10 items the reader skips: line endings, grid items, via stitching, drill charts;
    - browser checks for the older areas (P20);
-   - re-running `tools/parity_report.py` (connectivity is at 84%). On the box (2026-10-23) it needs `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data`, and its connectivity part evaluates 56 boards, against a floor of 58 set on the Mac, which fails the ratchet. Find out which two boards drop out before raising or lowering the floor.
+   - re-running `tools/parity_report.py` (connectivity is at 84%). On the box (2026-10-23) it needs `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data`, and its connectivity part evaluates 56 boards, against a floor of 58 set on the Mac, which fails the ratchet. The two boards are the user's `work/` boards that exist only on the Mac (`work/l1-order`; a worktree has no `work/mcu30` either), so the floor counts boards the box does not have. That is a machine difference, not a regression. A floor that counts only `qa/data` and `examples/` would fix it.
 
 Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Python plugins, the autoplacer and the viewer windows (see `STALE-REASONS.md`); IDF, Hyperlynx and footprint-report export (no kicad-cli exporter; ask the user before porting them as was done for Specctra).
 
