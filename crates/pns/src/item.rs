@@ -153,6 +153,12 @@ pub struct Via {
     pub drill: Um,
     pub source_via: Option<String>,
     pub locked: bool,
+    /// `ITEM::m_isVirtual` (`VVIA`, `NODE::FixupVirtualVias`): a via the router puts where tracks meet with no pad or via -- three or more segments,
+    /// a change of width, the ends of a locked segment -- so that the meeting point is a joint with a via in it. It has no hole (`HasHole()` false),
+    /// collides with nothing (`NODE::Collide`, `QueryColliding`: "virtual items cannot collide"), is not drawn and not committed; what it is for is
+    /// the dragger, which drags it as a via when a segment is taken hold of at such an end (`DRAGGER::checkVirtualVia`), and the joints, which end a line
+    /// there.
+    pub is_virtual: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +178,11 @@ pub enum Item {
 }
 
 impl Item {
+    /// `ITEM::IsVirtual`: a virtual via ([`Via::is_virtual`]).
+    pub fn is_virtual(&self) -> bool {
+        matches!(self, Item::Via(v) if v.is_virtual)
+    }
+
     pub fn kind(&self) -> Kind {
         match self {
             Item::Solid(_) => Kind::Solid,

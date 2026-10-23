@@ -791,6 +791,26 @@ a locked track (refused, Drag Anyway, walked round), `V` shoving the track under
    a board text on copper, which this router does not see (`syncTextItem` is not ported: four of them, two in a mitered mode; a gap of its own); the browser check's Track Corner Mode
    scenario.
 
+3. **Virtual vias** (`pns_node.cpp`: `NODE::FixupVirtualVias`, run by `ROUTER::SyncWorld`; `pns_via.h`: `VVIA`; `pns_item.h`: `m_isVirtual`;
+   `pns_node.cpp:148, :273`: virtual items never collide; `pns_joint.h`: `NextSegment` with `aAllowLockedSegs`; `pns_dragger.cpp`: `checkVirtualVia`,
+   `DRAGGER::Start`; `router_preview_item.cpp` and `pns_router.cpp::CommitRouting`: a virtual item is neither drawn nor committed). **What KiCad means
+   by it:** a via the router itself puts in its world at every joint on one layer with no pad and no via where three or more segments meet, where the
+   track width changes, or where a locked segment ends (and at that segment's other end), so that the point is a joint with a via in it. It has no hole,
+   collides with nothing, is not drawn and not committed. **What the person sees:** `D` on a segment within half its width of such an end drags that
+   point as a via (`DM_VIA`): every track meeting there follows, in each mode, and no via appears or is committed -- before, the drag took the corner of
+   one line and tore it off the others. And a line ends at such a joint (`NextSegment` stops at a via, unless locked segments are followed). Ported:
+   `Via::is_virtual`, `Node::fixup_virtual_vias` (called by `from_ir::build_node`, as `SyncWorld` does), a virtual item in the joints but not in the
+   spatial index nor in `Node::iter` / the anchor and unconnected-item searches (nothing finds it but its joint), never an obstacle (`via_vs_line`,
+   `items_collide`, `via_colliding_world`, `nearest_obstacle`'s via, `VIA::PushoutForce`, the dragger's own via check), `check_virtual_via` in
+   `Dragger::start_checked`, `Dragger::via_virtual` (no via in the commit), `virtual_via` on the drag reply and no via ghost in the studio's drag
+   preview. **Differences:** `PNS_HULL_MARGIN` (10 nm) is below the micrometre grid, so the virtual via is as wide as the widest track; the solder mask
+   KiCad compares besides the width is not in the model. **Proof:** units in `dragger.rs` (a T dragged as its virtual via in all three modes, three tracks
+   follow, no via committed; the middle of a segment still slides; where the width changes and the ends of a locked segment get one, a real via's joint
+   none), the joint counts in `router.rs`; kicad-cli (`gate_vs_kicad::tests::dragging_a_junction_as_a_virtual_via_adds_no_violation_to_kicad_clis_drc`,
+   `EDA_SLOW_TESTS=1`): six of `pic_programmer`'s 27 junctions dragged 0.3 mm in Shove, Walk around and Highlight collisions add no copper violation
+   and no dangling track; the browser check's virtual via scenario. All of `tests/qa_regressions.rs` replays agree as before with the virtual vias in the
+   world.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
@@ -844,7 +864,7 @@ a locked track (refused, Drag Anyway, walked round), `V` shoving the track under
 - ~~`MOUSE_TRAIL_TRACER`~~ **Ported 2026-10-20** (Stage 9 step 4). ~~Springback~~
   **Ported 2026-10-23** for the line placer (Stage 10 step 1; the dragger and the pair
   placer do not keep the stack). See
-  `docs/parity/GAPS.md` item 7 for what is left in gap #7: `LockJoint`, virtual vias,
+  `docs/parity/GAPS.md` item 7 for what is left in gap #7: `LockJoint`, ~~virtual vias~~ (Stage 10 step 3),
   the walkaround cluster timeout, the pad-to-die length and delay, time-domain rules as the tuner's
   target, the rounding of corners, the merged outline of a pair's pattern, a pattern moved, turned
   or flipped, the tuner's world branched at every move, two walk attempts of a pair where KiCad makes

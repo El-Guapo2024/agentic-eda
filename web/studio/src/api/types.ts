@@ -2049,6 +2049,8 @@ export interface DragPreview {
   /** What `DRAGGER::Start` grabbed: the whole segment (`DM_SEGMENT`, it slides sideways, its neighbours following at 45 degrees), one
    * vertex (`DM_CORNER`), a via (`DM_VIA`) or an arc track (`DM_ARC`: its curvature follows the cursor, tangent to the tracks next to it). */
   drag?: "segment" | "corner" | "via" | "arc";
+  /** A `"via"` drag of a virtual via (`DRAGGER::checkVirtualVia`): the end of a segment where tracks meet with no pad or via -- the junction moves, no via is drawn or committed. */
+  virtual_via?: boolean;
   colliding: boolean;
   /** The cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last
    * solution"), and letting go commits that one. */

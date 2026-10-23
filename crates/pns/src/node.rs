@@ -41,7 +41,7 @@ const SEGMENT_AT_REACH: Um = 2_500;
 const ASSEMBLE_MAX_VERTS: usize = 1024 * 16;
 
 use crate::arcs::ArcPts;
-use crate::item::{same_net, Item, ItemId, Kind, Net};
+use crate::item::{same_net, Item, ItemId, Kind, Net, Via};
 use crate::joint::{Joint, JointKey};
 use crate::layer::LayerRange;
 use crate::line::Line;
@@ -189,8 +189,68 @@ impl Node {
         self.items.is_empty()
     }
 
+    /// Every item but the virtual ones ([`crate::item::Via::is_virtual`]: they are not drawn, not committed, not picked, and collide with nothing;
+    /// the joints have them, and [`Self::get`] finds them).
     pub fn iter(&self) -> impl Iterator<Item = (ItemId, &Item)> {
-        self.items.iter().map(|(&id, it)| (id, it))
+        self.items.iter().filter(|(_, it)| !it.is_virtual()).map(|(&id, it)| (id, it))
+    }
+
+    /// `NODE::FixupVirtualVias` (`pns_node.cpp:1270`, run by `ROUTER::SyncWorld`): a virtual via (`VVIA`) at every joint on one layer with no pad and no
+    /// via where three or more segments meet, where the width changes, or where a locked segment ends -- and one at the other end of that locked
+    /// segment too. Its diameter is the widest track's plus twice `PNS_HULL_MARGIN` (10 nm, which the micrometre grid has no room for). As
+    /// KiCad's, only segments are counted (an arc is no `SEGMENT`), "the locked one" is the last segment of the joint, and the solder mask, which
+    /// KiCad compares too, is not in the model.
+    pub fn fixup_virtual_vias(&mut self) {
+        let mut vvias: Vec<Via> = Vec::new();
+        let mut keys: Vec<&JointKey> = self.joints.keys().collect();
+        keys.sort_by_key(|k| format!("{k:?}")); // one order, whatever the hash map's
+        for key in keys {
+            let joint = &self.joints[key];
+            if joint.layers.start() != joint.layers.end() {
+                continue; // `IsMultilayer()`
+            }
+            let (mut n_seg, mut n_solid, mut n_vias) = (0, 0, 0);
+            let (mut prev_w, mut max_w, mut is_width_change) = (-1, -1, false);
+            let mut locked_seg: Option<&crate::item::Segment> = None;
+            let mut is_locked = false;
+            let mut pos: Option<Point> = None;
+            let mut net = None;
+            for id in &joint.links {
+                match self.items.get(id) {
+                    Some(Item::Via(_)) => n_vias += 1,
+                    Some(Item::Solid(_)) => n_solid += 1,
+                    Some(Item::Segment(s)) => {
+                        let w = s.width;
+                        // `if( prev_w < 0 ) prev_w = w; else if( w != prev_w ) is_width_change = true;`
+                        if prev_w >= 0 && w != prev_w {
+                            is_width_change = true;
+                        }
+                        max_w = max_w.max(w);
+                        prev_w = w;
+                        is_locked = s.locked;
+                        locked_seg = Some(s);
+                        n_seg += 1;
+                        net = Some(s.net.clone());
+                        pos = Some(key.pos());
+                    }
+                    _ => {}
+                }
+            }
+            let (Some(pos), Some(net)) = (pos, net) else { continue };
+            let layer = joint.layers.start();
+            let vvia = |at: Point| Via { net: net.clone(), layers: LayerRange::single(layer), pos: at, diameter: max_w, drill: max_w / 2, source_via: None, locked: false, is_virtual: true };
+            if (is_width_change || n_seg >= 3 || is_locked) && n_solid == 0 && n_vias == 0 {
+                vvias.push(vvia(pos));
+            }
+            if is_locked {
+                if let Some(s) = locked_seg {
+                    vvias.push(vvia(if s.a == pos { s.b } else { s.a }));
+                }
+            }
+        }
+        for v in vvias {
+            self.add(Item::Via(v));
+        }
     }
 
     fn bbox_of(item: &Item) -> (Um, Um, Um, Um) {
@@ -210,7 +270,11 @@ impl Node {
     pub fn add(&mut self, item: Item) -> ItemId {
         let id = self.next_id;
         self.next_id += 1;
-        self.index.insert(id, Self::bbox_of(&item));
+        // a virtual item is in the joints but not in the index: "By default, virtual items cannot collide" (`QueryColliding`), so no spatial
+        // query is to find it
+        if !item.is_virtual() {
+            self.index.insert(id, Self::bbox_of(&item));
+        }
         for anchor in item.anchors() {
             self.touch_joint(anchor, item.layers(), item.net()).link(id);
         }
@@ -307,6 +371,8 @@ impl Node {
                         }
                     }
                 }
+                // "Virtual via will be added at the joint between an unlocked and locked seg": followed through when locked segments are
+                Some(Item::Via(v)) if v.is_virtual && follow_locked => {}
                 Some(Item::Solid(_)) | Some(Item::Via(_)) => return None, // pad/via: always a hard stop
                 _ => {}
             }
@@ -767,7 +833,7 @@ impl Node {
             }
         }
         let mut best: Option<(i64, ItemId, Point)> = None;
-        let mut ids: Vec<ItemId> = self.items.iter().filter(|(id, it)| same_net_exact(it.net(), net) && !connected.contains(id) && !matches!(it, Item::Solid(s) if s.edge)).map(|(&id, _)| id).collect();
+        let mut ids: Vec<ItemId> = self.items.iter().filter(|(id, it)| same_net_exact(it.net(), net) && !connected.contains(id) && !it.is_virtual() && !matches!(it, Item::Solid(s) if s.edge)).map(|(&id, _)| id).collect();
         ids.sort_unstable();
         for id in ids {
             for a in self.items[&id].anchors() {
@@ -883,7 +949,7 @@ impl Node {
                 found.entry(o.id).or_insert(o);
             }
         }
-        if let Some(v) = via {
+        if let Some(v) = via.filter(|v| !v.is_virtual) {
             let shape = Shape::Circle { c: v.pos, r: v.diameter / 2 };
             for o in self.colliding_with(&shape, &v.net, v.layers, rules, exclude, opts) {
                 found.entry(o.id).or_insert(o);
@@ -1038,7 +1104,7 @@ impl Node {
     pub fn nearest_anchor(&self, pos: Point, layers: LayerRange, max_dist: Um, net_filter: Option<&Net>) -> Option<(ItemId, Point)> {
         let mut best: Option<(ItemId, Point, i128)> = None;
         for (&id, item) in &self.items {
-            if !item.layers().overlaps(&layers) {
+            if !item.layers().overlaps(&layers) || item.is_virtual() {
                 continue;
             }
             if let Some(f) = net_filter {
@@ -1179,7 +1245,7 @@ mod tests {
         let net = net_of("SIG");
         let s1 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(0, 0), b: p(1000, 0), width: 200, source_track: None, locked: false }));
         let _s2 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(1000, 0), b: p(2000, 0), width: 200, source_track: None, locked: false }));
-        let _via = n.add(Item::Via(Via { net: net.clone(), layers: LayerRange::new(0, 1), pos: p(2000, 0), diameter: 600, drill: 300, source_via: None, locked: false }));
+        let _via = n.add(Item::Via(Via { net: net.clone(), layers: LayerRange::new(0, 1), pos: p(2000, 0), diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false }));
         let line = n.assemble_line(s1).expect("line");
         assert_eq!(line.pts, vec![p(0, 0), p(1000, 0), p(2000, 0)]);
         assert_eq!(line.segment_ids.len(), 2);
@@ -1240,7 +1306,7 @@ mod tests {
     #[test]
     fn branch_is_independent_clone() {
         let mut n = Node::new();
-        let id = n.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(0, 0), diameter: 600, drill: 300, source_via: None, locked: false }));
+        let id = n.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(0, 0), diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false }));
         let mut child = n.branch();
         child.remove(id);
         assert!(n.contains(id), "removing from a branch must not affect the parent");
@@ -1297,7 +1363,7 @@ mod tests {
         let pad = n.add(pad_item("A", p(1000, 3000), 300));
         let line = Line::from_points(net_of("SIG"), 0, 200, vec![p(0, 0), p(1000, 0)]);
         assert!(n.nearest_obstacle(&line, None, &rules, &[], QueryOpts::default()).is_none(), "the track alone is clear of the pad");
-        let via = crate::item::Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(1000, 2500), diameter: 600, drill: 300, source_via: None, locked: false };
+        let via = crate::item::Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(1000, 2500), diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false };
         assert_eq!(n.nearest_obstacle(&line, Some(&via), &rules, &[], QueryOpts::default()).unwrap().id, pad);
     }
 

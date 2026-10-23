@@ -432,7 +432,7 @@ impl DiffPairPlacer {
     /// `makeVia`: a via of the pair's size on the layers between the current one and the one the route goes on to.
     fn make_via(&self, pos: Point, net: &Net) -> Via {
         let to = self.via_to_layer.unwrap_or(self.current_layer);
-        Via { net: net.clone(), layers: LayerRange::new(self.current_layer, to), pos, diameter: self.sizes.via_diameter, drill: self.sizes.via_drill, source_via: None, locked: false }
+        Via { net: net.clone(), layers: LayerRange::new(self.current_layer, to), pos, diameter: self.sizes.via_diameter, drill: self.sizes.via_drill, source_via: None, locked: false, is_virtual: false }
     }
 
     /// The end item of a cursor (`TOOL_BASE::updateEndItem`, `pickSingleItem` for each net of the pair): a pad or via of either net near

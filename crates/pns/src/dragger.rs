@@ -71,6 +71,22 @@ pub enum DragKind {
     Arc,
 }
 
+/// `DRAGGER::checkVirtualVia( aP, aSeg )`: a segment taken hold of within half its width of one of its ends (`EuclideanNorm() <= w2`, the start
+/// first), where the joint has a virtual via -- that via.
+fn check_virtual_via(node: &Node, at: Point, seg: &crate::item::Segment) -> Option<ItemId> {
+    let w2 = seg.width / 2;
+    let norm = |p: Point| (((at.x - p.x) as f64).hypot((at.y - p.y) as f64)).round() as Um;
+    let psnap = if norm(seg.a) <= w2 {
+        seg.a
+    } else if norm(seg.b) <= w2 {
+        seg.b
+    } else {
+        return None;
+    };
+    let joint = node.joint_at(psnap, &seg.net)?;
+    joint.links.iter().copied().find(|&id| node.get(id).is_some_and(Item::is_virtual))
+}
+
 pub struct Dragger {
     pub kind: DragKind,
     pub net: Net,
@@ -90,6 +106,9 @@ pub struct Dragger {
     /// `Via` only: the layers the via spans.
     pub via_layers: LayerRange,
     pub source_via: Option<String>,
+    /// `Via` only: the via is a virtual one (`VVIA`, [`crate::item::Via::is_virtual`]): the joint where tracks meet with no pad or via, taken hold
+    /// of at the end of a segment (`DRAGGER::checkVirtualVia`). It collides with nothing and is not committed -- only the tracks it drags are.
+    pub via_virtual: bool,
     /// `m_freeAngleMode` (`DM_FREE_ANGLE`, the `G` hotkey): see the module
     /// doc -- never shoves, only marks obstacles.
     pub free_angle: bool,
@@ -200,7 +219,7 @@ impl Dragger {
                 let index = line.segment_ids.iter().position(|&id| id == item_id).ok_or(CANT)?.min(line.segment_count().saturating_sub(1));
                 let run = line.arc_runs().into_iter().find(|r| index >= r.first && index < r.last).ok_or(CANT)?;
                 let drag = crate::arc_drag::ArcDrag::new(&line, run)?.ok_or("The arc has no corner to round: its tangents do not meet.")?;
-                Ok(Dragger { kind: DragKind::Arc, net: line.net.clone(), layer: line.layer, width: line.width, original: line.clone(), grabbed_index: run.first, via_id: None, via_pos: Point { x: 0, y: 0 }, via_diameter: 0, via_drill: 0, source_via: None, via_layers: LayerRange::single(line.layer), free_angle, arc: Some(drag), start_point: at, state: DragState::default() })
+                Ok(Dragger { kind: DragKind::Arc, net: line.net.clone(), layer: line.layer, width: line.width, original: line.clone(), grabbed_index: run.first, via_id: None, via_pos: Point { x: 0, y: 0 }, via_diameter: 0, via_drill: 0, source_via: None, via_virtual: false, via_layers: LayerRange::single(line.layer), free_angle, arc: Some(drag), start_point: at, state: DragState::default() })
             }
             _ => Self::start_plain(node, at, item_id, free_angle).ok_or_else(|| CANT.to_string()),
         }
@@ -209,8 +228,12 @@ impl Dragger {
     fn start_plain(node: &Node, at: Point, item_id: ItemId, free_angle: bool) -> Option<Dragger> {
         let item = node.get(item_id)?;
         match item {
-            Item::Via(v) => Some(Dragger { kind: DragKind::Via, net: v.net.clone(), layer: v.layers.start(), width: 0, original: Line::new(v.net.clone(), v.layers.start(), 0), grabbed_index: 0, via_id: Some(item_id), via_pos: v.pos, via_diameter: v.diameter, via_drill: v.drill, via_layers: v.layers, source_via: v.source_via.clone(), free_angle, arc: None, start_point: at, state: DragState::default() }),
+            Item::Via(v) => Some(Dragger { kind: DragKind::Via, net: v.net.clone(), layer: v.layers.start(), width: 0, original: Line::new(v.net.clone(), v.layers.start(), 0), grabbed_index: 0, via_id: Some(item_id), via_pos: v.pos, via_diameter: v.diameter, via_drill: v.drill, via_layers: v.layers, source_via: v.source_via.clone(), via_virtual: v.is_virtual, free_angle, arc: None, start_point: at, state: DragState::default() }),
             Item::Segment(seg) => {
+                // `DRAGGER::Start`: "VVIA* vvia = checkVirtualVia( aP, seg ); if( vvia ) return startDragVia( vvia );"
+                if let Some(vvia) = check_virtual_via(node, at, seg) {
+                    return Self::start_plain(node, at, vvia, free_angle);
+                }
                 // `startDragSegment`
                 let (seg_a, seg_b, w2) = (seg.a, seg.b, seg.width / 2);
                 let line = assemble(node, item_id)?;
@@ -234,7 +257,7 @@ impl Dragger {
                 } else {
                     kind = DragKind::Segment;
                 }
-                Some(Dragger { kind, net: line.net.clone(), layer: line.layer, width: line.width, original: line, grabbed_index: index, via_id: None, via_pos: Point { x: 0, y: 0 }, via_diameter: 0, via_drill: 0, via_layers: LayerRange::single(layer_of_line), source_via: None, free_angle, arc: None, start_point: at, state: DragState::default() })
+                Some(Dragger { kind, net: line.net.clone(), layer: line.layer, width: line.width, original: line, grabbed_index: index, via_id: None, via_pos: Point { x: 0, y: 0 }, via_diameter: 0, via_drill: 0, via_layers: LayerRange::single(layer_of_line), source_via: None, via_virtual: false, free_angle, arc: None, start_point: at, state: DragState::default() })
             }
             _ => None,
         }
@@ -314,7 +337,8 @@ impl Dragger {
         if self.kind == DragKind::Via {
             let fanout = self.via_candidate(node, to);
             let shape = Shape::Circle { c: to, r: self.via_diameter / 2 };
-            let mut colliding = node.first_colliding(&shape, &self.net, self.via_layers, rules, &exclude).is_some();
+            // a virtual via collides with nothing: only its tracks can
+            let mut colliding = !self.via_virtual && node.first_colliding(&shape, &self.net, self.via_layers, rules, &exclude).is_some();
             for l in &fanout {
                 colliding |= l.segs().any(|(a, b)| {
                     let shape = Shape::Stadium { a, b, r: l.width.max(1) / 2 };
@@ -528,7 +552,7 @@ impl Dragger {
     /// ([`try_walkaround`]). A via that cannot be pushed free, or a track that cannot be walked, is a collision.
     fn drag_via_walkaround(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
         let exclude = self.exclude();
-        let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: to, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false };
+        let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: to, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, is_virtual: false };
         let lead = (self.via_pos.x - to.x, self.via_pos.y - to.y);
         let Some(force) = shove::via_pushout_force(node, rules, &via, lead, crate::node::kind_mask::ANY, settings.via_force_prop_iteration_limit, &exclude) else {
             // can't force-propagate the via? bummer...
@@ -597,9 +621,12 @@ impl Dragger {
                 if let Some(src) = &self.source_via {
                     commit.remove_via_ids.push(src.clone());
                 }
-                // where the drag left the via: the cursor, or further, if a shove or a pushout moved it on
+                // where the drag left the via: the cursor, or further, if a shove or a pushout moved it on -- a virtual via is not committed
+                // (`ROUTER::CommitRouting`: `if( !item->IsVirtual() ) m_iface->AddItem( item )`)
                 let end = preview.pts.first().copied().unwrap_or(self.via_pos);
-                commit.vias.push((end, self.via_diameter, self.via_drill, self.source_via.clone()));
+                if !self.via_virtual {
+                    commit.vias.push((end, self.via_diameter, self.via_drill, self.source_via.clone()));
+                }
                 for l in &preview.fanout {
                     for src in Self::source_tracks(node, l) {
                         if !commit.remove_track_ids.contains(&src) {
@@ -694,6 +721,65 @@ mod tests {
     /// A SIG track of `pts` on layer 0 (width 200) in the node, one `Segment` per leg, all of IR track `track`.
     fn add_track(node: &mut Node, net: &str, track: &str, pts: &[Point]) -> Vec<ItemId> {
         pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of(net), layer: 0, a: w[0], b: w[1], width: 200, source_track: Some((track.into(), i)), locked: false }))).collect()
+    }
+
+    /// `NODE::FixupVirtualVias` + `DRAGGER::checkVirtualVia`: where three tracks meet with no pad or via, the world has a virtual via, and a segment
+    /// taken hold of within half its width of that end drags the junction as a via -- all three tracks follow, in every mode, and the commit moves the
+    /// three and adds no via. Taken hold of further along, it is a corner or segment drag of that track as before.
+    #[test]
+    fn a_t_junction_is_dragged_as_a_virtual_via() {
+        let mut node = Node::new();
+        let a = add_track(&mut node, "SIG", "trkA", &[p(-3000, 0), p(0, 0)]);
+        add_track(&mut node, "SIG", "trkB", &[p(0, 0), p(3000, 0)]);
+        add_track(&mut node, "SIG", "trkC", &[p(0, 0), p(0, 3000)]);
+        node.fixup_virtual_vias();
+        let joint = node.joint_at(p(0, 0), &net_of("SIG")).unwrap();
+        let vvia = joint.links.iter().copied().find(|&id| node.get(id).is_some_and(Item::is_virtual)).expect("a virtual via at the T");
+        assert!(node.iter().all(|(id, _)| id != vvia), "a virtual via is not one of the items the world lists");
+        assert!(node.item_at(p(0, 0), LayerRange::single(0), 100).is_some_and(|id| id != vvia), "and not one it picks");
+        let rules = rules();
+        for mode in [Mode::MarkObstacles, Mode::Walkaround, Mode::Shove] {
+            let settings = RoutingSettings { mode, ..RoutingSettings::default() };
+            let mut d = Dragger::start(&node, p(-50, 0), a[0]).expect("a drag");
+            assert_eq!((d.kind, d.via_virtual, d.via_id), (DragKind::Via, true, Some(vvia)), "{mode:?}: the end of the segment at the T is the virtual via");
+            let pv = d.drag(&node, &rules, &settings, p(500, 500));
+            assert!(!pv.colliding, "{mode:?}");
+            assert_eq!(pv.fanout.len(), 3, "{mode:?}: all three tracks follow: {:?}", pv.fanout);
+            assert!(pv.fanout.iter().all(|l| l.first() == Some(p(500, 500)) || l.last() == Some(p(500, 500))), "{mode:?}: {:?}", pv.fanout);
+            let commit = d.finish(&node, &rules, &settings, p(500, 500), false).expect("commits");
+            assert!(commit.vias.is_empty() && commit.remove_via_ids.is_empty(), "{mode:?}: no via is committed: {:?}", commit.vias);
+            let mut removed = commit.remove_track_ids.clone();
+            removed.sort();
+            assert_eq!(removed, vec!["trkA", "trkB", "trkC"], "{mode:?}");
+        }
+        // further along the segment it is the segment's own drag
+        let d = Dragger::start(&node, p(-1500, 0), a[0]).expect("a drag");
+        assert_eq!(d.kind, DragKind::Segment);
+        // a plain corner of one track (two segments) has no virtual via
+        let mut plain = Node::new();
+        let b = add_track(&mut plain, "SIG", "trkD", &[p(0, 0), p(2000, 0), p(2000, 2000)]);
+        plain.fixup_virtual_vias();
+        assert_eq!(Dragger::start(&plain, p(2000, 50), b[0]).unwrap().kind, DragKind::Corner);
+    }
+
+    /// `FixupVirtualVias`: a change of width and the two ends of a locked segment are joints with a virtual via too, a pad or a via already there is not.
+    #[test]
+    fn virtual_vias_go_where_the_width_changes_and_at_the_ends_of_a_locked_segment() {
+        let count = |n: &Node, at: Point| n.joint_at(at, &net_of("SIG")).map_or(0, |j| j.links.iter().filter(|&&id| n.get(id).is_some_and(Item::is_virtual)).count());
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(1000, 0), width: 200, source_track: None, locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(1000, 0), b: p(2000, 0), width: 400, source_track: None, locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(2000, 0), b: p(3000, 0), width: 400, source_track: None, locked: true }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(3000, 0), b: p(4000, 0), width: 400, source_track: None, locked: false }));
+        node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(4000, 0), diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false }));
+        node.fixup_virtual_vias();
+        assert_eq!(count(&node, p(1000, 0)), 1, "where the width changes");
+        assert_eq!(count(&node, p(0, 0)), 0, "a free end");
+        // the joint at (3000, 0): the locked segment is the last one there, so it is "the locked one" and both its ends get one
+        assert!(count(&node, p(3000, 0)) >= 1 && count(&node, p(2000, 0)) >= 1, "the ends of the locked segment");
+        assert_eq!(count(&node, p(4000, 0)), 0, "a real via is there already");
+        let d = node.joint_at(p(1000, 0), &net_of("SIG")).unwrap().links.iter().find_map(|&id| match node.get(id) { Some(Item::Via(v)) if v.is_virtual => Some((v.diameter, v.layers)), _ => None });
+        assert_eq!(d, Some((400, LayerRange::single(0))), "as wide as the widest track, on its one layer");
     }
 
     #[test]
@@ -929,7 +1015,7 @@ mod tests {
     fn dragging_a_via_drags_its_connected_track_with_it() {
         let mut node = Node::new();
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 1000, y: 0 }, width: 200, source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 1000, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 1000, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: false, is_virtual: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
         let mut dragger = Dragger::start(&node, Point { x: 1000, y: 0 }, via_id).expect("must start a via drag");
@@ -955,7 +1041,7 @@ mod tests {
     fn via_across_a_gnd_track() -> (Node, Dragger) {
         let mut node = Node::new();
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: -3000, y: 0 }, b: Point { x: 0, y: 0 }, width: 200, source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: false, is_virtual: false }));
         node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 4000, y: -3000 }, b: Point { x: 4000, y: 3000 }, width: 200, source_track: Some(("trkB".into(), 0)), locked: false }));
         let dragger = Dragger::start(&node, Point { x: 0, y: 0 }, via_id).expect("a via drag");
         assert_eq!(dragger.kind, DragKind::Via);
@@ -984,7 +1070,7 @@ mod tests {
         assert_eq!(removed, vec!["trkA", "trkB"]);
         // and the board it leaves is clean: nothing the router's own collision test calls a violation
         let mut after = Node::new();
-        after.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: to, diameter: 600, drill: 300, source_via: None, locked: false }));
+        after.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: to, diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false }));
         for l in &commit.tracks {
             after.add_line(l, None, false);
         }
@@ -1014,7 +1100,7 @@ mod tests {
         use crate::item::Solid;
         let mut node = Node::new();
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: -3000, y: 0 }, b: Point { x: 0, y: 0 }, width: 200, source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: false, is_virtual: false }));
         node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 4000, y: 0 }, shape: Shape::Circle { c: Point { x: 4000, y: 0 }, r: 500 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let onto_the_pad = Point { x: 4000, y: 300 };

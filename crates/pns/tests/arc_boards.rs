@@ -89,7 +89,7 @@ fn world_after(node: &Node, layers: &LayerMap, commit: &RouteCommit) -> Node {
     }
     for v in &commit.vias {
         let range = layers.range_of(&v.from_layer, &v.to_layer);
-        w.add(Item::Via(eda_pns::item::Via { net: net_of(&v.net), layers: range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: None, locked: false }));
+        w.add(Item::Via(eda_pns::item::Via { net: net_of(&v.net), layers: range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: None, locked: false, is_virtual: false }));
     }
     w
 }

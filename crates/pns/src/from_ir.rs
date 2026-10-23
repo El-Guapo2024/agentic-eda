@@ -111,10 +111,12 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
 
     for v in &drc_board.vias {
         let layer_range = layers.range_of(&v.from_layer, &v.to_layer);
-        node.add(Item::Via(Via { net: v.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: Some(v.id.clone()), locked: locked.contains(v.id.as_str()) }));
+        node.add(Item::Via(Via { net: v.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: Some(v.id.clone()), locked: locked.contains(v.id.as_str()), is_virtual: false }));
     }
 
     add_board_outline(&mut node, &drc_board, &layers);
+    // `ROUTER::SyncWorld`: `m_world->FixupVirtualVias()`
+    node.fixup_virtual_vias();
 
     (node, layers)
 }

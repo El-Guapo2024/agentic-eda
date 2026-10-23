@@ -278,6 +278,8 @@ export type DrawState =
       layer: string;
       width: Um;
       viaDiameter?: Um;
+      /** A via drag of a virtual via (a junction of tracks): no via is drawn. */
+      virtualVia?: boolean;
       /** The dragged item's live shape: the stretched line (corner) or
        * just the via's own new position, one point (via) -- see
        * `DragPreview`'s own doc comment. */

@@ -364,6 +364,8 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
         "ok": true,
         // `DM_SEGMENT` (the whole segment slides), `DM_CORNER` (a vertex follows the cursor), `DM_VIA` or `DM_ARC` (the arc's curvature follows it)
         "drag": drag_kind_name(router.drag_kind()),
+        // `DM_VIA` of a virtual via (the joint where tracks meet, `DRAGGER::checkVirtualVia`): no via is drawn (`ROUTER_PREVIEW_ITEM`: "if( v->IsVirtual() ) return") or committed
+        "virtual_via": router.drag_virtual_via(),
         "colliding": preview.colliding,
         // the cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last solution")
         "restored": preview.restored,

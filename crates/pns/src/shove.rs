@@ -362,6 +362,10 @@ fn via_pushout_from(rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> 
 /// `max_iterations` is `ROUTING_SETTINGS::ViaForcePropIterationLimit`. `None` when it does not come free within that many
 /// steps, or an obstacle's MTV is zero ("force propagation has failed").
 pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, direction: (i64, i64), mask: u8, max_iterations: i32, exclude: &[ItemId]) -> Option<(i64, i64)> {
+    // `VIA::PushoutForce` asks `CheckColliding( this )`, and a virtual via collides with nothing
+    if via.is_virtual {
+        return Some((0, 0));
+    }
     let threshold = via.diameter / 4;
     let (mut pos, mut total) = (via.pos, (0i64, 0i64));
     let mut iter = 0;
@@ -767,6 +771,10 @@ impl<'a> Shove<'a> {
 
     /// Does the via collide with the line (its tracks and its own via)?
     fn via_vs_line(&self, v: &Via, l: &SLine) -> bool {
+        // "virtual items cannot collide" (`NODE::Collide`)
+        if v.is_virtual {
+            return false;
+        }
         let circle = Shape::Circle { c: v.pos, r: v.diameter / 2 };
         if !same_net(&v.net, &l.line.net) && l.line.layer >= v.layers.start() && l.line.layer <= v.layers.end() {
             let clearance = self.clearance(&v.net, &l.line.net);
@@ -774,7 +782,7 @@ impl<'a> Shove<'a> {
                 return true;
             }
         }
-        if let Some(lv) = &l.via {
+        if let Some(lv) = l.via.as_ref().filter(|lv| !lv.data.is_virtual) {
             if !same_net(&v.net, &lv.data.net) {
                 let clearance = self.clearance(&v.net, &lv.data.net);
                 if (Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }).collides(&circle, clearance).is_some() {
@@ -811,7 +819,7 @@ impl<'a> Shove<'a> {
     /// `ITEM::Collide` between two items of the node (different nets, shapes within clearance).
     fn items_collide(&self, a: ItemId, b: ItemId) -> bool {
         let (Some(ia), Some(ib)) = (self.node.get(a), self.node.get(b)) else { return false };
-        if same_net(ia.net(), ib.net()) || !ia.layers().overlaps(&ib.layers()) {
+        if ia.is_virtual() || ib.is_virtual() || same_net(ia.net(), ib.net()) || !ia.layers().overlaps(&ib.layers()) {
             return false;
         }
         // An Edge.Cuts graphic on either side asks for the board's edge clearance, not a net class's.
@@ -1266,7 +1274,7 @@ impl<'a> Shove<'a> {
         let Some(obstacle_via) = self.via_item(via_id) else { return Status::Incomplete };
         if let Some(lv) = &cur.via {
             let clearance = self.get_clearance(&lv.data.net, &obstacle_via.net);
-            let hit = !same_net(&lv.data.net, &obstacle_via.net) && Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }.collides(&Shape::Circle { c: obstacle_via.pos, r: obstacle_via.diameter / 2 }, clearance).is_some();
+            let hit = !lv.data.is_virtual && !same_net(&lv.data.net, &obstacle_via.net) && Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }.collides(&Shape::Circle { c: obstacle_via.pos, r: obstacle_via.diameter / 2 }, clearance).is_some();
             if hit {
                 let next = self.line_rank(cur) - 1;
                 return self.on_colliding_via(Pusher::Line(cur), via_id, info, next);
@@ -1332,6 +1340,9 @@ impl<'a> Shove<'a> {
     /// `m_currentNode->CheckColliding( viaEnd )`.
     fn via_colliding_world(&self, via_id: ItemId) -> bool {
         let Some(Item::Via(v)) = self.node.get(via_id) else { return false };
+        if v.is_virtual {
+            return false;
+        }
         let shape = Shape::Circle { c: v.pos, r: v.diameter / 2 };
         self.node.first_colliding(&shape, &v.net, v.layers, self.rules, &[via_id]).is_some()
     }
@@ -1421,7 +1432,7 @@ impl<'a> Shove<'a> {
                     let mut vias_collide = false;
                     if let (Some(lv), Some(Item::Via(nv))) = (&current.via, self.node.get(ni)) {
                         let clearance = self.clearance(&nv.net, &lv.data.net);
-                        vias_collide = !same_net(&nv.net, &lv.data.net) && Shape::Circle { c: nv.pos, r: nv.diameter / 2 }.collides(&Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }, clearance).is_some();
+                        vias_collide = !lv.data.is_virtual && !same_net(&nv.net, &lv.data.net) && Shape::Circle { c: nv.pos, r: nv.diameter / 2 }.collides(&Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }, clearance).is_some();
                     }
                     if vias_collide {
                         self.on_colliding_via(Pusher::Line(&current), ni, &info, ni_rank + 1)
@@ -2001,7 +2012,7 @@ mod tests {
     fn a_locked_via_is_walked_around() {
         use crate::item::Via;
         let mut node = Node::new();
-        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: true }));
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: true, is_virtual: false }));
         let (rules, settings) = (rules(), RoutingSettings::default());
         let raw = vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];
         let out = shove_line(&node, &raw, &net_of("SIG"), 0, 200, &rules, &settings).expect("walks around");
@@ -2013,7 +2024,7 @@ mod tests {
     fn pushes_a_stitching_via_aside() {
         use crate::item::Via;
         let mut node = Node::new();
-        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: false }));
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: false, is_virtual: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
         let raw = vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];

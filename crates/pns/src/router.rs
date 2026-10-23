@@ -321,7 +321,7 @@ impl Router {
         for w in placer.runs.windows(2) {
             if w[0].layer != w[1].layer && w[0].last() == w[1].first() {
                 let (l0, l1) = (w[0].layer, w[1].layer);
-                node.add(Item::Via(crate::item::Via { net: net.clone(), layers: LayerRange::new(l0, l1), pos: w[0].last().unwrap(), diameter: placer.via_diameter.max(1), drill: placer.via_drill.max(1), source_via: None, locked: false }));
+                node.add(Item::Via(crate::item::Via { net: net.clone(), layers: LayerRange::new(l0, l1), pos: w[0].last().unwrap(), diameter: placer.via_diameter.max(1), drill: placer.via_drill.max(1), source_via: None, locked: false, is_virtual: false }));
             }
         }
         let current_end = head.last().unwrap_or_else(|| placer.fixed_start());
@@ -697,6 +697,11 @@ impl Router {
     }
 
     /// `GetForceMarkObstaclesMode`: the drag in progress only marks obstacles because its first position failed.
+    /// The drag is of a virtual via (`DRAGGER::checkVirtualVia`: the end of a segment where tracks meet with no pad or via), which is not drawn.
+    pub fn drag_virtual_via(&self) -> bool {
+        self.drag.as_ref().is_some_and(|d| d.via_virtual)
+    }
+
     pub fn drag_forces_mark_obstacles(&self) -> bool {
         self.drag.as_ref().is_some_and(|d| d.force_mark_obstacles())
     }
@@ -1047,7 +1052,10 @@ mod tests {
         // and in the board that results, the new route and both halves of the track meet at one joint
         let (after, _) = crate::from_ir::build_node(&committed(&design, &commit), &model);
         let joint = after.joint_at(Point { x: 2000, y: 0 }, &net_of("SIG")).expect("a joint where the route starts");
-        assert_eq!(joint.links.len(), 3, "the two halves of the track and the route");
+        let segments = joint.links.iter().filter(|&&id| matches!(after.get(id), Some(Item::Segment(_)))).count();
+        assert_eq!(segments, 3, "the two halves of the track and the route");
+        // three segments meet there with no pad or via: the world has a virtual via at the point (`FixupVirtualVias`)
+        assert!(joint.links.iter().any(|&id| after.get(id).is_some_and(Item::is_virtual)));
     }
 
     /// A route that starts and places nothing leaves the track whole (`CommitRouting` commits nothing).
@@ -1113,7 +1121,7 @@ mod tests {
         let cut = commit.tracks.iter().find(|t| t.pts.first() == Some(&Point { x: 0, y: 0 })).expect("the cut track");
         assert_eq!(cut.pts, vec![Point { x: 0, y: 0 }, middle, Point { x: 4000, y: 0 }]);
         let (after, _) = crate::from_ir::build_node(&committed(&design, &commit), &model);
-        assert_eq!(after.joint_at(middle, &net_of("SIG")).map(|j| j.links.len()), Some(3));
+        assert_eq!(after.joint_at(middle, &net_of("SIG")).map(|j| j.links.iter().filter(|&&id| matches!(after.get(id), Some(Item::Segment(_)))).count()), Some(3));
     }
 
     /// With "snap to tracks" off the cursor over a track is no end, and nothing is cut.

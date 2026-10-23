@@ -31,6 +31,11 @@ impl JointKey {
     pub fn new(pos: Point, net: &Net) -> Self {
         JointKey { pos: (pos.x, pos.y), net: net.as_ref().map(|n| n.to_string()) }
     }
+
+    /// `JOINT::Pos()`.
+    pub fn pos(&self) -> Point {
+        Point { x: self.pos.0, y: self.pos.1 }
+    }
 }
 
 #[derive(Debug, Clone, Default)]

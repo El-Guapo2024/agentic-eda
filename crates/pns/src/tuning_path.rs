@@ -473,7 +473,7 @@ mod tests {
         let mut w = Node::new();
         w.add(pad("S", p(0, 0)));
         let a = w.add(seg("S", 0, p(0, 0), p(10_000, 0)));
-        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000, 0), diameter: 600, drill: 300, source_via: Some("via".into()), locked: false }));
+        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000, 0), diameter: 600, drill: 300, source_via: Some("via".into()), locked: false, is_virtual: false }));
         w.add(seg("S", 1, p(10_000, 0), p(10_000, 8_000)));
         w.add(pad_on("S", p(10_000, 8_000), LayerRange::new(0, 1)));
         let path = assemble_tuning_path(&w, a).expect("a path");

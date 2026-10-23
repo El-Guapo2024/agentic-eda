@@ -731,4 +731,83 @@ mod tests {
         assert!(judged >= 12, "{judged} routes judged");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Virtual vias (`NODE::FixupVirtualVias`, `DRAGGER::checkVirtualVia`) against kicad-cli's DRC (slow tier): on `pic_programmer` and
+    /// `backspace1`, the joints where three tracks or more meet, or the width changes, with no pad or via, taken hold of at the end of one of their
+    /// segments and dragged 0.3 mm in each mode -- every track there follows, no via is committed, and kicad-cli finds no new copper violation and no
+    /// new dangling track (the junction stays one joint).
+    #[test]
+    fn dragging_a_junction_as_a_virtual_via_adds_no_violation_to_kicad_clis_drc() {
+        use eda_model::ir::Point;
+        use eda_pns::item::Item;
+        use eda_pns::router::Router;
+        use eda_pns::settings::Mode;
+        if !kicad_available() {
+            return;
+        }
+        let kinds = ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width", "track_dangling", "unconnected_items"];
+        let mut judged = 0;
+        for board in ["pic_programmer", "backspace1"] {
+            let Some((design, model)) = qa_board(board) else {
+                eprintln!("KiCad's QA corpus not found; skipping");
+                return;
+            };
+            let dir = scratch(&format!("vvia_{board}"));
+            let without_text = |r: Vec<(String, String)>| r.into_iter().filter(|(_, d)| !d.contains("PCB text")).collect::<Vec<_>>();
+            let before = without_text(all_track_report(&design, &model, &dir, &kinds));
+            let baseline = counts_of(&before);
+            let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+            // the junctions: segment ends whose joint has a virtual via
+            let mut junctions: Vec<(Point, i32, Point)> = Vec::new();
+            for (_, it) in node.iter() {
+                let Item::Segment(s) = it else { continue };
+                for (end, other) in [(s.a, s.b), (s.b, s.a)] {
+                    let has = node.joint_at(end, &s.net).is_some_and(|j| j.links.iter().any(|&id| node.get(id).is_some_and(Item::is_virtual)));
+                    if has && !junctions.iter().any(|(p, _, _)| *p == end) {
+                        // the grab point: on the segment, a micrometre from the end
+                        let len = (((other.x - end.x) as f64).hypot((other.y - end.y) as f64)).max(1.0);
+                        let at = Point { x: end.x + ((other.x - end.x) as f64 / len).round() as i64, y: end.y + ((other.y - end.y) as f64 / len).round() as i64 };
+                        junctions.push((end, s.layer, at));
+                    }
+                }
+            }
+            junctions.sort_by_key(|(p, _, _)| (p.x, p.y));
+            eprintln!("{board}: {} junctions with a virtual via", junctions.len());
+            let mut done = 0;
+            for (k, (end, layer, at)) in junctions.iter().enumerate() {
+                if done >= 6 {
+                    break;
+                }
+                let mode = [Mode::Shove, Mode::Walkaround, Mode::MarkObstacles][k % 3];
+                let mut router = Router::new(&design, &model);
+                router.settings.mode = mode;
+                if router.drag_start(*at, layers.name_of(*layer)).is_err() || !router.drag_virtual_via() {
+                    continue;
+                }
+                let to = Point { x: end.x + 300, y: end.y + 300 };
+                if !router.drag_preview(to).is_some_and(|pv| !pv.colliding) {
+                    continue;
+                }
+                let Some(commit) = router.drag_finish(to) else { continue };
+                assert!(commit.vias.iter().all(|v| v.at != to), "{board}: no via is committed at the junction");
+                let after = apply_commit(&design, &commit);
+                let now = without_text(all_track_report(&after, &model, &dir, &kinds));
+                let counts = counts_of(&now);
+                eprintln!("{board} {mode:?} junction {end:?}: {} tracks put, {} taken: {counts:?} (before {baseline:?})", commit.tracks.len(), commit.remove_track_ids.len());
+                if counts != baseline {
+                    eprintln!("    new: {:?}", now.iter().filter(|v| !before.contains(v)).collect::<Vec<_>>());
+                }
+                for kind in kinds {
+                    let (was, got) = (baseline.get(kind).copied().unwrap_or(0), counts.get(kind).copied().unwrap_or(0));
+                    assert!(got <= was, "{board} {mode:?} junction {end:?}: kicad-cli reports {got} {kind} (the board had {was})");
+                }
+                assert!(commit.remove_track_ids.len() >= 3 || commit.tracks.len() >= 2, "{board}: the tracks at the junction moved: {commit:?}");
+                done += 1;
+                judged += 1;
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        eprintln!("{judged} junction drags judged by kicad-cli");
+        assert!(judged >= 6, "{judged} junction drags judged");
+    }
 }

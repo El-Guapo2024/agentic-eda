@@ -309,7 +309,7 @@ fn dragged(node: &Node, d: &Dragger, pv: &DragPreview, to: Point) -> Node {
             }
             // where the drag left the via: the cursor, or further, if a shove or a pushout moved it on
             let end = pv.pts.first().copied().unwrap_or(to);
-            w.add(Item::Via(eda_pns::item::Via { net: d.net.clone(), layers: d.via_layers, pos: end, diameter: d.via_diameter, drill: d.via_drill, source_via: d.source_via.clone(), locked: false }));
+            w.add(Item::Via(eda_pns::item::Via { net: d.net.clone(), layers: d.via_layers, pos: end, diameter: d.via_diameter, drill: d.via_drill, source_via: d.source_via.clone(), locked: false, is_virtual: false }));
             for l in &pv.fanout {
                 w.remove_line_segments(l);
                 w.add_line(l, None, false);

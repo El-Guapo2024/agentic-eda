@@ -25,6 +25,8 @@
 //                radio button and a target delay, the pattern is tuned to it within 0.2 ps and stored as a time domain one.
 //   corner mode  (Stage 10) the Track Corner Mode actions: arc 45 rounds the head's corner and commits it as an arc track, 90 routes axis legs,
 //                Ctrl+/ steps through the modes and the running route takes the new one;
+//   virtual via  (Stage 10) D at the end of a segment where three tracks meet drags the junction (its virtual via, `DRAGGER::checkVirtualVia`): every track
+//                follows, no via is drawn or committed, one Undo puts it back; in the middle the segment slides;
 //   springback   (Stage 10) in Shove mode a track the head pushed stays pushed, is pushed on from where it was left, and springs back once the head draws back off it; a click keeps the
 //                push and the next leg pushes on from it, Backspace takes the leg and its push back, and the finished route commits the track where the session left it in one undo step;
 //
@@ -716,6 +718,46 @@
     await ctrlSlash();
     const set2 = replies.slice(n).find((r) => r.name === "settings");
     t(!!set2 && set2.req.settings.corner_mode === "mitered_45", `and again to 45, the default: ${set2 && JSON.stringify(set2.req.settings.corner_mode)}`);
+  });
+
+  await scenario("virtual vias: D at the end of a segment where three tracks meet drags the junction, every track follows, no via is drawn or committed", async (t) => {
+    // a T of PA6 at (30, 10) mm: no pad or via there, so the router's world has a virtual via at it (`NODE::FixupVirtualVias`)
+    await commit([line("PA6", "F.Cu", [[27000, 10000], [30000, 10000]]), line("PA6", "F.Cu", [[30000, 10000], [33000, 10000]]), line("PA6", "F.Cu", [[30000, 10000], [30000, 13000]])]);
+    for (const mode of ["pcbnew.InteractiveRouter.WalkaroundMode", "pcbnew.InteractiveRouter.ShoveMode"]) {
+      await E.run(mode);
+      await pointerTo(30000, 10000);
+      let n = replies.length;
+      await E.run("pcbnew.InteractiveRouter.Drag45Degree");
+      const s = await waitReply("drag_start", n);
+      t(s && s.body.ok === true && s.body.drag === "via" && s.body.virtual_via === true, `${mode}: D at the junction takes hold of its virtual via: ${s && JSON.stringify([s.body.ok, s.body.drag, s.body.virtual_via, s.body.message])}`);
+      const m = await moveTo(32000, 12000, "drag_move");
+      // the cursor as the studio's snapping put it
+      const to = m ? [Math.round(m.req.x), Math.round(m.req.y)] : [32000, 12000];
+      const legs = m && m.body.fanout;
+      t(!!legs && legs.length === 3 && legs.every((l) => nearPt(l.pts[0], to, 0) || nearPt(l.pts[l.pts.length - 1], to, 0)), `${mode}: the three tracks follow the cursor: ${legs && JSON.stringify(legs.map((l) => [l.pts[0], l.pts[l.pts.length - 1]]))}`);
+      t(m && m.body.colliding === false, `${mode}: and fit`);
+      n = replies.length;
+      await clickAt(...to);
+      await waitReply("drag_finish", n);
+      await quiet();
+      await sleep(400);
+      const st = await state();
+      const pa6 = tracksOf(st).filter((q) => q.net === "PA6");
+      const ends = pa6.flatMap((q) => [q.pts[0], q.pts[q.pts.length - 1]]);
+      t(ends.filter((p) => nearPt(p, to, 0)).length === 3 && [[27000, 10000], [33000, 10000], [30000, 13000]].every((p) => ends.some((e) => nearPt(e, p, 0))), `${mode}: the junction is at the cursor and the far ends where they were: ${JSON.stringify(pa6.map((q) => q.pts))}`);
+      t(viasOf(st).length === 0, `${mode}: no via is committed: ${viasOf(st).length}`);
+      t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), `${mode}: the gates find no clearance failure`);
+      await E.run("common.Interactive.undo");
+      await sleep(600);
+      t(tracksOf(await state()).filter((q) => q.net === "PA6").every((q) => q.pts.every((p) => !nearPt(p, to, 0))), `${mode}: one Undo puts the junction back`);
+      await settle();
+    }
+    // taken hold of in the middle, a segment of the T slides as a segment
+    await pointerTo(28500, 10000);
+    const n = replies.length;
+    await E.run("pcbnew.InteractiveRouter.Drag45Degree");
+    const s = await waitReply("drag_start", n);
+    t(s && s.body.ok === true && s.body.drag === "segment" && s.body.virtual_via === false, `the middle of a segment is a segment drag: ${s && JSON.stringify([s.body.drag, s.body.virtual_via])}`);
   });
 
   await scenario("the board is as it was, and the studio reported no error", async (t) => {
