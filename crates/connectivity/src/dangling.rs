@@ -61,6 +61,7 @@ fn item_hits_point(other: &crate::items::CnItem, p: Point, accuracy: f64) -> boo
         ItemShape::Pad(pad) => pad.signed_distance(p) <= accuracy,
         ItemShape::Via { center, radius } => geom::dist(p, *center) <= radius + accuracy,
         ItemShape::Segment { a, b, half_width } => geom::point_seg_distance(p, *a, *b) <= half_width + accuracy,
+        ItemShape::Arc { pts, half_width } => pts.windows(2).any(|w| geom::point_seg_distance(p, w[0], w[1]) <= half_width + accuracy),
         // `rtree->QueryColliding( SHAPE_CIRCLE( p, accuracy ) )` on the fill.
         ItemShape::Zone { outline } => geom::zone_hits_point(outline, p, accuracy),
     }
@@ -71,6 +72,8 @@ fn item_hits_point(other: &crate::items::CnItem, p: Point, accuracy: f64) -> boo
 fn min_dist_to_track(other: &crate::items::CnItem, p: Point) -> f64 {
     match &other.shape {
         ItemShape::Segment { a, b, .. } => geom::dist(p, *a).min(geom::dist(p, *b)),
+        // `PCB_ARC_T`: the distance to its start or its end.
+        ItemShape::Arc { pts, .. } => geom::dist(p, pts[0]).min(geom::dist(p, pts[pts.len() - 1])),
         _ => 0.0,
     }
 }
@@ -82,6 +85,7 @@ fn track_seg_dangling(graph: &ConnGraph, idx: usize) -> Option<Point> {
     let it = &graph.items[idx];
     let (a, b, half_width) = match &it.shape {
         ItemShape::Segment { a, b, half_width } => (*a, *b, *half_width),
+        ItemShape::Arc { pts, half_width } => (pts[0], pts[pts.len() - 1], *half_width),
         _ => return None,
     };
 
@@ -176,6 +180,29 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].kind, DanglingKind::Track);
         assert_eq!(out[0].at, free_end);
+    }
+
+    /// An arc is one `PCB_ARC`, one `CN_ITEM` with an anchor at each end (`CN_LIST::Add( PCB_ARC* )`), not the pieces of its tessellation: a
+    /// tessellation whose rounding to micrometres puts two points on one (as the importer's of `issue22475` does) has no piece of nothing to dangle.
+    #[test]
+    fn an_arc_is_one_item_and_a_point_its_tessellation_repeats_dangles_nothing() {
+        let (mut design, model) = two_pad_model();
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        // A 20 um arc half way: 32 pieces of under a micrometre each, so its tessellation has repeated points.
+        let p = Point { x: (a.x + b.x) / 2 - 10, y: a.y };
+        let q = Point { x: p.x + 20, y: p.y };
+        let mut arc = Track::new_arc("N1".into(), "F.Cu".into(), 50, p, Point { x: p.x + 10, y: p.y - 10 }, q);
+        arc.id = "a1".into();
+        assert!(arc.pts.windows(2).any(|w| w[0] == w[1]), "the tessellation repeats a point");
+        let rt = design.routing.as_mut().unwrap();
+        rt.tracks.push(arc);
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 50, pts: vec![a, p], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 50, pts: vec![q, b], arc_mid_offset: None });
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
+        let arc_items = graph.items.iter().filter(|i| matches!(&i.item, ItemRef::TrackSeg { track_id, .. } if track_id == "a1")).count();
+        assert_eq!(arc_items, 1, "one item for the arc");
+        let out = dangling_tracks_and_vias(&graph);
+        assert!(out.is_empty(), "{:?}", out.iter().map(|d| (&d.id, d.at)).collect::<Vec<_>>());
     }
 
     #[test]
