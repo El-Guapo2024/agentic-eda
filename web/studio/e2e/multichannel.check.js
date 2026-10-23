@@ -26,6 +26,7 @@
 //
 // It answers through `window.__multichannelCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. A run takes about three minutes: read it with
 // `await __multichannelCheck.wait(20000)` (it returns when the run is done or the time is up; the Browser pane's javascript tool gives up after 45 s) until `.done`.
+// run-all-checks: board=multichannel minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__multichannelCheck = { results, done: false, ok: false, wait: null });

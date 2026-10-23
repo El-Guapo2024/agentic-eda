@@ -13,6 +13,7 @@
 //
 // It works through `window.__eda` (select with `common.InteractiveSelection.selectItems`, undo with `common.Interactive.undo`, open a dialog with the action that
 // opens it), the Properties grid's own inputs, the dialogs' controls (their `data-testid`s) and the pointer events a user makes on the canvas.
+// run-all-checks: board=mcu30-placed   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__fpEditCheck = { results, done: false, ok: false, wait: null });

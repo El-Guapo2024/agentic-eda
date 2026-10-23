@@ -16,6 +16,7 @@
 //   Stop Simulation killing a long run; nothing logged an error.
 //
 // It answers through `window.__simulatorCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
+// run-all-checks: board=simulator minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__simulatorCheck = { results, done: false, ok: false, wait: null });

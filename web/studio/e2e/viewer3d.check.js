@@ -6,6 +6,7 @@
 // silkscreen, adhesive and user layers) the more rows are checked, and a row the board has nothing for is reported as skipped.
 //
 // It returns { ok, firstModelMs, results: [{ name, ok, detail? }, ...] }. Waits are fetch loops (`/api/version`), not timers: a hidden pane throttles timers to once a minute.
+// run-all-checks: board=mcu30-zones   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const sleep = async (ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) await fetch("/api/version").then((r) => r.text()); };
   const frame = () => new Promise((r) => requestAnimationFrame(() => r()));

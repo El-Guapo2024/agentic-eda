@@ -20,6 +20,7 @@
 //   the schematic, an Altium sheet: the schematic is replaced in one step of the schematic's history with its errors reported, and an Undo brings the old drawing back.
 //
 // It returns { ok, failed, results: [{ name, ok, detail }, ...] }. The results also pile up in `window.__importForeignCheck.results` (`.done` is set at the end).
+// run-all-checks: board=mcu30 ui=import-foreign minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   window.__importForeignCheck = { results, done: false };

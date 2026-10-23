@@ -14,6 +14,7 @@
 //   nets        a net's eye hides its ratsnest set, a class's eye hides all its nets and the class is remembered, Show All brings them back
 //   file        the settings reach `appearance.json` (`local` and `project` sections), within a second or so
 //   end         the settings and the active layer are as they were (a preset moves the active layer), and no console error came up while it ran
+// run-all-checks: board=mcu30-routed   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const results = [];
@@ -189,8 +190,9 @@
   await sleep(1000);
   check("the settings are back as they were", JSON.stringify(app()) === startedWith, `${startedWith}\n${JSON.stringify(app())}`);
   await tab("layers");
-  if (layerBefore && activeLayer() !== layerBefore) {
-    document.querySelector(`.ap-root .ap-row[data-layer="${layerBefore}"]`)?.click();
+  if (activeLayer() !== layerBefore) {
+    // A click on a row makes it the active layer; a click on the active row leaves no layer active (a page that was just opened has none).
+    document.querySelector(layerBefore ? `.ap-root .ap-row[data-layer="${layerBefore}"]` : ".ap-root .ap-row.active[data-layer]")?.click();
     await sleep(250);
   }
   check("the active layer is the one it was", activeLayer() === layerBefore, `${layerBefore} -> ${activeLayer()}`);

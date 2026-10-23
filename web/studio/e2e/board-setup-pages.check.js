@@ -28,6 +28,7 @@
 // A scenario that throws does not stop the run: its section ends with a failed check "<section> ran to the end (stopped at: <step>)" naming the step it was at (and why), the next section
 // runs, and whatever happens the run ends by closing the dialogs, taking back the undo steps it made (only those that were made) and checking the board is as it was. `__boardSetupPagesCheck.at`
 // is the step a run that is still going is at.
+// run-all-checks: board=mcu30-few   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const run = (window.__boardSetupPagesCheck = { results, done: false, ok: false, summary: null, wait: null, at: "setup" });
@@ -468,7 +469,9 @@
       await sleep(600);
       const trackId = ((await state()).routing?.tracks ?? []).at(-1)?.id;
       check("a straight track is added for the tuner", added.ok && !!trackId, JSON.stringify(added).slice(0, 200));
-      const tunerFields = () => [...document.querySelectorAll(".dialog .kv-grid input[type=number]")].map((i) => Number(i.value));
+      // The Tuning Pattern dialog's amplitude and spacing: its text fields after the target length and the target delay (P5d put the time domain in front),
+      // [minimum amplitude, maximum amplitude, spacing, corner radius].
+      const tunerFields = () => [...document.querySelectorAll(".dialog .kv-grid input[type=text]")].slice(2).map((i) => Number(i.value));
       await __eda.run("common.InteractiveSelection.clear");
       await __eda.run("common.InteractiveSelection.selectItems", [trackId]);
       await sleep(250);

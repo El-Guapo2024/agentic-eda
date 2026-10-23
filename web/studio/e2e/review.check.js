@@ -19,6 +19,7 @@
 //
 // (a copy of this file in web/studio/dist is served by the same server, so `src = await (await fetch("/review.check.js")).text()`). `window.__reviewOnly = ["pcb"]` (or ["sch"]) runs one half.
 // Nothing is downloaded: the page's file save is held back and its text read instead.
+// run-all-checks: board=mcu30-placed minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const eda = window.__eda;
   const results = [];

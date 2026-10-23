@@ -16,6 +16,7 @@
 //     with the grid off (Ctrl; Cmd on a Mac) landing on whole micrometres.
 //
 // It returns { ok, failed, results: [{ name, ok, detail }, ...] }. The results also pile up in `window.__snapGridCheck.results` (`.done` is set at the end).
+// run-all-checks: board=mcu30-routed   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   window.__snapGridCheck = { results, done: false };
@@ -110,10 +111,10 @@
     // A spot with nothing within 3 mm of it, where the pointer can go: the nearest pad, via, track, drawing and footprint is far, so only the grid acts.
     const emptySpot = (st) => {
       const segs = [], pts = [];
-      for (const t of st.routing.tracks) for (let i = 0; i + 1 < t.pts.length; i++) segs.push([t.pts[i], t.pts[i + 1]]);
-      for (const sh of st.drawings.shapes) { if (sh.start && sh.end) segs.push([sh.start, sh.end]); for (const k of ["start", "end", "center", "mid"]) if (sh[k]) pts.push(sh[k]); for (const q of sh.pts ?? []) pts.push(q); }
+      for (const t of (st.routing?.tracks ?? [])) for (let i = 0; i + 1 < t.pts.length; i++) segs.push([t.pts[i], t.pts[i + 1]]);
+      for (const sh of (st.drawings?.shapes ?? [])) { if (sh.start && sh.end) segs.push([sh.start, sh.end]); for (const k of ["start", "end", "center", "mid"]) if (sh[k]) pts.push(sh[k]); for (const q of sh.pts ?? []) pts.push(q); }
       for (const p of st.parts) for (const q of p.pads) pts.push([q.x, q.y]);
-      for (const v of st.routing.vias) pts.push([v.x, v.y]);
+      for (const v of (st.routing?.vias ?? [])) pts.push([v.x, v.y]);
       const dSeg = (p, [a, b]) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy || 1; const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l)); return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy)); };
       const { x0, y0, x1, y1 } = reach(40);
       const [bx0, by0] = st.outline[0], [bx1, by1] = st.outline[2];

@@ -10,6 +10,7 @@
 // makes. A whole board takes minutes (each edit waits for the board's answer), longer than a tool call may last: set `window.__propertiesCheckOnly = ["track", "via"]`
 // first to run only the kinds whose names start with one of those (a kind that is left out is not reported). The results also pile up in
 // `window.__propertiesCheck.results` (`.done` is set at the end), so a run that outlasts the tool call can be read afterwards.
+// run-all-checks: board=mcu30-zones minutes=20   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const sleep = async (ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) await fetch("/api/version").then((r) => r.text()); }; // a fetch loop: a hidden pane throttles timers
   const json = (url) => fetch(url).then((r) => r.json());

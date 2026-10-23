@@ -7,7 +7,8 @@
 //   target/debug/eda board serve -C <scratch copy> --port 8802 --ui web/studio/dist     # after `cd web/studio && npm run build`
 //   open http://127.0.0.1:8802/ in a tab of your own, then evaluate this file
 //
-// It needs a board with at least three DRC findings of one check (work/mcu30 has 21 silkscreen warnings) and a schematic ERC finds something in.
+// It needs a board with at least three DRC findings of one check (work/mcu30 has 21 silkscreen warnings; examples/mcu_board_30plus.yaml placed and routed has 39) and
+// a schematic ERC finds something in (when it finds nothing, the check puts a lone resistor on the root sheet first).
 // Each step waits for what it asked for (a kicad-cli run takes seconds, the whole check about a minute). The Browser pane's javascript tool gives up on
 // a call after 45 s, so start it without waiting and read the answer later:
 //
@@ -15,6 +16,7 @@
 //   ... later: window.__checkResults
 //
 // (a copy of this file in web/studio/dist is served by the same server, so `src = await (await fetch("/drc-review.check.js")).text()`).
+// run-all-checks: board=mcu30-routed minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const eda = window.__eda;
   const results = [];
@@ -159,6 +161,13 @@
   if (eda.state().tab !== "schematic") {
     check("the Schematic tab opens", false, eda.state().tab);
     return results;
+  }
+  // The schematic examples/mcu_board_30plus.yaml draws has nothing ERC finds: a resistor with nothing on its pins gives it two errors (pin_not_connected).
+  const ercNow = await (await fetch("/api/erc")).json();
+  if (!(ercNow.violations ?? []).length) {
+    const seeded = await (await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd: { op: "add_symbol", id: "R99", lib_id: "Device:R", at: { x: 101600, y: 139700 }, rot_millideg: 0, value: "R", footprint: "", unit: 1 }, strict: false }) })).json();
+    check("a lone resistor is put on the sheet for the ERC to find something", seeded.ok, seeded.message);
+    await sleep(800);
   }
   const erc = await eda.run("eeschema.InspectionTool.runERC");
   check("Run ERC opens the Electrical Rules Checker", erc.ok && /Electrical Rules Checker/.test(erc.dialog ?? ""), erc.dialog);

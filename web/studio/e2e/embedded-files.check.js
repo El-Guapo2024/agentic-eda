@@ -8,6 +8,7 @@
 // switch off and back on). It answers through `window.__embeddedFilesCheck`:
 //   { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }
 // Read it with `await __embeddedFilesCheck.wait(60000)` until `.done`.
+// run-all-checks: board=mcu30-placed   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__embeddedFilesCheck = { results, done: false, ok: false, wait: null });

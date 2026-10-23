@@ -12,6 +12,7 @@
 //
 // It works through `window.__eda` (select with `common.InteractiveSelection.selectItems`, `pcbnew.InteractiveEdit.rotateCcw` / `flip`, undo with `common.Interactive.undo`, the Appearance
 // rows through `studio.Appearance.op`), the canvas's own pixels and a synthetic click on the canvas (pointer events at the position a stroke is drawn at).
+// run-all-checks: board=opamp-routed   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__fpGraphicsCheck = { results, done: false, ok: false, wait: null });

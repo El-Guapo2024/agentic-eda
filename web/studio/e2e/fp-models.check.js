@@ -15,6 +15,7 @@
 //
 // It works through `window.__eda` (`actions`' ids with `run`, selection with `common.InteractiveSelection.selectItems`, undo with `common.Interactive.undo`), the dialogs' data-testids, the
 // preview's own `data-drawn` / `data-waiting` / `data-missing` on `[data-testid="model-preview"]`, and the verbs' routes (`/api/cmd`, `/api/clipboard/copy` for the board file's text).
+// run-all-checks: board=mcu30-placed minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__fpModelsCheck = { results, done: false, ok: false, wait: null });
