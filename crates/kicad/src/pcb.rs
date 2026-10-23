@@ -398,7 +398,12 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         let mut shapes: Vec<&Shape> = drawings.shapes.iter().collect();
         shapes.sort_by(|a, b| a.id().cmp(b.id()));
         for s in &shapes {
-            let uuid = write_shape(&mut out, s, is_locked(s.id()), drawings.board_items.hatch_of(s.id()));
+            let style = drawings.board_items.style_of(s.id());
+            let net = match style.and_then(|st| st.net.as_deref()) {
+                Some(name) => net_of("a copper shape", &format!("{name} on {}", s.layer()), name),
+                None => 0,
+            };
+            let uuid = write_shape(&mut out, s, is_locked(s.id()), style, net);
             written.entry(s.id().to_string()).or_default().push(uuid);
         }
         let mut texts: Vec<&Text> = drawings.texts.iter().collect();
@@ -1328,10 +1333,16 @@ pub(crate) fn write_footprint(
 /// PCB_SHAPE*)`: stroke width and type first, `fill` only for the three
 /// shapes KiCad actually fills (rect/circle/poly -- a line or an arc has no
 /// interior, and KiCad's own writer never emits `fill` for either).
-pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: Option<eda_model::pcb_items::HatchKind>) -> String {
+///
+/// `style` is what the board keeps of the shape beyond `Shape` ([`eda_model::pcb_items::ShapeStyle`]): its hatch, its line endings (`(start_shape ..)` and `(end_shape ..)`
+/// after the stroke, `LINE_ENDING::Format`; an open shape's only) and its net, which `net` has already turned into the file's number (0 is none: `GetNetCode() > 0`).
+pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: Option<&eda_model::pcb_items::ShapeStyle>, net: usize) -> String {
     let sw = |w: Um| mm(w.max(0));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
-    let layer = sexpr_str(shape.layer());
+    let hatch = style.and_then(|st| st.hatch);
+    let ends = style.map(|st| crate::line_ending_io::words(&st.endings, matches!(shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. }))).unwrap_or_default();
+    // `(net ..)` after the layer, before the uuid.
+    let layer = if net > 0 { format!("(layer {}) (net {net})", sexpr_str(shape.layer())) } else { format!("(layer {})", sexpr_str(shape.layer())) };
     // `(fill yes)`, `(fill no)` or `(fill hatch)`, `(fill reverse_hatch)`, `(fill cross_hatch)`: a solid fill wins over a hatch.
     let fill = |filled: bool| match (filled, hatch) {
         (true, _) => "yes",
@@ -1343,7 +1354,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: 
         Shape::Segment { stroke_width, start, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)){lock} (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -1351,7 +1362,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: 
         Shape::Arc { stroke_width, start, mid, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)){lock} (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(mid.x), mm(mid.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -1359,7 +1370,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: 
         Shape::Rect { stroke_width, filled, start, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -1367,7 +1378,7 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: 
         Shape::Circle { stroke_width, filled, center, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
                 mm(center.x), mm(center.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -1377,13 +1388,13 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, hatch: 
             for p in pts {
                 write!(out, " (xy {} {})", mm(p.x), mm(p.y)).unwrap();
             }
-            writeln!(out, ") (stroke (width {}) (type solid)) (fill {}){lock} (layer {layer}) (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
+            writeln!(out, ") (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
         }
         // `case SHAPE_T::BEZIER:` -- `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)) ...)`; like a line, never filled.
         Shape::Bezier { stroke_width, start, c1, c2, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type solid)){lock} (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type solid)){ends}{lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(c1.x), mm(c1.y), mm(c2.x), mm(c2.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();

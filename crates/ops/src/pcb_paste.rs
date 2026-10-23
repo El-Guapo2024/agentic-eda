@@ -20,7 +20,7 @@ use super::Board;
 use eda_kicad::{ClipRef, Clipboard};
 use eda_model::fp_edit::FootprintEdit;
 use eda_model::ir::{next_item_id, BoardPart, Dimension, FootprintExtra, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, LibraryFootprint, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
-use eda_model::pcb_items::HatchKind;
+use eda_model::pcb_items::ShapeStyle;
 use eda_model::{CheckResult, Footprint, Part};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -99,8 +99,8 @@ pub(crate) struct Copies {
     pub(crate) vias: Vec<Via>,
     pub(crate) zones: Vec<Zone>,
     pub(crate) shapes: Vec<Shape>,
-    /// The hatch each of `shapes` had (the same positions; a copy without an entry is not hatched).
-    pub(crate) shape_hatch: Vec<Option<HatchKind>>,
+    /// The style each of `shapes` had -- its hatch, line endings and net (the same positions; a copy without an entry has none).
+    pub(crate) shape_style: Vec<Option<ShapeStyle>>,
     pub(crate) texts: Vec<Text>,
     pub(crate) dimensions: Vec<Dimension>,
     pub(crate) footprints: Vec<FootprintCopy>,
@@ -130,11 +130,11 @@ impl Copies {
         self.tracks.extend(other.tracks);
         self.vias.extend(other.vias);
         self.zones.extend(other.zones);
-        // The hatches stay beside their shapes: both lists are made as long as their shapes before the others' follow.
-        self.shape_hatch.resize(self.shapes.len(), None);
-        let mut other_hatch = other.shape_hatch;
-        other_hatch.resize(other.shapes.len(), None);
-        self.shape_hatch.extend(other_hatch);
+        // The styles stay beside their shapes: both lists are made as long as their shapes before the others' follow.
+        self.shape_style.resize(self.shapes.len(), None);
+        let mut other_style = other.shape_style;
+        other_style.resize(other.shapes.len(), None);
+        self.shape_style.extend(other_style);
         self.shapes.extend(other.shapes);
         self.texts.extend(other.texts);
         self.dimensions.extend(other.dimensions);
@@ -359,8 +359,8 @@ impl Board<'_> {
         }
         if let Some(dr) = &self.design.drawings {
             if let Some(s) = dr.shapes.iter().find(|s| s.id() == id) {
-                copies.shape_hatch.resize(copies.shapes.len(), None);
-                copies.shape_hatch.push(dr.board_items.hatch_of(s.id()));
+                copies.shape_style.resize(copies.shapes.len(), None);
+                copies.shape_style.push(dr.board_items.style_of(s.id()).cloned());
                 copies.shapes.push(s.clone());
                 return Some(Member::Shape(copies.shapes.len() - 1));
             }
@@ -454,8 +454,8 @@ impl Board<'_> {
             let mut c = s.clone();
             c.translate(at.x, at.y);
             shape_ix.push(copies.shapes.len());
-            copies.shape_hatch.resize(copies.shapes.len(), None);
-            copies.shape_hatch.push(clip.shape_hatch.get(k).copied().flatten());
+            copies.shape_style.resize(copies.shapes.len(), None);
+            copies.shape_style.push(clip.shape_style.get(k).cloned().flatten());
             copies.shapes.push(c);
         }
         let mut text_ix: Vec<usize> = Vec::new();
@@ -663,10 +663,10 @@ impl Board<'_> {
         if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() || !new_edits.is_empty() || !new_extras.is_empty() {
             let dr = self.drawings_mut();
             dr.shapes.append(&mut copies.shapes);
-            // A copy of a hatched shape is hatched the same way.
-            for (id, hatch) in shape_ids.iter().zip(&copies.shape_hatch) {
-                if hatch.is_some() {
-                    dr.board_items.set_hatch(id, *hatch);
+            // A copy of a hatched shape is hatched the same way, and has the same line endings and net.
+            for (id, style) in shape_ids.iter().zip(&copies.shape_style) {
+                if style.is_some() {
+                    dr.board_items.set_style(id, style.as_ref());
                 }
             }
             dr.texts.append(&mut copies.texts);

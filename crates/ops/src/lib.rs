@@ -4162,7 +4162,7 @@ impl<'a> Board<'a> {
         if dr.shapes.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")]);
         }
-        dr.board_items.set_hatch(id, None);
+        dr.board_items.forget_shape(id);
         Ok(())
     }
 

@@ -24,6 +24,7 @@ import { ancestors } from "../../kicad-port/groupTree";
 import type { LengthUnit } from "../../state/units";
 import { measureLabel } from "../../kicad-port/measureRuler";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import { endingInks, hasEndings, kicadArc, shortenArc, shortenBezier, shortenSegment } from "../../kicad-port/lineEnding";
 import { drawArcPreview } from "./arcPreview";
 import { drawBezierPreview } from "./bezierPreview";
 import { BEZIER_MAX_ERROR_UM } from "./itemHitTest";
@@ -798,6 +799,11 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
 
 /** `sketch` is `pcbnew.Control.graphicOutlines` ("Sketch Graphic Items", `m_DisplayGraphicsFill` off): a filled shape is drawn as its outline only. */
 export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketch = false) {
+  // KiCad 10's line endings: the body stops short of an arrow, a circle or a square, and the endings are drawn after it in the same colour (`PCB_PAINTER::draw( PCB_SHAPE )`).
+  if ((s.kind === "segment" || s.kind === "arc" || s.kind === "bezier") && hasEndings(s)) {
+    drawShapeWithEndings(ctx, s);
+    return;
+  }
   ctx.beginPath();
   switch (s.kind) {
     case "segment":
@@ -847,6 +853,64 @@ export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketc
   if (s.filled && !sketch) ctx.fill();
   ctx.stroke();
   drawHatchLines(ctx, s);
+}
+
+/**
+ * A line, an arc or a curve with line endings, as `PCB_PAINTER::draw( PCB_SHAPE )` draws it: `ShortenSegmentForEndings` / `ShortenArcForEndings` / `ShortenedBezierCurve` take off what
+ * the endings cover (nothing is drawn of a body they cover whole), then each ending is drawn at its end (`LINE_ENDING::Draw`): filled, and stroked at its own outline width when it has
+ * one; an open arrow is a polyline stroked at its outline width or the line's. The pen colour is the one the caller set.
+ */
+function drawShapeWithEndings(ctx: CanvasRenderingContext2D, s: Extract<Shape, { kind: "segment" | "arc" | "bezier" }>) {
+  const lw = s.stroke_width;
+  ctx.beginPath();
+  if (s.kind === "segment") {
+    const body = shortenSegment(s.start, s.end, s.start_ending, s.end_ending, lw);
+    if (body) {
+      ctx.moveTo(body[0][0], body[0][1]);
+      ctx.lineTo(body[1][0], body[1][1]);
+      ctx.stroke();
+    }
+  } else if (s.kind === "arc") {
+    const k = kicadArc(s.start, s.mid, s.end);
+    if (k) {
+      const r = Math.hypot(k.start[0] - k.centre[0], k.start[1] - k.centre[1]);
+      const a0 = (Math.atan2(k.start[1] - k.centre[1], k.start[0] - k.centre[0]) * 180) / Math.PI;
+      let a1 = (Math.atan2(k.end[1] - k.centre[1], k.end[0] - k.centre[0]) * 180) / Math.PI;
+      if (a1 === a0) a1 = a0 + 360;
+      while (a1 < a0) a1 += 360;
+      const body = shortenArc(a0, a1 - a0, r, s.start_ending, s.end_ending, lw);
+      if (body) {
+        const rad = Math.PI / 180;
+        ctx.arc(k.centre[0], k.centre[1], r, body[0] * rad, (body[0] + body[1]) * rad, body[1] < 0);
+        ctx.stroke();
+      }
+    }
+  } else {
+    const body = shortenBezier({ start: s.start, c1: s.c1, c2: s.c2, end: s.end }, s.start_ending, s.end_ending, lw);
+    if (body) {
+      bezierPolyline(body.start, body.c1, body.c2, body.end, BEZIER_MAX_ERROR_UM).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.stroke();
+    }
+  }
+  ctx.save();
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineJoin = "miter";
+  for (const ink of endingInks(s)) {
+    ctx.beginPath();
+    ink.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    if (ink.fill) {
+      ctx.closePath();
+      ctx.fill();
+      if (ink.stroke > 0) {
+        ctx.lineWidth = ink.stroke;
+        ctx.stroke();
+      }
+    } else {
+      ctx.lineWidth = Math.max(ink.stroke, ctx.lineWidth);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 /**

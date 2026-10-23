@@ -22,7 +22,7 @@ use super::pcb_transform::Xform;
 use super::Board;
 use eda_model::fp_edit::{self, FieldLayout, FootprintEdit};
 use eda_model::ir::{next_item_id, Design, Dimension, FootprintInstance, Group, Point, Shape, Side, Text, Track, Um, Via, Zone};
-use eda_model::pcb_items::{HatchKind, PcbPoint, TextBox};
+use eda_model::pcb_items::{PcbPoint, TextBox};
 use eda_model::CheckResult;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,7 +38,7 @@ pub(crate) enum Item {
     Track(Track),
     Via(Via),
     Zone(Zone),
-    Shape(Shape, Option<HatchKind>),
+    Shape(Shape, Option<eda_model::pcb_items::ShapeStyle>),
     Text(Text, Option<eda_model::board_text::TextExtra>),
     Dimension(Dimension),
     TextBox(TextBox),
@@ -191,7 +191,7 @@ pub(crate) fn enclosed_items(design: &Design, outline: &[Point], area_layers: &[
     }
     if let Some(dr) = &design.drawings {
         for s in &dr.shapes {
-            take(Item::Shape(s.clone(), dr.board_items.hatch_of(s.id())));
+            take(Item::Shape(s.clone(), dr.board_items.style_of(s.id()).cloned()));
         }
         for t in &dr.texts {
             take(Item::Text(t.clone(), dr.text_extras.iter().find(|x| x.id == t.id).cloned()));
@@ -546,14 +546,14 @@ impl Board<'_> {
                 self.routing_mut().zones.push(z.clone());
                 id
             }
-            Item::Shape(s, hatch) => {
+            Item::Shape(s, style) => {
                 let id = mint("shp", format!("{}|{:?}", s.layer(), s.points().first()));
                 s.set_id(id.clone());
-                let hatch = *hatch;
+                let style = style.clone();
                 let dr = self.drawings_mut();
                 dr.shapes.push(s.clone());
-                if hatch.is_some() {
-                    dr.board_items.set_hatch(&id, hatch);
+                if style.is_some() {
+                    dr.board_items.set_style(&id, style.as_ref());
                 }
                 id
             }

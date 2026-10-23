@@ -11,6 +11,7 @@ use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
 use eda_model::barcode::{Barcode, BarcodeKind, EccLevel};
 use eda_model::ir::{DrawingsSection, Millideg, Point, Shape, Um};
+use eda_model::line_ending::LineEnding;
 use eda_model::pcb_items::{PcbPoint, RefImage, ShapeFill, TextBox};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
@@ -62,10 +63,18 @@ pub enum PcbItemCmd {
     /// The fill of rectangles, circles and polygons (`EDA_SHAPE::SetFillModeProp`: the Fill row of the Properties panel and the shape dialog's choice): none, solid, hatch, reverse hatch or
     /// cross-hatch, for all of `ids` as one undo step. The hatch lines are worked out when the board is described (`eda_drc::hatch`), as KiCad's `rehatchShapes` does after every commit,
     /// so there is nothing for a verb to refresh. Only fills: a fill of `null` changes nothing.
+    ///
+    /// And the line endings of lines, arcs and curves (`EDA_SHAPE::SetStartEnding` / `SetEndEnding`: the shape dialog's Start and End rows, and the Properties panel's Start Shape,
+    /// Start Length, Start Width, Start Stroke Width and their End rows), KiCad 10's `(start_shape ..)` and `(end_shape ..)`: an ending left out changes nothing, one of style
+    /// `none` takes it away. A closed shape has no endings (`isOpenShape`).
     SetShapeStyle {
         ids: Vec<String>,
         #[serde(default)]
         fill: Option<ShapeFill>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_ending: Option<LineEnding>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_ending: Option<LineEnding>,
     },
 }
 
@@ -106,7 +115,15 @@ impl PcbItemCmd {
             PcbItemCmd::AddBarcode { barcode: b } => format!("barcode add --layer {} --at {},{} --size {}x{} --kind {} --text {:?}", b.layer, mm(b.at.x), mm(b.at.y), mm(b.width_um), mm(b.height_um), b.kind.file_name(), b.text),
             PcbItemCmd::EditBarcode { id, barcode: b } => format!("barcode edit {id} --layer {} --at {},{} --size {}x{} --kind {} --text {:?}", b.layer, mm(b.at.x), mm(b.at.y), mm(b.width_um), mm(b.height_um), b.kind.file_name(), b.text),
             PcbItemCmd::DeleteBarcode { id } => format!("barcode delete {id}"),
-            PcbItemCmd::SetShapeStyle { ids, fill } => format!("shape style {} --fill {}", ids.join(","), fill.map_or("unchanged".to_string(), |f| format!("{f:?}").to_lowercase())),
+            PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending } => {
+                let mut out = format!("shape style {} --fill {}", ids.join(","), fill.map_or("unchanged".to_string(), |f| format!("{f:?}").to_lowercase()));
+                for (flag, e) in [("start", start_ending), ("end", end_ending)] {
+                    if let Some(e) = e {
+                        out.push_str(&format!(" --{flag}-shape {} --{flag}-size {}x{} --{flag}-stroke {}", e.style.token(), mm(e.length_um), mm(e.width_um), mm(e.stroke_width_um)));
+                    }
+                }
+                out
+            }
         }
     }
 
@@ -136,7 +153,7 @@ impl<'a> Board<'a> {
             PcbItemCmd::AddPoint { point } => self.add_point(point.clone()),
             PcbItemCmd::EditPoint { id, layer, at, size_um } => self.edit_point(id, layer, *at, *size_um),
             PcbItemCmd::DeletePoint { id } => self.delete_point(id),
-            PcbItemCmd::SetShapeStyle { ids, fill } => self.set_shape_style(ids, *fill),
+            PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending } => self.set_shape_style(ids, *fill, *start_ending, *end_ending),
             PcbItemCmd::AddBarcode { barcode } => self.add_barcode(barcode.clone()),
             PcbItemCmd::EditBarcode { id, barcode } => self.edit_barcode(id, barcode.clone()),
             PcbItemCmd::DeleteBarcode { id } => self.delete_barcode(id),
@@ -197,23 +214,44 @@ impl<'a> Board<'a> {
 
     /// `SetShapeStyle`: a rectangle, a circle or a polygon (the kinds `fillAvailable` lets have a fill) is solid (`Shape::filled`), hatched (the board's `shape_styles`) or neither. Every shape
     /// is checked before any is changed.
-    fn set_shape_style(&mut self, ids: &[String], fill: Option<ShapeFill>) -> Result<(), Vec<CheckResult>> {
+    fn set_shape_style(&mut self, ids: &[String], fill: Option<ShapeFill>, start: Option<LineEnding>, end: Option<LineEnding>) -> Result<(), Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(fail("ops_bad_shape_style", "ids", "name at least one shape"));
         }
-        let Some(fill) = fill else { return Ok(()) };
+        if fill.is_none() && start.is_none() && end.is_none() {
+            return Ok(());
+        }
         let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_shape", &ids[0], "the board has no drawings yet"))?;
         for id in ids {
             let shape = dr.shapes.iter().find(|s| s.id() == id).ok_or_else(|| fail("ops_unknown_shape", id, "no shape with this id"))?;
-            if !matches!(shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. }) {
+            let closed = matches!(shape, Shape::Rect { .. } | Shape::Circle { .. } | Shape::Polygon { .. });
+            if fill.is_some() && !closed {
                 return Err(fail("ops_bad_shape_style", id, "only a rectangle, a circle or a polygon has a fill"));
+            }
+            if (start.is_some() || end.is_some()) && closed {
+                return Err(fail("ops_bad_shape_style", id, "only a line, an arc or a curve has line endings"));
             }
         }
         for id in ids {
-            if let Some(shape) = dr.shapes.iter_mut().find(|s| s.id() == id) {
-                shape.set_filled(fill == ShapeFill::Solid);
+            if let Some(fill) = fill {
+                if let Some(shape) = dr.shapes.iter_mut().find(|s| s.id() == id) {
+                    shape.set_filled(fill == ShapeFill::Solid);
+                }
+                dr.board_items.set_hatch(id, fill.hatch());
             }
-            dr.board_items.set_hatch(id, fill.hatch());
+            if start.is_some() || end.is_some() {
+                // `DIALOG_SHAPE_PROPERTIES::TransferDataFromWindow`: a size below 0 is 0 (`std::max( 0, .. )`).
+                // The outline's line type is the file's and no control sets it (`SetStrokeWidth` keeps it): a command that names none keeps the one there is.
+                let mut endings = dr.board_items.endings_of(id);
+                let keep_type = |new: LineEnding, old: LineEnding| if new.stroke_style.is_default() { LineEnding { stroke_style: old.stroke_style, ..new } } else { new };
+                if let Some(e) = start {
+                    endings.start = keep_type(e.clamped(), endings.start);
+                }
+                if let Some(e) = end {
+                    endings.end = keep_type(e.clamped(), endings.end);
+                }
+                dr.board_items.set_endings(id, endings);
+            }
         }
         Ok(())
     }

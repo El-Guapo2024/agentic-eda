@@ -16,6 +16,7 @@ import type { MicrowaveCmd } from "./microwaveTypes";
 import type { EmbeddedCmd } from "./embeddedTypes";
 import type { TableCmdWire } from "./tableTypes";
 import type { TuningPattern } from "./tuneTypes";
+import type { LineEnding } from "../kicad-port/lineEnding";
 
 export type Um = number;
 export type Degrees = number;
@@ -557,6 +558,11 @@ interface ShapeCommon {
   /** The lines `EDA_SHAPE::UpdateHatching` makes of that hatch from the board as it is, and the width they are drawn with (the shape's line width). */
   hatch_lines?: HatchLine[];
   hatch_width?: Um;
+  /** KiCad 10's line endings of a line, an arc or a curve (`(start_shape ..)`, `(end_shape ..)`; kicad-port/lineEnding.ts); absent for none. */
+  start_ending?: LineEnding;
+  end_ending?: LineEnding;
+  /** The net of a shape on a copper layer; absent for none. */
+  net?: string;
 }
 
 export type Shape =

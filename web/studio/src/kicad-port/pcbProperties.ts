@@ -27,6 +27,7 @@ import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "
 import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
 import { registerExtraItemProperties } from "./pcbItemProperties";
 import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
+import { NO_ENDING, type LineEnding, type LineEndingStyle } from "./lineEnding";
 import { registerTableProperties, tableItemOf, tableItemsOf } from "./pcbTableProperties";
 import { PLACEMENT_SOURCE_CHOICES } from "./multichannel";
 
@@ -1337,6 +1338,62 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     SHAPE
   );
+
+  // KiCad 10's line endings (`_EDA_SHAPE_DESC`, after Fill Color): Start Shape, Start Length, Start Width, Start Stroke Width and the End ones, on an open shape (`isOpenShape`).
+  // The enum lists the styles in `ENUM_MAP<LINE_ENDING_STYLE>`'s order: None, Arrow, Circle, Square, Open Arrow.
+  const ENDING_STYLES: { label: string; value: LineEndingStyle }[] = [
+    { label: "None", value: "none" },
+    { label: "Arrow", value: "arrow" },
+    { label: "Circle", value: "circle" },
+    { label: "Square", value: "square" },
+    { label: "Open Arrow", value: "arrow_open" },
+  ];
+  const isOpenShape = (i: PcbItem): boolean => kindOf(i) === "segment" || kindOf(i) === "arc" || kindOf(i) === "bezier";
+  const endingOf = (i: PcbItem, side: "start" | "end"): LineEnding => (side === "start" ? i.shape!.start_ending : i.shape!.end_ending) ?? NO_ENDING;
+  const endingSet = (i: PcbItem, side: "start" | "end", next: LineEnding): Cmd[] => {
+    const cur = endingOf(i, side);
+    if (cur.style === next.style && cur.length === next.length && cur.width === next.width && cur.stroke_width === next.stroke_width) return [];
+    const ending = { style: next.style, length_um: next.length, width_um: next.width, stroke_width_um: next.stroke_width };
+    return [{ op: "pcb_item", verb: "set_shape_style", ids: [i.id], ...(side === "start" ? { start_ending: ending } : { end_ending: ending }) }];
+  };
+  for (const [side, cap] of [
+    ["start", "Start"],
+    ["end", "End"],
+  ] as const) {
+    add(
+      {
+        owner: "EDA_SHAPE",
+        name: `${cap} Shape`,
+        kind: "enum",
+        choices: () => ENDING_STYLES.map((c, n) => ({ label: c.label, value: n })),
+        get: (i) => Math.max(0, ENDING_STYLES.findIndex((c) => c.value === endingOf(i, side).style)),
+        available: isOpenShape,
+        set: (i, v) => {
+          const style = ENDING_STYLES[Math.round(num(v))]?.value;
+          return style === undefined ? [] : endingSet(i, side, { ...endingOf(i, side), style });
+        },
+      },
+      SHAPE
+    );
+    for (const [prop, field] of [
+      ["Length", "length"],
+      ["Width", "width"],
+      ["Stroke Width", "stroke_width"],
+    ] as const) {
+      add(
+        {
+          owner: "EDA_SHAPE",
+          name: `${cap} ${prop}`,
+          kind: "int",
+          display: "size",
+          get: (i) => endingOf(i, side)[field],
+          available: isOpenShape,
+          set: (i, v) => endingSet(i, side, { ...endingOf(i, side), [field]: Math.max(0, Math.round(num(v))) }),
+        },
+        SHAPE
+      );
+    }
+  }
 
   pm.inheritsAfter("PCB_SHAPE", "BOARD_CONNECTED_ITEM");
   pm.inheritsAfter("PCB_SHAPE", "EDA_SHAPE");

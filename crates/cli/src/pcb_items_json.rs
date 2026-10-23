@@ -87,7 +87,7 @@ pub(crate) fn point_json(p: &PcbPoint) -> Value {
     json!({ "id": p.id, "layer": p.layer, "x": p.at.x, "y": p.at.y, "size": p.size_um })
 }
 
-/// Add the new item kinds to the `drawings` object of the state, and the hatch of the shapes `drawings["shapes"]` already lists.
+/// Add the new item kinds to the `drawings` object of the state, and the hatch, line endings and net of the shapes `drawings["shapes"]` already lists.
 pub(crate) fn extend(drawings: &mut Value, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, d: &DrawingsSection, tv: &PcbShown) {
     drawings["text_boxes"] = Value::Array(d.board_items.text_boxes.iter().map(|t| text_box_json(t, tv)).collect());
     drawings["images"] = Value::Array(d.board_items.images.iter().map(image_json).collect());
@@ -131,10 +131,33 @@ fn hatch_json(drawings: &mut Value, design: &eda_model::ir::Design, model: &eda_
     }
     let Some(Value::Array(shapes)) = drawings.get_mut("shapes") else { return };
     for (json, shape) in shapes.iter_mut().zip(&d.shapes) {
+        endings_json(json, shape, &d.board_items);
         let Some(kind) = d.board_items.hatch_of(shape.id()).filter(|_| !shape.is_filled()) else { continue };
         let hatching = eda_drc::hatch::hatching(design, Some(model), shape, kind);
         json["fill"] = json!(kind.token());
         json["hatch_width"] = json!(hatching.width);
         json["hatch_lines"] = Value::Array(hatching.lines.iter().map(|(a, b)| json!([a.x, a.y, b.x, b.y])).collect());
+    }
+}
+
+/// One line ending as the canvas, the shape dialog and the Properties panel read it: `{ "style", "length", "width", "stroke_width" }` (micrometres; 0 is automatic).
+pub(crate) fn line_ending_json(e: &eda_model::line_ending::LineEnding) -> Value {
+    json!({ "style": e.style.token(), "length": e.length_um, "width": e.width_um, "stroke_width": e.stroke_width_um })
+}
+
+/// The line endings of an open shape (`start_ending`, `end_ending`, present when not none) and the net of a shape on copper (`net`). A closed shape's endings are not
+/// there: `EDA_SHAPE::GetStartEnding` gives a closed shape the blank one.
+fn endings_json(json: &mut Value, shape: &eda_model::ir::Shape, items: &eda_model::pcb_items::BoardItems) {
+    let Some(st) = items.style_of(shape.id()) else { return };
+    if !matches!(shape, eda_model::ir::Shape::Rect { .. } | eda_model::ir::Shape::Circle { .. } | eda_model::ir::Shape::Polygon { .. }) {
+        if !st.endings.start.is_none() {
+            json["start_ending"] = line_ending_json(&st.endings.start);
+        }
+        if !st.endings.end.is_none() {
+            json["end_ending"] = line_ending_json(&st.endings.end);
+        }
+    }
+    if let Some(net) = &st.net {
+        json["net"] = json!(net);
     }
 }

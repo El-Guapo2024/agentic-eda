@@ -75,11 +75,12 @@ export function fillWidthError(kind: Shape["kind"], fill: ShapeFill, widthUm: nu
 
 /**
  * The commands that make the board's shape `id` the shape `next`. A shape's id comes from its geometry, so the board editor has always done an edit of the geometry as a delete and an
- * add (the new shape takes the place of the old one in the selection: `removed` are the ids that are gone). A hatched shape is replaced in place instead (`replace_shape` keeps its id,
- * and the hatch is kept by id), as KiCad edits the same item; nothing is removed then.
+ * add (the new shape takes the place of the old one in the selection: `removed` are the ids that are gone). A hatched shape, and one with line endings or a net, is replaced in place
+ * instead (`replace_shape` keeps its id, and the hatch, the endings and the net are kept by id), as KiCad edits the same item; nothing is removed then.
  */
 export function reshapeCmds(board: Pick<BoardState, "drawings"> | null | undefined, id: string, next: CmdShape): { cmds: Cmd[]; removed: string[] } {
   const current = board?.drawings?.shapes.find((s) => s.id === id);
-  if (current && isHatched(current)) return { cmds: [{ op: "replace_shape", id, shape: next }], removed: [] };
+  // A shape with line endings or a net keeps them the same way: they are kept by its id too.
+  if (current && (isHatched(current) || current.start_ending || current.end_ending || current.net)) return { cmds: [{ op: "replace_shape", id, shape: next }], removed: [] };
   return { cmds: [{ op: "delete_shape", id }, { op: "add_shape", shape: next }], removed: [id] };
 }

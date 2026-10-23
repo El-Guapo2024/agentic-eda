@@ -160,7 +160,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let mut refs = Refs::default();
     let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
     let (tracks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
-    let (mut shapes, texts, text_extras) = import_drawings(root, &mut refs);
+    let (mut shapes, texts, text_extras) = import_drawings(root, &net_names, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
     let (outline, outline_is_shapes, outline_width_um) = import_outline(root, &mut shapes, &mut refs, &mut notes);
     let dimensions = import_items::import_dimensions(root, &mut refs);
@@ -178,7 +178,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     notes.zone_fills = crate::zone_fills::scan_zone_fills(text);
     // The board's nets: those the file lists and every net an item names -- a pad, but also a track, a via or a zone (`PCB_IO_KICAD_SEXPR_PARSER::parseNet` makes a net of any
     // `(net "name")` it meets, and a KiCad 10 file lists none: a net that only copper uses, a pour with no pad on it, is a net of the board all the same).
-    let copper_nets: Vec<&str> = tracks.iter().map(|t| t.net.as_str()).chain(vias.iter().map(|v| v.net.as_str())).chain(zones.iter().map(|z| z.net.as_str())).collect();
+    let copper_nets: Vec<&str> = tracks.iter().map(|t| t.net.as_str()).chain(vias.iter().map(|v| v.net.as_str())).chain(zones.iter().map(|z| z.net.as_str())).chain(refs.shapes.iter().filter_map(|r| r.net.as_deref())).collect();
     let nets = build_nets(&net_names, &pin_nets, &copper_nets);
 
     add_layers_in_use(
@@ -261,9 +261,9 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // deterministic ids a fresh route or a hand-add would get, so an
     // imported board is addressable from the moment it lands.
     design.assign_missing_ids();
-    // The shapes' hatch (`(fill hatch)` and the others), named by the ids the shapes have just been given.
+    // The shapes' hatch (`(fill hatch)` and the others), line endings and nets, named by the ids the shapes have just been given.
     if let Some(dr) = design.drawings.as_mut() {
-        let styles: Vec<eda_model::pcb_items::ShapeStyle> = dr.shapes.iter().zip(&refs.shapes).filter_map(|(s, r)| r.hatch.map(|h| eda_model::pcb_items::ShapeStyle { id: s.id().to_string(), hatch: Some(h) })).collect();
+        let styles: Vec<eda_model::pcb_items::ShapeStyle> = dr.shapes.iter().zip(&refs.shapes).filter_map(|(s, r)| r.shape_style(s.id())).collect();
         dr.board_items.shape_styles = styles;
     }
     // The vias' tokens beyond `Via`'s fields, named by the ids the vias have just been given.
@@ -2008,19 +2008,21 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 /// Board-level graphics (`gr_line`/`gr_arc`/`gr_rect`/`gr_circle`/
 /// `gr_poly`/`gr_curve`) and text (`gr_text`), any layer. Those on Edge.Cuts are
 /// the board outline's items; [`import_outline`] decides what becomes of them.
-fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>, Vec<eda_model::board_text::TextExtra>) {
+fn import_drawings(root: &[Sexpr], net_names: &BTreeMap<i64, String>, refs: &mut Refs) -> (Vec<Shape>, Vec<Text>, Vec<eda_model::board_text::TextExtra>) {
     let mut shapes = Vec::new();
+    // A shape's `(net ..)` (`parsePCB_SHAPE`'s `T_net`): the net of a shape on copper. Net 0, the empty name, is no net.
+    let shape_ref = |item: &[Sexpr]| ItemRef { net: Some(net_ref(sexpr::find(item, "net"), net_names)).filter(|n| !n.is_empty()), ..ItemRef::of(item) };
     for item in sexpr::find_all(root, "gr_line") {
         if let Some(shape) = graphic_shape(item, "gr_line", |p| p) {
             shapes.push(shape);
-            refs.shapes.push(ItemRef::of(item));
+            refs.shapes.push(shape_ref(item));
         }
     }
     for tag in ["gr_arc", "gr_rect", "gr_circle", "gr_poly", "gr_curve"] {
         for item in sexpr::find_all(root, tag) {
             if let Some(shape) = graphic_shape(item, tag, |p| p) {
                 shapes.push(shape);
-                refs.shapes.push(ItemRef::of(item));
+                refs.shapes.push(shape_ref(item));
             }
         }
     }

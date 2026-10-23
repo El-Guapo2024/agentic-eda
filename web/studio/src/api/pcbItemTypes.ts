@@ -192,7 +192,18 @@ export type PcbItemCmd =
    * dialog's choice), for all of `ids` as one undo step. The hatch lines are worked out when the board is described -- `pcbnew.Control.rehatchShapes` (`PCB_CONTROL::RehatchShapes`,
    * which KiCad posts after every commit, undo and file load) is that, so there is no verb for it. A fill left out changes nothing.
    */
-  | { verb: "set_shape_style"; ids: string[]; fill?: ShapeFill };
+  | { verb: "set_shape_style"; ids: string[]; fill?: ShapeFill; start_ending?: CmdLineEnding; end_ending?: CmdLineEnding };
+
+/**
+ * One line ending as `set_shape_style` takes it (`eda_model::line_ending::LineEnding`): KiCad 10's `(start_shape ..)` / `(end_shape ..)` of a line, an arc or a curve -- the shape dialog's
+ * Start and End rows and the Properties panel's Start Shape, Start Length, Start Width and Start Stroke Width (and the End ones). A size of 0 is automatic; `none` takes the ending away.
+ */
+export interface CmdLineEnding {
+  style: "none" | "arrow" | "circle" | "square" | "arrow_open";
+  length_um?: number;
+  width_um?: number;
+  stroke_width_um?: number;
+}
 
 /** `FILL_T`: how a closed shape is filled (`UI_FILL_MODE`). */
 export type ShapeFill = "none" | "solid" | "hatch" | "reverse_hatch" | "cross_hatch";

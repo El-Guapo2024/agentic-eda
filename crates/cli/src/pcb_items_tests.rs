@@ -455,7 +455,7 @@ fn add_shape(dir: &Path, shape: Shape) -> String {
 }
 
 fn set_fill(dir: &Path, id: &str, fill: ShapeFill) {
-    step(dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.to_string()], fill: Some(fill) }), false, "test").unwrap();
+    step(dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.to_string()], fill: Some(fill), start_ending: None, end_ending: None }), false, "test").unwrap();
 }
 
 fn rect_shape(layer: &str, (x0, y0): (i64, i64), (x1, y1): (i64, i64)) -> Shape {

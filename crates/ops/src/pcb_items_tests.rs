@@ -350,7 +350,7 @@ use eda_model::ir::Shape;
 use eda_model::pcb_items::{HatchKind, ShapeFill};
 
 fn style(b: &mut Board<'_>, shape_ids: &[&str], fill: ShapeFill) -> Result<(), Vec<CheckResult>> {
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: Some(fill) }))
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: Some(fill), start_ending: None, end_ending: None }))
 }
 
 fn hatch_of(b: &Board<'_>, id: &str) -> Option<HatchKind> {
@@ -395,7 +395,7 @@ fn several_shapes_are_given_a_fill_together_or_not_at_all() {
     assert_eq!(style(&mut b, &[], ShapeFill::None).unwrap_err()[0].check, "ops_bad_shape_style");
     assert_eq!(serde_json::to_value(b.design()).unwrap(), before, "a refused command changes nothing");
     // No fill given is no change.
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(&["shp_rect"]), fill: None })).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(&["shp_rect"]), fill: None, start_ending: None, end_ending: None })).unwrap();
     assert_eq!(hatch_of(&b, "shp_rect"), Some(HatchKind::Hatch));
 }
 
@@ -448,7 +448,7 @@ fn a_shape_added_where_a_hatched_one_was_deleted_is_not_hatched() {
 #[test]
 fn the_shape_style_command_has_one_wire_form() {
     let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_shape_style", "ids": ["shp_a", "shp_b"], "fill": "reverse_hatch"})).unwrap();
-    let Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: shape_ids, fill }) = &c else { panic!("{c:?}") };
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: shape_ids, fill, .. }) = &c else { panic!("{c:?}") };
     assert_eq!((shape_ids.as_slice(), *fill), (&["shp_a".to_string(), "shp_b".to_string()][..], Some(ShapeFill::ReverseHatch)));
     assert_eq!(c.domain(), Domain::Pcb);
     assert_eq!(c.subjects(), vec!["shp_a", "shp_b"]);
@@ -625,4 +625,68 @@ fn the_barcode_commands_have_one_wire_form_and_describe_themselves() {
     assert_eq!(c.describe(), "barcode edit bar_x --layer F.Cu --at 0.001,0.002 --size 5.000x6.000 --kind qr --text \"T\"");
     let back: Cmd = serde_json::from_value(serde_json::to_value(&add).unwrap()).unwrap();
     assert_eq!(back, add);
+}
+
+// ------------------------------------------------------------------------------------------------------------------ line endings (KiCad 10)
+
+use eda_model::line_ending::{LineEnding, LineEndingStyle, LineEndings};
+
+fn endings(b: &mut Board<'_>, shape_ids: &[&str], start: Option<LineEnding>, end: Option<LineEnding>) -> Result<(), Vec<CheckResult>> {
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { ids: ids(shape_ids), fill: None, start_ending: start, end_ending: end }))
+}
+
+fn endings_of(b: &Board<'_>, id: &str) -> LineEndings {
+    drawings(b).board_items.endings_of(id)
+}
+
+#[test]
+fn a_line_an_arc_and_a_curve_get_line_endings_and_a_closed_shape_none() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_um: 3_000, width_um: 2_000, ..Default::default() };
+    endings(&mut b, &["shp_seg", "shp_arc"], Some(arrow), None).unwrap();
+    assert_eq!(endings_of(&b, "shp_seg"), LineEndings { start: arrow, end: LineEnding::default() });
+    assert_eq!(endings_of(&b, "shp_arc").start, arrow);
+    // The end alone, and the start as it was.
+    endings(&mut b, &["shp_seg"], None, Some(LineEnding::new(LineEndingStyle::Circle))).unwrap();
+    assert_eq!(endings_of(&b, "shp_seg"), LineEndings { start: arrow, end: LineEnding::new(LineEndingStyle::Circle) });
+    // A size below 0 is 0 (`std::max( 0, .. )`).
+    endings(&mut b, &["shp_seg"], Some(LineEnding { style: LineEndingStyle::Square, length_um: -5, width_um: 1_000, stroke_width_um: -1, ..Default::default() }), None).unwrap();
+    assert_eq!(endings_of(&b, "shp_seg").start, LineEnding { style: LineEndingStyle::Square, width_um: 1_000, ..Default::default() });
+
+    let before = serde_json::to_value(b.design()).unwrap();
+    assert_eq!(endings(&mut b, &["shp_seg", "shp_rect"], Some(arrow), None).unwrap_err()[0].check, "ops_bad_shape_style", "a rectangle is closed");
+    assert_eq!(serde_json::to_value(b.design()).unwrap(), before, "a refused command changes nothing");
+
+    // None takes them away, and a style that says nothing is not kept.
+    endings(&mut b, &["shp_seg", "shp_arc"], Some(LineEnding::default()), Some(LineEnding::default())).unwrap();
+    assert!(drawings(&b).board_items.shape_styles.is_empty());
+}
+
+#[test]
+fn a_shape_keeps_its_endings_through_a_move_a_turn_a_flip_and_a_duplicate_and_loses_them_when_it_is_deleted() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let open = LineEnding::new(LineEndingStyle::ArrowOpen);
+    endings(&mut b, &["shp_seg"], Some(open), Some(open)).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&["shp_seg"]), dx: 1_000, dy: 2_000 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["shp_seg"]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&["shp_seg"]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!(endings_of(&b, "shp_seg").end, open);
+    b.apply(&Cmd::Duplicate { ids: ids(&["shp_seg"]) }).unwrap();
+    let with = drawings(&b).shapes.iter().filter(|s| !endings_of(&b, s.id()).is_none()).count();
+    assert_eq!(with, 2, "the copy has the endings too");
+    b.apply(&Cmd::DeleteShape { id: "shp_seg".into() }).unwrap();
+    assert!(endings_of(&b, "shp_seg").is_none());
+}
+
+#[test]
+fn the_endings_have_one_wire_form() {
+    let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_shape_style", "ids": ["shp_a"], "start_ending": {"style": "arrow_open", "length_um": 3000, "width_um": 3000, "stroke_width_um": 600}})).unwrap();
+    let Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { start_ending, end_ending, fill, .. }) = &c else { panic!("{c:?}") };
+    assert_eq!((*start_ending, *end_ending, *fill), (Some(LineEnding { style: LineEndingStyle::ArrowOpen, length_um: 3_000, width_um: 3_000, stroke_width_um: 600, ..Default::default() }), None, None));
+    let Cmd::PcbItem(p) = &c else { panic!() };
+    assert_eq!(p.describe(), "shape style shp_a --fill unchanged --start-shape arrow_open --start-size 3.000x3.000 --start-stroke 0.600");
+    let back: Cmd = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+    assert_eq!(back, c);
 }
