@@ -49,6 +49,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-kicad10-items` | KiCad 10's line endings, grid items, via stitching, drill charts, drill maps and drill symbol profile read, written, drawn and edited (HANDOFF "Next tasks" 5, third bullet), ported from KiCad 25ec2335 (`~/src/kicad-src-25ec2335`, the commit of the box's kicad-cli) | done: 4 commits, slow proofs on 7 QA boards and a fixture, 3 chart builds held to kicad-cli's, e2e `kicad10-items.check.js` 6/6 | grid items as routing/placement roles; the Drill Chart Properties and Drill Groups dialogs; backdrills and post-machining in the drill model; microvia stack generators and custom user properties (PARITY-pcb.md section 49) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
