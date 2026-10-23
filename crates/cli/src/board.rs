@@ -76,6 +76,9 @@ mod lib_editors_tests;
 #[path = "review_tests.rs"]
 mod review_tests;
 #[cfg(test)]
+#[path = "rule_editor_tests.rs"]
+mod rule_editor_tests;
+#[cfg(test)]
 #[path = "pcb_items_tests.rs"]
 mod pcb_items_tests;
 #[cfg(test)]
@@ -1289,6 +1292,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetStackup { settings } => format!("board-setup stackup --layers {}", settings.copper_layers),
         Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
+        Cmd::EditDrcRule { action, name, rule, .. } => format!("drc-rule-editor {} {:?}", serde_json::to_value(action).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(), rule.as_ref().map_or(name.as_str(), |r| r.name.as_str())),
         Cmd::SetTextVariables { variables } => format!("board-setup text-variables ({} variables)", variables.len()),
         Cmd::SetBoardLayers { settings } => format!("board-setup layers ({} enabled)", settings.enabled.len()),
         Cmd::SetFormatting { .. } => "board-setup formatting".to_string(),
@@ -1625,6 +1629,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetStackup { .. } => "stackup",
         Cmd::SetRuleSeverities { .. } => "severities",
         Cmd::SetCustomRules { .. } => "custom-rules",
+        Cmd::EditDrcRule { .. } => "drc-rule",
         Cmd::SetTextVariables { .. } => "text-variables",
         Cmd::SetBoardLayers { .. } => "board-layers",
         Cmd::SetFormatting { .. } => "formatting",
