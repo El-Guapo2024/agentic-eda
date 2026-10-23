@@ -12,7 +12,7 @@ use super::model::*;
 use eda_drc::outline::BoardOutline;
 use eda_shape_poly_set::{CornerStrategy, ShapePolySet};
 
-/// What `FromBOARD` takes besides the board: the board outline (`m_brd_outlines`, made before the footprints were flipped, in micrometres), the design settings it reads
+/// What `FromBOARD` takes besides the board: the board outline (`m_brd_outlines`, made before the footprints were flipped, in nanometres), the design settings it reads
 /// (`m_HoleClearance`, `m_MaxError`), the Default net class and how a net finds its own.
 pub struct Settings<'a> {
     pub pcb_name: String,
@@ -301,8 +301,8 @@ impl<'a> Db<'a> {
             let mut path = PathElem::new(false);
             path.layer_id = "pcb".to_string();
             let outline = polys.outline(cnt);
-            // The outline is in micrometres, the unit of the file.
-            let um = |p: &eda_clipper2::Point64| Pt::new(p.x as f64, -(p.y as f64)).fixed();
+            // `mapPt`: the outline is in nanometres, as KiCad builds it.
+            let um = |p: &eda_clipper2::Point64| map_pt(V::new(p.x, p.y));
             for p in outline.iter() {
                 path.points.push(um(p));
             }
@@ -502,7 +502,7 @@ impl<'a> Db<'a> {
             }
             PadShapeKind::Custom => {
                 // The exact shape can be a non convex polygon with holes, which routers handle badly: its convex hull is exported.
-                let mut hull = custom_pad_hull(pad);
+                let mut hull = custom_pad_hull(pad, self.st.max_error);
                 if hull.first() != hull.last() {
                     if let Some(first) = hull.first().copied() {
                         hull.push(first);
@@ -512,9 +512,11 @@ impl<'a> Db<'a> {
                 for layer in &layer_names {
                     polygon_on(&mut padstack, layer, &pts);
                 }
-                // This string _must_ be unique for a given physical shape, so try to make it unique.
+                // This string _must_ be unique for a given physical shape, so try to make it unique. `aPad->GetBoundingBox()` is the pad's on the board: the hull
+                // turned by the pad's orientation, and its hole.
                 let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
-                for p in &hull {
+                let half_hole = V::new(pad.drill.x / 2, pad.drill.y / 2);
+                for p in hull.iter().map(|p| rotate_point(*p, pad.orient)).chain([-half_hole, half_hole].into_iter().filter(|_| pad.drill.x > 0)) {
                     x0 = x0.min(p.x);
                     y0 = y0.min(p.y);
                     x1 = x1.max(p.x);
@@ -526,7 +528,8 @@ impl<'a> Db<'a> {
                     hasher.update(&p.x.to_le_bytes());
                     hasher.update(&p.y.to_le_bytes());
                 }
-                let hash = hasher.finalize().to_hex();
+                // KiCad's is the `HASH_128` of the merged polygon (`SHAPE_POLY_SET::GetHash`), which is not made here: this one is of the hull, in the same form.
+                let hash = hasher.finalize().to_hex().to_ascii_uppercase();
                 padstack.padstack_id = format!(
                     "Cust{uniqifier}Pad_{}x{}_{}x{}_{}_um_{}",
                     fixed6(iu2um(pad_size.x)),
@@ -617,8 +620,9 @@ impl<'a> Db<'a> {
                 GfxShape::Circle(c, e) => {
                     // This is best done by 4 QARC's but freerouter does not yet support QARCs: line segments are used.
                     path.aperture_width = width;
-                    let radius = ((e.x - c.x) as f64).hypot((e.y - c.y) as f64);
-                    for p in arc_to_polyline_inside(*c, kiround(radius), Angle::ZERO, Angle(360.0), ARC_HIGH_DEF) {
+                    // `GetRadius()`: at least 1.
+                    let radius = kiround(((e.x - c.x) as f64).hypot((e.y - c.y) as f64)).max(1);
+                    for p in arc_to_polyline_inside(*c, radius, Angle::ZERO, Angle(360.0), ARC_HIGH_DEF) {
                         path.points.push(map_pt_fp(p, fp));
                     }
                 }
@@ -635,10 +639,11 @@ impl<'a> Db<'a> {
                     path.points.push(map_pt_fp(*a, fp));
                 }
                 GfxShape::Arc(a, m, b) => {
-                    // An arc is a polygon (a path with an aperture width is converted to a convex polygon by FreeRouting).
+                    // An arc is a polygon (a path with an aperture width is converted to a convex polygon by FreeRouting): `TransformShapeToPolygon( .., 0,
+                    // ARC_HIGH_DEF, ERROR_INSIDE, false )`, its outline.
                     path.polygon = true;
                     path.aperture_width = 0.0;
-                    for p in stroked_arc_outline(*a, *m, *b, graphic.width) {
+                    for p in transform_arc_to_polygon(*a, *m, *b, graphic.width, ARC_HIGH_DEF, ErrorLoc::Inside) {
                         path.points.push(map_pt_fp(p, fp));
                     }
                 }
@@ -656,7 +661,11 @@ impl<'a> Db<'a> {
             // Image object coordinates are relative to the image, not absolute board coordinates: the zone is turned back by the footprint's orientation.
             let angle = (-fp.orient).normalize();
             let kind = keepout_kind(zone);
-            for layer in zone.layers.iter().filter(|l| board.copper.iter().any(|c| &c.name == *l)) {
+            // The holes go on `m_layerIds[ m_kicadLayer2pcb[ zone->GetLayer() ] ]`: the zone's layer when it has one, else `UNDEFINED_LAYER`, which the map
+            // (`std::map::operator[]`) takes for layer 0 of the stack.
+            let window_layer = if zone.layers.len() == 1 { self.layer_id_of(board, &zone.layers[0]) } else { self.layer_ids[0].clone() };
+            // `layerset.CuStack()`: the copper layers of the zone from the top of the stack down.
+            for layer in board.copper.iter().map(|c| &c.name).filter(|c| zone.layers.contains(c)) {
                 let mut keepout = Keepout::new(kind);
                 let layer_id = self.layer_id_of(board, layer);
                 let local = |p: &V| map_pt(rotate_point_about(*p, fp.pos, angle) - fp.pos);
@@ -673,7 +682,7 @@ impl<'a> Db<'a> {
                 keepout.shape = Some(ShapeElem::Path(main));
                 for hole in zone.polys.iter().skip(1) {
                     let mut cutout = PathElem::new(true);
-                    cutout.layer_id = layer_id.clone();
+                    cutout.layer_id = window_layer.clone();
                     for p in hole {
                         cutout.points.push(local(p));
                     }
@@ -878,85 +887,84 @@ fn is_round_keepout(pad: &Pad) -> bool {
     false
 }
 
-/// The outline of a stroked arc: the polygon of the arc's centre line widened by half its width. (`TransformArcToPolygon` makes this with arcs of its own; the polygon
-/// is the same within the allowed error.)
-fn stroked_arc_outline(a: V, m: V, b: V, width: i64) -> Vec<V> {
-    let arc = eda_model::outline::Arc::through(eda_model::ir::Point { x: a.x, y: a.y }, eda_model::ir::Point { x: m.x, y: m.y }, eda_model::ir::Point { x: b.x, y: b.y });
-    let centre_line: Vec<eda_clipper2::Point64> = arc.polyline(ARC_HIGH_DEF as f64).into_iter().map(|p| eda_clipper2::Point64::new(p.x, p.y)).collect();
-    let mut set = ShapePolySet::new();
-    if width > 0 {
-        set.offset_line_chain(&centre_line, width / 2, CornerStrategy::RoundAllCorners, ARC_HIGH_DEF as i32, false);
-    } else {
-        let mut ring = centre_line.clone();
-        ring.extend(centre_line.iter().rev().skip(1).take(centre_line.len().saturating_sub(2)));
-        set.add_outline(ring);
+/// `TransformShapeToPolygon( aBuffer, UNDEFINED_LAYER, 0, aError, ERROR_INSIDE )` of a custom pad's basic shape (`EDA_SHAPE::TransformShapeToPolygon`), its outlines.
+/// A circle's or a ring's, a rectangle's (with its edges drawn as stadiums when it has a width or no fill), an arc's, a segment's, a polygon's (filled and grown by
+/// half its width with round corners, or its edges as stadiums), a Bezier's flattened edges. A rounded rectangle's corner radius is not read here: none is rounded.
+fn shape_polygons(g: &Gfx, error: i64) -> Vec<Vec<V>> {
+    let loc = ErrorLoc::Inside;
+    let width = g.width;
+    let solid = g.filled;
+    let mut out: Vec<Vec<V>> = Vec::new();
+    let edges = |pts: &[V], out: &mut Vec<Vec<V>>| {
+        for i in 0..pts.len() {
+            out.push(oval_polygon(pts[i], pts[(i + 1) % pts.len()], width, error, loc));
+        }
+    };
+    match &g.shape {
+        GfxShape::Circle(c, e) => {
+            let r = kiround(((e.x - c.x) as f64).hypot((e.y - c.y) as f64)).max(1);
+            let inner = r - width / 2;
+            if solid || inner <= 0 {
+                out.push(circle_polygon(*c, r + width / 2, error, loc));
+            } else {
+                // `TransformRingToPolygon`: the outer circle and the hole.
+                out.push(circle_polygon(*c, inner + width, error, loc));
+                out.push(circle_polygon(*c, inner, error, ErrorLoc::Outside));
+            }
+        }
+        GfxShape::Rect(a, b) => {
+            // `GetRectCorners`.
+            let pts = [*a, V::new(b.x, a.y), *b, V::new(a.x, b.y)];
+            if solid {
+                out.push(pts.to_vec());
+            }
+            if width > 0 || !solid {
+                edges(&pts, &mut out);
+            }
+        }
+        GfxShape::Arc(a, m, b) => out.push(transform_arc_to_polygon(*a, *m, *b, width, error, loc)),
+        GfxShape::Segment(a, b) => out.push(oval_polygon(*a, *b, width, error, loc)),
+        GfxShape::Poly(pts) if pts.is_empty() => {}
+        GfxShape::Poly(pts) => {
+            if solid {
+                let mut tmp = ShapePolySet::from_outline(pts.iter().map(|p| eda_clipper2::Point64::new(p.x, p.y)).collect());
+                if width > 0 {
+                    tmp.inflate(width / 2, CornerStrategy::RoundAllCorners, error as i32, false);
+                }
+                for i in 0..tmp.outline_count() {
+                    out.push(tmp.outline(i).iter().map(|p| V::new(p.x, p.y)).collect());
+                }
+            } else {
+                edges(pts, &mut out);
+            }
+        }
+        GfxShape::Bezier([a, c1, c2, b]) => {
+            let p = |v: &V| eda_model::ir::Point { x: v.x, y: v.y };
+            let poly: Vec<V> = eda_model::bezier::bezier_polyline(p(a), p(c1), p(c2), p(b), error).into_iter().map(|q| V::new(q.x, q.y)).collect();
+            for w in poly.windows(2) {
+                out.push(oval_polygon(w[0], w[1], width, error, loc));
+            }
+        }
     }
-    if set.outline_count() == 0 {
-        return Vec::new();
-    }
-    set.outline(0).iter().map(|p| V::new(p.x, p.y)).collect()
+    out
 }
 
-/// The vertices of a custom pad's convex hull (`BuildConvexHull( .., MergePrimitivesAsPolygon )`), in the pad's own frame: the anchor and the basic shapes, each widened by
-/// half its line width.
-fn custom_pad_hull(pad: &Pad) -> Vec<V> {
+/// `BuildConvexHull( polygonal_shape, pad_shape )` of `PAD::MergePrimitivesAsPolygon`, in the pad's own frame: the hull of the anchor (a rectangle, or a circle at the
+/// board's `m_MaxError`) and of the outlines of the basic shapes. The hull of their union is the hull of their corners: a corner the union drops is inside it, and a
+/// point where two edges cross is on an edge.
+fn custom_pad_hull(pad: &Pad, max_error: i64) -> Vec<V> {
     let mut pts: Vec<V> = Vec::new();
-    let circle_points = |c: V, r: i64, pts: &mut Vec<V>| {
-        let n = 36;
-        for k in 0..n {
-            let a = Angle(360.0 * k as f64 / n as f64);
-            pts.push(V::new(c.x + kiround(r as f64 * a.cos()), c.y + kiround(r as f64 * a.sin())));
-        }
-    };
-    let widen = |p: V, half: i64, pts: &mut Vec<V>| {
-        if half <= 0 {
-            pts.push(p);
-        } else {
-            for (dx, dy) in [(-1, -1), (1, -1), (1, 1), (-1, 1)] {
-                pts.push(V::new(p.x + dx * half, p.y + dy * half));
-            }
-        }
-    };
-    // The anchor pad shape is always at the origin.
+    // The anchor pad is always at 0,0.
     if pad.anchor_rect {
-        let (hx, hy) = (pad.size.x / 2, pad.size.y / 2);
-        pts.extend([V::new(-hx, -hy), V::new(hx, -hy), V::new(hx, hy), V::new(-hx, hy)]);
+        // `SHAPE_RECT( -padSize.x / 2, -padSize.y / 2, padSize.x, padSize.y ).Outline()`.
+        let (x0, y0) = (-pad.size.x / 2, -pad.size.y / 2);
+        pts.extend([V::new(x0, y0), V::new(x0 + pad.size.x, y0), V::new(x0 + pad.size.x, y0 + pad.size.y), V::new(x0, y0 + pad.size.y)]);
     } else {
-        circle_points(V::new(0, 0), pad.size.x / 2, &mut pts);
+        pts.extend(circle_polygon(V::new(0, 0), pad.size.x / 2, max_error, ErrorLoc::Inside));
     }
     for g in &pad.prims {
-        let half = g.width / 2;
-        match &g.shape {
-            GfxShape::Segment(a, b) => {
-                circle_points(*a, half.max(1), &mut pts);
-                circle_points(*b, half.max(1), &mut pts);
-            }
-            GfxShape::Circle(c, e) => {
-                let r = kiround(((e.x - c.x) as f64).hypot((e.y - c.y) as f64));
-                circle_points(*c, r + half, &mut pts);
-            }
-            GfxShape::Rect(a, b) => {
-                for p in [*a, V::new(b.x, a.y), *b, V::new(a.x, b.y)] {
-                    widen(p, half, &mut pts);
-                }
-            }
-            GfxShape::Arc(a, m, b) => {
-                let arc = eda_model::outline::Arc::through(eda_model::ir::Point { x: a.x, y: a.y }, eda_model::ir::Point { x: m.x, y: m.y }, eda_model::ir::Point { x: b.x, y: b.y });
-                for p in arc.polyline(ARC_HIGH_DEF as f64) {
-                    widen(V::new(p.x, p.y), half, &mut pts);
-                }
-            }
-            GfxShape::Poly(v) => {
-                for p in v {
-                    widen(*p, half, &mut pts);
-                }
-            }
-            GfxShape::Bezier([a, c1, c2, b]) => {
-                let p = |v: &V| eda_model::ir::Point { x: v.x, y: v.y };
-                for q in eda_model::bezier::bezier_polyline(p(a), p(c1), p(c2), p(b), ARC_HIGH_DEF) {
-                    widen(V::new(q.x, q.y), half, &mut pts);
-                }
-            }
+        for poly in shape_polygons(g, max_error) {
+            pts.extend(poly);
         }
     }
     build_convex_hull(&pts)

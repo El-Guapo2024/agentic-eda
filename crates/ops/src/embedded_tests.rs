@@ -166,3 +166,13 @@ fn the_command_has_a_wire_form_and_a_domain_for_the_undo_scope() {
     assert_eq!(Cmd::Embedded(EmbeddedCmd::SetFonts { owner: EmbeddedOwner::LibrarySymbol { lib_id: "L:X".into() }, embed: true }).domain(), Domain::SymbolEditor);
     assert!(!Cmd::Embedded(EmbeddedCmd::SetFonts { owner: EmbeddedOwner::Schematic, embed: true }).edits_connectivity());
 }
+
+/// `EMBEDDED_FILES::AddFile` fails on an empty file (`decompressedData.data()` is null), and the panel says "Failed to add file '%s'." (`AddEmbeddedFile`).
+#[test]
+fn an_empty_file_is_not_added_as_kicad_does_not_add_one() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    assert_eq!(check(&mut b, add(EmbeddedOwner::Board, "empty.txt", b"")), "ops_bad_embedded_data");
+    let e = b.apply(&add(EmbeddedOwner::Board, "empty.txt", b"")).unwrap_err();
+    assert_eq!(e[0].hint.as_deref(), Some("Failed to add file 'empty.txt'."));
+}

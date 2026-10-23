@@ -58,6 +58,7 @@ import { CleanupTracksDialog } from "./components/CleanupTracksDialog";
 import { BoardStatisticsDialog } from "./components/BoardStatisticsDialog";
 import { SwapLayersDialog } from "./components/SwapLayersDialog";
 import { RemoveUnusedPadsDialog } from "./components/RemoveUnusedPadsDialog";
+import { RuleEditorDialog } from "./components/RuleEditorDialog";
 import { SwapNetsDialog } from "./components/SwapNetsDialog";
 import { GlobalEditTracksAndViasDialog } from "./components/GlobalEditTracksAndViasDialog";
 import { GlobalEditTextAndGraphicsDialog } from "./components/GlobalEditTextAndGraphicsDialog";
@@ -285,6 +286,7 @@ function StudioFrame() {
       <BoardStatisticsDialog />
       <SwapLayersDialog />
       <RemoveUnusedPadsDialog />
+      <RuleEditorDialog />
       <SwapNetsDialog />
       <GlobalEditTracksAndViasDialog />
       <GlobalEditTextAndGraphicsDialog />

@@ -870,6 +870,8 @@ export interface StudioState {
   swapLayersDialogOpen: boolean;
   /** `pcbnew.GlobalEdit.removeUnusedPads` -- components/RemoveUnusedPadsDialog.tsx. */
   removeUnusedPadsDialogOpen: boolean;
+  /** `pcbnew.DRETool.drcRuleEditor` -- components/RuleEditorDialog.tsx. */
+  ruleEditorDialogOpen: boolean;
   /** Swap Pad Nets / Swap Gate Nets asking what to do with the unselected pads that are connected to the nets (`PromptConnectedPadDecision`; components/SwapNetsDialog.tsx). Null = not asking. */
   swapNetsPrompt: { cmd: Cmd; pads: string[]; title: string } | null;
   /** `pcbnew.GlobalEdit.editTextAndGraphics` -- components/GlobalEditTextAndGraphicsDialog.tsx. */
@@ -1025,6 +1027,7 @@ const initialState: StudioState = {
   boardStatisticsDialogOpen: false,
   swapLayersDialogOpen: false,
   removeUnusedPadsDialogOpen: false,
+  ruleEditorDialogOpen: false,
   swapNetsPrompt: null,
   editTextAndGraphicsDialogOpen: false,
   createArrayDialogOpen: false,
@@ -1189,6 +1192,7 @@ export type Action =
   | { type: "SET_BOARD_STATISTICS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_SWAP_LAYERS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_REMOVE_UNUSED_PADS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_RULE_EDITOR_DIALOG_OPEN"; open: boolean }
   | { type: "SET_SWAP_NETS_PROMPT"; prompt: { cmd: Cmd; pads: string[]; title: string } | null }
   | { type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_CREATE_ARRAY_DIALOG_OPEN"; open: boolean };
@@ -1674,6 +1678,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, swapLayersDialogOpen: action.open };
     case "SET_REMOVE_UNUSED_PADS_DIALOG_OPEN":
       return { ...state, removeUnusedPadsDialogOpen: action.open };
+    case "SET_RULE_EDITOR_DIALOG_OPEN":
+      return { ...state, ruleEditorDialogOpen: action.open };
     case "SET_SWAP_NETS_PROMPT":
       return { ...state, swapNetsPrompt: action.prompt };
     case "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN":

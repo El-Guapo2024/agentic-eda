@@ -474,7 +474,17 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
 
     // The files embedded in the board, and those its footprints use: one list, last in the file as KiCad writes it (`PCB_IO_KICAD_SEXPR::format( const BOARD* )`), each file's
     // data as it was read.
-    crate::embedded::write_owner(&mut out, &eda_model::embedded_files::board_file_list(design), 1, false);
+    // `board_file_list` has dropped the board's own fonts when it does not embed them; the footprints' fonts stay (`ClearEmbeddedFonts` is the board's list only).
+    {
+        let list = eda_model::embedded_files::board_file_list(design);
+        if list.fonts {
+            writeln!(out, "\t(embedded_fonts yes)").unwrap();
+        }
+        let files: Vec<&eda_model::embedded_files::EmbeddedFile> = list.files.iter().collect();
+        if !files.is_empty() {
+            crate::embedded::write_block(&mut out, &files, 1, true);
+        }
+    }
 
     writeln!(out, ")").unwrap();
     if !net_errors.is_empty() {
@@ -1293,13 +1303,15 @@ pub(crate) fn write_footprint(
         }
     }
 
-    // The files the footprint lists as its own: names, types and checksums (the data is the board's), before its models as KiCad writes them.
+    // The files the footprint lists as its own: names, types and checksums (the data is the board's), before its models as KiCad writes them. `(embedded_fonts yes)` when the
+    // footprint embeds fonts, whether it lists files or not (`FormatBool( .., "embedded_fonts", .. )` is written for every footprint; the `no` is left out, as before, so that a board
+    // without embedded files is written as it was).
     {
+        if eda_model::embedded_files::of_footprint(design, &fp.id).is_some_and(|l| l.fonts) {
+            writeln!(out, "\t\t(embedded_fonts yes)").unwrap();
+        }
         let listed = eda_model::embedded_files::footprint_listed_files(design, &fp.id);
         if !listed.is_empty() {
-            if eda_model::embedded_files::of_footprint(design, &fp.id).is_some_and(|l| l.fonts) {
-                writeln!(out, "\t\t(embedded_fonts yes)").unwrap();
-            }
             let refs: Vec<&eda_model::embedded_files::EmbeddedFile> = listed.iter().collect();
             crate::embedded::write_block(out, &refs, 2, false);
         }

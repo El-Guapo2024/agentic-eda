@@ -328,7 +328,8 @@ pub fn decode(file: &EmbeddedFile) -> Result<Decoded, EmbedError> {
     let current = checksum_of(&bytes);
     let mut legacy = false;
     if file.checksum.len() == 64 {
-        if !file.checksum.eq_ignore_ascii_case(&sha256_hex(&bytes)) {
+        // `sha_hash != aFile.data_hash`: the text compared as it is (picosha2 writes lower case).
+        if file.checksum != sha256_hex(&bytes) {
             return Err(EmbedError::Checksum);
         }
         legacy = true;
@@ -565,6 +566,9 @@ mod tests {
         assert_eq!(decode(&wrong), Err(EmbedError::Checksum));
         let wrong_sha = EmbeddedFile { checksum: "0".repeat(64), ..f.clone() };
         assert_eq!(decode(&wrong_sha), Err(EmbedError::Checksum));
+        // `sha_hash != aFile.data_hash`: picosha2 writes lower case, and the comparison is of the text
+        let upper_sha = EmbeddedFile { checksum: sha256_hex(&content).to_ascii_uppercase(), ..f.clone() };
+        assert_eq!(decode(&upper_sha), Err(EmbedError::Checksum));
         assert_eq!(decode(&EmbeddedFile { data: String::new(), ..f.clone() }), Err(EmbedError::NoData));
         assert_eq!(decode(&EmbeddedFile { data: "!!!!".into(), ..f.clone() }), Err(EmbedError::Base64));
         assert!(matches!(decode(&EmbeddedFile { data: base64_encode(b"plain text, no frame"), ..f.clone() }), Err(EmbedError::Frame(_))));

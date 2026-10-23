@@ -104,6 +104,8 @@ mod pcb_transform;
 mod tuning;
 mod zone_overrides;
 pub mod zone_priority;
+pub mod rule_editor;
+pub use rule_editor::DrcRuleAction;
 mod sch_annotate;
 mod sch_clipboard;
 pub mod sch_control;
@@ -600,6 +602,17 @@ pub enum Cmd {
     SetRuleSeverities { severities: BTreeMap<String, String> },
     /// Design Rules > Custom Rules: the text of the board's `.kicad_dru`.
     SetCustomRules { text: String },
+    /// The DRC Rule Editor (`pcbnew.DRETool.drcRuleEditor`): Save, Delete, Move Up or Move Down on one rule of the `.kicad_dru`, the file written again as
+    /// the editor writes it (`rule_editor.rs`). `entry` is the rule's place in the editor's list and `name` its name there; `rule` is what Save sends.
+    EditDrcRule {
+        action: DrcRuleAction,
+        #[serde(default)]
+        entry: Option<usize>,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        rule: Option<eda_drc::rule_editor::RuleEdit>,
+    },
     /// Board Stackup > Board Editor Layers (`panel_setup_layers.cpp`): the non-copper layers the board has (the technical ones and User.1 to User.45), the
     /// names the user gave its layers and their types. The whole page; refused with the layer's name when a name or type is out of the panel's rules or
     /// a layer is turned off while items are on it.
@@ -2241,6 +2254,7 @@ impl Cmd {
             Cmd::SetStackup { .. } => vec!["stackup"],
             Cmd::SetRuleSeverities { .. } => vec!["severities"],
             Cmd::SetCustomRules { .. } => vec!["custom_rules"],
+            Cmd::EditDrcRule { .. } => vec!["custom_rules"],
             Cmd::SetTextVariables { .. } => vec!["text_variables"],
             Cmd::SetBoardLayers { .. } => vec!["board_layers"],
             Cmd::SetFormatting { .. } => vec!["formatting"],
@@ -2720,6 +2734,7 @@ impl<'a> Board<'a> {
             Cmd::SetConnectionGrid { mils } => review::set_connection_grid(&mut self.design, *mils),
             Cmd::SetSimulator { ngspice, workbook } => simulator::set_simulator(&mut self.design, ngspice.as_ref(), workbook.as_deref()),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
+            Cmd::EditDrcRule { action, entry, name, rule } => rule_editor::edit_drc_rule(&mut self.design, self.model, *action, *entry, name, rule.as_ref()),
             Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),
             Cmd::SetBoardLayers { settings } => board_setup::set_board_layers(&mut self.design, self.model, settings),
             Cmd::SetFormatting { settings } => board_setup::set_formatting(&mut self.design, settings),
