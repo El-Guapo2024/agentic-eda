@@ -55,7 +55,8 @@ never edited as masters.
 
 - **kicad-cli is the only engine** for batch work it already does exactly:
   DRC, ERC, plots, Gerber/drill/position/STEP exports, netlist, BOM, board
-  statistics, and reading other EDA formats (below). `crates/kicad-engine` exports the current `design.json` revision
+  statistics, the Specctra DSN export (where the kicad-cli has `pcb export
+  specctra`: see below), and reading other EDA formats (below). `crates/kicad-engine` exports the current `design.json` revision
   to derived KiCad files (`.kicad/` beside `design.json`, scratch, rewritten on
   every run), runs kicad-cli, and maps the report back to our item ids through
   the exporter's uuid map; `crates/cli/src/kicad_engine.rs` is the board
@@ -135,7 +136,7 @@ never edited as masters.
     `imports/` that `DrawingsSection::intent_file` names). The file is an
     upload, never a path on the server.
   - **The studio stays live while kicad-cli runs.** `/api/drc`, `/api/erc`,
-    `/api/board_stats`, `/api/fab/*`, `/api/sch/plot|netlist` and `/api/import_foreign` run on threads
+    `/api/board_stats`, `/api/fab/*`, `/api/sch/plot|netlist`, `/api/specctra/export` and `/api/import_foreign` run on threads
     of their own (`crates/cli/src/kicad_lane.rs`), so edits, the `/api/version`
     poll and the 3D view never wait for one: an edit answers in milliseconds
     during a DRC. One kicad-cli at a time (they share `.kicad/`, and a DRC, an
@@ -153,6 +154,15 @@ never edited as masters.
     report whose revision the board has left as out of date ("design changed
     since this check — rerun", dimmed markers) rather than as current. The
     canvas is never locked for a run.
+  - **Specctra DSN** (File > Export > Specctra DSN..., `eda board export
+    specctra`, `crates/cli/src/specctra_api.rs`): kicad-cli's `pcb export
+    specctra` when the kicad-cli found has it, which each process asks once
+    (`eda_kicad_engine::cli_has_export`, from `pcb export --help`), so it is no
+    longer an exception there. A kicad-cli without it (10.99.0-5334 and older)
+    gets our own port of `FromBOARD` (`eda_kicad::specctra::export_dsn`), a
+    fallback marked DEPRECATED, to be deleted once every machine has the
+    command; the reply's `engine` says which wrote the file. The session
+    import (SES, `Cmd::Specctra`) stays ours: kicad-cli has no command for it.
 - **Our own ports** are kept for what kicad-cli cannot do or cannot do fast
   enough interactively:
   - the interactive router (`crates/pns`, a port of KiCad's PNS),
