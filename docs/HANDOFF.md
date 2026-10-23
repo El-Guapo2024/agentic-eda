@@ -43,6 +43,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | Specctra via kicad-cli (10-23) | DSN export through `kicad-cli pcb export specctra` when kicad-cli has it; our exporter is the DEPRECATED fallback (the user's decision). |
 | IDF via kicad-cli (10-23) | File > Export > IDFv3 through `kicad-cli pcb export idf`; GenCAD (already wired) gated the same way. Both are disabled, with the reason, on a kicad-cli without the command. kicad-cli reads `--user-origin-x/-y` in 1/25400 mm with `--units mils`, and `idf_args` compensates; the slow test `idf_takes_the_dialogs_reference_point_in_mils` fails if a later nightly fixes that. |
 | Router leftovers (10-23) | Springback, the four corner modes, virtual vias and copper text as an obstacle, reviewed against `pcbnew/router/`. Left: springback in the dragger (~200 lines) and the pair placer, the mark-obstacles hull snap, and keeping the previous head when the head cannot be resolved. |
+| Schematic details (10-23) | A pasted sheet shares its screen, buses across sheets, a label's own fields; reviewed against eeschema's code; 18 of KiCad's QA hierarchies trace as kicad-cli reads them. Left: a shared screen inside a shared screen (needs references keyed by the whole path), two buses joined by a shared member name, `${#}` per placement, 20 of 371 nets of `netlists/video`. PARITY-sch.md section 39. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)

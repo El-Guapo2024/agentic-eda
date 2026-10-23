@@ -306,3 +306,20 @@ fn our_file_with_the_three_details_has_what_we_say_in_it_and_kicad_reads_it_the_
     assert_eq!(cached_pin_at(&back, "GATE_1", "1"), cached_pin_at(root, "test:GATE", "2"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A power symbol of a project's own library (`complex_hierarchy_schlib:+12V`, as KiCad's QA `complex_hierarchy` has them) is written with its units named after
+/// the symbol's own name, the part of its `lib_id` after the library: `SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol` refuses a unit whose name does not start with
+/// it, and kicad-cli then loads no sheet at all.
+#[test]
+fn a_power_symbol_of_a_project_library_names_its_units_after_its_own_name() {
+    let mut m = model();
+    let mut rail = eda_model::symbol::builtin("power:+12V").expect("the generic rail");
+    rail.lib_id = "complex_hierarchy_schlib:+12V".into();
+    m.symbols.push(rail);
+    let mut sch = gate_sheet(&m, false);
+    sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "complex_hierarchy_schlib:+12V".into(), at: Point { x: 50_800, y: 50_800 }, rot: 0, net: "+12V".into(), pin: String::new() });
+    let text = export_kicad_sch(&design_with(sch), &m, &META).expect("the sheet exports");
+    assert!(text.contains("(symbol \"complex_hierarchy_schlib:+12V\""), "{text}");
+    assert!(text.contains("(symbol \"+12V_0_1\""), "the unit is named after the symbol: {text}");
+    assert!(!text.contains("complex_hierarchy_schlib:+12V_0_1"));
+}

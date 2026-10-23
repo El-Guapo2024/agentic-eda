@@ -90,6 +90,11 @@ pub enum SchCmd {
     /// `auto_rotate` is the "Auto" check of a global or hierarchical label (`SetAutoRotateOnPlacement`, then `AutoRotateItem`): while it is on the label takes
     /// the spin of what it is connected to and `spin` is not applied (`if( !AutoRotateOnPlacement() && spin != selected ) SetSpinStyle( selected )`). Refused
     /// for a local label, which has no such check.
+    ///
+    /// `fields` is the dialog's grid of the label's own fields (`SCH_LABEL_BASE::m_fields`) as OK leaves them: its net class (`Netclass`, the name "Net Class"
+    /// reads as) and the others, each with its text, whether it is shown and its italics; a global label's Sheet References is not among them (Schematic Setup
+    /// shows or hides it). An empty, unnamed field is dropped, an empty net class when another is there too, an unnamed one is "untitled"; two fields of one name
+    /// are refused ("Field name '%s' already in use.").
     EditLabel {
         id: String,
         #[serde(default)]
@@ -106,6 +111,8 @@ pub enum SchCmd {
         italic: Option<bool>,
         #[serde(default)]
         auto_rotate: Option<bool>,
+        #[serde(default)]
+        fields: Option<Vec<eda_model::sch_extras::LabelField>>,
     },
     /// Place Label, Global Label and Hierarchical Label (`SCH_DRAWING_TOOLS::TwoClickPlace` after `createNewLabel`): a label named `net` of `kind` at `at`, with the
     /// properties the dialog gave it, as one step. `spin` is which way the text runs from the anchor (the usual label with none given reads off the wire it ends
@@ -379,15 +386,20 @@ impl<'a> Board<'a> {
             SchCmd::AddGraphic { graphic } => add_graphic(self.schematic_mut_or_create(), graphic.clone()),
             SchCmd::DeleteGraphic { id } => delete_graphic(self.schematic_mut()?, id),
             SchCmd::EditGraphic { id, graphic } => edit_graphic(self.schematic_mut()?, id, graphic.clone()),
-            SchCmd::DeleteSheet { id } => delete_sheet(self.schematic_mut()?, id),
+            SchCmd::DeleteSheet { id } => {
+                delete_sheet(self.schematic_mut()?, id)?;
+                // the references its placement gave a screen another sheet still shows go with it (`PruneOrphanedSymbolInstances`)
+                eda_model::sheet_list::prune_orphaned_overrides(&mut self.design);
+                Ok(())
+            }
             SchCmd::AddSheetPin { sheet, name, shape, at } => add_sheet_pin(self.schematic_mut()?, sheet, name, *shape, *at),
             SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id),
             SchCmd::EditSheetPin { id, name, shape, at, size_um, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_um: *size_um, bold: *bold, italic: *italic }),
             SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
             SchCmd::SetBodyStyle { ids, style } => self.set_body_style(ids, *style),
-            SchCmd::EditLabel { id, text, shape, spin, size_um, bold, italic, auto_rotate } => {
-                self.edit_sch_label(id, text.as_deref(), *shape, *spin, crate::sch_props::LabelLookEdit { size_um: *size_um, bold: *bold, italic: *italic, auto_rotate: *auto_rotate })
+            SchCmd::EditLabel { id, text, shape, spin, size_um, bold, italic, auto_rotate, fields } => {
+                self.edit_sch_label(id, text.as_deref(), *shape, *spin, crate::sch_props::LabelLookEdit { size_um: *size_um, bold: *bold, italic: *italic, auto_rotate: *auto_rotate, fields: fields.clone() })
             }
             SchCmd::PlaceLabel { net, at, kind, spin, size_um, bold, italic, auto_rotate } => {
                 self.place_label(net, *at, kind, &crate::sch_labels::PlacedLabel { spin: *spin, size_um: *size_um, bold: *bold, italic: *italic, auto_rotate: *auto_rotate })

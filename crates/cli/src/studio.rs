@@ -1716,12 +1716,15 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             // them by number, same "can't tell, so don't filter" fallback
             // `eda_engine::geometry`'s own unit-aware functions use.
             let resolved = part.and_then(|p| model.real_symbol_of_instance(&sch, s, p));
+            // A screen two sheets show: the reference this placement gives the symbol (`SCH_SYMBOL::GetRef( &GetCurrentSheet() )`), which its Reference
+            // field shows and its pins' nets are filed under; the symbol's `id` stays what the verbs name it by.
+            let reference = eda_model::sheet_list::reference_under(&sch, s, breadcrumb.last().map(|(id, _)| id.as_str()));
             let pins: Vec<Value> = part
                 .map(|p| {
                     p.pins
                         .iter()
                         .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == s.unit))
-                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": pin_net.get(format!("{}.{}", s.id, pin.number).as_str()) }))
+                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": pin_net.get(format!("{reference}.{}", pin.number).as_str()) }))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -1732,8 +1735,17 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(sh) = &shown {
                 sh.annotate_symbol_fields(&owner, &mut fields);
             }
+            if reference != s.id {
+                for f in fields.iter_mut().filter(|f| f["name"] == "Reference") {
+                    f["text"] = json!(reference);
+                    if f.get("shown").is_some() {
+                        f["shown"] = json!(reference);
+                    }
+                }
+            }
             let mut symbol = json!({
                 "id": s.id,
+                "reference": reference,
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &owner),
                 "at": [s.at.x, s.at.y],
@@ -1823,6 +1835,13 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
     let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y], "stroke": sch.extras.strokes.get(&be.id) })).collect();
+    // A global label's Sheet References (`SCH_GLOBALLABEL::ResolveTextVar( "INTERSHEET_REFS" )`): the pages its name is on, as Schematic Setup says
+    let iref = eda_kicad::design_intersheet_refs(design);
+    let entries = eda_model::sheet_list::walk(design);
+    let label_pages = eda_model::sheet_list::global_label_pages(design);
+    let here: Vec<String> = breadcrumb.iter().map(|(id, _)| id.clone()).collect();
+    let current = entries.iter().find(|e| e.path == here).map_or(1, |e| e.virtual_page);
+    let page_text = |p: usize| entries.iter().find(|e| e.virtual_page == p).map(|e| e.effective_page()).unwrap_or_else(|| p.to_string());
     let labels: Vec<Value> = sch
         .labels
         .iter()
@@ -1834,7 +1853,20 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             };
             // The look Label Properties set (size, bold, italic); the defaults when it never did.
             let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
-            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_um": look.text_size_um(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate })
+            // Its own fields and a global label's Sheet References, where `AutoplaceFields` puts them (`eda_kicad::label_fields`)
+            let fields: Vec<Value> = eda_kicad::label_fields::label_fields_placed(&sch, l, iref.show)
+                .into_iter()
+                .map(|f| {
+                    let shown = if f.intersheet_refs { iref.shown(label_pages.get(&l.net), current, &page_text) } else { f.text.clone() };
+                    let h = match f.h {
+                        eda_model::kicad_font::HJustify::Left => "left",
+                        eda_model::kicad_font::HJustify::Right => "right",
+                        eda_model::kicad_font::HJustify::Center => "center",
+                    };
+                    json!({ "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "size_um": 1270 })
+                })
+                .collect();
+            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_um": look.text_size_um(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields })
         })
         .collect();
     let texts: Vec<Value> = sch

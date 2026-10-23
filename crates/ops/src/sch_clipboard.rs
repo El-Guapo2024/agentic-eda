@@ -32,6 +32,16 @@ impl<'a> Board<'a> {
                 out.push(UsedRef { reference: p.id.clone(), unit: 1, lib_id: p.lib_id.clone(), value: p.net.clone() });
             }
         }
+        // a screen shown twice holds the references its other placements give its symbols too (`SCH_SHEET_LIST::GetSymbols` walks every path)
+        for e in eda_model::sheet_list::walk(&self.design).into_iter().skip(1) {
+            let Some(sec) = eda_model::sheet_list::screen_of(&self.design, &e.path) else { continue };
+            for s in &sec.symbols {
+                let reference = eda_model::sheet_list::reference_under(sec, s, e.path.last().map(String::as_str));
+                if reference != s.id {
+                    out.push(UsedRef { reference, unit: s.unit, lib_id: s.lib_id.clone(), value: s.value.clone() });
+                }
+            }
+        }
         out
     }
 
@@ -284,14 +294,18 @@ impl<'a> Board<'a> {
                 sch.extras.pin_swaps.insert(eda_model::ir::field_key(new, s.unit), swaps.clone());
             }
         }
-        // a pasted label keeps its spin, size, bold and italic
+        // a pasted label keeps its spin, size, bold and italic, and its fields
         for (k, l) in src.labels.iter().enumerate() {
             let Some(new_id) = sch.labels.get(first_label + k).map(|n| n.id.clone()) else { continue };
             if let Some(spin) = src.extras.label_spins.get(&l.id) {
                 sch.extras.label_spins.insert(new_id.clone(), *spin);
             }
             if let Some(look) = src.extras.label_looks.get(&l.id) {
-                sch.extras.label_looks.insert(new_id, *look);
+                sch.extras.label_looks.insert(new_id.clone(), *look);
+            }
+            // and its own fields (its net class, ...)
+            if let Some(fields) = src.extras.label_fields.get(&l.id) {
+                sch.extras.label_fields.insert(new_id, fields.clone());
             }
         }
         // a pasted text keeps its justification

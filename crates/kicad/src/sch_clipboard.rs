@@ -634,14 +634,13 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         // the label's spin, size, bold and italic go on the clipboard (`SCH_IO_KICAD_SEXPR::saveText`)
         let (angle, effects) = crate::label_effects(sch, l, tag == "label");
         let _ = writeln!(out, "\n\t\t(at {x} {y} {angle})");
-        if shape.is_some() && tag == "global_label" {
+        if tag == "global_label" || sch.extras.label_fields.get(&l.id).is_some_and(|f| !f.is_empty()) {
             let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
         }
         let _ = writeln!(out, "\t\t{effects}");
         let _ = writeln!(out, "\t\t(uuid \"{uuid}\")");
-        if tag == "global_label" {
-            let _ = writeln!(out, "\t\t(property \"Intersheetrefs\" \"${{INTERSHEET_REFS}}\" (at {x} {y} 0) (effects (font (size 1.27 1.27)) (justify left) (hide yes)))");
-        }
+        // its fields: a global label's Sheet References and the label's own (`saveField`)
+        crate::label_fields::write_label_fields(&mut out, sch, l, false);
         let _ = writeln!(out, "\t)");
     }
     for t in &texts {

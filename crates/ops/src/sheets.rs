@@ -69,7 +69,7 @@ impl<'a> Board<'a> {
                     pins.insert(format!("{}.{number}", sym.id), at);
                 }
             }
-            let mut screens = vec![ScreenIn { sch: &mut drawn, file: String::new(), pins }];
+            let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut drawn, file: String::new(), pins }];
             trace_nets(&mut screens)
         };
         let Some(intent) = &self.intent_nets else {
@@ -209,7 +209,7 @@ mod tests {
             .collect();
         let mut screens: Vec<ScreenIn> = Vec::new();
         for ((file, sch), p) in all.iter_mut().zip(pins) {
-            screens.push(ScreenIn { sch, file: file.clone(), pins: p });
+            screens.push(ScreenIn { path: Vec::new(), sch, file: file.clone(), pins: p });
         }
         trace_nets(&mut screens).into_iter().filter(|n| n.pins.len() >= 2).map(|n| (n.name, n.pins)).collect()
     }

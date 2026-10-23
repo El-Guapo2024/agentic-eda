@@ -61,7 +61,7 @@ fn labels() -> SchematicSection {
 }
 
 fn label(id: &str, text: Option<&str>, shape: Option<LabelShape>, spin: Option<LabelSpin>) -> SchCmd {
-    SchCmd::EditLabel { id: id.into(), text: text.map(str::to_string), shape, spin, size_um: None, bold: None, italic: None, auto_rotate: None }
+    SchCmd::EditLabel { id: id.into(), text: text.map(str::to_string), shape, spin, size_um: None, bold: None, italic: None, auto_rotate: None, fields: None }
 }
 
 #[test]
@@ -363,4 +363,38 @@ fn only_a_label_and_a_sheet_edit_can_change_what_is_connected() {
     assert!(!is(text("txt_a", Some("x"), None, None)));
     assert!(!is(stroke(&["wire_a"], Some(1), None, None, None)));
     assert!(Cmd::OnSheet { sheet: "s".into(), cmd: Box::new(Cmd::SchEdit(stroke(&["wire_a"], Some(1), None, None, None))) }.edits_connectivity() == false);
+}
+
+fn fields_cmd(id: &str, fields: Vec<eda_model::sch_extras::LabelField>) -> SchCmd {
+    SchCmd::EditLabel { id: id.into(), text: None, shape: None, spin: None, size_um: None, bold: None, italic: None, auto_rotate: None, fields: Some(fields) }
+}
+
+fn fld(name: &str, text: &str) -> eda_model::sch_extras::LabelField {
+    eda_model::sch_extras::LabelField { name: name.into(), text: text.into(), visible: true, italic: true }
+}
+
+/// Label Properties' grid of the label's own fields (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`): the net class is stored as `Netclass` ("Net Class" is how
+/// it reads), an empty unnamed field goes, an empty net class goes when another is there, an unnamed one is "untitled", two of one name are refused, and the
+/// same grid again is no change.
+#[test]
+fn label_properties_keep_the_labels_own_fields_as_the_dialogs_ok_does() {
+    let (m, d) = board(labels());
+    let mut b = Board::new(d, &m, 100, 300);
+    ok(&mut b, fields_cmd("lbl_l", vec![fld("Net Class", "Power"), fld("", ""), fld("", "a note")]));
+    let got = sch_of(&b).extras.label_fields.get("lbl_l").cloned().unwrap();
+    assert_eq!(got.iter().map(|f| (f.name.as_str(), f.text.as_str())).collect::<Vec<_>>(), vec![("Netclass", "Power"), ("untitled", "a note")]);
+    assert_eq!(sch_of(&b).extras.label_netclass("lbl_l"), Some("Power"));
+    // an empty net class beside another goes
+    ok(&mut b, fields_cmd("lbl_g", vec![fld("Netclass", ""), fld("Netclass", "HV")]));
+    assert_eq!(sch_of(&b).extras.label_fields["lbl_g"].len(), 1);
+    // two of one name, in any case: refused, nothing changed
+    let before = sch_of(&b).extras.label_fields.clone();
+    assert_eq!(err(&mut b, fields_cmd("lbl_l", vec![fld("Note", "a"), fld("note", "b")])), "ops_label_field_name");
+    assert_eq!(err(&mut b, fields_cmd("lbl_l", vec![fld("Intersheetrefs", "x")])), "ops_label_field_name");
+    assert_eq!(sch_of(&b).extras.label_fields, before);
+    // the same grid again changes nothing
+    assert_eq!(err(&mut b, fields_cmd("lbl_l", got.clone())), "ops_label_unchanged");
+    // an empty grid takes the fields away
+    ok(&mut b, fields_cmd("lbl_l", vec![]));
+    assert!(!sch_of(&b).extras.label_fields.contains_key("lbl_l"));
 }
