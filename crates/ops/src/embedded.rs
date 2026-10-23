@@ -217,6 +217,11 @@ impl Board<'_> {
             return Err(refuse("ops_bad_embedded_name", name, "a file name has no quotes or control characters in it"));
         }
         let bytes = eda_kicad::embedded::base64_decode(data.trim()).map_err(|_| refuse("ops_bad_embedded_data", name, "the content is not base64"))?;
+        // `EMBEDDED_FILES::AddFile` returns no file for an empty one (`if( !efile->decompressedData.data() ) return nullptr;`: an empty vector has no data), and
+        // `AddEmbeddedFile` says so.
+        if bytes.is_empty() {
+            return Err(refuse("ops_bad_embedded_data", name, format!("Failed to add file '{name}'.")));
+        }
         if bytes.len() > MAX_FILE_BYTES {
             return Err(refuse("ops_embedded_too_large", name, format!("{name} is {} bytes; the largest file that can be embedded is {MAX_FILE_BYTES}", bytes.len())));
         }

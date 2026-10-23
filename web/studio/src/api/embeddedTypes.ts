@@ -35,6 +35,9 @@ export interface EmbeddedFileInfo {
   /** The size it is stored in (the compressed frame). */
   stored: number;
   checksum: string;
+  /** The checksum of the content as KiCad holds it once the file is read (`data_hash` after `DecompressAndDecode`: the current MurmurHash3), which `AddEmbeddedFile` compares a file
+   *  added again with; null when the file does not decode. */
+  content_checksum: string | null;
   /** `ok`; `legacy` (an older kind of checksum, rewritten on save); `reference` (no data of its own); `error` (does not decode: `message` says why). */
   status: "ok" | "legacy" | "reference" | "error";
   message: string;
