@@ -839,6 +839,8 @@ fn handle(
         ("POST", "/api/multichannel/sources") => respond(stream, "200 OK", "application/json", crate::multichannel_api::sources(dir).to_string().as_bytes()),
         ("POST", "/api/multichannel/compat") => respond(stream, "200 OK", "application/json", crate::multichannel_api::compat(dir, &body).to_string().as_bytes()),
         ("POST", "/api/design_blocks/delete") => respond(stream, "200 OK", "application/json", crate::design_block_api::delete(dir, &body).to_string().as_bytes()),
+        // What Swap Pad Nets / Swap Gate Nets would ask first: the unselected pads the copper connected to the swapped pads reaches (`PromptConnectedPadDecision`).
+        ("POST", "/api/swap_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
@@ -1065,6 +1067,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, clock));
     let b = eda_ops::Board::new(design.clone(), &model, meta.snap_um, meta.spacing_um);
     let view = eda_ops::view::view(&b, &model)?;
+    // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
+    let flashed = eda_connectivity::flashed_layers(&design, &model);
     let block_of: std::collections::HashMap<String, String> = view["parts"]
         .as_array()
         .map(|ps| ps.iter().filter_map(|p| Some((p["ref"].as_str()?.to_string(), p["block"].as_str().unwrap_or("").to_string()))).collect())
@@ -1108,7 +1112,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     let net = net_of.get(format!("{}.{}", part.reference, q.number).as_str()).copied();
                     match engine_pads.get(i) {
                         // The pad with its own shape, type, hole and overrides (`crate::fp_json`).
-                        Some((pad, nth)) => crate::fp_json::pad_json(&design, &model, fp, q, pad, *nth, net),
+                        Some((pad, nth)) => crate::fp_json::pad_json(&design, &model, fp, q, pad, *nth, net, &flashed),
                         None => json!({ "num": q.number, "net": net, "x": q.center.x, "y": q.center.y, "w": q.size.0, "h": q.size.1, "round": q.is_round(), "th": q.through_hole }),
                     }
                 })
@@ -1118,6 +1122,11 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 p["fields"] = json!(crate::fp_json::fields_json(&design, part, fp, footprint));
                 tv.annotate_fields(&part.reference, &mut p["fields"]);
                 p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
+                // A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`), for Swap Gate Nets' menu: absent for fewer than two.
+                let units = eda_model::fp_units::unit_info(&design, &model, &part.reference);
+                if units.len() >= 2 {
+                    p["units"] = json!(units);
+                }
                 // Its silkscreen, fab drawings and texts (`graphics`, `texts`), board space.
                 crate::fp_art_json::add_art(&mut p, part, fp, footprint);
             }
@@ -1186,10 +1195,17 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 // The arc's mid point when this track is a KiCad arc (`Track::arc`), so an edit that re-sends the track keeps it an arc.
                 "arc_mid": t.arc().map(|(_, m, _)| [m.x, m.y]),
             })).collect::<Vec<_>>(),
-            "vias": r.vias.iter().map(|v| json!({
-                "id": v.id, "net": v.net, "x": v.at.x, "y": v.at.y, "d": v.diameter,
-                "drill": v.drill, "from": v.from_layer, "to": v.to_layer,
-            })).collect::<Vec<_>>(),
+            "vias": r.vias.iter().map(|v| {
+                let extra = design.drawings.as_ref().and_then(|d| d.via_extra(&v.id));
+                json!({
+                    "id": v.id, "net": v.net, "x": v.at.x, "y": v.at.y, "d": v.diameter,
+                    "drill": v.drill, "from": v.from_layer, "to": v.to_layer,
+                    // What the via does with the layers nothing connects it on (`remove_unused_layers`, Remove Unused Pads): `remove_all`,
+                    // `remove_except_start_and_end` or `start_end_only` -- absent when it keeps every layer -- and the layers it then has copper on.
+                    "unconnected": extra.map(|e| e.unconnected_layers()).filter(|m| m.removes()),
+                    "flashed": flashed.vias.get(&v.id),
+                })
+            }).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({
                 "id": z.id, "net": z.net, "layer": z.layer,
                 // `ZONE::GetLayerSet()`: the zone's layers, `layer` first -- one for a zone on one layer.

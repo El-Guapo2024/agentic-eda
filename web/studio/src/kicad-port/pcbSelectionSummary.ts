@@ -13,6 +13,7 @@ import { emptyPcbSummary, type PcbSelectionSummary, type ShapeKind } from "./pcb
 import { ancestors, parentGroup } from "./groupTree";
 import { itemBounds, itemKind, padById } from "./pcbItems";
 import { canMerge, canUnmerge, cellById } from "./tables";
+import { gateSwapChoice } from "./gateSwap";
 
 const isCopper = (layer: string): boolean => layer.endsWith(".Cu");
 
@@ -144,6 +145,9 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
   // CONVERT_TOOL::Init's conditions over the whole selection.
   const convert = convertAvailability(board, ids.filter((id) => itemKind(board, id) !== null));
   s.convert = { poly: convert.poly, zone: convert.zone, keepout: convert.keepout, lines: convert.lines, outset: convert.outset, tracks: convert.tracks, arc: convert.arc };
+  // Swap Gate Nets: the selected pads' units (`GATE_SWAP_MENU`).
+  const gates = gateSwapChoice(board, ids);
+  s.gateSwap = { multiple: gates.multiple, targets: gates.targets };
   return s;
 }
 

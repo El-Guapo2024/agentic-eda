@@ -31,14 +31,14 @@ use crate::sexpr::{self, Sexpr};
 pub const SYMBOL_LIBRARY_ROOT_ENV: &str = "EDA_KICAD_SYMBOLS";
 
 /// Where KiCad's standard symbol libraries live: `SYMBOL_LIBRARY_ROOT_ENV`
-/// if set, else KiCad's own default install location on macOS.
+/// if set, else the installed KiCad's (`kicad_shared_dir`).
 pub fn default_symbol_library_root() -> PathBuf {
     if let Ok(p) = std::env::var(SYMBOL_LIBRARY_ROOT_ENV) {
         if !p.is_empty() {
             return PathBuf::from(p);
         }
     }
-    PathBuf::from("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols")
+    crate::footprint_lib::kicad_shared_dir("symbols")
 }
 
 /// The `.kicad_sym` file a library name (`"Device"`, `"Regulator_Linear"`)
@@ -463,25 +463,36 @@ pub fn export_kicad_sym(sym: &eda_model::ir::LibrarySymbol) -> String {
 /// The whole project symbol library as one `.kicad_sym` (`eeschema.SymbolLibraryControl.saveLibraryAs`, Ctrl+Shift+S):
 /// one `(kicad_symbol_lib ...)` holding every symbol, each written exactly as [`export_kicad_sym`] writes a single one.
 pub fn export_kicad_sym_library(syms: &[&eda_model::ir::LibrarySymbol]) -> String {
+    export_kicad_sym_library_with(syms, &std::collections::BTreeMap::new())
+}
+
+/// [`export_kicad_sym_library`] for symbols that embed files (`embedded`, by `lib_id`): each symbol's `(embedded_fonts ..)` and `(embedded_files ..)` with the data
+/// (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`, where `aIncludeData` is true for a library).
+pub fn export_kicad_sym_library_with(syms: &[&eda_model::ir::LibrarySymbol], embedded: &std::collections::BTreeMap<String, eda_model::embedded_files::EmbeddedFiles>) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     writeln!(out, "(kicad_symbol_lib (version 20231120) (generator \"eda\") (generator_version \"1.0\")").unwrap();
     for sym in syms {
-        write_symbol(&mut out, sym);
+        write_symbol(&mut out, sym, embedded.get(&sym.lib_id));
     }
     writeln!(out, ")").unwrap();
     out
 }
 
-fn write_symbol(out: &mut String, sym: &eda_model::ir::LibrarySymbol) {
+fn write_symbol(out: &mut String, sym: &eda_model::ir::LibrarySymbol, embedded: Option<&eda_model::embedded_files::EmbeddedFiles>) {
     let bare_name = sym.lib_id.rsplit(':').next().unwrap_or(sym.lib_id.as_str());
-    write_symbol_named(out, sym, bare_name);
+    write_symbol_named_with(out, sym, bare_name, embedded);
 }
 
 /// One symbol block as [`export_kicad_sym`] writes it, under the name `outer_name`: the bare name in a library file, the full
 /// `Library:Name` in a schematic's `(lib_symbols ...)` cache (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol( aSymbol, aFormatter, aName )`),
 /// whose `<bare>_<unit>_<style>` sub-blocks keep the bare name.
 pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibrarySymbol, outer_name: &str) {
+    write_symbol_named_with(out, sym, outer_name, None);
+}
+
+/// [`write_symbol_named`] with the files the symbol embeds, written at the end of its block as KiCad's `SaveSymbol` does.
+pub(crate) fn write_symbol_named_with(out: &mut String, sym: &eda_model::ir::LibrarySymbol, outer_name: &str, embedded: Option<&eda_model::embedded_files::EmbeddedFiles>) {
     use std::fmt::Write as _;
 
     // the sub-blocks are named for the block they are in: `<bare>_<unit>_<style>` of `outer_name` (a symbol's own copy in the cache, `GATE_1`, has `GATE_1_1_1`: KiCad refuses
@@ -495,6 +506,9 @@ pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibraryS
     if let Some(parent) = &sym.extends {
         writeln!(out, "\t(symbol {} (extends {})", crate::sexpr_str(outer_name), crate::sexpr_str(eda_model::sym_fields::bare_name(parent))).unwrap();
         write_fields(out, sym);
+        if let Some(list) = embedded {
+            crate::embedded::write_owner(out, list, 2, false);
+        }
         writeln!(out, "\t)").unwrap();
         return;
     }
@@ -528,6 +542,9 @@ pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibraryS
         }
     }
 
+    if let Some(list) = embedded {
+        crate::embedded::write_owner(out, list, 2, false);
+    }
     writeln!(out, "\t)").unwrap();
 }
 

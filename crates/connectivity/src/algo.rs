@@ -75,6 +75,23 @@ pub fn build_graph(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
         }
     }
 
+    // The pieces of one padstack pad are one pad: every piece touches every other (`CN_ITEM` of a pad spans its layers).
+    let mut pieces: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    for (i, it) in items.iter().enumerate() {
+        if let Some(group) = it.pad_piece_of {
+            pieces.entry(group).or_default().push(i);
+        }
+    }
+    for members in pieces.values() {
+        for &a in members {
+            for &b in members {
+                if a != b && !edges[a].contains(&b) {
+                    edges[a].push(b);
+                }
+            }
+        }
+    }
+
     for (it, mut e) in items.iter_mut().zip(edges) {
         e.sort_unstable();
         it.connected = e;
@@ -157,6 +174,62 @@ mod tests {
         let clusters = search_clusters(&graph);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].items.len(), 3, "2 pads + 1 track segment");
+    }
+
+    /// A plated through-hole pad J1.1 on net N: a 1.6 mm circle at the front, a 3 mm square on the inner layers and a 2.4 x 1.0 mm oval at the back of a four-layer board.
+    fn padstack_model(side: eda_model::ir::Side) -> (eda_model::ir::Design, eda_model::ConstraintModel) {
+        use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode};
+        use eda_model::{BoardRules, Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
+        let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("TH1".into()), footprint: Some("TH1".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None };
+        let mut pad = Pad { number: "1".into(), at: (0, 0), size: (1600, 1600), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(800), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        pad.ext.stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(PadLayerShape::plain(PadShape::Rect, (3000, 3000))), back: Some(PadLayerShape::plain(PadShape::Oval, (2400, 1000))), ..Default::default() };
+        let model = eda_model::ConstraintModel {
+            parts: vec![part],
+            nets: vec![Net { name: "N".into(), pins: vec!["J1.1".into()] }],
+            footprints: vec![Footprint { name: "TH1".into(), pads: vec![pad], courtyard: Some((2000, 2000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }],
+            board: BoardRules { layers: vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()], ..Default::default() },
+            ..Default::default()
+        };
+        let (mut design, _) = two_pad_model();
+        design.placement.as_mut().unwrap().footprints = vec![eda_model::ir::FootprintInstance { id: "J1".into(), at: eda_model::ir::Point { x: 10_000, y: 10_000 }, rot: 0, side, label: Default::default() }];
+        (design, model)
+    }
+
+    /// The track on `layer` whose end is at (10000 + dx, 10000), and what the pad's pieces and the track have to say about one another.
+    fn track_touches_the_pad(layer: &str, dx: i64, side: eda_model::ir::Side) -> (usize, bool) {
+        let (mut design, model) = padstack_model(side);
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: layer.into(), width: 200, pts: vec![eda_model::ir::Point { x: 10_000 + dx, y: 10_000 }, eda_model::ir::Point { x: 10_000 + dx + 3_000, y: 10_000 }], arc_mid_offset: None });
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
+        let pads: Vec<usize> = graph.items.iter().enumerate().filter(|(_, i)| matches!(i.item, ItemRef::Pad { .. })).map(|(i, _)| i).collect();
+        let track = graph.items.iter().position(|i| matches!(i.item, ItemRef::TrackSeg { .. })).unwrap();
+        (pads.len(), pads.iter().any(|p| graph.items[track].connected.contains(p)))
+    }
+
+    #[test]
+    fn a_track_connects_to_a_padstack_pad_where_the_copper_of_its_layer_is() {
+        use eda_model::ir::Side;
+        // 1.2 mm from the centre: outside the 0.8 mm circle of the front, inside the 1.5 mm half side of the inner square, outside the oval's 1.2 mm half length by nothing.
+        let (pieces, on_inner) = track_touches_the_pad("In1.Cu", 1_200, Side::Top);
+        assert_eq!(pieces, 3, "an item for the front, one for the inner layers and one for the back");
+        assert!(on_inner, "the inner square reaches the track's end");
+        assert!(!track_touches_the_pad("F.Cu", 1_200, Side::Top).1, "the front circle does not");
+        assert!(track_touches_the_pad("B.Cu", 1_150, Side::Top).1, "the back oval is 2.4 mm long: it reaches 1.15 mm");
+        assert!(!track_touches_the_pad("B.Cu", 1_500, Side::Top).1, "a track end within its half width of the copper connects, farther does not");
+        // A bottom-side footprint has the oval on the board's front.
+        assert!(track_touches_the_pad("F.Cu", 1_150, Side::Bottom).1);
+        assert!(!track_touches_the_pad("B.Cu", 1_150, Side::Bottom).1);
+    }
+
+    #[test]
+    fn the_pieces_of_one_padstack_pad_are_one_pad_to_the_clusters() {
+        let (mut design, model) = padstack_model(eda_model::ir::Side::Top);
+        // A track on In1 ends in the inner square and a second one on B.Cu ends in the oval: the pad joins them.
+        for (id, layer, x) in [("t1", "In1.Cu", 11_200), ("t2", "B.Cu", 11_150)] {
+            design.routing.as_mut().unwrap().tracks.push(Track { id: id.into(), net: "N".into(), pins: vec![], layer: layer.into(), width: 200, pts: vec![eda_model::ir::Point { x, y: 10_000 }, eda_model::ir::Point { x: x + 3_000, y: 10_000 }], arc_mid_offset: None });
+        }
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
+        let clusters = search_clusters(&graph);
+        assert_eq!(clusters.len(), 1, "one pad, two tracks: one cluster");
     }
 
     #[test]

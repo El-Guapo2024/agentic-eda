@@ -52,6 +52,7 @@ fn library_pad(number: &str, x: i64, y: i64) -> eda_model::ir::LibraryPad {
         thermal_spoke_width_override: None,
         zone_connection: None,
         thermal_spoke_angle_mdeg: None,
+        stack: Default::default(),
     }
 }
 
@@ -390,7 +391,7 @@ fn a_derived_symbol_is_placed_exported_and_undone_as_the_flat_symbol_it_stands_f
     assert_eq!(whole.matches("(pin passive").count(), 2, "the drawing is written once, under the base");
     // and what is written reads back as the same library
     let back = eda_kicad::parse_library_symbols(&whole).unwrap();
-    let section = eda_model::ir::SymbolLibrarySection { symbols: back.symbols.into_iter().map(|mut s| { s.lib_id = format!("Lib:{}", s.lib_id); s.extends = s.extends.map(|p| format!("Lib:{p}")); s }).collect() };
+    let section = eda_model::ir::SymbolLibrarySection { symbols: back.symbols.into_iter().map(|mut s| { s.lib_id = format!("Lib:{}", s.lib_id); s.extends = s.extends.map(|p| format!("Lib:{p}")); s }).collect(), ..Default::default() };
     assert_eq!(section.flatten("Lib:Leaf").unwrap().all_fields(), lib.flatten("Lib:Leaf").unwrap().all_fields());
     assert_eq!(section.flatten("Lib:Leaf").unwrap().pins.len(), 2);
 
@@ -486,7 +487,7 @@ fn kicad_cli_loads_derived_symbols_keeps_them_through_sym_upgrade_and_plots_a_fl
     }
     // KiCad writes a derived symbol's footprint filters out in full when it saves (the ones it inherits too: `saveDcmInfoAsFields` asks `GetFPFilters()`), so the keywords and the
     // filters are compared as the symbols have them once flattened -- what each one stands for
-    let (mine, kicad) = (eda_model::ir::SymbolLibrarySection { symbols: ours.clone() }, eda_model::ir::SymbolLibrarySection { symbols: theirs.symbols.clone() });
+    let (mine, kicad) = (eda_model::ir::SymbolLibrarySection { symbols: ours.clone(), ..Default::default() }, eda_model::ir::SymbolLibrarySection { symbols: theirs.symbols.clone(), ..Default::default() });
     for name in ["Base", "Mid", "Leaf"] {
         let (a, b) = (mine.flatten(name).unwrap(), kicad.flatten(name).unwrap());
         assert_eq!((&b.keywords, &b.footprint_filters), (&a.keywords, &a.footprint_filters), "{name}: keywords and filters once flattened");

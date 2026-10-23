@@ -19,6 +19,9 @@ eda-shape-poly-set = { path = "../shape-poly-set" }
 # `(dimension ..)` the PCB writer emits. `eda-connectivity` has `eda-kicad` only as a dev-dependency.
 eda-connectivity = { path = "../connectivity" }
 blake3 = { workspace = true }
+# Embedded files (`EMBEDDED_FILES::CompressAndEncode` / `DecompressAndDecode`, common/embedded_files.cpp): KiCad stores them as zstd frames, base64-encoded. The one
+# dependency added for them (approved 2026-10-21); no default features (no legacy-format reader, no dictionary builder).
+zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 eda-place = { path = "../place" }

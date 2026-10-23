@@ -59,6 +59,9 @@ pub use array::ArrayGeometry;
 mod array_numbering;
 pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingAxes, NumberingType, PadNumberProvider, PadNumbering};
 mod fp_array;
+mod pad_edit;
+mod unused_pads;
+mod pad_nets;
 mod fp_lib_fields;
 mod sym_derive;
 mod fix_shapes;
@@ -756,6 +759,39 @@ pub enum Cmd {
         /// Texts' `stroke_width` and a dimension's `text_thickness_um`.
         #[serde(default)]
         text_thickness: Option<Um>,
+    },
+    /// `pcbnew.GlobalEdit.removeUnusedPads` (Remove Unused Pads...), `DIALOG_UNUSED_PAD_LAYERS::updatePadsAndVias` -- see `unused_pads.rs`: the plated
+    /// through-hole pads (`pads`) and the vias (`vias`) the dialog picked stop having copper on the layers nothing connects them on (`remove` with `keep_outside`:
+    /// "Keep outside layers" -- the pad keeps its front and back ring), or keep every layer again (`remove: false`, "Restore All Layers"). `selected` is "Selected only":
+    /// the ids of the selection (a footprint, a pad `REF.NUM`, a via); `None` takes the whole board. One undo step; refused when nothing qualifies.
+    RemoveUnusedPads {
+        #[serde(default)]
+        selected: Option<Vec<String>>,
+        #[serde(default)]
+        vias: bool,
+        #[serde(default)]
+        pads: bool,
+        #[serde(default)]
+        keep_outside: bool,
+        remove: bool,
+    },
+    /// `pcbnew.InteractiveEdit.swapPadNets` (Swap Pad Nets), `EDIT_TOOL::SwapPadNets` -- see `pad_nets.rs`: the nets of the pads `ids` (two or more, in selection order) rotate,
+    /// the pad `i` taking the net of the pad `i + 1`, and the tracks, vias and pads the copper connected to them reaches follow. `connected_pads` is the answer to "N unselected pad(s)
+    /// are connected to these nets": `false` ignores them, `true` swaps them too; left out, such a swap is refused with `ops_swap_unselected_pads` (the pads in its `detail`)
+    /// so that the studio can ask. One undo step.
+    SwapPadNets {
+        ids: Vec<String>,
+        #[serde(default)]
+        connected_pads: Option<bool>,
+    },
+    /// `pcbnew.InteractiveEdit.swapGateNets` (Swap Gate Nets), `EDIT_TOOL::SwapGateNets`: the pads `ids` are in two or more units of one multi-gate footprint (`FOOTPRINT::GetUnitInfo`),
+    /// whose nets rotate unit to unit, position by position -- or in one unit, which swaps with the unit called `target`. `connected_pads` as for [`Cmd::SwapPadNets`].
+    SwapGateNets {
+        ids: Vec<String>,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        connected_pads: Option<bool>,
     },
 
     /// `EDIT_TOOL::Duplicate` (the studio's Cmd+D): exact copies of the named items in place, under fresh ids -- placed footprints,
@@ -1659,6 +1695,13 @@ pub enum Cmd {
         #[serde(default)]
         numbering: Option<PadNumbering>,
     },
+    /// `pcbnew.PadTool.explodePad` (Edit Pad as Graphic Shapes, Ctrl+E), `PAD_TOOL::EditPad` with a pad selected -- see [`pad_edit`]: a custom pad's basic shapes
+    /// become free graphics of the footprint on the pad's layer, the pad is left as its anchor and the footprint is in pad edit mode
+    /// ([`eda_model::ir::PadEditMode`]), until the pad is recombined. One undo step. Refused while a pad is being edited.
+    ExplodePad { footprint: String, id: String },
+    /// `pcbnew.PadTool.recombinePad` (Finish Pad Edit, Ctrl+E), `PAD_TOOL::EditPad` with a pad being edited -- see [`pad_edit`]: every graphic on the pad's layer
+    /// that touches the pad goes back into it as a basic shape. One undo step. Refused when no pad is being edited.
+    RecombinePad { footprint: String },
 
     // ----------------------------------------------------- symbol editor
     //
@@ -1983,7 +2026,9 @@ impl Cmd {
             | Cmd::EditFootprintText { .. }
             | Cmd::DeleteFootprintText { .. }
             | Cmd::MoveFootprintText { .. }
-            | Cmd::CreateFootprintArray { .. } => Domain::FootprintEditor,
+            | Cmd::CreateFootprintArray { .. }
+            | Cmd::ExplodePad { .. }
+            | Cmd::RecombinePad { .. } => Domain::FootprintEditor,
             Cmd::OpenSymbolForEdit { .. }
             | Cmd::NewSymbol { .. }
             | Cmd::DeleteLibrarySymbol { .. }
@@ -2073,6 +2118,8 @@ impl Cmd {
             Cmd::ReannotateBoard { .. } => true,
             // a board that comes in has its own nets: the netlist the schematic's drawing had set goes (`design.nets`)
             Cmd::ReplaceBoard { .. } => true,
+            // a swap of nets moves pins between the nets of `design.nets` -- the netlist the schematic's half of the design owns -- and the nets of the board's copper with them
+            Cmd::SwapPadNets { .. } | Cmd::SwapGateNets { .. } => true,
             // Replace All renames a reference when it is asked to look at them
             Cmd::ReplaceText { search, .. } => search.replace_references,
             // Field Properties of a Reference field renames the symbol
@@ -2139,6 +2186,8 @@ impl Cmd {
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, .. } => shape_ids.iter().chain(text_ids.iter()).chain(dimension_ids.iter()).map(String::as_str).collect(),
+            Cmd::RemoveUnusedPads { selected, .. } => selected.iter().flatten().map(String::as_str).collect(),
+            Cmd::SwapPadNets { ids, .. } | Cmd::SwapGateNets { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetTeardropSettings { .. } => vec!["teardrop_settings"],
             Cmd::AddAllTeardrops | Cmd::RemoveAllTeardrops => vec!["teardrops"],
             Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
@@ -2255,7 +2304,9 @@ impl Cmd {
             | Cmd::EditFootprintText { footprint, .. }
             | Cmd::DeleteFootprintText { footprint, .. }
             | Cmd::MoveFootprintText { footprint, .. }
-            | Cmd::CreateFootprintArray { footprint, .. } => vec![footprint.as_str()],
+            | Cmd::CreateFootprintArray { footprint, .. }
+            | Cmd::ExplodePad { footprint, .. }
+            | Cmd::RecombinePad { footprint } => vec![footprint.as_str()],
 
             Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
             Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
@@ -2731,6 +2782,9 @@ impl<'a> Board<'a> {
             }
             Cmd::DeleteText { id } => self.delete_text(id),
             Cmd::MoveText { id, x, y } => self.move_text(id, *x, *y),
+            Cmd::RemoveUnusedPads { selected, vias, pads, keep_outside, remove } => self.remove_unused_pads(&unused_pads::UnusedPadLayers { selected: selected.as_deref(), vias: *vias, pads: *pads, keep_outside: *keep_outside, remove: *remove }),
+            Cmd::SwapPadNets { ids, connected_pads } => self.swap_pad_nets(ids, *connected_pads),
+            Cmd::SwapGateNets { ids, target, connected_pads } => self.swap_gate_nets(ids, target.as_deref(), *connected_pads),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, layer, line_width, text_size, text_thickness } => {
                 self.edit_text_and_graphics(&pcb_global_edit::GlobalTextEdit { shape_ids, text_ids, dimension_ids, layer_defaults: *layer_defaults, layer: layer.as_deref(), line_width: *line_width, text_size: *text_size, text_thickness: *text_thickness })
             }
@@ -2862,6 +2916,8 @@ impl<'a> Board<'a> {
             }
             Cmd::SetPadNumbers { footprint, numbers } => self.set_pad_numbers(footprint, numbers),
             Cmd::RenumberPads { footprint, start, prefix, step } => self.renumber_pads(footprint, *start, prefix, *step),
+            Cmd::ExplodePad { footprint, id } => self.explode_pad(footprint, id),
+            Cmd::RecombinePad { footprint } => self.recombine_pad(footprint),
 
             Cmd::AddFootprintGraphic { footprint, shape } => self.add_footprint_graphic(footprint, shape.clone()),
             Cmd::DeleteFootprintGraphic { footprint, id } => self.delete_footprint_graphic(footprint, id),
@@ -5206,6 +5262,10 @@ impl<'a> Board<'a> {
     }
 
     fn update_footprint_on_board(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
+        // `FOOTPRINT_EDIT_FRAME::SaveFootprint`: a pad being edited as shapes is recombined before the footprint is saved.
+        if self.library_footprint_mut(name)?.pad_edit.is_some() {
+            self.recombine_pad(name)?;
+        }
         self.library_footprint_mut(name)?.published = true;
         Ok(())
     }
@@ -5261,6 +5321,10 @@ impl<'a> Board<'a> {
         fp.pads.retain(|p| p.id != id);
         if fp.pads.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_pad", id, "no pad with this id")]);
+        }
+        // `PAD_TOOL::Reset`: a deleted pad leaves pad edit mode.
+        if fp.pad_edit.as_ref().is_some_and(|m| m.pad == id) {
+            fp.pad_edit = None;
         }
         Ok(())
     }
@@ -5839,6 +5903,12 @@ mod pcb_transform_tests;
 mod array_tests;
 #[cfg(test)]
 mod fp_array_tests;
+#[cfg(test)]
+mod pad_edit_tests;
+#[cfg(test)]
+mod unused_pads_tests;
+#[cfg(test)]
+mod pad_nets_tests;
 #[cfg(test)]
 mod sym_derive_tests;
 #[cfg(test)]

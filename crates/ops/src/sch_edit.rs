@@ -1034,7 +1034,7 @@ mod tests {
     fn update_library_symbols_publishes_edited_symbols_once() {
         use eda_model::ir::{LibrarySymbol, SymbolLibrarySection};
         let mut design = design_with_schematic(empty_sheet());
-        design.symbol_library = Some(SymbolLibrarySection { symbols: vec![LibrarySymbol::new_empty("Device:R"), LibrarySymbol::new_empty("Device:C")] });
+        design.symbol_library = Some(SymbolLibrarySection { symbols: vec![LibrarySymbol::new_empty("Device:R"), LibrarySymbol::new_empty("Device:C")], ..Default::default() });
         let model = ConstraintModel::default();
         let mut b = Board::new(design, &model, 100, 300);
         let published = |b: &Board, id: &str| b.design().symbol_library.as_ref().unwrap().by_lib_id(id).unwrap().published;

@@ -21,6 +21,7 @@ use eda_model::ir::{Design, FieldPlacement, NetLabel, NoConnect, PowerSymbol, Sc
 use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
+pub mod embedded;
 mod barcode_io;
 mod pcb_image;
 mod pcb_items_io;
@@ -32,6 +33,7 @@ mod via_io;
 mod fp_art_io;
 mod fp_fields;
 mod pad_shape;
+mod padstack_io;
 mod pcb;
 mod pcb_generated;
 mod pcb_items;
@@ -54,7 +56,7 @@ mod footprint_import;
 pub use footprint_import::{parse_library_footprint, ParsedFootprint};
 
 mod footprint_lib;
-pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_footprint_file, footprint_attributes, footprint_models, parse_footprint_file, resolve_library_footprints, resolve_library_footprints_with, LIBRARY_ROOT_ENV};
+pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, export_kicad_mod_with, find_footprint_file, footprint_attributes, footprint_models, kicad_shared_dir, parse_footprint_file, resolve_library_footprints, resolve_library_footprints_with, LIBRARY_ROOT_ENV};
 
 mod model3d;
 pub use model3d::{default_part_models, default_part_models_in, fit_pads, installed_footprint, installed_footprint_in, part_models, part_models_in, Fit, InstalledFootprint, ModelKind, PartModels};
@@ -69,7 +71,7 @@ mod footprint_scan;
 pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
 
 mod symbol_lib;
-pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, find_symbol_library_file, list_symbol_libraries, list_symbols_in_file, list_symbols_in_library, resolve_library_symbols, resolve_library_symbols_with, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
+pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, export_kicad_sym_library_with, find_symbol_library_file, list_symbol_libraries, list_symbols_in_file, list_symbols_in_library, resolve_library_symbols, resolve_library_symbols_with, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
 // KiCad's library tables (`sym-lib-table`, `fp-lib-table`, `design-block-lib-table`): the file format, the path variables, how global and project tables are put together.
 pub mod library_table;
@@ -616,7 +618,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     writeln!(out, "\t(sheet_instances").unwrap();
     writeln!(out, "\t\t(path \"/\" (page \"1\"))").unwrap();
     writeln!(out, "\t)").unwrap();
-    writeln!(out, "\t(embedded_fonts no)").unwrap();
+    // The files embedded in the schematic belong to it, not to a sheet: they are in the root sheet's file only, which is the one whose extras hold them
+    // (`SCH_IO_KICAD_SEXPR::Format`: the schematic's first top-level sheet).
+    embedded::write_owner(&mut out, &sch.extras.embedded, 1, true);
 
     writeln!(out, ")").unwrap();
     Ok(out)
@@ -1156,16 +1160,23 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
                     let p = baked_real_point(baker, width as f64, x0, y1, rp.at);
                     (p.x, p.y, baked_real_angle(baker, rp.angle_deg), rp.length_mm)
                 }
-                // No matching real pin (shouldn't happen for a resolved
-                // symbol whose numbers agree with ours -- defensive only):
-                // fall back to the synthetic stub tip so the instance's own
-                // pin-uuid list still has a drawn pin for every part.pins
-                // entry.
+                // No real pin: the generated box (no library resolved the
+                // symbol), or a resolved one whose numbers disagree with
+                // ours. The synthetic stub tip, the pin pointing from it
+                // into the box (the library frame is y up: a left pin points
+                // right, 0; a top pin down, 270), so that its name is drawn
+                // inside the body as KiCad lays a pin's name out.
                 None => {
                     let (plx, ply) = local_port_point(port, width, height);
                     let (slx, sly) = local_stub_tip(port, plx, ply);
                     let (bx, by) = baked_local(baker, width as f64, slx, sly);
-                    (bx, by, 0.0, STUB_MM)
+                    let inward = match port.side {
+                        Side::Left => 0.0,
+                        Side::Right => 180.0,
+                        Side::Top => 270.0,
+                        Side::Bottom => 90.0,
+                    };
+                    (bx, by, baked_real_angle(baker, inward), STUB_MM)
                 }
             };
             // the pin written at this place is the one that took it (itself unless Swap Pins moved pins here)

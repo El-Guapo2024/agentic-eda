@@ -122,6 +122,10 @@ pub struct ImportNotes {
     /// each: they are not in the design and not in what is exported from it. Nothing is listed for a kind that is read.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub unread_items: BTreeMap<String, usize>,
+    /// What was wrong in the `(embedded_files ..)` of the board (a file with no name, a type KiCad does not know): the files are read as far as they go, and these are what
+    /// KiCad would have stopped at. A checksum that does not match is not found here: that is told when the file is looked at (`crate::embedded::decode`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedded_problems: Vec<String>,
     /// The `(filled_polygon ..)` the file stored for its zones (KiCad's own fill, as saved): not part of the design. The caller that keeps the board files
     /// (`eda_kicad::zone_fills::entries_of_imported_file`) files them beside `design.json`, so an imported board shows the fills it was saved with.
     #[serde(skip)]
@@ -144,8 +148,8 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         .ok_or_else(|| vec![CheckResult::fail("kicad_import.not_a_board", "file", "top-level form is not (kicad_pcb ...); not a KiCad PCB file")])?;
 
     let mut notes = ImportNotes { footprints_scaled, unread_items: unread_items(root), ..ImportNotes::default() };
-    // The items nothing here reads are kept as text and written back (`DrawingsSection::raw_items`), except the embedded files, whose data a re-quoting would break.
-    let mut raw_items: Vec<String> = root.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l).is_some_and(|t| !is_read(l, t) && t != "embedded_files")).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
+    // The items nothing here reads are kept as text and written back (`DrawingsSection::raw_items`).
+    let mut raw_items: Vec<String> = root.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l).is_some_and(|t| !is_read(l, t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
 
     let layers = import_layers(root);
     let net_names = import_net_names(root);
@@ -215,6 +219,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     }
     if !tables.is_empty() {
         design.drawings.get_or_insert_with(Default::default).tables = tables;
+    }
+    // The files embedded in the board, with their data as read: `(embedded_fonts ..)` and `(embedded_files ..)` (`PCB_IO_KICAD_SEXPR_PARSER`, `EMBEDDED_FILES_PARSER::ParseEmbedded`).
+    let embedded = crate::embedded::read_owner(root, &mut notes.embedded_problems);
+    if !embedded.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).embedded = embedded;
     }
     // The vias' protection defaults of KiCad 10's `(setup ..)`.
     let setup_tokens: Vec<String> = sexpr::find(root, "setup").map(|s| s.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| matches!(sexpr::tag(l), Some("covering") | Some("plugging") | Some("capping") | Some("filling"))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect()).unwrap_or_default();
@@ -297,11 +306,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
 }
 
 /// The kinds of top-level item a reader here takes: everything `import_kicad_pcb` reads below, the header (`version`, `generator`, `general`, `paper`, `title_block`, `layers`,
-/// `setup`, nets and net classes) and `embedded_fonts`, which is a flag. The other kinds are counted ([`unread_items`]) and kept as text (`DrawingsSection::raw_items`).
+/// `setup`, nets and net classes), `embedded_fonts` (a flag) and `embedded_files` (`DrawingsSection::embedded`). The other kinds are counted ([`unread_items`]) and kept as text (`DrawingsSection::raw_items`).
 const READ_ITEMS: &[&str] = &[
     "version", "generator", "generator_version", "general", "paper", "page", "title_block", "layers", "setup", "host", "net", "net_class", "footprint", "module", "segment", "arc", "via", "zone", "gr_line", "gr_arc",
     "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "gr_text_box", "image", "point", "dimension", "group", "generated", "barcode", "embedded_fonts",
-    "table",
+    "table", "embedded_files",
 ];
 
 /// Whether a reader here takes the top-level `item` of kind `tag`: its kind is in [`READ_ITEMS`], and a reference image is one whose data is a file the reader understands
@@ -1208,6 +1217,12 @@ pub(crate) fn parse_pad_geometry(pad: &[Sexpr], fp_side: Side, fp_rot: u32, note
 /// no copper layer (a mask-only aperture pad) instead of dropping it -- the
 /// solder-mask DRC needs those as `PCB_PAD_T` mask apertures.
 pub(crate) fn parse_pad_geometry_opt(pad: &[Sexpr], fp_side: Side, fp_rot: u32, notes: &mut ImportNotes, keep_non_copper: bool) -> Option<Pad> {
+    parse_pad_geometry_in(pad, fp_side, fp_rot, notes, keep_non_copper, &[])
+}
+
+/// [`parse_pad_geometry_opt`] on a board whose copper layers are `copper_layers`, front to back (a bottom-side pad's custom padstack needs to know which
+/// layer each of them has become; empty is a two-layer board).
+pub(crate) fn parse_pad_geometry_in(pad: &[Sexpr], fp_side: Side, fp_rot: u32, notes: &mut ImportNotes, keep_non_copper: bool, copper_layers: &[String]) -> Option<Pad> {
     let number = sexpr::txt(pad, 1).unwrap_or("").to_string();
     let kind_tok = sexpr::txt(pad, 2).unwrap_or("");
     let pad_kind = match kind_tok {
@@ -1288,7 +1303,17 @@ pub(crate) fn parse_pad_geometry_opt(pad: &[Sexpr], fp_side: Side, fp_rot: u32, 
         None => (None, None),
     };
 
-    Some(Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: read.shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio: read.roundrect_ratio, opposite_side, ext: read.ext })
+    let mut out = Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: read.shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio: read.roundrect_ratio, opposite_side, ext: read.ext };
+    // The padstack (`(padstack ..)`, `(remove_unused_layers ..)`, `(keep_end_layers ..)`): the other layers' shapes and what becomes of the layers nothing connects to.
+    // The main fields are the shape on `F.Cu`; the pad's own shape is the footprint's side, which on the bottom is the file's `B.Cu`.
+    let main = eda_model::padstack::PadLayerShape::of(&out);
+    let layers: Vec<String> = if copper_layers.is_empty() { vec!["F.Cu".to_string(), "B.Cu".to_string()] } else { copper_layers.to_vec() };
+    let read_stack = crate::padstack_io::read_padstack(pad, &main, fp_side, &layers);
+    if let Some(own) = &read_stack.own {
+        own.put_on(&mut out);
+    }
+    out.ext.stack = read_stack.stack;
+    Some(out)
 }
 
 /// The cache key `import_footprints` should use for an instance whose lib id
@@ -1498,7 +1523,7 @@ fn import_footprints(
         // The Reference and Value text as the file has it, the user fields and the attributes; the pad offsets and margins join below.
         let mut edit = crate::fp_fields::parse_footprint_edit_in(fp, &reference, value.as_deref(), side, rot, file_version);
         for pad in sexpr::find_all(fp, "pad") {
-            let Some(p) = parse_pad_geometry(pad, side, rot, notes) else {
+            let Some(p) = parse_pad_geometry_in(pad, side, rot, notes, false, layers) else {
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
                     extra.graphics.extend(g);
                 }
@@ -1598,7 +1623,7 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     // (`solder_mask_margin` is `FootprintExtra::solder_mask_margin`, which the writer makes it from; `thermal_width` and `thermal_gap` are read and dropped by KiCad itself.)
     const OWN: &[&str] = &[
         "layer", "uuid", "tstamp", "tedit", "at", "transform", "locked", "attr", "clearance", "zone_connect", "solder_mask_margin", "thermal_width", "thermal_gap", "net_tie_pad_groups", "fp_line", "fp_arc",
-        "fp_circle", "fp_rect", "fp_poly", "fp_curve", "fp_text", "pad", "model", "zone", "group", "component_classes", "sheetname", "sheetfile", "path", "embedded_fonts", "embedded_files",
+        "fp_circle", "fp_rect", "fp_poly", "fp_curve", "fp_text", "pad", "model", "zone", "group", "component_classes", "sheetname", "sheetfile", "units", "path", "embedded_fonts", "embedded_files",
     ];
     for item in fp.iter().skip(2).filter_map(Sexpr::as_list) {
         let tag = sexpr::tag(item);
@@ -1614,6 +1639,8 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
         }
     }
     e.source_name = name.to_string();
+    // The files the footprint lists (`(embedded_files ..)` inside the footprint: names, types and checksums; the data is the board's).
+    e.embedded = crate::embedded::read_owner(fp, &mut Vec::new());
     // `(component_classes (class "A") (class "B"))`: the classes the file gives the footprint (`parseFOOTPRINT_unchecked`'s `T_component_classes`), without repeats.
     if let Some(classes) = sexpr::find(fp, "component_classes") {
         for name in sexpr::find_all(classes, "class").filter_map(|c| sexpr::txt(c, 1)) {
@@ -1625,6 +1652,14 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     // The sheet the footprint's symbol is on.
     e.sheetname = sexpr::find(fp, "sheetname").and_then(|s| sexpr::txt(s, 1)).map(str::to_string);
     e.sheetfile = sexpr::find(fp, "sheetfile").and_then(|s| sexpr::txt(s, 1)).map(str::to_string);
+    // `(units (unit (name "A") (pins "1" "2" ..)) ..)`: the footprint's gates (`parseFOOTPRINT_unchecked`'s `T_units`), which Swap Gate Nets reads.
+    if let Some(units) = sexpr::find(fp, "units") {
+        for unit in sexpr::find_all(units, "unit") {
+            let name = sexpr::find(unit, "name").and_then(|n| sexpr::txt(n, 1)).unwrap_or_default().to_string();
+            let pins: Vec<String> = sexpr::find(unit, "pins").map(|p| p.iter().skip(1).filter_map(|x| x.text().map(str::to_string)).collect()).unwrap_or_default();
+            e.units.push(eda_model::fp_units::FootprintUnit { name, pins });
+        }
+    }
     // A footprint with nothing on its courtyard layers has no courtyard (`BuildCourtyardCaches` finds none, and kicad-cli says `missing_courtyard` or nothing).
     e.no_courtyard = !["fp_line", "fp_arc", "fp_rect", "fp_circle", "fp_poly", "fp_curve"].iter().any(|tag| sexpr::find_all(fp, tag).any(|it| matches!(sexpr::find(it, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd"))));
     // The courtyard graphics as the file wrote them, in file order (see `FootprintExtra::courtyard_items`).
@@ -1714,6 +1749,8 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
     const OWN: &[&str] = &[
         "at", "size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "drill", "layers", "net", "pinfunction", "pintype", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio",
         "clearance", "zone_connect", "thermal_bridge_width", "thermal_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "uuid", "tstamp",
+        // The padstack is the pad's own (`Pad::ext.stack`): its layers and what becomes of the layers nothing connects to.
+        "padstack", "remove_unused_layers", "keep_end_layers",
     ];
     info.tokens = pad.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| OWN.contains(&t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
     // `parsePAD`: `(zone_connect N)`, `(thermal_bridge_width ..)` (legacy `(thermal_width ..)`), `(thermal_bridge_angle ..)`, `(thermal_gap ..)`.

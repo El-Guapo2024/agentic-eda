@@ -509,6 +509,69 @@ struct PadItem {
     /// `routing_via_in_pad` measure.
     copper: Shape,
     layers: Vec<String>,
+    /// `UNCONNECTED_LAYER_MODE` of the pad this is a piece of (see [`apply_unconnected_layers`]).
+    unconnected: eda_model::padstack::UnconnectedLayers,
+}
+
+/// A padstack pad is one `PadItem` for each group of layers that shares a shape (`PADSTACK::ForEachUniqueLayer`), all with the pad's `refpin`: the connectivity
+/// gate joins them, the clearance gate measures each on its own layers.
+fn pad_pieces_by_layer(model: &ConstraintModel, fp: &FootprintInstance, source: &Option<eda_model::Pad>, g: eda_model::footprint::PlacedPad, copper: Shape, layers: Vec<String>) -> Vec<(eda_model::footprint::PlacedPad, Shape, Rect, Vec<String>)> {
+    if let Some(pad) = source.as_ref().filter(|p| p.has_stack()) {
+        return pad
+            .shape_groups(fp.side, &model.board.layers)
+            .into_iter()
+            .map(|group| {
+                let view = group.shape.lay_on(pad);
+                let geom = eda_model::footprint::placed_pad_of(fp, &view);
+                let shape = eda_drc::board::placed_pad_copper(fp, &view);
+                let rect = Rect::centered(geom.center, geom.size);
+                (geom, shape, rect, group.layers)
+            })
+            .collect();
+    }
+    let rect = Rect::centered(g.center, g.size);
+    vec![(g, copper, rect, layers)]
+}
+
+/// `PAD::FlashLayer` for the plated through-hole pads that remove the copper of the layers nothing connects to (the Remove Unused Pads dialog,
+/// `remove_unused_layers`): a layer where the pad's own settings do not decide keeps its copper when a track of the pad's net ends in it there or a via of its net
+/// is at it (`CONNECTIVITY_DATA::IsConnectedOnLayer`), and has none otherwise, so a foreign track passing over the hole's place on such a layer is no conflict.
+fn apply_unconnected_layers(pads: &mut [PadItem], rt: &eda_model::ir::RoutingSection, board_layers: &[String]) {
+    use eda_model::padstack::UnconnectedLayers;
+    let (Some(first), Some(last)) = (board_layers.first(), board_layers.last()) else { return };
+    let index = |name: &str| board_layers.iter().position(|l| l == name);
+    for i in 0..pads.len() {
+        if pads[i].unconnected == UnconnectedLayers::KeepAll || !pads[i].geom.through_hole {
+            continue;
+        }
+        let keep: Vec<String> = pads[i]
+            .layers
+            .iter()
+            .filter(|layer| {
+                let outer = *layer == first || *layer == last;
+                match pads[i].unconnected {
+                    UnconnectedLayers::KeepAll => true,
+                    UnconnectedLayers::StartEndOnly => outer,
+                    UnconnectedLayers::RemoveExceptStartAndEnd if outer => true,
+                    _ => {
+                        let p = &pads[i];
+                        let on_track = rt.tracks.iter().any(|t| t.net == p.net && t.layer == **layer && t.pts.iter().any(|pt| p.geom.contains(*pt)));
+                        let on_via = rt.vias.iter().any(|v| {
+                            let (a, b) = (index(&v.from_layer), index(&v.to_layer));
+                            let l = index(layer);
+                            v.net == p.net && match (a, b, l) {
+                                (Some(a), Some(b), Some(l)) => l >= a.min(b) && l <= a.max(b),
+                                _ => true,
+                            } && p.rect.gap(&Rect::centered(v.at, (v.diameter, v.diameter))) <= 0.0
+                        });
+                        on_track || on_via
+                    }
+                }
+            })
+            .cloned()
+            .collect();
+        pads[i].layers = keep;
+    }
 }
 
 /// Distance from a segment's centreline to the pad's copper (0 = touches).
@@ -610,8 +673,8 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
             // The footprint's own pad, to take the exact outline and the copper side from. Without it
             // (it cannot be missing: `placed_pads` is built from the same list) the bounding rectangle
             // stands in, which can only read the pad closer than it is.
-            let (copper, on_back) = match source {
-                Some(pad) => (eda_drc::board::placed_pad_copper(fp, &pad), pad.on_back(fp.side)),
+            let (copper, on_back) = match &source {
+                Some(pad) => (eda_drc::board::placed_pad_copper(fp, pad), pad.on_back(fp.side)),
                 None => (Shape::Rect { x0: rect.0, y0: rect.1, x1: rect.2, y1: rect.3 }, fp.side != Side::Top),
             };
             let layers = if g.through_hole {
@@ -619,12 +682,16 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
             } else {
                 vec![if on_back { outer_bot.clone() } else { outer_top.clone() }]
             };
-            pads.push(PadItem { refpin, net, rect, geom: g, copper, layers });
+            let unconnected = source.as_ref().map(|p| p.ext.stack.unconnected).unwrap_or_default();
+            for (geom, copper, rect, layers) in pad_pieces_by_layer(model, fp, &source, g, copper, layers) {
+                pads.push(PadItem { refpin: refpin.clone(), net: net.clone(), rect, geom, copper, layers, unconnected });
+            }
         }
     }
     if fp_ok {
         out.push(CheckResult::pass("routing_footprint"));
     }
+    apply_unconnected_layers(&mut pads, rt, &rules.layers);
 
     // Track width against the net class is `eda-lint`'s (below); outline
     // containment has no KiCad equivalent and stays exactly as it was.
@@ -743,8 +810,10 @@ fn check_workmanship(
     let mut n_vip = 0usize;
     for (vi, v) in rt.vias.iter().enumerate() {
         let via = Shape::Circle { c: v.at, r: v.diameter / 2 };
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for p in pads {
-            if via.gap_to(&p.copper) <= 0.0 {
+            // One finding for a pad, whatever number of layer groups of its padstack the via is over.
+            if via.gap_to(&p.copper) <= 0.0 && seen.insert(p.refpin.as_str()) {
                 n_vip += 1;
                 out.push(CheckResult::fail("routing_via_in_pad", format!("via:{}#{vi}/{}", v.net, p.refpin), "via copper overlaps the pad (max 0)"));
             }
@@ -1003,6 +1072,15 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
         n += zone_count;
         let mut uf = Uf::new(n);
 
+        // The pieces of one padstack pad (a shape for each group of layers) are one pad.
+        for i in 0..net_pads.len() {
+            for j in i + 1..net_pads.len() {
+                if net_pads[i].refpin == net_pads[j].refpin {
+                    uf.union(i, j);
+                }
+            }
+        }
+
         // Track vertices chain.
         for (ti, t) in tracks.iter().enumerate() {
             for k in 1..t.pts.len() {
@@ -1120,7 +1198,8 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
                 eprintln!("gate {}: via {vi} {:?} comp {}", net.name, v.at, uf.find(via_base + vi));
             }
         }
-        let disconnected: Vec<&str> = net_pads.iter().enumerate().filter(|(i, _)| uf.find(*i) != root).map(|(_, p)| p.refpin.as_str()).collect();
+        let mut disconnected: Vec<&str> = net_pads.iter().enumerate().filter(|(i, _)| uf.find(*i) != root).map(|(_, p)| p.refpin.as_str()).collect();
+        disconnected.dedup();
         if !disconnected.is_empty() {
             ok = false;
             out.push(CheckResult::fail(
@@ -1774,6 +1853,102 @@ mod tests {
         d.drawings.as_mut().expect("drawings").shapes.push(eda_model::ir::Shape::Circle { id: "crossing".into(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: Point { x: 20_000, y: 10_000 }, end: Point { x: 21_500, y: 10_000 } });
         let r = malformed(&d, &m);
         assert!(r.iter().any(|c| c.status == CheckStatus::Fail && c.hint.as_deref().is_some_and(|h| h.starts_with("Board has malformed outline (self-intersecting)")) && c.location.as_deref().is_some_and(|l| l.contains("crossing"))), "{r:?}");
+    }
+
+    // ---------------------------------------------- a padstack's copper is measured layer by layer
+
+    /// A plated through-hole pad "1" on net B at the footprint's origin (10000, 10000), 1.6 mm round with a 0.8 mm hole, and a small SMD pad "2" on net C well away, on a
+    /// board of four copper layers.
+    fn th_fixture(stack: eda_model::padstack::PadStack, side: Side, rt: RoutingSection) -> (Design, ConstraintModel) {
+        let mut th = Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1600, 1600), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(800), drill_slot: None, rot: 0, roundrect_ratio: None };
+        th.ext.stack = stack;
+        let far = test_pad("2", (6000, 0), (800, 800), PadShape::Rect);
+        let (design, mut model) = pad_fixture(vec![th, far], 0, side, rt);
+        model.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+        (design, model)
+    }
+
+    /// A net-C track on `layer` running down the board at x = 11700: 1.7 mm from the pad's centre.
+    fn c_track(layer: &str) -> Track {
+        Track { id: "tc".into(), layer: layer.into(), ..track("C", &[(11_700, 8_000), (11_700, 12_000)]) }
+    }
+
+    #[test]
+    fn a_padstacks_inner_copper_is_as_far_as_its_inner_shape_and_the_front_as_far_as_the_front() {
+        use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode};
+        // The inner layers' shape is a 3 mm square: the track 1.7 mm from the centre is 0.1 mm from it (less the track's half width) -- under the 0.2 mm clearance.
+        let stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(PadLayerShape::plain(PadShape::Rect, (3000, 3000))), ..Default::default() };
+        let rt = |layer: &str| routing_of(vec![c_track(layer)], vec![]);
+        let (d, m) = th_fixture(stack.clone(), Side::Top, rt("In1.Cu"));
+        let f = fails(&d, &m, "routing_clearance");
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].location.as_deref().is_some_and(|l| l.contains("J1.1")), "{f:?}");
+        // The same track on the front, where the pad is the 1.6 mm circle, is 0.8 mm from it.
+        let (d, m) = th_fixture(stack.clone(), Side::Top, rt("F.Cu"));
+        assert!(fails(&d, &m, "routing_clearance").is_empty());
+        // And on the back, whose shape is the pad's own as the stack leaves it.
+        let (d, m) = th_fixture(stack, Side::Top, rt("B.Cu"));
+        assert!(fails(&d, &m, "routing_clearance").is_empty());
+        // A pad of one shape everywhere is the circle on every layer.
+        let (d, m) = th_fixture(Default::default(), Side::Top, rt("In1.Cu"));
+        assert!(fails(&d, &m, "routing_clearance").is_empty());
+    }
+
+    #[test]
+    fn a_footprint_on_the_bottom_has_the_stacks_back_on_the_boards_front() {
+        use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode};
+        // The pad's back is a 3 mm square; on the bottom side that is the board's F.Cu.
+        let stack = PadStack { mode: PadStackMode::FrontInnerBack, back: Some(PadLayerShape::plain(PadShape::Rect, (3000, 3000))), ..Default::default() };
+        // x is mirrored on the bottom: the track on the other side of the pad's origin is where the board's copper is.
+        let at = |layer: &str| {
+            let mut t = c_track(layer);
+            for p in &mut t.pts {
+                p.x = 20_000 - p.x;
+            }
+            routing_of(vec![t], vec![])
+        };
+        let (d, m) = th_fixture(stack.clone(), Side::Bottom, at("F.Cu"));
+        assert_eq!(fails(&d, &m, "routing_clearance").len(), 1, "the back is on the board's front");
+        let (d, m) = th_fixture(stack, Side::Bottom, at("B.Cu"));
+        assert!(fails(&d, &m, "routing_clearance").is_empty(), "the pad's own shape is on the board's back");
+    }
+
+    #[test]
+    fn a_padstacks_pieces_are_one_pad_to_the_connectivity_gate_and_one_finding_to_the_via_in_pad_gate() {
+        use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode};
+        let stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(PadLayerShape::plain(PadShape::Rect, (3000, 3000))), back: Some(PadLayerShape::plain(PadShape::Oval, (2400, 1000))), ..Default::default() };
+        // Pads 1 and 2 are on different nets, so no connectivity is asked; a via of net B in the pad's hole overlaps all three pieces: one finding.
+        let via = Via { id: "vb".into(), net: "B".into(), at: Point { x: 10_000, y: 10_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        let (d, m) = th_fixture(stack, Side::Top, routing_of(vec![], vec![via]));
+        assert_eq!(fails(&d, &m, "routing_via_in_pad").len(), 1);
+        assert!(fails(&d, &m, "routing_connectivity").is_empty());
+    }
+
+    #[test]
+    fn a_layer_nothing_is_connected_to_has_no_copper_when_the_pad_removes_unused_layers() {
+        use eda_model::padstack::{PadStack, UnconnectedLayers};
+        let keep_ends = PadStack { unconnected: UnconnectedLayers::RemoveExceptStartAndEnd, ..Default::default() };
+        // A net-C track right across the pad's place on the inner layer In1: a conflict while the pad has copper there, none once it is taken away.
+        let across = |layer: &str| {
+            let t = Track { id: "tc".into(), layer: layer.into(), ..track("C", &[(9_000, 10_000), (11_000, 10_000)]) };
+            routing_of(vec![t], vec![])
+        };
+        let (d, m) = th_fixture(PadStack::default(), Side::Top, across("In1.Cu"));
+        assert_eq!(fails(&d, &m, "routing_clearance").len(), 1, "a pad that keeps every layer has copper under the track");
+        let (d, m) = th_fixture(keep_ends.clone(), Side::Top, across("In1.Cu"));
+        assert!(fails(&d, &m, "routing_clearance").is_empty(), "the unconnected inner layer has no copper");
+        // The outer layers are kept ("Front, back and connected layers").
+        let (d, m) = th_fixture(keep_ends.clone(), Side::Top, across("F.Cu"));
+        assert_eq!(fails(&d, &m, "routing_clearance").len(), 1);
+        // "Connected layers only" takes the outer ones away too.
+        let only = PadStack { unconnected: UnconnectedLayers::RemoveAll, ..Default::default() };
+        let (d, m) = th_fixture(only, Side::Top, across("F.Cu"));
+        assert!(fails(&d, &m, "routing_clearance").is_empty());
+        // A track of the pad's own net that ends in it on In1 connects the pad there: it has copper on that layer again, and the foreign track is a conflict.
+        let own = Track { id: "tb".into(), layer: "In1.Cu".into(), ..track("B", &[(10_000, 10_000), (10_000, 6_000)]) };
+        let foreign = Track { id: "tc".into(), layer: "In1.Cu".into(), ..track("C", &[(10_700, 9_000), (10_700, 11_000)]) };
+        let (d, m) = th_fixture(keep_ends, Side::Top, routing_of(vec![own, foreign], vec![]));
+        assert_eq!(fails(&d, &m, "routing_clearance").len(), 1, "{:?}", fails(&d, &m, "routing_clearance"));
     }
 
     #[test]

@@ -244,6 +244,7 @@ fn a_footprint_placed_from_the_project_library_brings_its_models() {
         thermal_spoke_width_override: None,
         zone_connection: None,
         thermal_spoke_angle_mdeg: None,
+        stack: Default::default(),
     });
     fp.models3d = two_models();
     fp.model = Some(fp.models3d[0].path.clone());

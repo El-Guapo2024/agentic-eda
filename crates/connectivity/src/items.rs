@@ -88,6 +88,9 @@ pub struct CnItem {
     pub bbox: (Um, Um, Um, Um),
     /// Filled by [`crate::algo::build_graph`]; empty until then.
     pub connected: Vec<usize>,
+    /// A pad whose copper differs from layer to layer ([`eda_model::padstack`]) is one item for each group of layers that shares a shape (a `CN_ITEM` per layer
+    /// range, as `PADSTACK::ForEachUniqueLayer` has them); the pieces of one pad carry the same number here and [`crate::algo::build_graph`] joins them.
+    pub pad_piece_of: Option<usize>,
 }
 
 /// Do two items' layer spans share at least one copper layer? KiCad's
@@ -115,17 +118,14 @@ fn net_of_pin_map(model: &ConstraintModel) -> HashMap<String, String> {
     map
 }
 
-/// Whether each of `part`'s physical pads (in the same order
-/// `placed_pads` returns them -- both are the same stable sort by pad
-/// number over the same source list) is a plated through-hole: KiCad's
-/// `CN_LIST::Add(PAD*)` only spans the *whole* copper stack for
-/// `PAD_ATTRIB::PTH`; SMD, `NPTH` and `CONN` pads (our `PadKind::Smd` and
-/// `PadKind::NonPlatedHole`) are single-layer, same as an SMD pad.
-fn plated_through_hole_flags(model: &ConstraintModel, part: &Part) -> Vec<(bool, bool)> {
+/// The footprint's own pads of `part`, in the same order `placed_pads` returns the placed ones -- both are the same stable sort by pad number over the same
+/// source list. A pad is a plated through-hole to the connectivity when KiCad's `CN_LIST::Add(PAD*)` spans the *whole* copper stack for it
+/// (`PAD_ATTRIB::PTH`); SMD, `NPTH` and `CONN` pads (our `PadKind::Smd` and `PadKind::NonPlatedHole`) are single-layer, same as an SMD pad.
+fn sorted_pads(model: &ConstraintModel, part: &Part) -> Vec<eda_model::footprint::Pad> {
     let Some(fp) = model.footprint_of(part) else { return Vec::new() };
-    let mut pads: Vec<&eda_model::footprint::Pad> = fp.pads.iter().collect();
+    let mut pads = fp.pads;
     pads.sort_by(|a, b| a.number.cmp(&b.number));
-    pads.iter().map(|p| (p.kind == PadKind::ThroughHole, p.opposite_side)).collect()
+    pads
 }
 
 /// Build every [`CnItem`] on the board: pads (from the placement),
@@ -143,10 +143,44 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
         for fp in &pl.footprints {
             let Some(part) = model.part(&fp.id) else { continue };
             let Some(pads) = placed_pads(model, part, fp) else { continue };
-            let full_stack = plated_through_hole_flags(model, part);
+            let sources = sorted_pads(model, part);
             for (i, pad) in pads.into_iter().enumerate() {
                 let net = net_of_pin.get(&format!("{}.{}", fp.id, pad.number)).cloned().unwrap_or_default();
-                let (is_pth, opposite) = full_stack.get(i).copied().unwrap_or((false, false));
+                let (is_pth, opposite) = sources.get(i).map(|p| (p.kind == PadKind::ThroughHole, p.opposite_side)).unwrap_or((false, false));
+                // A padstack: an item for each run of layers that shares a shape, each measured by its own copper (`PADSTACK::ForEachUniqueLayer`).
+                if let Some(source) = sources.get(i).filter(|p| is_pth && p.has_stack()).cloned() {
+                    let piece_of = Some(items.len());
+                    for group in source.shape_groups(fp.side, layers) {
+                        let mut idx: Vec<i32> = group.layers.iter().map(|l| layer_index(layers, l)).collect();
+                        idx.sort_unstable();
+                        idx.dedup();
+                        let view = group.shape.lay_on(&source);
+                        let mut k = 0;
+                        while k < idx.len() {
+                            let mut end = k;
+                            while end + 1 < idx.len() && idx[end + 1] == idx[end] + 1 {
+                                end += 1;
+                            }
+                            let geom = eda_model::footprint::placed_pad_of(fp, &view);
+                            let (hw, hh) = (geom.size.0 / 2, geom.size.1 / 2);
+                            let bbox = (geom.center.x - hw, geom.center.y - hh, geom.center.x + hw, geom.center.y + hh);
+                            items.push(CnItem {
+                                item: ItemRef::Pad { reference: fp.id.clone(), number: pad.number.clone() },
+                                net: net.clone(),
+                                can_change_net: false,
+                                layer_lo: idx[k],
+                                layer_hi: idx[end],
+                                anchors: vec![geom.center],
+                                shape: ItemShape::Pad(geom),
+                                bbox,
+                                connected: Vec::new(),
+                                pad_piece_of: piece_of,
+                            });
+                            k = end + 1;
+                        }
+                    }
+                    continue;
+                }
                 let (layer_lo, layer_hi) = if is_pth {
                     (0, last_idx)
                 } else if (fp.side == eda_model::ir::Side::Top) != opposite {
@@ -157,7 +191,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                 let (hw, hh) = (pad.size.0 / 2, pad.size.1 / 2);
                 let bbox = (pad.center.x - hw, pad.center.y - hh, pad.center.x + hw, pad.center.y + hh);
                 let anchors = vec![pad.center];
-                items.push(CnItem { item: ItemRef::Pad { reference: fp.id.clone(), number: pad.number.clone() }, net, can_change_net: false, layer_lo, layer_hi, anchors, shape: ItemShape::Pad(pad), bbox, connected: Vec::new() });
+                items.push(CnItem { item: ItemRef::Pad { reference: fp.id.clone(), number: pad.number.clone() }, net, can_change_net: false, layer_lo, layer_hi, anchors, shape: ItemShape::Pad(pad), bbox, connected: Vec::new(), pad_piece_of: None });
             }
         }
     }
@@ -180,6 +214,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                     shape: ItemShape::Segment { a, b, half_width },
                     bbox,
                     connected: Vec::new(),
+                    pad_piece_of: None,
                 });
             }
         }
@@ -192,7 +227,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
             let radius = v.diameter as f64 / 2.0;
             let margin = (v.diameter / 2).max(0);
             let bbox = (v.at.x - margin, v.at.y - margin, v.at.x + margin, v.at.y + margin);
-            items.push(CnItem { item: ItemRef::Via { via_id: v.id.clone() }, net: v.net.clone(), can_change_net: true, layer_lo: lo, layer_hi: hi, anchors: vec![v.at], shape: ItemShape::Via { center: v.at, radius }, bbox, connected: Vec::new() });
+            items.push(CnItem { item: ItemRef::Via { via_id: v.id.clone() }, net: v.net.clone(), can_change_net: true, layer_lo: lo, layer_hi: hi, anchors: vec![v.at], shape: ItemShape::Via { center: v.at, radius }, bbox, connected: Vec::new(), pad_piece_of: None });
         }
 
         if !rt.zones.is_empty() {
@@ -221,6 +256,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                             shape: ItemShape::Zone { outline },
                             bbox,
                             connected: Vec::new(),
+                            pad_piece_of: None,
                         });
                     }
                 }
