@@ -12,11 +12,10 @@
 //! already a whole polyline -- see [`RouteCommit`]'s own doc comment).
 //!
 //! `Router` owns the committed [`Node`] (`m_world`) and, while a route is
-//! in progress, a [`crate::line_placer::LinePlacer`] session -- there is no
-//! persistent working/preview `Node` the way upstream keeps one, because
-//! neither `LinePlacer` nor `shove` need one between calls (both re-derive
-//! everything fresh from `m_world` plus the session's own state on every
-//! call; see those modules' doc comments for why that's enough here).
+//! in progress, a [`crate::line_placer::LinePlacer`] session. The placer keeps
+//! the shove's springback stack ([`crate::springback`]) as diffs against
+//! `m_world`, not the `NODE`s upstream keeps; each call makes the world it
+//! needs from `m_world` and the newest frame.
 
 use crate::arcs::ArcPts;
 use crate::item::{net_of, Item, ItemId, Net};

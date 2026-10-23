@@ -732,6 +732,39 @@ scenarios through `window.__eda` -- the two router-setting rows, the mouse path 
 a locked track (refused, Drag Anyway, walked round), `V` shoving the track under a head's via, a tuning pattern on an arc track and a target in picoseconds -- and a Ctrl+E scenario in
 `diff-pairs.check.js`. It found two bugs the unit tests did not: Drag Anyway had no dialog host on the PCB tab, and the clean-up after a walk dropped the vertex a tangent arc starts at.
 
+## Stage 10 -- the router's details (springback, rounded corners, virtual vias; 2026-10-23)
+
+`docs/parity/GAPS.md` item 7's three leftovers of the interactive router, in this order (branch `task-router-details`, one commit each).
+
+1. **Springback** (`src/springback.rs`; `pns_shove.cpp`: `SPRINGBACK_TAG`, `reduceSpringback`, `pushSpringback`, `AddLockedSpringbackNode`,
+   `RewindSpringbackTo`, `RewindToLastLockedNode`; `pns_line_placer.cpp`: `rhShoveOnly`, `FixRoute`, `UnfixRoute`). In Shove mode every `Move`
+   pops the frames, newest first, whose world the head (as the pad walk left it, with its via) no longer collides with -- never a locked one, never
+   the last one -- shoves from the newest frame left (`m_currentNode = parent->Branch()`), and pushes the world the shove left with its area merged
+   into the frame below's (the optimizer's restriction area is that merged area and the shove's own: `totalAffectedArea`, `shove_line_after` /
+   `shove_heads_after`). A shove that fails is walked in the parent frame's world (`rhWalkOnly` in `m_currentNode`). A click pushes a locked frame
+   with the fixed run (and a placed via) in it; Backspace erases the stack from the frame the undone run was fixed in (`RewindSpringbackTo(
+   st.commit )`). The other modes resolve the head in the world the last click left. The commit replaces what the newest frame has moved against
+   the session's world: every shove of the session that is still in it, the earlier legs' included (`LinePlacer::displaced_tracks`), and the
+   preview reports the same (`Preview::displaced_lines` is the frame's, not only this move's). **Differences:** a frame is a diff against the
+   session's world (the IR tracks and vias it moved, by id, and the fixed runs), not a `NODE` -- a `Node` is a full clone here (decision 1) and a
+   route pushes a frame per mouse move; the frame's world is made from it when a shove starts there, and `reduceSpringback`'s `CheckColliding`
+   asks the session's world without what the frame moved plus a small node of what it moved to. The fixed runs are **locked** in the frame (KiCad
+   adds them as ordinary segments, so a later shove may push the route's own tail, and `CommitPlacement` commits the node; the commit here is
+   built from the runs, which a shove cannot reach). When the stage's `commit` node is not a frame (no shove had succeeded before the click),
+   KiCad's `RewindSpringbackTo` finds nothing and keeps the undone run's locked frame; here it is erased. `SetSpringbackDoNotTouchNode` has no
+   counterpart (the end item is picked from the session's world, never a frame). Not ported here: the dragger's and the pair placer's use of the
+   stack (`DRAGGER::dragShove`, `DIFF_PAIR_PLACER::tryShove`: they still shove from the world their gesture or last fix started from).
+   **Before:** every move shoved from the session's world as it was when the route started, and the fixed legs' shoves were merged by IR id
+   afterwards, so a second leg could push a track back over the first. **Proof:** KiCad's recorded sessions match better --
+   `simple-shove-1` reproduces 24 of the 28 segments KiCad committed (12 before), `issue22749-shove-weird-drag-track-end` all 11 (4 before;
+   `tests/qa_regressions.rs`); units in `springback.rs` (4) and `line_placer.rs` (a pushed track pushed on and sprung back; the next leg shoving
+   from the click's world, a clean commit, Backspace taking the push back); kicad-cli
+   (`gate_vs_kicad::tests::springback_sessions_add_no_violation_to_kicad_clis_drc`, `EDA_SLOW_TESTS=1`): the `issue22749` session replayed and
+   routes on `pic_programmer` that push, draw back, push again, click, Backspace and go on add no copper violation to kicad-cli's report.
+   The browser check (`router-leftovers.check.js`, the springback scenario) found a bug of the route API: a cursor that is not a whole
+   micrometre (the studio sends `32000.000000000004` after Backspace, and on `/`) was read as missing, and the head went to 0 -- `route_api::num`
+   rounds it now.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
@@ -781,12 +814,10 @@ a locked track (refused, Drag Anyway, walked round), `V` shoving the track under
   `BuildInitialTrace( ROUNDED_45 / ROUNDED_90 )`): the tuner is the only maker of arcs.
 - ~~`VIA::PushoutForce`~~ is ported (2026-10-08, `shove::via_pushout_force`); the
   second lead KiCad tries (`m_last_p_end`) is not kept.
-- ~~`MOUSE_TRAIL_TRACER`~~ **Ported 2026-10-20** (Stage 9 step 4). Springback
-  (an incremental undo stack so backing the cursor up reverts
-  shove/walkaround decisions instead of recomputing from scratch) --
-  still not implemented; see `line_placer.rs`'s own module doc comment
-  (point 1) and `shove.rs`'s Stage 3 doc comment above for why, and
-  `docs/parity/GAPS.md` item 7 for what is left in gap #7: springback, `LockJoint`, virtual vias,
+- ~~`MOUSE_TRAIL_TRACER`~~ **Ported 2026-10-20** (Stage 9 step 4). ~~Springback~~
+  **Ported 2026-10-23** for the line placer (Stage 10 step 1; the dragger and the pair
+  placer do not keep the stack). See
+  `docs/parity/GAPS.md` item 7 for what is left in gap #7: `LockJoint`, virtual vias,
   the walkaround cluster timeout, the pad-to-die length and delay, time-domain rules as the tuner's
   target, the rounding of corners, the merged outline of a pair's pattern, a pattern moved, turned
   or flipped, the tuner's world branched at every move, two walk attempts of a pair where KiCad makes

@@ -520,4 +520,120 @@ mod tests {
         }
         assert!(judged == 0 || judged >= 6, "{judged} edits judged by kicad-cli");
     }
+
+    /// Springback (`SHOVE::reduceSpringback` / `pushSpringback`, `FixRoute`'s locked frame, `UnfixRoute`'s rewind) against kicad-cli's DRC
+    /// (slow tier): KiCad's own recorded session `issue22749-shove-weird-drag-track-end` replayed through the router, and routes on
+    /// `pic_programmer` whose cursor pushes into the tracks, draws back, pushes again, clicks, goes on and Backspaces -- each commit,
+    /// with every track the session's shoves left moved, adds no copper violation to kicad-cli's report of the board.
+    #[test]
+    fn springback_sessions_add_no_violation_to_kicad_clis_drc() {
+        use eda_model::ir::Point;
+        use eda_pns::item::Item;
+        use eda_pns::router::Router;
+        use eda_pns::settings::Mode;
+        if !kicad_available() {
+            return;
+        }
+        let kinds = ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width"];
+        let Some((design, model)) = qa_board("pic_programmer") else {
+            eprintln!("KiCad's QA corpus not found; skipping");
+            return;
+        };
+        let dir = scratch("springback");
+        let before = all_track_report(&design, &model, &dir, &kinds);
+        let baseline = counts_of(&before);
+        let judge = |label: &str, commit: &eda_pns::router::RouteCommit| {
+            let after = apply_commit(&design, commit);
+            let now = all_track_report(&after, &model, &dir, &kinds);
+            let counts = counts_of(&now);
+            eprintln!("pic_programmer {label}: {} tracks put, {} taken, {} vias moved: {counts:?} (before {baseline:?})", commit.tracks.len(), commit.remove_track_ids.len(), commit.remove_via_ids.len());
+            if counts != baseline {
+                eprintln!("    new: {:?}", now.iter().filter(|v| !before.contains(v)).collect::<Vec<_>>());
+            }
+            for kind in kinds {
+                let (was, got) = (baseline.get(kind).copied().unwrap_or(0), counts.get(kind).copied().unwrap_or(0));
+                assert!(got <= was, "{label}: kicad-cli reports {got} {kind} (the board had {was})");
+            }
+        };
+        let mut judged = 0;
+
+        // KiCad's recorded session: a route from a track end on B.Cu, pushing its neighbour round the head
+        let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data")).join("pcbnew/pns_regressions/issue22749-shove-weird-drag-track-end");
+        if let Ok(text) = std::fs::read_to_string(root.join("pns.log")) {
+            let log: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let pt = |v: &serde_json::Value| Point { x: (v["x"].as_f64().unwrap() / 1000.0).round() as i64, y: (v["y"].as_f64().unwrap() / 1000.0).round() as i64 };
+            let events = log["events"].as_array().unwrap();
+            let mut router = Router::new(&design, &model);
+            router.settings.mode = Mode::Shove;
+            let start = pt(&events[0]["position"]);
+            let (node, _) = eda_pns::from_ir::build_node(&design, &model);
+            let net = node.nearest_anchor(start, eda_pns::layer::LayerRange::single(1), 500, None).and_then(|(id, _)| node.get(id).and_then(|i| i.net().clone())).expect("a track end with a net");
+            router.start(start, "B.Cu", model.board.width_of(&net)).expect("starts on the track end");
+            for e in &events[1..] {
+                router.preview(pt(&e["position"]));
+            }
+            let commit = router.finish(pt(&events.last().unwrap()["position"])).expect("the recorded route finishes");
+            assert!(!commit.remove_track_ids.is_empty(), "the session pushed tracks");
+            judge("issue22749 replayed", &commit);
+            judged += 1;
+        }
+
+        // pushing into the tracks east of a pad, drawing back, pushing again, a click, a second leg, a Backspace and the leg again
+        let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+        let mut pads: Vec<(Point, String, i32)> = node
+            .iter()
+            .filter_map(|(_, it)| match it {
+                Item::Solid(s) if !s.edge && s.net.is_some() && s.layers.overlaps_layer(0) => Some((s.pos, s.source.clone(), 0)),
+                _ => None,
+            })
+            .collect();
+        pads.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut sessions = 0;
+        for (pad, name, layer) in &pads {
+            if sessions >= 4 {
+                break;
+            }
+            let layer_name = layers.name_of(*layer).to_string();
+            let at = |dx: i64, dy: i64| Point { x: pad.x + dx, y: pad.y + dy };
+            let mut router = Router::new(&design, &model);
+            router.settings.mode = Mode::Shove;
+            router.settings.fix_all_segments = true;
+            if router.start(*pad, &layer_name, model.board.track_width).is_err() {
+                continue;
+            }
+            let mut pushed = false;
+            for step in [600, 1500, 2500, 3500, 2000, 800, 2000, 3500, 4500] {
+                if let Some(pv) = router.preview(at(step, 0)) {
+                    pushed |= !pv.displaced_lines.is_empty();
+                }
+            }
+            if !pushed || !router.preview(at(4500, 0)).is_some_and(|pv| !pv.colliding) {
+                continue;
+            }
+            if !matches!(router.fix(at(4500, 0)), Some(eda_pns::line_placer::FixOutcome::Fixed { real_end: false })) {
+                continue;
+            }
+            for step in [500, 1500, 2500] {
+                router.preview(at(4500, -step));
+            }
+            router.undo_last_segment();
+            for step in [600, 1500, 2500, 3500, 4500] {
+                router.preview(at(4500 + step / 2, step));
+            }
+            let end = at(6750, 4500);
+            if !router.preview(end).is_some_and(|pv| !pv.colliding) {
+                continue;
+            }
+            let Some(commit) = router.finish(end) else { continue };
+            if commit.remove_track_ids.is_empty() {
+                continue;
+            }
+            judge(&format!("session from {name}"), &commit);
+            sessions += 1;
+            judged += 1;
+        }
+        eprintln!("{judged} springback sessions judged ({sessions} on pic_programmer's pads)");
+        assert!(judged >= 3, "{judged} sessions judged by kicad-cli");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

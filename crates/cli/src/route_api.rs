@@ -31,8 +31,10 @@ fn body_json(body: &[u8]) -> Value {
     serde_json::from_slice(body).unwrap_or(Value::Null)
 }
 
+/// A whole number of micrometres: the studio sends the cursor as it converted it from the screen, which is not always whole
+/// (`32000.000000000004` after Backspace warps it), and such a number is rounded -- not read as missing, which put the head at 0.
 fn num(v: &Value, key: &str, default: i64) -> i64 {
-    v.get(key).and_then(Value::as_i64).unwrap_or(default)
+    v.get(key).and_then(|n| n.as_i64().or_else(|| n.as_f64().filter(|f| f.is_finite()).map(|f| f.round() as i64))).unwrap_or(default)
 }
 
 fn point_of(v: &Value) -> Point {
@@ -684,6 +686,16 @@ mod tests {
 
     fn p(x: i64, y: i64) -> Point {
         Point { x, y }
+    }
+
+    /// The cursor as the studio sends it after Backspace (`32000.000000000004`) is the point it is, rounded -- it used to be read as missing,
+    /// and the head went to y = 0.
+    #[test]
+    fn a_cursor_that_is_not_a_whole_micrometre_is_rounded() {
+        let req = body_json(br#"{"x": 25000, "y": 32000.000000000004}"#);
+        assert_eq!(point_of(&req), p(25_000, 32_000));
+        assert_eq!(point_of(&body_json(br#"{"x": -10.6, "y": 7.4}"#)), p(-11, 7));
+        assert_eq!(point_of(&body_json(br#"{}"#)), p(0, 0));
     }
 
     /// A 20 mm board with a SIG stub ending at (10000, 8000) and a GND via at (10000, 5000), right in the way of SIG going down.

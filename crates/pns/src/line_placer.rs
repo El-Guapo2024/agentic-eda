@@ -37,13 +37,14 @@
 //! the new layer, mirroring the existing single-segment router's own
 //! `dropViaAndSwitchLayer` (`web/studio/src/components/canvas/routing.ts`).
 //!
-//! Fixed runs are deliberately **not** inserted into the `Node` passed to
-//! `preview()`/`fix()` -- same-net items never collide with each other
-//! (`Node::all_colliding`'s own net check), so a same-net tail can never
-//! block its own head regardless of whether it's "in" the node. This
-//! sidesteps needing a mutable per-session working node during the
-//! interactive phase entirely: only `finish()`'s output ever needs to be
-//! committed anywhere.
+//! **Springback** (`SHOVE`'s `m_nodeStack`, [`crate::springback`]): in Shove mode every `Move` starts its shove from the newest frame the
+//! head still presses on (`reduceSpringback`) and pushes the world it leaves (`pushSpringback`), so a pushed track stays pushed, is pushed
+//! on from where it was left, and springs back as the head draws back. A click pushes a locked frame with the fixed run in it (locked:
+//! the commit is built from the runs, so a later shove may not move them -- KiCad's tail can be pushed), Backspace rewinds the stack to
+//! the frame the undone run was fixed in, and what the commit replaces is what the newest frame has moved against the session's world
+//! ([`LinePlacer::displaced_tracks`]). The `Node` passed to `preview()`/`fix()` is that world, and must be the same for the whole session: the
+//! frames are diffs against it. In the other modes the head is resolved in the world the last click left (`m_currentNode` is
+//! `m_lastNode` there); the fixed runs in it are the head's own net, which it never collides with.
 
 /// `LINE_PLACER::rhWalkOnly`/`rhShoveOnly`'s head effort: `OE_LOW` merges
 /// nothing, `OE_MEDIUM`/`OE_FULL` merge segments; smart pads on top when
@@ -68,12 +69,13 @@ use crate::line::Line;
 use crate::node::Node;
 use crate::settings::{Mode, RoutingSettings};
 use crate::shove::{DisplacedLine, DisplacedVia};
+use crate::springback::{HeadSet, Springback, World};
 use crate::{optimizer, walkaround};
 use eda_drc::kimath::Shape;
 use eda_model::ir::{Point, Um};
 use eda_model::BoardRules;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 /// `ANCHOR_SNAP_UM`-equivalent: how close the cursor must be to a same-net
 /// pad/via/track-end to snap onto it and offer to finish the route there.
@@ -121,6 +123,9 @@ struct HeadResult {
     colliding: bool,
     displaced_lines: Vec<DisplacedLine>,
     displaced_vias: Vec<DisplacedVia>,
+    /// The world the head was resolved in, against the session's: the springback frame the shove pushed, or the one it started from
+    /// (`m_currentNode` after `rhShoveOnly` / `rhWalkOnly`). What a click fixes the head in.
+    world: World,
     /// `Mode::Shove` with a via pending: the head was shoved together with its via (`rhShoveOnly`: `newHead.AppendVia( makeVia( ... ) )`
     /// before `m_shove->AddHeads( newHead )`), and this is where the via ended -- the head's last point. `None`: the via, if there is one,
     /// is placed on the finished head (`place_via`).
@@ -128,8 +133,9 @@ struct HeadResult {
 }
 
 impl HeadResult {
-    fn plain(pts: Vec<Point>, colliding: bool) -> Self {
-        HeadResult { pts, colliding, displaced_lines: Vec::new(), displaced_vias: Vec::new(), via: None }
+    /// A head resolved without a shove, in `world` (whose moved tracks and vias are what the preview shows displaced).
+    fn plain(pts: Vec<Point>, colliding: bool, node: &Node, world: World) -> Self {
+        HeadResult { pts, colliding, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via: None }
     }
 }
 
@@ -180,6 +186,13 @@ pub struct LinePlacer {
     pub exclude_end: Vec<ItemId>,
     /// Where the route ended, in the middle of a same-net track: that track is split there when the route is committed.
     pub end_split: Option<(ItemId, Point)>,
+    /// `m_shove`'s springback stack (`m_nodeStack`): the worlds the head's shoves left, newest last, and a locked one per click.
+    springback: RefCell<Springback>,
+    /// The world of the last `Move` (`m_currentNode`): the frame its shove pushed or started from.
+    last_world: RefCell<World>,
+    /// `m_fixedTail`'s stages, one per run: the length of the springback stack when the run was fixed -- its newest frame is the
+    /// stage's `commit` node, which Backspace rewinds the stack to (`RewindSpringbackTo( st.commit )`).
+    stages: Vec<usize>,
 }
 
 impl LinePlacer {
@@ -200,7 +213,7 @@ impl LinePlacer {
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: 0, via_drill: 0, via_to_layer: None, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: 0, via_drill: 0, via_to_layer: None, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), stages: Vec::new() }
     }
 
     pub fn fixed_start(&self) -> Point {
@@ -217,14 +230,17 @@ impl LinePlacer {
 
     /// `LINE_PLACER::buildInitialLine` + `routeHead`: the raw 45-degree
     /// candidate from the last fixed point to `p`, then resolved per the
-    /// active routing mode. Pure -- never mutates `self`, including in
-    /// `Mode::Shove`: a successful shove's displaced items are reported
-    /// back in the result for the caller ([`Self::preview`]/[`Self::fix`])
-    /// to decide whether and when to actually keep them.
+    /// active routing mode. In `Mode::Shove` it reduces the springback
+    /// stack, shoves from the newest frame left and pushes the world the
+    /// shove leaves (`SHOVE::Run`); the result carries that world, and what
+    /// it has moved, for [`Self::preview`]/[`Self::fix`].
     fn build_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> HeadResult {
         let start = self.fixed_start();
+        // the world the last `Move` left (`m_currentNode`): in Shove mode the newest springback frame, in the others the world the last click
+        // left (those modes never shove, so their `m_currentNode` is `m_lastNode` of the last `FixRoute`)
+        let current = if settings.mode == Mode::Shove { self.springback.borrow().top().0 } else { self.springback.borrow().locked_top() };
         if start == p {
-            return HeadResult::plain(vec![start], false);
+            return HeadResult::plain(vec![start], false, node, current);
         }
         // `buildInitialLine`: in Shove mode a pending via is pushed off the pads under it before the head is built to it (`v.PushoutForce( ..,
         // collMask = SOLID_T, .. )`, the head then ends at `aP + force`); the other modes place theirs on the finished head (`place_via`).
@@ -233,6 +249,7 @@ impl LinePlacer {
         let raw = if settings.free_angle() { vec![start, p] } else { self.posture(settings, p).build_initial_trace(start, p, false, CornerMode::Mitered45) };
         let exclude = self.exclude();
 
+        let mut current = current;
         if settings.mode == Mode::Shove {
             // `rhShoveOnly`: first walk the head around the pads alone
             // (`rhWalkBase( aP, walkSolids, ITEM::SOLID_T, RM_Shove )`), then
@@ -245,9 +262,14 @@ impl LinePlacer {
                 // moves what is in the way of the via as well as what is in the way of the track (`SHOVE::Run`: `headVia->SetRank( 100000 )`,
                 // `m_currentNode->Add( std::move( headVia ) )`)
                 let head_via = if self.placing_via { walked.last().map(|&end| self.make_via(end)) } else { None };
+                // `SHOVE::Run`: "Pop NODEs containing previous shoves which are no longer necessary" (`reduceSpringback( headSet )`), then
+                // `m_currentNode = parent->Branch()`: the shove starts from the world the newest frame the head still presses on left
+                let head_set = HeadSet { pts: &walked, net: &self.net, layer: self.current_layer, width: self.width, via: head_via.as_ref() };
+                let (parent, prior_area) = self.springback.borrow_mut().reduce(node, &head_set, rules);
+                let parent_node = parent.apply(node);
                 let outcome = match &head_via {
-                    Some(via) => crate::shove::shove_heads(node, vec![crate::shove::ShoveHead { line: Line::from_points(self.net.clone(), self.current_layer, self.width, walked.clone()), via: Some(via.clone()) }], rules, settings),
-                    None => crate::shove::shove_line(node, &walked, &self.net, self.current_layer, self.width, rules, settings),
+                    Some(via) => crate::shove::shove_heads_after(&parent_node, vec![crate::shove::ShoveHead { line: Line::from_points(self.net.clone(), self.current_layer, self.width, walked.clone()), via: Some(via.clone()) }], rules, settings, prior_area),
+                    None => crate::shove::shove_line_after(&parent_node, &walked, &self.net, self.current_layer, self.width, rules, settings, prior_area),
                 };
                 if let Some(outcome) = outcome {
                     let line = Line::from_points(self.net.clone(), self.current_layer, self.width, outcome.head.clone());
@@ -256,32 +278,47 @@ impl LinePlacer {
                     // shortcut is only taken where the pushed items now allow it.
                     let optimized = optimizer::optimize_with(&line, &outcome.world, rules, &exclude, head_effort(settings, self.manually_forced));
                     let via = head_via.as_ref().and_then(|_| optimized.pts.last().copied());
-                    return HeadResult { pts: optimized.pts, colliding: false, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias, via };
+                    // `pushSpringback( m_currentNode, m_affectedArea )`: the world this shove left is the newest frame
+                    let mut world = parent;
+                    world.merge_shove(&outcome.displaced_lines, &outcome.displaced_vias);
+                    self.springback.borrow_mut().push(node, world.clone(), outcome.area);
+                    return HeadResult { pts: optimized.pts, colliding: false, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via };
                 }
+                // the shove failed: "m_currentNode = parent", and `rhWalkOnly` walks the head in it
+                current = parent;
             }
         }
 
+        // `rhWalkOnly` / `rhMarkObstacles` resolve the head in `m_currentNode`: the session's world as the springback frame has it (its
+        // moved tracks and vias; the fixed runs in it are the head's own net, which it never collides with)
+        let moved;
+        let world_node = if current.tracks.is_empty() && current.vias.is_empty() {
+            node
+        } else {
+            moved = current.apply(node);
+            &moved
+        };
         match settings.mode {
             Mode::MarkObstacles => {
                 let colliding = raw.windows(2).any(|w| {
                     let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width / 2 };
-                    node.first_colliding(&shape, &self.net, LayerRange::single(self.current_layer), rules, &exclude).is_some()
+                    world_node.first_colliding(&shape, &self.net, LayerRange::single(self.current_layer), rules, &exclude).is_some()
                 });
-                HeadResult::plain(raw, colliding)
+                HeadResult::plain(raw, colliding, node, current)
             }
             Mode::Walkaround | Mode::Shove => {
                 // `rhWalkOnly`: `rhWalkBase( aP, walkFull, ITEM::ANY_T, RM_Walkaround )`, refused if the walk still
                 // collides with anything, then the head optimized per the effort setting.
                 let iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
-                let walked = walkaround::walk_base(node, rules, &self.net, self.current_layer, self.width, &raw, crate::node::kind_mask::ANY, iteration_limit, settings.walkaround_hug_length_threshold, &exclude)
-                    .filter(|path| !walkaround::path_collides(node, rules, &self.net, self.current_layer, self.width, path, &exclude));
+                let walked = walkaround::walk_base(world_node, rules, &self.net, self.current_layer, self.width, &raw, crate::node::kind_mask::ANY, iteration_limit, settings.walkaround_hug_length_threshold, &exclude)
+                    .filter(|path| !walkaround::path_collides(world_node, rules, &self.net, self.current_layer, self.width, path, &exclude));
                 match walked {
                     Some(path) => {
                         let line = Line::from_points(self.net.clone(), self.current_layer, self.width, path);
-                        let optimized = optimizer::optimize_with(&line, node, rules, &exclude, head_effort(settings, self.manually_forced));
-                        HeadResult::plain(optimized.pts, false)
+                        let optimized = optimizer::optimize_with(&line, world_node, rules, &exclude, head_effort(settings, self.manually_forced));
+                        HeadResult::plain(optimized.pts, false, node, current)
                     }
-                    None => HeadResult::plain(raw, true), // ST_STUCK: show the direct line, flagged violating
+                    None => HeadResult::plain(raw, true, node, current), // ST_STUCK: show the direct line, flagged violating
                 }
             }
         }
@@ -342,15 +379,16 @@ impl LinePlacer {
     }
 
     /// `LINE_PLACER::Move`: the live preview, including end-of-route
-    /// snapping onto a same-net anchor near `p`. Never mutates `self` --
-    /// not even in `Mode::Shove`, where the shove this computes is always
-    /// disposable until [`Self::fix`]/[`Self::finish`] actually accepts it
-    /// (see the module doc comment).
+    /// snapping onto a same-net anchor near `p`. What it changes is the
+    /// mouse trail and, in `Mode::Shove`, the springback stack (a frame for
+    /// the world this shove left); nothing is committed until
+    /// [`Self::fix`]/[`Self::finish`] accepts it (see the module doc comment).
     pub fn preview(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Preview {
         self.begin_move(p);
         let (mut snapped_end, snapped_segment) = self.snap_end(node, settings, p);
         let target = snapped_end.unwrap_or(p);
         let head_result = self.build_head(node, rules, settings, target);
+        *self.last_world.borrow_mut() = head_result.world.clone();
         let mut colliding = head_result.colliding;
         let shoved_via = head_result.via;
         let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
@@ -434,34 +472,20 @@ impl LinePlacer {
         settings.allow_drc_violations()
     }
 
-    /// Merge a just-accepted preview's shoved items into this session's
-    /// running displacement set -- keyed by source id, so a later call that
-    /// re-shoves (or un-shoves, by no longer touching) the same track only
-    /// ever contributes its most recent position to the final commit.
-    fn absorb_displacement(&mut self, preview: &Preview) {
-        self.absorb(&preview.displaced_lines, &preview.displaced_vias);
+    /// What the commit replaces and moves is what the world of the last `Move` has moved against the session's world (the springback
+    /// frame the head was resolved in: every shove since the route began that is still in it, the earlier legs' included).
+    fn take_displacement(&mut self, world: &World) {
+        self.displaced_tracks = world.tracks.clone();
+        self.displaced_vias = world.vias.clone();
     }
 
-    /// The replacement of a track is whatever the latest shove that touched it
-    /// left: all of that shove's lines for the track (a track cut by a junction
-    /// has several, a line on several imported tracks leaves the others with
-    /// none) take the place of what an earlier one said.
-    fn absorb(&mut self, lines: &[DisplacedLine], vias: &[DisplacedVia]) {
-        let mut fresh: HashMap<&str, Vec<Line>> = HashMap::new();
-        for d in lines {
-            if let Some(id) = &d.source_track {
-                let e = fresh.entry(id.as_str()).or_default();
-                if d.line.point_count() >= 2 {
-                    e.push(d.line.clone());
-                }
-            }
-        }
-        for (id, ls) in fresh {
-            self.displaced_tracks.insert(id.to_string(), ls);
-        }
-        for d in vias {
-            self.displaced_vias.insert(d.source_via.clone(), d.pos);
-        }
+    /// `FixRoute`: `m_shove->AddLockedSpringbackNode( m_lastNode )` -- the world of the last `Move` with the head just fixed in it (and the
+    /// via it ends in) is a frame that is never popped.
+    fn lock_fixed(&mut self, node: &Node, run: Option<&Line>, via: Option<crate::item::Via>) {
+        let world = self.last_world.borrow().with_fixed(run, via);
+        self.take_displacement(&world);
+        self.springback.borrow_mut().add_locked(node, world.clone());
+        *self.last_world.borrow_mut() = world;
     }
 
     /// `LINE_PLACER::FixRoute` for an intermediate click: commit the
@@ -491,7 +515,9 @@ impl LinePlacer {
             head.pts.pop();
         }
         self.direction = head.pts.windows(2).rev().find(|w| w[0] != w[1]).map(|w| Direction45::from_seg(w[0], w[1])).unwrap_or(self.direction);
-        self.absorb_displacement(&preview);
+        // the stage's `commit` is the newest frame now (`m_fixedTail.AddStage( .., m_currentNode )`)
+        self.stages.push(self.springback.borrow().len());
+        self.lock_fixed(node, Some(&head), None);
         self.runs.push(head);
         self.placement_correct = true;
         if !real_end {
@@ -521,16 +547,22 @@ impl LinePlacer {
         self.begin_move(p);
         let head_result = self.build_head(node, rules, settings, p);
         let shoved_via = head_result.via;
+        *self.last_world.borrow_mut() = head_result.world;
         let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
         head.simplify();
-        self.absorb(&head_result.displaced_lines, &head_result.displaced_vias);
         let via_pos = match shoved_via {
             // shoved together with the head: the via is where the head ends
             Some(_) => head.last().unwrap_or(p),
             None => self.place_via(node, rules, settings, head.last().unwrap_or(p), new_layer),
         };
+        let via = crate::item::Via { layers: LayerRange::new(self.current_layer, new_layer), ..self.make_via(via_pos) };
+        let via = crate::item::Via { diameter, drill, ..via };
         if head.point_count() >= 2 {
+            self.stages.push(self.springback.borrow().len());
+            self.lock_fixed(node, Some(&head), Some(via));
             self.runs.push(head);
+        } else {
+            self.lock_fixed(node, None, Some(via));
         }
         self.current_layer = new_layer;
         self.via_diameter = diameter;
@@ -550,6 +582,14 @@ impl LinePlacer {
     /// shrink below the route's own origin.
     pub fn undo_last_segment(&mut self) -> bool {
         let Some(popped) = self.runs.pop() else { return false };
+        // `UnfixRoute`: `m_shove->RewindSpringbackTo( st.commit )` -- the frames from the one the run was fixed in are gone, and with them
+        // what its shoves had moved
+        if let Some(len) = self.stages.pop() {
+            self.springback.borrow_mut().rewind_to(len);
+        }
+        let world = self.springback.borrow().top().0;
+        self.take_displacement(&world);
+        *self.last_world.borrow_mut() = world;
         self.direction = self
             .runs
             .last()
@@ -610,7 +650,8 @@ impl LinePlacer {
         if preview.colliding && !Self::may_commit_despite_collision(settings) {
             return None;
         }
-        self.absorb_displacement(&preview);
+        let world = self.last_world.borrow().clone();
+        self.take_displacement(&world);
         let real_end = preview.snapped_end.is_some();
         if real_end {
             self.record_end_split(&preview);
@@ -942,6 +983,10 @@ mod tests {
         // and a shove that cannot move the track (locked) leaves the via flagged, as the walk-around fallback finds it
         let mut locked = Node::new();
         locked.add(Item::Segment(Segment { net: net_of("GND"), layer: 1, a: Point { x: 4450, y: -3000 }, b: Point { x: 4450, y: 3000 }, width: 200, source_track: Some(("trkG".into(), 0)), locked: true }));
+        // (a new route: a placer's springback frames are of the world it routes in)
+        let mut placer = LinePlacer::start(&locked, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        placer.toggle_via(true, 600, 300);
+        placer.via_to_layer = Some(1);
         let pv = placer.preview(&locked, &rules, &shove, Point { x: 4000, y: 0 });
         assert!(pv.displaced_lines.is_empty() && pv.colliding, "a locked track is not shoved, and the via on it is flagged: {pv:?}");
     }
@@ -966,6 +1011,94 @@ mod tests {
         assert_eq!(displaced[0].0, "trkG");
         assert!(displaced[0].1.iter().all(|l| l.pts.iter().filter(|q| q.y.abs() <= 300).all(|q| q.x >= 4600 - 1)), "{displaced:?}");
         assert!(!placer.placing_via && placer.via_to_layer.is_none());
+    }
+
+    /// The board a session would commit: the session's world with the tracks and vias it moved, and its runs.
+    fn committed_world(node: &Node, placer: &LinePlacer) -> Node {
+        let world = World {
+            tracks: placer.displaced_tracks().map(|(t, l)| (t.to_string(), l.to_vec())).collect(),
+            vias: placer.displaced_vias().map(|(v, p)| (v.to_string(), p)).collect(),
+            fixed: placer.runs.clone(),
+            fixed_vias: Vec::new(),
+        };
+        world.apply(node)
+    }
+
+    /// Every pair of items of different nets in `node` closer than the rules allow.
+    fn violations(node: &Node, rules: &BoardRules) -> Vec<(ItemId, ItemId)> {
+        let mut out = Vec::new();
+        for (id, item) in node.iter() {
+            for o in node.all_colliding(&item.shape(item.layers().start()), item.net(), item.layers(), rules, &[id]) {
+                out.push((id.min(o.id), id.max(o.id)));
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    fn crossing_track() -> Node {
+        use crate::item::Segment;
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 2500, y: -2000 }, b: Point { x: 2500, y: 2000 }, width: 200, source_track: Some(("trkA".into(), 0)), locked: false }));
+        node
+    }
+
+    /// `SHOVE::reduceSpringback` / `pushSpringback`: a track the head pushed stays pushed as long as the head presses on it, is pushed on from
+    /// where it was left as the head goes further, and springs back to where it was once the head has drawn back off it.
+    #[test]
+    fn a_pushed_track_is_pushed_on_from_where_it_was_left_and_springs_back_when_the_head_draws_back() {
+        let (node, rules) = (crossing_track(), rules());
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        // the first move (KiCad's first frame: the head a few pixels long) touches nothing
+        assert!(placer.preview(&node, &rules, &settings, Point { x: 500, y: 0 }).displaced_lines.is_empty());
+        let reach = |pv: &Preview| pv.displaced_lines.iter().flat_map(|d| d.line.pts.iter()).map(|q| q.x).max().unwrap_or(2500);
+        let pushed = placer.preview(&node, &rules, &settings, Point { x: 5000, y: 0 });
+        assert_eq!(pushed.displaced_lines.len(), 1);
+        assert!(reach(&pushed) >= 5000 + 100 + 200 + 100 - 1, "{:?}", pushed.displaced_lines);
+        let further = placer.preview(&node, &rules, &settings, Point { x: 6000, y: 0 });
+        assert!(reach(&further) >= 6000 + 400 - 1, "{:?}", further.displaced_lines);
+        assert_eq!(placer.springback.borrow().len(), 3, "a frame per move that shoved");
+        // drawn back off the track: every frame it no longer presses on is popped, down to the first
+        let back = placer.preview(&node, &rules, &settings, Point { x: 1500, y: 0 });
+        assert!(back.displaced_lines.is_empty(), "the track springs back: {:?}", back.displaced_lines);
+        assert_eq!(placer.springback.borrow().len(), 2, "the first frame and the one this move pushed");
+    }
+
+    /// `FixRoute`: `AddLockedSpringbackNode( m_lastNode )` -- the world a click leaves (the track the leg pushed, and the leg itself) is where
+    /// the next leg is routed and shoves from, so the next leg pushes the track on from there and never back across the fixed leg; and
+    /// `UnfixRoute`: `RewindSpringbackTo( st.commit )` -- Backspace takes the push back with the leg.
+    #[test]
+    fn the_next_leg_shoves_from_the_world_the_click_left_and_backspace_takes_the_push_back() {
+        let (node, rules) = (crossing_track(), rules());
+        let settings = RoutingSettings { mode: Mode::Shove, fix_all_segments: true, ..RoutingSettings::default() };
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        placer.preview(&node, &rules, &settings, Point { x: 500, y: 0 });
+        placer.preview(&node, &rules, &settings, Point { x: 5000, y: 0 });
+        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: 5000, y: 0 }), FixOutcome::Fixed { real_end: false });
+        assert_eq!(placer.displaced_tracks().count(), 1, "the click keeps the push");
+        // a leg going north from the click runs into the track where the first leg left it (bulged round x = 5000)
+        let mut path = vec![Point { x: 5000, y: -500 }, Point { x: 5000, y: -1500 }, Point { x: 5000, y: -3000 }];
+        let last = path.pop().unwrap();
+        for p in path {
+            placer.preview(&node, &rules, &settings, p);
+        }
+        let pv = placer.preview(&node, &rules, &settings, last);
+        assert!(!pv.colliding);
+        assert_eq!(pv.displaced_lines.len(), 1, "the track, as both legs have pushed it: {:?}", pv.displaced_lines);
+        placer.finish(&node, &rules, &settings, last).expect("finishes");
+        let board = committed_world(&node, &placer);
+        assert!(violations(&board, &rules).is_empty(), "the commit is clean: {:?}", violations(&board, &rules));
+
+        // Backspace after the first click: the track is back where it was
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        placer.preview(&node, &rules, &settings, Point { x: 500, y: 0 });
+        placer.fix(&node, &rules, &settings, Point { x: 5000, y: 0 });
+        assert_eq!(placer.displaced_tracks().count(), 1);
+        assert!(placer.undo_last_segment());
+        assert_eq!(placer.displaced_tracks().count(), 0, "the leg and its push are gone");
+        assert!(placer.preview(&node, &rules, &settings, Point { x: 1500, y: 0 }).displaced_lines.is_empty());
     }
 
     /// `buildInitialLine`: a via that lands on a pad is pushed off it before the head is built, and the head ends at the via.

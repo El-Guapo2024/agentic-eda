@@ -28,9 +28,10 @@
 //! collisions mode (`m_forceMarkObstaclesMode`): the violations are shown, and only Ctrl+click commits them.
 //!
 //! Scoped down from upstream (see `PARITY.md`):
-//! - No springback/incremental-branch reuse, for the same reason
-//!   `crate::shove` has none: every `preview`/`finish` call re-derives
-//!   everything fresh from the committed world.
+//! - No springback: every `preview`/`finish` call re-derives everything
+//!   fresh from the committed world. (KiCad's `DRAGGER` keeps a `SHOVE` for
+//!   the whole drag and so its stack, `m_nodeStack`; the single-track placer
+//!   has it here, [`crate::springback`].)
 //! - **Dragging a corner in `Mode::Walkaround`** is `dragWalkaround`: the
 //!   dragged line is walked around what it would land on
 //!   (`DRAGGER::tryWalkaround`), and only refused if it cannot be. A

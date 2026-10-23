@@ -35,10 +35,13 @@
 //!
 //! What differs, on purpose:
 //!
-//! - **No springback stack.** KiCad keeps the branches of
-//!   earlier shoves so an interactive drag can un-shove cheaply; this port is
-//!   driven one HTTP request per mouse sample and re-runs from the committed
-//!   world every time, so there is nothing to pop. The loop is bounded as
+//! - **The springback stack is the line placer's** ([`crate::springback`]):
+//!   KiCad's `SHOVE` keeps it (`m_nodeStack`) and `Run` starts from it; here a
+//!   shove is one call on a world, and the line placer keeps the frames,
+//!   reduces them before the call ([`shove_line_after`], [`shove_heads_after`]:
+//!   the frame's world and its area) and pushes the world the call left. The
+//!   dragger and the pair placer still shove from the world their gesture
+//!   started in (or the last fix left) on every move. The loop is bounded as
 //!   KiCad's is: the 250-iteration cap (`ShoveIterationLimit`) and the
 //!   one-second clock (`ShoveTimeLimit`, [`crate::time_limit::TimeLimit`]).
 //! - **Widths survive.** `SHOVE::assembleLine` calls `AssembleLine` with the
@@ -108,6 +111,9 @@ pub struct ShoveOutcome {
     /// The world the shove left, with the head removed (`SHOVE::CurrentNode()`
     /// after `removeHeads`) -- what the head is optimized against.
     pub world: Node,
+    /// `m_affectedArea`: the box round everything this shove changed (`replaceLine`, `replaceItems`), which `pushSpringback` merges into
+    /// the area of the frame it pushes ([`crate::springback`]).
+    pub area: Option<Area>,
 }
 
 /// One head of a multi-head shove (`SHOVE::AddHeads( aHead )`): the line, and the via it ends in if it does (`LINE::EndsWithVia`).
@@ -126,7 +132,7 @@ enum Status {
     TryWalk,
 }
 
-type Area = (Um, Um, Um, Um);
+pub(crate) type Area = (Um, Um, Um, Um);
 
 /// `SHOVE::Run`: `head.SetRank( 100000 )`.
 const HEAD_RANK: i32 = 100_000;
@@ -522,11 +528,14 @@ struct Shove<'a> {
     /// `SHOVE::ForceClearance( true, aClearance )` (`m_forceClearance`): the clearance every hull is built at, whatever the rules say.
     /// The pair placer shoves one line of a pair away from the other at the pair's gap.
     force_clearance: Option<Um>,
+    /// The area of the springback frame this shove starts from (`m_nodeStack.back().m_affectedArea`): `totalAffectedArea()` is it
+    /// merged with this shove's own, and that is where `runOptimizer` may straighten the shoved lines.
+    prior_area: Option<Area>,
 }
 
 impl<'a> Shove<'a> {
     fn new(world: &'a Node, rules: &'a BoardRules, settings: &'a RoutingSettings) -> Self {
-        Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new(), force_clearance: None }
+        Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new(), force_clearance: None, prior_area: None }
     }
 
     fn clearance(&self, a: &Net, b: &Net) -> Um {
@@ -1520,7 +1529,12 @@ impl<'a> Shove<'a> {
             flags |= effort::SMART_PADS;
         }
         let max_width = self.optimizer_queue.iter().map(|l| l.line.width).max().unwrap_or(0);
-        let area = self.affected.map(|(x0, y0, x1, y1)| (x0 - max_width, y0 - max_width, x1 + max_width, y1 + max_width));
+        // `totalAffectedArea()`: the springback frame's area merged with this shove's
+        let total = match (self.prior_area, self.affected) {
+            (Some(p), Some(a)) => merge_area(Some(p), a),
+            (p, a) => p.or(a),
+        };
+        let area = total.map(|(x0, y0, x1, y1)| (x0 - max_width, y0 - max_width, x1 + max_width, y1 + max_width));
         for _ in 0..passes {
             self.optimizer_queue.reverse();
             for i in 0..self.optimizer_queue.len() {
@@ -1546,7 +1560,7 @@ impl<'a> Shove<'a> {
         let raw = head.pts.clone();
         let ids = self.node.add_line(&head, None, false);
         if ids.is_empty() {
-            return Some(ShoveOutcome { head: raw.clone(), heads: vec![raw], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: self.node });
+            return Some(ShoveOutcome { head: raw.clone(), heads: vec![raw], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: self.node, area: None });
         }
         head.segment_ids = ids.clone();
         let mut head_line = SLine::new(head);
@@ -1703,7 +1717,7 @@ impl<'a> Shove<'a> {
                 }
             }
         }
-        ShoveOutcome { head, heads, displaced_lines, displaced_vias, world: self.node }
+        ShoveOutcome { head, heads, displaced_lines, displaced_vias, world: self.node, area: self.affected }
     }
 
     /// The IR tracks a set of the original world's segments belong to.
@@ -1744,7 +1758,7 @@ pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: 
 #[allow(clippy::too_many_arguments)]
 fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
     if raw.len() < 2 {
-        return Some(ShoveOutcome { head: raw.to_vec(), heads: vec![raw.to_vec()], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone() });
+        return Some(ShoveOutcome { head: raw.to_vec(), heads: vec![raw.to_vec()], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone(), area: None });
     }
     let mut head = Line::from_points(net.clone(), layer, width, raw.to_vec());
     head.arcs = arcs.to_vec();
@@ -1772,6 +1786,26 @@ pub fn shove_via(node: &Node, via_id: ItemId, to: Point, rules: &BoardRules, set
 /// empty, a pad it could not walk around, a track it could not push, or the iteration limit.
 pub fn shove_heads(node: &Node, heads: Vec<ShoveHead>, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
     Shove::new(node, rules, settings).run_heads(heads)
+}
+
+/// [`shove_line`] from a springback frame (`SHOVE::Run` after `reduceSpringback`: `m_currentNode = parent->Branch()`): `node` is the frame's
+/// world and `prior_area` its area, which the optimizer's restriction area takes in (`totalAffectedArea`). The outcome's displacement is
+/// against `node`; [`crate::springback::World::merge_shove`] makes it the frame's against the session's world.
+#[allow(clippy::too_many_arguments)] // `shove_line`'s query context plus the frame's area
+pub fn shove_line_after(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, prior_area: Option<Area>) -> Option<ShoveOutcome> {
+    if raw.len() < 2 {
+        return shove_line(node, raw, net, layer, width, rules, settings);
+    }
+    let mut shove = Shove::new(node, rules, settings);
+    shove.prior_area = prior_area;
+    shove.run(Line::from_points(net.clone(), layer, width, raw.to_vec()))
+}
+
+/// [`shove_heads`] from a springback frame: see [`shove_line_after`].
+pub fn shove_heads_after(node: &Node, heads: Vec<ShoveHead>, rules: &BoardRules, settings: &RoutingSettings, prior_area: Option<Area>) -> Option<ShoveOutcome> {
+    let mut shove = Shove::new(node, rules, settings);
+    shove.prior_area = prior_area;
+    shove.run_heads(heads)
 }
 
 /// `SHOVE::ShoveObstacleLine( aCurLine, aObstacleLine, aResultLine )` after `ForceClearance( forced.is_some(), forced )`: the line

@@ -18,8 +18,8 @@
 //!
 //! What differs from KiCad, on purpose:
 //!
-//! - **No springback.** Every `Move` resolves from the world as the last fix left it, as the rest of this router does
-//!   ([`crate::shove`]'s header): there is no shove branch kept between mouse samples.
+//! - **No springback.** Every `Move` resolves from the world as the last fix left it: there is no shove branch kept between mouse
+//!   samples. (The single-track placer has KiCad's stack, [`crate::springback`]; `DIFF_PAIR_PLACER::tryShove` uses the same one.)
 //! - **A walk that fails shows the pair as it was drawn.** `tryWalkDp` ends with `if( bestScore > 0.0 ) {..; return true;}`, which is
 //!   always true -- when no attempt worked, `best` is an empty `DIFF_PAIR` and the pair vanishes while the walk is called a success. Here a
 //!   failed walk leaves the pair where [`DiffPairPlacer::route_head`] put it and reports that it does not fit (it is drawn in violation).

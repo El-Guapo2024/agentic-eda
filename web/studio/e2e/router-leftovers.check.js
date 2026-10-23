@@ -23,6 +23,8 @@
 //   tuner on arc  a track that is an arc is picked by the tuner (the line's length along the arc), a pattern is started on it and tuned to 24 mm through the arc, which stays an arc;
 //   delay        a net whose class names a tuning profile with the time domain on is tuned in picoseconds: the status box reads "current delay", the Tuning Pattern dialog has the Delay
 //                radio button and a target delay, the pattern is tuned to it within 0.2 ps and stored as a time domain one.
+//   springback   (Stage 10) in Shove mode a track the head pushed stays pushed, is pushed on from where it was left, and springs back once the head draws back off it; a click keeps the
+//                push and the next leg pushes on from it, Backspace takes the leg and its push back, and the finished route commits the track where the session left it in one undo step;
 //
 // It answers through `window.__routerLeftoversCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. Read it with `await __routerLeftoversCheck.wait(60000)` until
 // `.done`. In a hidden pane the browser stops timers; the script waits with a fetch loop. A run takes four or five minutes (a debug build of the server), longer than the Browser pane's javascript
@@ -601,6 +603,63 @@
     await E.run("common.Interactive.undo");
     await sleep(600);
     t(arcsOf(await state()).length === 1 && tracksOf(await state()).length === 3, "one Undo takes the pattern away and the fillet is as it was");
+  });
+
+  await scenario("springback: a pushed track stays pushed, is pushed on, springs back as the head draws back; a click keeps the push, Backspace takes it back", async (t) => {
+    // a PA4 stub ending at (21, 30) mm and a GND track across its way down x = 24 mm
+    await commit([line("PA4", "F.Cu", [[20000, 30000], [21000, 30000]]), line("GND", "F.Cu", [[24000, 27000], [24000, 33000]])]);
+    await E.run("pcbnew.InteractiveRouter.SingleTrack");
+    await E.run("pcbnew.InteractiveRouter.ShoveMode");
+    await sleep(300);
+    let n = replies.length;
+    await clickAt(21000, 30000);
+    const s = await waitReply("start", n);
+    t(s && s.body.ok === true && s.body.net === "PA4", `the route starts on the PA4 stub: ${s && JSON.stringify([s.body.ok, s.body.net])}`);
+    const pushedOf = (m) => (m ? m.body.displaced.filter((d) => d.pts.length > 0) : []);
+    const reach = (m) => Math.max(24000, ...pushedOf(m).flatMap((d) => d.pts.map((p) => p[0])));
+    const first = await moveTo(22000, 30000);
+    t(first && pushedOf(first).length === 0, `a short head touches nothing: ${first && JSON.stringify(first.body.displaced)}`);
+    const pushed = await moveTo(25000, 30000);
+    t(pushed && pushed.body.colliding === false && pushedOf(pushed).length === 1 && pushedOf(pushed)[0].layer === "F.Cu", `the head pushes the GND track: ${pushed && JSON.stringify(pushedOf(pushed).map((d) => d.pts.length))}`);
+    const gap = 100 + rules.clearance + 100;
+    t(reach(pushed) >= 25000 + gap - 2, `round the head's end, a clearance off it: ${reach(pushed)}`);
+    const further = await moveTo(26000, 30000);
+    t(further && reach(further) >= 26000 + gap - 2 && pushedOf(further).length === 1, `the head goes on and pushes it on from where it was: ${further && reach(further)}`);
+    const back = await moveTo(22000, 30000);
+    t(back && back.body.colliding === false && pushedOf(back).length === 0, `drawn back off it, the track springs back to where it was: ${back && JSON.stringify(back.body.displaced)}`);
+    const again = await moveTo(25000, 30000);
+    t(again && pushedOf(again).length === 1, "pushed again");
+    n = replies.length;
+    await clickAt(25000, 30000);
+    const fx = await waitReply("fix", n);
+    t(fx && fx.body.ok === true && fx.body.blocked === false, `a click fixes the leg: ${fx && JSON.stringify([fx.body.ok, fx.body.blocked])}`);
+    // the next leg down x = 25 mm runs into the track where the first leg left it: it is pushed on from there, and what the click kept is still pushed
+    let leg = null;
+    for (const y of [31000, 32000]) leg = await moveTo(25000, y);
+    t(leg && leg.body.colliding === false && pushedOf(leg).length === 1 && reach(leg) >= 25000 + gap - 2, `the second leg pushes the track on from the world the click left: ${leg && reach(leg)}`);
+    n = replies.length;
+    await E.run("pcbnew.InteractiveRouter.UndoLastSegment");
+    const un = await waitReply("undo_segment", n);
+    t(un && un.body.ok === true && un.body.popped === true, `Backspace takes the first leg back: ${un && JSON.stringify(un.body)}`);
+    const after = await moveTo(22000, 30000);
+    t(after && pushedOf(after).length === 0, `and its push with it: ${after && JSON.stringify(after.body.displaced)}`);
+    await moveTo(25000, 30000);
+    n = replies.length;
+    await clickAt(25000, 30000);
+    await waitReply("fix", n);
+    for (const y of [31000, 32000]) await moveTo(25000, y);
+    n = replies.length;
+    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await waitReply("finish", n);
+    await sleep(700);
+    const st = await state();
+    const gnd = tracksOf(st).filter((q) => q.net === "GND");
+    t(gnd.length >= 1 && gnd.some((q) => q.pts.some((p) => p[0] >= 25000 + gap - 2)), `the GND track is committed where the session left it: ${JSON.stringify(gnd.map((q) => q.pts))}`);
+    t(tracksOf(st).some((q) => q.net === "PA4" && q.pts.some((p) => p[0] === 25000 && p[1] === 32000)), "the route ends where the cursor was");
+    t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), `the gates find no clearance failure: ${JSON.stringify((st.checks ?? []).filter((c) => c.fail).map((c) => c.check))}`);
+    await E.run("common.Interactive.undo");
+    await sleep(600);
+    t(tracksOf(await state()).length === 2, "one Undo takes the route and the push away");
   });
 
   await scenario("the board is as it was, and the studio reported no error", async (t) => {
