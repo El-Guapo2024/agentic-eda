@@ -211,3 +211,111 @@ fn a_footprint_on_a_board_lists_its_files_without_data_and_the_boards_list_has_t
     assert_eq!(listed.files.iter().map(|f| (f.name.as_str(), f.data.is_empty())).collect::<Vec<_>>(), [("datasheet.pdf", true), ("part.step", true)]);
     assert_eq!(listed.get("part.step").unwrap().checksum, list.get("part.step").unwrap().checksum);
 }
+
+// ------------------------------------------------------------------------------------------------------------------ the slow tier (kicad-cli)
+
+fn kicad_cli() -> Option<PathBuf> {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return None;
+    }
+    for c in ["/usr/local/bin/kicad-cli", "/usr/bin/kicad-cli", "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"] {
+        if std::path::Path::new(c).is_file() {
+            return Some(c.into());
+        }
+    }
+    let out = std::process::Command::new("which").arg("kicad-cli").output().ok()?;
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if p.is_empty() {
+        eprintln!("skipped: no kicad-cli");
+        None
+    } else {
+        Some(p.into())
+    }
+}
+
+/// `kicad-cli pcb export <format>` of `board` into `out`; kicad-cli's own report, which names a model it could not add.
+fn export_3d(cli: &std::path::Path, format: &str, board: &std::path::Path, out: &std::path::Path) -> String {
+    let o = std::process::Command::new(cli).args(["pcb", "export", format, "-f", "-o"]).arg(out).arg(board).output().expect("runs kicad-cli");
+    let report = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success() && out.is_file(), "kicad-cli pcb export {format}: {report}");
+    report
+}
+
+/// How many solids a STEP file holds.
+fn solids(step: &std::path::Path) -> usize {
+    let text = std::fs::read_to_string(step).unwrap();
+    text.matches("MANIFOLD_SOLID_BREP(").count()
+}
+
+/// How many meshes a GLB holds: the `meshes` of the glTF JSON chunk (the 12-byte header, then the chunk's length and type, then the JSON).
+fn glb_meshes(glb: &std::path::Path) -> usize {
+    let b = std::fs::read(glb).unwrap();
+    assert_eq!(&b[..4], b"glTF");
+    let len = u32::from_le_bytes([b[12], b[13], b[14], b[15]]) as usize;
+    let json: serde_json::Value = serde_json::from_slice(&b[20..20 + len]).unwrap();
+    json["meshes"].as_array().map_or(0, |m| m.len())
+}
+
+/// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): a board whose footprint names its STEP model `kicad-embed://..`, the model kept in the board's own `(embedded_files ..)` as this
+/// studio writes it, is exported by `kicad-cli pcb export step` and `glb` with the model in it -- as many solids and meshes as the same board with the model named by its path on
+/// disk, and more than the board with no model at all (`EXPORTER_STEP::buildFootprint3DShapes`: `ResolvePath` with the footprint's and the board's embedded files).
+#[test]
+fn kicad_cli_exports_a_board_with_an_embedded_step_model_with_the_model_in_it() {
+    let Some(cli) = kicad_cli() else { return };
+    let Some(fp_path) = qa(ESP32) else { return };
+    let Some((_, mut design, mut model, _)) = board_files("pcbnew/footprints_load_save.kicad_pcb") else { return };
+    // the STEP model: the one KiCad's own QA footprint embeds
+    let parsed = eda_kicad::parse_library_footprint(&std::fs::read_to_string(fp_path).unwrap()).unwrap();
+    let step_file = parsed.embedded.files[0].clone();
+    let step_bytes = decode(&step_file).unwrap().bytes;
+
+    let work = std::env::temp_dir().join(format!("eda_embedded_export_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let on_disk = work.join("model.step");
+    std::fs::write(&on_disk, &step_bytes).unwrap();
+
+    let write = |design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, name: &str| -> PathBuf {
+        let p = work.join(format!("{name}.kicad_pcb"));
+        std::fs::write(&p, export_kicad_pcb(design, model, &ExportMeta { date: "2026-10-23", title: name }).unwrap()).unwrap();
+        p
+    };
+    for fp in &mut model.footprints {
+        fp.models3d.clear();
+    }
+    let bare = write(&design, &model, "bare");
+    let first = model.footprints[0].name.clone();
+    let users = model.parts.iter().filter(|p| model.footprint_of(p).is_some_and(|f| f.name == first)).count();
+    assert!(users >= 1, "the footprint {first} is on the board");
+    model.footprints[0].models3d = vec![eda_model::footprint::Model3d::identity(on_disk.to_str().unwrap())];
+    let by_path = write(&design, &model, "by_path");
+    model.footprints[0].models3d = vec![eda_model::footprint::Model3d::identity(&step_file.link())];
+    design.drawings.get_or_insert_with(Default::default).embedded.insert(step_file.clone());
+    let embedded = write(&design, &model, "embedded");
+    // the board file holds the model, as KiCad writes it
+    let text = std::fs::read_to_string(&embedded).unwrap();
+    assert!(text.contains(&format!("(model \"{}\"", step_file.link())) && block_of(&text).contains(&step_file.checksum));
+
+    let step_of = |b: &PathBuf| {
+        let out = b.with_extension("step");
+        let report = export_3d(&cli, "step", b, &out);
+        (solids(&out), report)
+    };
+    let (none_solids, _) = step_of(&bare);
+    let (path_solids, _) = step_of(&by_path);
+    let (embedded_solids, report) = step_of(&embedded);
+    assert!(path_solids > none_solids, "the model by its path adds solids: {none_solids} -> {path_solids}");
+    assert_eq!(embedded_solids, path_solids, "the embedded model is exported as the one on disk is: {report}");
+
+    let glb_of = |b: &PathBuf| {
+        let out = b.with_extension("glb");
+        export_3d(&cli, "glb", b, &out);
+        glb_meshes(&out)
+    };
+    let (none, by_path_meshes, embedded_meshes) = (glb_of(&bare), glb_of(&by_path), glb_of(&embedded));
+    assert!(by_path_meshes > none, "the model by its path adds meshes: {none} -> {by_path_meshes}");
+    assert_eq!(embedded_meshes, by_path_meshes, "the GLB has the embedded model too");
+    eprintln!("{users} footprint(s) with the model; STEP solids {none_solids} / {path_solids} / {embedded_solids}, GLB meshes {none} / {by_path_meshes} / {embedded_meshes} (none / by path / embedded)");
+    let _ = std::fs::remove_dir_all(&work);
+}
