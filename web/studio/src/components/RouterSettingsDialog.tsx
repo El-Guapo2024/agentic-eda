@@ -55,7 +55,7 @@ export function RouterSettingsDialog() {
     dispatch({ type: "SET_ROUTER_SETTINGS", settings: s });
     // A route, drag or diff pair in progress takes the new settings from its next move.
     const draw = state.drawState;
-    const cur = state.cursorUm;
+    const cur = state.cursorNm;
     if (draw?.kind === "route" || draw?.kind === "drag" || draw?.kind === "diffpair") {
       const applied = routeSetSettings(s);
       if (draw.kind === "route" && cur) void applied.then(() => routeMove(cur.x, cur.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) })));

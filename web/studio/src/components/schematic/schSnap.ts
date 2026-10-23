@@ -20,7 +20,7 @@ export interface SchSnapView {
   sch: Schematic | null;
   /** Screen pixels per um. */
   scale: number;
-  gridUm: number;
+  gridNm: number;
   grids: readonly number[];
   overrides: GridOverrides | null;
 }
@@ -78,8 +78,8 @@ export function itemsOf(sch: Schematic): SchSnapItem[] {
       });
     }
   }
-  for (const j of sch.junctions ?? []) out.push({ id: j.id, owner: j.id, kind: "junction", connectable: true, position: j.at, connectionPoints: [j.at], bbox: box(j.at[0] - 460, j.at[1] - 460, j.at[0] + 460, j.at[1] + 460) });
-  for (const n of sch.no_connects) out.push({ id: n.id, owner: n.id, kind: "no_connect", connectable: true, position: n.at, connectionPoints: [n.at], bbox: box(n.at[0] - 610, n.at[1] - 610, n.at[0] + 610, n.at[1] + 610) });
+  for (const j of sch.junctions ?? []) out.push({ id: j.id, owner: j.id, kind: "junction", connectable: true, position: j.at, connectionPoints: [j.at], bbox: box(j.at[0] - 460_000, j.at[1] - 460_000, j.at[0] + 460_000, j.at[1] + 460_000) });
+  for (const n of sch.no_connects) out.push({ id: n.id, owner: n.id, kind: "no_connect", connectable: true, position: n.at, connectionPoints: [n.at], bbox: box(n.at[0] - 610_000, n.at[1] - 610_000, n.at[0] + 610_000, n.at[1] + 610_000) });
   for (const b of sch.bus_entries) {
     const end: Pt = [b.at[0] + b.size[0], b.at[1] + b.size[1]];
     out.push({ id: b.id, owner: b.id, kind: "bus_entry", connectable: true, position: b.at, connectionPoints: [b.at, end], bbox: box(Math.min(b.at[0], end[0]), Math.min(b.at[1], end[1]), Math.max(b.at[0], end[0]), Math.max(b.at[1], end[1])) });
@@ -100,7 +100,7 @@ export function itemsOf(sch: Schematic): SchSnapItem[] {
   }
   for (const ps of sch.power_symbols) {
     const b = itemBounds(sch, { id: ps.id, kind: "power" });
-    out.push({ id: ps.id, owner: ps.id, kind: "symbol", connectable: true, position: ps.at, connectionPoints: [ps.at], bbox: b ? boxOf(b) : box(ps.at[0] - 600, ps.at[1] - 600, ps.at[0] + 600, ps.at[1] + 600) });
+    out.push({ id: ps.id, owner: ps.id, kind: "symbol", connectable: true, position: ps.at, connectionPoints: [ps.at], bbox: b ? boxOf(b) : box(ps.at[0] - 600_000, ps.at[1] - 600_000, ps.at[0] + 600_000, ps.at[1] + 600_000) });
   }
   // A symbol: its position and its pins' ends. A multi-unit symbol is one item per unit (each is a `SCH_SYMBOL` in KiCad).
   sch.symbols.forEach((s, i) => {
@@ -178,7 +178,7 @@ export class SchSnap {
   private env(): GridEnv {
     const v = this.view!;
     const scale = v.scale > 0 ? v.scale : 1;
-    return { scale, gridUm: v.gridUm, visibleGridUm: computeVisibleGridSize(v.gridUm, scale), origin: [0, 0], gridSizeOf: (c) => gridSizeFor(c, v.gridUm, v.grids, v.overrides) };
+    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: [0, 0], gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides) };
   }
 
   private helperFor(tool: string): SchGridHelper {
@@ -208,7 +208,7 @@ export class SchSnap {
   /** `GetGridSize( category )`: the category's grid under the overrides. */
   gridSize(category: GridCategory): number {
     const v = this.view;
-    return v ? gridSizeFor(category, v.gridUm, v.grids, v.overrides) : 0;
+    return v ? gridSizeFor(category, v.gridNm, v.grids, v.overrides) : 0;
   }
 
   /** `Align( point, category )` only: the grid of the category, no anchors (a rubber band follows the cursor with it). */

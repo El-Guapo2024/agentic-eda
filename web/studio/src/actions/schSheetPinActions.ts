@@ -28,7 +28,7 @@ export function registerSchSheetPinActions(registry: ActionMap, ctx: SchEditCont
     if (!sch) return undefined;
     const selected = requestSelection().find((id) => sch.sheets.some((s) => s.id === id));
     if (selected) return sch.sheets.find((s) => s.id === selected);
-    return state.cursorUm ? sheetAt(sch, [state.cursorUm.x, state.cursorUm.y], 6 / (state.schematicView.scale || 1)) : undefined;
+    return state.cursorNm ? sheetAt(sch, [state.cursorNm.x, state.cursorNm.y], 6 / (state.schematicView.scale || 1)) : undefined;
   };
 
   // Place Pins from Sheet: arms the tool; with a sheet at hand its labels are read straight away, otherwise the first click picks a sheet.

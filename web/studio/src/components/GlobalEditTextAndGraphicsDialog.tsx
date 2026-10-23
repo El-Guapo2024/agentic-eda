@@ -19,7 +19,7 @@
 // what is ticked.
 import { useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { umFrom, type LengthUnit } from "../state/units";
+import { nmFrom, type LengthUnit } from "../state/units";
 import { initialTextGraphicsFilter, matchingTextAndGraphics, NOTHING_IN_TEXT_SCOPE, textGraphicsLayers, type TextGraphicsFilter, type TextGraphicsScope } from "../kicad-port/globalEditTextGraphics";
 
 type Mode = "specified" | "layer_defaults";
@@ -77,9 +77,9 @@ export function GlobalEditTextAndGraphicsDialog() {
               text_ids: textIds,
               dimension_ids: dimensionIds,
               layer: changeLayer && newLayer ? newLayer : null,
-              line_width: changeLineWidth ? Math.round(umFrom(lineWidth, unit)) : null,
-              text_size: changeTextSize ? Math.round(umFrom(textSize, unit)) : null,
-              text_thickness: changeTextThickness ? Math.round(umFrom(textThickness, unit)) : null,
+              line_width: changeLineWidth ? Math.round(nmFrom(lineWidth, unit)) : null,
+              text_size: changeTextSize ? Math.round(nmFrom(textSize, unit)) : null,
+              text_thickness: changeTextThickness ? Math.round(nmFrom(textThickness, unit)) : null,
             },
       );
       if (ok) close();

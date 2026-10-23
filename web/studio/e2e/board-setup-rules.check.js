@@ -90,11 +90,11 @@
       t(!!c0, `the board reports its constraints (${J(c0).slice(0, 120)})`);
       const clr = aria(p, "Minimum clearance"), trk = aria(p, "Minimum track width");
       t(!!clr && !!trk, "the page has Minimum clearance and Minimum track width");
-      const want = { clr: (c0?.min_clearance_um ?? 200) + 50, trk: (c0?.min_track_width_um ?? 200) + 25 };
+      const want = { clr: (c0?.min_clearance_nm ?? 200) + 50, trk: (c0?.min_track_width_nm ?? 200) + 25 };
       setValue(clr, want.clr / 1000); setValue(trk, want.trk / 1000);
       await sleep(150);
-      const { st } = await apply(p, (s) => s.board_rules?.constraints?.min_clearance_um === want.clr);
-      t(st?.board_rules?.constraints?.min_clearance_um === want.clr && st?.board_rules?.constraints?.min_track_width_um === want.trk, `the board has ${want.clr} and ${want.trk} um (${J(st?.board_rules?.constraints).slice(0, 160)})`);
+      const { st } = await apply(p, (s) => s.board_rules?.constraints?.min_clearance_nm === want.clr);
+      t(st?.board_rules?.constraints?.min_clearance_nm === want.clr && st?.board_rules?.constraints?.min_track_width_nm === want.trk, `the board has ${want.clr} and ${want.trk} um (${J(st?.board_rules?.constraints).slice(0, 160)})`);
       t(st?.board_rules?.constraints_explicit === true, "they are the board's own now (constraints_explicit)");
       // A value below zero is refused by the page.
       const p2 = await openPage("Constraints");
@@ -136,9 +136,9 @@
       const front = [...p.querySelectorAll("label")].find((l) => l.textContent.trim() === "Front")?.querySelector("input");
       front?.click();
       await sleep(150);
-      const { st } = await apply(p, (s) => s.board_rules?.mask_paste?.expansion_um === 50);
+      const { st } = await apply(p, (s) => s.board_rules?.mask_paste?.expansion_nm === 50);
       const m = st?.board_rules?.mask_paste;
-      t(m?.expansion_um === 50 && m?.paste_margin_um === -30, `expansion 50 um, paste clearance -30 um (${J(m)})`);
+      t(m?.expansion_nm === 50 && m?.paste_margin_nm === -30, `expansion 50 um, paste clearance -30 um (${J(m)})`);
       t(!!front && m?.tent_vias_front === !m0?.tent_vias_front, `Tent vias: Front was switched (${m0?.tent_vias_front} -> ${m?.tent_vias_front})`);
       const back = await undoAfter();
       t(J(back.board_rules?.mask_paste) === J(m0), "one undo gives them back");
@@ -151,9 +151,9 @@
       setValue(aria(p, "Silk Layers Line Thickness"), 0.15);
       setValue(aria(p, "Silk Layers Text Height"), 1.2);
       await sleep(150);
-      const { st } = await apply(p, (s) => s.board_rules?.text_graphics?.silk?.line_width_um === 150);
+      const { st } = await apply(p, (s) => s.board_rules?.text_graphics?.silk?.line_width_nm === 150);
       const silk = st?.board_rules?.text_graphics?.silk;
-      t(silk?.line_width_um === 150 && silk?.text_height_um === 1200, `silk: line 150 um, text height 1200 um (${J(silk)})`);
+      t(silk?.line_width_nm === 150 && silk?.text_height_nm === 1200, `silk: line 150 um, text height 1200 um (${J(silk)})`);
       t(J(st?.board_rules?.text_graphics?.copper) === J(d0?.copper), "the other rows are as they were");
       const back = await undoAfter();
       t(J(back.board_rules?.text_graphics) === J(d0), "one undo gives them back");

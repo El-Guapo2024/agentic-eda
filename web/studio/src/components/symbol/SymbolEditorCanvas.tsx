@@ -6,8 +6,8 @@
 //
 // Unit convention: every world-space number in this file is this app's
 // shared internal space (µm, +y down) -- see `state/symbolEditorStore
-// .tsx`'s own doc for why, and `symbolPainter.ts`'s `mmPointToUm`/
-// `umPointToMm` for the one seam back to the symbol's own wire format
+// .tsx`'s own doc for why, and `symbolPainter.ts`'s `mmPointToNm`/
+// `nmPointToMm` for the one seam back to the symbol's own wire format
 // (mm, +y up) that every outgoing `Cmd` needs. Because that conversion
 // already happens once, up front, this file's own `screenToWorld`/
 // `worldToScreen` calls are completely ordinary -- no second Y-flip
@@ -16,7 +16,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { LibraryFill, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
 import { drawTarget, useSymApi, useSymDispatch, useSymState, type SymToolId } from "../../state/symbolEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
-import { paintSymbol, mmPointToUm, umPointToMm, toLibPin, IDENTITY, type SymShapeKind } from "./symbolPainter";
+import { paintSymbol, mmPointToNm, nmPointToMm, toLibPin, IDENTITY, type SymShapeKind } from "./symbolPainter";
 import { resolvePin } from "../schematic/transform";
 import { useGridSettings } from "../../state/gridSettings";
 import { useGridOverrides } from "../../state/gridOverrides";
@@ -44,7 +44,7 @@ import { askConfirm } from "../library/libraryDialogs";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { stackedPinMenuState } from "../../kicad-port/stackedPins";
-import { newTextBox, textBoxDistanceUm } from "../../kicad-port/symTextBox";
+import { newTextBox, textBoxDistanceNm } from "../../kicad-port/symTextBox";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<SymToolId, SymShapeKind>> = {
@@ -73,38 +73,38 @@ const DEFAULT_PIN_TEMPLATE: Omit<LibrarySymbolPin, "id" | "number" | "at" | "uni
 };
 
 function graphicPoints(g: LibrarySymbolGraphic): [number, number][] {
-  const toUm = (p: { x: number; y: number }) => mmPointToUm(p);
+  const toNm = (p: { x: number; y: number }) => mmPointToNm(p);
   switch (g.kind) {
     case "rectangle":
-      return [toUm(g.start), toUm(g.end)];
+      return [toNm(g.start), toNm(g.end)];
     case "circle":
-      return [toUm(g.center)];
+      return [toNm(g.center)];
     case "arc":
-      return [toUm(g.start), toUm(g.mid), toUm(g.end)];
+      return [toNm(g.start), toNm(g.mid), toNm(g.end)];
     case "polyline":
-      return g.pts.map(toUm);
+      return g.pts.map(toNm);
     case "text":
-      return [toUm(g.at)];
+      return [toNm(g.at)];
     case "text_box":
-      return [toUm(g.start), toUm(g.end)];
+      return [toNm(g.start), toNm(g.end)];
   }
 }
 
 function graphicHitDistance(g: LibrarySymbolGraphic, wx: number, wy: number): number {
   if (g.kind === "circle") {
-    const [cx, cy] = mmPointToUm(g.center);
-    const r = g.radius_mm * 1000;
+    const [cx, cy] = mmPointToNm(g.center);
+    const r = g.radius_mm * 1e6;
     return Math.abs(Math.hypot(wx - cx, wy - cy) - r);
   }
   if (g.kind === "text") {
-    const [tx, ty] = mmPointToUm(g.at);
+    const [tx, ty] = mmPointToNm(g.at);
     return Math.hypot(wx - tx, wy - ty);
   }
   // `SCH_TEXTBOX::HitTest`: anywhere in the box
-  if (g.kind === "text_box") return textBoxDistanceUm(g, wx, wy);
+  if (g.kind === "text_box") return textBoxDistanceNm(g, wx, wy);
   if (g.kind === "rectangle") {
-    const [x0, y0] = mmPointToUm(g.start);
-    const [x1, y1] = mmPointToUm(g.end);
+    const [x0, y0] = mmPointToNm(g.start);
+    const [x1, y1] = mmPointToNm(g.end);
     const pts: [number, number][] = [
       [x0, y0],
       [x1, y0],
@@ -131,23 +131,23 @@ function pinHitDistance(pin: LibrarySymbolPin, wx: number, wy: number): number {
 
 type DragState = { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] } | { kind: "move"; refs: string[]; moveKind: "pin" | "graphic" | "field"; startWorld: [number, number]; snapOrigin: [number, number] };
 
-function symbolGraphicFromDraw(kind: SymShapeKind, ptsUm: [number, number][], unit: number, bodyStyle: number): LibrarySymbolGraphic | null {
-  const p = (i: number) => umPointToMm(ptsUm[i]![0], ptsUm[i]![1]);
+function symbolGraphicFromDraw(kind: SymShapeKind, ptsNm: [number, number][], unit: number, bodyStyle: number): LibrarySymbolGraphic | null {
+  const p = (i: number) => nmPointToMm(ptsNm[i]![0], ptsNm[i]![1]);
   const base = { unit, body_style: bodyStyle, stroke_mm: 0.254, fill: "none" as LibraryFill };
   switch (kind) {
     case "segment":
-      return ptsUm.length >= 2 ? { kind: "polyline", ...base, pts: [p(0), p(1)] } : null;
+      return ptsNm.length >= 2 ? { kind: "polyline", ...base, pts: [p(0), p(1)] } : null;
     case "rect":
-      return ptsUm.length >= 2 ? { kind: "rectangle", ...base, start: p(0), end: p(1) } : null;
+      return ptsNm.length >= 2 ? { kind: "rectangle", ...base, start: p(0), end: p(1) } : null;
     case "circle":
-      return ptsUm.length >= 2 ? { kind: "circle", ...base, center: p(0), radius_mm: Math.hypot(ptsUm[1]![0] - ptsUm[0]![0], ptsUm[1]![1] - ptsUm[0]![1]) / 1000 } : null;
+      return ptsNm.length >= 2 ? { kind: "circle", ...base, center: p(0), radius_mm: Math.hypot(ptsNm[1]![0] - ptsNm[0]![0], ptsNm[1]![1] - ptsNm[0]![1]) / 1e6 } : null;
     case "arc":
-      return ptsUm.length >= 3 ? { kind: "arc", ...base, start: p(0), mid: p(1), end: p(2) } : null;
+      return ptsNm.length >= 3 ? { kind: "arc", ...base, start: p(0), mid: p(1), end: p(2) } : null;
     case "lines":
     case "polygon": {
       // `doDrawShape`: both tools build a `SHAPE_T::POLY` with `m_lastFillStyle`, which is `NO_FILL` -- an unfilled polyline, closed only by ending on its start.
-      const done = polyFinish(ptsUm);
-      return done ? { kind: "polyline", ...base, pts: done.pts.map(([x, y]) => umPointToMm(x, y)) } : null;
+      const done = polyFinish(ptsNm);
+      return done ? { kind: "polyline", ...base, pts: done.pts.map(([x, y]) => nmPointToMm(x, y)) } : null;
     }
     case "textbox":
       return null; // a text box is made by its own dialog (`newTextBox`), after the second click
@@ -174,7 +174,7 @@ export function SymbolEditorCanvas() {
   // Grid overrides (`common.Control.toggleGridOverrides`): each kind of item snaps to the grid its category is overridden to while they are on.
   const gridList = useGridSettings("symbol").grids;
   const gridOverrides = useGridOverrides("symbol");
-  const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridUm, gridList, gridOverrides);
+  const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridNm, gridList, gridOverrides);
   /** `GetSelectionGrid`: the category of the coarsest grid of what is held (a pin is a connectable item, a graphic is text or a shape). */
   const heldCategory = (ids: readonly string[]): GridCategory => {
     const cats = ids.map((id): GridCategory => (api.pinById(id) ? "connectable" : libFieldName(id) || api.graphicById(id)?.kind === "text" ? "text" : "graphics"));
@@ -211,7 +211,7 @@ export function SymbolEditorCanvas() {
   if (!snapRef.current) snapRef.current = new SymbolSnap();
   const snap = snapRef.current;
   const [snapTick, bumpSnap] = useState(0);
-  snap.update({ symbol: sym, fields: shownFields, unit: state.activeUnit, bodyStyle: state.activeBodyStyle, showHiddenPins: state.showHiddenPins, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides });
+  snap.update({ symbol: sym, fields: shownFields, unit: state.activeUnit, bodyStyle: state.activeBodyStyle, showHiddenPins: state.showHiddenPins, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, overrides: gridOverrides });
   useEffect(() => {
     snap.reset();
     bumpSnap((n) => n + 1);
@@ -249,7 +249,7 @@ export function SymbolEditorCanvas() {
     if (userMovedRef.current || containerSize.width < 50 || containerSize.height < 50) return;
     if (!sym) {
       // Nothing open: KiCad shows an empty canvas with its grid around the origin. An inch across (the symbol editor's own minimum fit span below).
-      if (!state.libId) dispatch({ type: "SET_VIEW", view: fitTransform({ minX: -25400, minY: -25400, maxX: 25400, maxY: 25400 }, containerSize.width, containerSize.height) });
+      if (!state.libId) dispatch({ type: "SET_VIEW", view: fitTransform({ minX: -25_400_000, minY: -25_400_000, maxX: 25_400_000, maxY: 25_400_000 }, containerSize.width, containerSize.height) });
       return;
     }
     const pts: [number, number][] = [];
@@ -262,8 +262,8 @@ export function SymbolEditorCanvas() {
     const bounds = boundsOfPoints(pts);
     if (!bounds) return;
     // A symbol a few millimetres across would be blown up to fill the canvas (a pin number as tall as the window): show at least 25.4 mm (an inch).
-    const MIN_SPAN_UM = 25400;
-    const grow = (lo: number, hi: number): [number, number] => (hi - lo >= MIN_SPAN_UM ? [lo, hi] : [(lo + hi) / 2 - MIN_SPAN_UM / 2, (lo + hi) / 2 + MIN_SPAN_UM / 2]);
+    const MIN_SPAN_NM = 25_400_000;
+    const grow = (lo: number, hi: number): [number, number] => (hi - lo >= MIN_SPAN_NM ? [lo, hi] : [(lo + hi) / 2 - MIN_SPAN_NM / 2, (lo + hi) / 2 + MIN_SPAN_NM / 2]);
     const [minX, maxX] = grow(bounds.minX, bounds.maxX);
     const [minY, maxY] = grow(bounds.minY, bounds.maxY);
     dispatch({ type: "SET_VIEW", view: fitTransform({ minX, minY, maxX, maxY }, containerSize.width, containerSize.height) });
@@ -296,13 +296,13 @@ export function SymbolEditorCanvas() {
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
     paintSymbol(ctx, state.view, width, height, sym, {
       selection: state.selection,
-      gridUm: state.gridUm,
+      gridNm: state.gridNm,
       gridVisible: state.gridVisible,
       activeUnit: state.activeUnit,
       activeBodyStyle: state.activeBodyStyle,
       drawState: state.drawState,
       // the rubber band follows the cursor the grid helper gave (a snapped one), not the pointer
-      cursorUm: placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorUm,
+      cursorNm: placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorNm,
       movePreview: state.movePreview,
       showElectricalTypes: state.showElectricalTypes,
       showHiddenPins: state.showHiddenPins,
@@ -319,7 +319,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sym, shownFields, state.view, state.selection, state.gridUm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorUm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, state.pendingText, containerSize, snapTick]);
+  }, [sym, shownFields, state.view, state.selection, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, state.pendingText, containerSize, snapTick]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -334,14 +334,14 @@ export function SymbolEditorCanvas() {
     (wx: number, wy: number): { kind: "pin" | "graphic" | "field"; id: string } | null => {
       if (!sym) return null;
       const visible = (unit: number, bodyStyle: number) => (unit === 0 || unit === state.activeUnit) && (bodyStyle === 0 || bodyStyle === state.activeBodyStyle);
-      const tol = Math.max(80, 6 / state.view.scale);
+      const tol = Math.max(80_000, 6 / state.view.scale);
       for (let i = sym.pins.length - 1; i >= 0; i--) {
         const p = sym.pins[i]!;
         // A hidden pin that is not drawn cannot be picked (`IsShowingHiddenPins`).
         if (p.id && pinShown(p.hidden, state.showHiddenPins) && visible(p.unit, p.body_style) && pinHitDistance(p, wx, wy) <= tol) return { kind: "pin", id: p.id };
       }
       // A field that is on show: its box (`SCH_FIELD::HitTest`); a hidden one is there to pick only while Show Hidden Fields is on, as it is drawn only then.
-      const field = hitLibField(shownFields, wx, wy, Math.max(40, 3 / state.view.scale), measureStrokeText);
+      const field = hitLibField(shownFields, wx, wy, Math.max(40_000, 3 / state.view.scale), measureStrokeText);
       if (field) return { kind: "field", id: field };
       for (let i = sym.graphics.length - 1; i >= 0; i--) {
         const g = sym.graphics[i]!;
@@ -388,7 +388,7 @@ export function SymbolEditorCanvas() {
       if (!state.libId || anchorBusyRef.current) return;
       anchorBusyRef.current = true;
       void api
-        .cmd({ op: "set_symbol_anchor", lib_id: state.libId, at: umPointToMm(sx, sy) })
+        .cmd({ op: "set_symbol_anchor", lib_id: state.libId, at: nmPointToMm(sx, sy) })
         .then((ok) => {
           if (!ok) return;
           const v = viewRef.current;
@@ -429,7 +429,7 @@ export function SymbolEditorCanvas() {
       // a quick second click must get the NEXT number, as the C++ tool's `m_lastPin` carry does.
       const last = lastPlacedPinRef.current;
       const number = nextPinNumber(last && last.libId === state.libId ? [...sym.pins, { number: last.number }] : sym.pins);
-      const pin: LibrarySymbolPin = { ...pinTemplateRef.current, number, unit: state.activeUnit, body_style: state.activeBodyStyle, at: umPointToMm(sx, sy) };
+      const pin: LibrarySymbolPin = { ...pinTemplateRef.current, number, unit: state.activeUnit, body_style: state.activeBodyStyle, at: nmPointToMm(sx, sy) };
       void confirmPinPlacement(pin).then((go) => {
         if (!go) return;
         lastPlacedPinRef.current = { libId: state.libId, number };
@@ -470,7 +470,7 @@ export function SymbolEditorCanvas() {
       // `TwoClickPlace` (SCH_TEXT_T): the first click asks for the text (DIALOG_TEXT_PROPERTIES), which then follows the cursor; the second click places it.
       if (state.pendingText) {
         const target = drawTarget(state);
-        void api.addGraphic({ kind: "text", unit: target.unit, body_style: target.bodyStyle, text: state.pendingText.text, at: umPointToMm(sx, sy), angle_deg: state.pendingText.angleDeg, size_mm: state.pendingText.sizeMm });
+        void api.addGraphic({ kind: "text", unit: target.unit, body_style: target.bodyStyle, text: state.pendingText.text, at: nmPointToMm(sx, sy), angle_deg: state.pendingText.angleDeg, size_mm: state.pendingText.sizeMm });
         dispatch({ type: "SET_PENDING_TEXT", pending: null });
       } else {
         dispatch({ type: "SET_TEXT_DIALOG", at: [sx, sy] });
@@ -520,8 +520,8 @@ export function SymbolEditorCanvas() {
       // `BestSnapAnchor( cursor, selection grid, selection )`, the cursor being the held point plus how far the pointer has travelled (kicad-port/heldCursor.ts).
       const c = snap.moveCursor(heldCursor(drag.snapOrigin, drag.startWorld, [wx, wy]), snapMods(e), drag.refs, heldCategory(drag.refs));
       const [sx, sy] = [c[0], c[1]];
-      const origin = state.moveOriginUm ?? { x: sx, y: sy };
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: drag.moveKind, dxUm: sx - origin.x, dyUm: sy - origin.y } });
+      const origin = state.moveOriginNm ?? { x: sx, y: sy };
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: drag.moveKind, dxNm: sx - origin.x, dyNm: sy - origin.y } });
     }
   };
 
@@ -531,11 +531,11 @@ export function SymbolEditorCanvas() {
     dragRef.current = null;
     if (!drag) return;
     if (drag.kind === "move" && state.movePreview) {
-      const { refs, kind, dxUm, dyUm } = state.movePreview;
+      const { refs, kind, dxNm, dyNm } = state.movePreview;
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
-      if (dxUm !== 0 || dyUm !== 0) {
-        const dxMm = dxUm / 1000;
-        const dyMm = -dyUm / 1000;
+      if (dxNm !== 0 || dyNm !== 0) {
+        const dxMm = dxNm / 1e6;
+        const dyMm = -dyNm / 1e6;
         if (kind === "pin") {
           // One undo step for the whole drop; in Synchronized Pins Mode the matching pins of the other units travel with them (`SYMBOL_EDITOR_MOVE_TOOL::Main`).
           const moves = refs.flatMap((id) => {

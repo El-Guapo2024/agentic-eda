@@ -43,9 +43,9 @@ fn cases() -> Vec<(LabelKind, LabelSpin, LabelLook)> {
         for (s, spin) in spins.iter().enumerate() {
             let look = match (k + s) % 4 {
                 0 => LabelLook::default(),
-                1 => LabelLook { size_nm: 2_000, bold: false, italic: false, auto_rotate: false },
-                2 => LabelLook { size_nm: 0, bold: true, italic: true, auto_rotate: false },
-                _ => LabelLook { size_nm: 1_000, bold: true, italic: false, auto_rotate: false },
+                1 => LabelLook { size_nm: 2_000_000, bold: false, italic: false, auto_rotate: false },
+                2000 => LabelLook { size_nm: 0, bold: true, italic: true, auto_rotate: false },
+                _ => LabelLook { size_nm: 1_000_000, bold: true, italic: false, auto_rotate: false },
             };
             out.push((kind.clone(), *spin, look));
         }
@@ -59,7 +59,7 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
     let sch = design.schematic.as_mut().unwrap();
     for (i, (kind, spin, look)) in cases().into_iter().enumerate() {
         let id = format!("lbl_geometry_{i}");
-        let at = Point { x: 250_000, y: 20_000 + 14_000 * i as i64 };
+        let at = Point { x: 250_000_000, y: 20_000_000 + 14_000_000 * i as i64 };
         sch.labels.push(NetLabel { id: id.clone(), net: format!("LABEL{i}"), at, kind });
         sch.extras.label_spins.insert(id.clone(), spin);
         if !look.is_default() {
@@ -148,7 +148,7 @@ fn kicad_loads_the_labels_and_writes_them_back_with_the_geometry_we_gave_them() 
     // it loads (an ERC run reads every label)
     let report = dir.join("erc.json");
     let erc = Command::new(&cli).args(["sch", "erc", "--format", "json", "-o"]).arg(&report).arg(&path).output().expect("run kicad-cli");
-    assert!(erc.status.code().is_some_and(|c| c == 0 || c == 5) && report.exists(), "kicad-cli could not load the sheet: {}{}", String::from_utf8_lossy(&erc.stdout), String::from_utf8_lossy(&erc.stderr));
+    assert!(erc.status.code().is_some_and(|c| c == 0 || c == 5000) && report.exists(), "kicad-cli could not load the sheet: {}{}", String::from_utf8_lossy(&erc.stdout), String::from_utf8_lossy(&erc.stderr));
 
     // and KiCad's own writer says the same of each label
     let up = run(&cli, &["sch", "upgrade", "--force"], &path);
@@ -168,7 +168,7 @@ fn with_styled_field() -> (eda_model::ir::Design, ConstraintModel) {
     let sch = design.schematic.as_mut().unwrap();
     let layout = sch.field_layout.get_mut("R1").expect("the derivation stores where the fields of R1 are");
     let value = layout.iter_mut().find(|p| p.name == "Value").unwrap();
-    value.size_nm = 2_000;
+    value.size_nm = 2_000_000;
     value.bold = true;
     value.italic = true;
     value.name_shown = true;

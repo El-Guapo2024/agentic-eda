@@ -13,7 +13,7 @@
 // cell registers the same rows under its own class (same names, same groups, same order as KiCad shows them).
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardTable, BoardTableCell, Cmd, Um } from "../api/types";
+import type { BoardState, BoardTable, BoardTableCell, Cmd, Nm } from "../api/types";
 import type { TableCellEdit, TableLineStyleName, TablePatch } from "../api/tableTypes";
 import { colorToHex, hexToColor, isUnspecified, UNSPECIFIED_COLOR } from "./schProperties";
 import type { PropertyManager, PropertyDef, PropValue, Choice } from "./propertyManager";
@@ -131,7 +131,7 @@ export function registerTableClass<I extends Item, C>(pm: PropertyManager<I, C, 
     );
   };
   const stroke = (t: BoardTable, which: "border" | "separators") => (which === "border" ? t.border.stroke : t.separators.stroke);
-  const strokeRows = (which: "border" | "separators", prefix: string, widthKey: "border_width_um" | "separators_width_um", styleKey: "border_style" | "separators_style", colorKey: "border_color" | "separators_color"): void => {
+  const strokeRows = (which: "border" | "separators", prefix: string, widthKey: "border_width_nm" | "separators_width_nm", styleKey: "border_style" | "separators_style", colorKey: "border_color" | "separators_color"): void => {
     add(
       {
         owner,
@@ -170,10 +170,10 @@ export function registerTableClass<I extends Item, C>(pm: PropertyManager<I, C, 
   };
   flag("External Border", "external", (t) => t.border.external);
   flag("Header Border", "header", (t) => t.border.header);
-  strokeRows("border", "Border", "border_width_um", "border_style", "border_color");
+  strokeRows("border", "Border", "border_width_nm", "border_style", "border_color");
   flag("Row Separators", "rows", (t) => t.separators.rows);
   flag("Cell Separators", "cols", (t) => t.separators.cols);
-  strokeRows("separators", "Separators", "separators_width_um", "separators_style", "separators_color");
+  strokeRows("separators", "Separators", "separators_width_nm", "separators_style", "separators_color");
 }
 
 /** `PCB_TABLE_DESC` and `PCB_TABLECELL_DESC`. `Item` is the panel's item type, which carries the table and cell fields of `TableItemParts`. */
@@ -225,7 +225,7 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
       get: (i) => i.cell!.thickness === 0,
       available: isCell,
       // `EDA_TEXT::SetAutoThickness`: on is thickness 0; off keeps the pen the text is drawn with.
-      set: (i, v) => ((i.cell!.thickness === 0) === Boolean(v) ? [] : [editCell(i, { thickness_um: Boolean(v) ? 0 : i.cell!.pen })]),
+      set: (i, v) => ((i.cell!.thickness === 0) === Boolean(v) ? [] : [editCell(i, { thickness_nm: Boolean(v) ? 0 : i.cell!.pen })]),
     },
     TEXT
   );
@@ -241,7 +241,7 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
       validate: (v) => (num(v) < 0 ? "The thickness cannot be negative." : null),
       set: (i, v) => {
         const w = Math.round(num(v));
-        return (i.cell!.thickness === 0 ? i.cell!.pen : i.cell!.thickness) === w ? [] : [editCell(i, { thickness_um: w })];
+        return (i.cell!.thickness === 0 ? i.cell!.pen : i.cell!.thickness) === w ? [] : [editCell(i, { thickness_nm: w })];
       },
     },
     TEXT
@@ -263,7 +263,7 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
   textFlag("Bold", "bold");
   // A cell's text is mirrored when its table is on a back layer; no verb sets it on its own, so the row only shows it.
   add({ owner: "PCB_TABLECELL", name: "Mirrored", kind: "bool", get: (i) => i.cell!.mirror, available: isCell }, TEXT);
-  const textSize = (name: "Width" | "Height", key: "size_w" | "size_h", edit: "width_um" | "height_um"): void => {
+  const textSize = (name: "Width" | "Height", key: "size_w" | "size_h", edit: "width_nm" | "height_nm"): void => {
     add(
       {
         owner: "PCB_TABLECELL",
@@ -278,8 +278,8 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
       TEXT
     );
   };
-  textSize("Width", "size_w", "width_um");
-  textSize("Height", "size_h", "height_um");
+  textSize("Width", "size_w", "width_nm");
+  textSize("Height", "size_h", "height_nm");
   add(
     {
       owner: "PCB_TABLECELL",
@@ -327,7 +327,7 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
         set: (i, v) => {
           const m = Math.round(num(v));
           if (i.cell!.margins[k] === m) return [];
-          const margins: [Um | null, Um | null, Um | null, Um | null] = [null, null, null, null];
+          const margins: [Nm | null, Nm | null, Nm | null, Nm | null] = [null, null, null, null];
           margins[k] = m;
           return [editCell(i, { margins })];
         },
@@ -347,7 +347,7 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
       get: (i) => i.table!.col_widths[i.cell!.col]!,
       available: isCell,
       validate: (v) => (num(v) <= 0 ? "The column width must be positive." : null),
-      set: (i, v) => ((i.table!.col_widths[i.cell!.col] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { col_width_um: Math.round(num(v)) })]),
+      set: (i, v) => ((i.table!.col_widths[i.cell!.col] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { col_width_nm: Math.round(num(v)) })]),
     },
     TABLE_GROUP
   );
@@ -360,7 +360,7 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
       get: (i) => i.table!.row_heights[i.cell!.row]!,
       available: isCell,
       validate: (v) => (num(v) <= 0 ? "The row height must be positive." : null),
-      set: (i, v) => ((i.table!.row_heights[i.cell!.row] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { row_height_um: Math.round(num(v)) })]),
+      set: (i, v) => ((i.table!.row_heights[i.cell!.row] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { row_height_nm: Math.round(num(v)) })]),
     },
     TABLE_GROUP
   );

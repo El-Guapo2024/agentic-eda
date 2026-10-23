@@ -25,7 +25,7 @@ export interface DraggableHit {
 
 /** `ROUTER_TOOL::CanInlineDrag`/`InlineDrag`'s own item-finding step,
  * approximated client-side: whatever track or via is directly under
- * `(xUm, yUm)` (reusing the exact same hit-test the click-to-select tool
+ * `(xNm, yNm)` (reusing the exact same hit-test the click-to-select tool
  * uses, restricted to the two kinds `crate::pns::dragger::Dragger` can
  * actually drag -- a footprint is not in scope), falling back to a single
  * already-selected track/via if nothing is directly under the cursor
@@ -35,17 +35,17 @@ export interface DraggableHit {
 export function findDraggableAt(
   board: BoardState,
   selection: ReadonlySet<string>,
-  xUm: number,
-  yUm: number,
-  toleranceUm: number,
-  onePixelUm: number,
+  xNm: number,
+  yNm: number,
+  toleranceNm: number,
+  onePixelNm: number,
   filter: SelectionFilter,
   layerVisible: Record<string, boolean>,
   activeLayer: string | null,
   highContrast: boolean
 ): DraggableHit | null {
   const fallbackLayer = activeLayer ?? board.layers[0] ?? "F.Cu";
-  const candidates = pickSelectionCandidates(board, xUm, yUm, toleranceUm, onePixelUm, filter, layerVisible, activeLayer, highContrast, selection, false, false);
+  const candidates = pickSelectionCandidates(board, xNm, yNm, toleranceNm, onePixelNm, filter, layerVisible, activeLayer, highContrast, selection, false, false);
   const hit = candidates.find((c) => c.kind === "track" || c.kind === "via");
   if (hit) return { kind: hit.kind as "track" | "via", id: hit.id, layer: hit.layer ?? fallbackLayer };
 

@@ -27,42 +27,42 @@ function schematic(symbols: SchematicSymbol[], wires: SchematicWire[]): Schemati
 }
 
 test("collectBoxSelection: a symbol fully inside the box is collected either way (crossing or enclosed)", () => {
-  const r1 = resistor("R1", [10_000, 10_000]);
+  const r1 = resistor("R1", [10_000_000, 10_000_000]);
   const sch = schematic([r1], []);
-  const box: [number, number, number, number] = [0, 0, 20_000, 20_000];
+  const box: [number, number, number, number] = [0, 0, 20_000_000, 20_000_000];
   assert.deepEqual(collectBoxSelection(sch, box, true), ["R1"]);
   assert.deepEqual(collectBoxSelection(sch, box, false), ["R1"]);
 });
 
 test("collectBoxSelection: a wire fully inside the box is collected, same as a symbol", () => {
   const w1 = wire("wire_1", [
-    [1_000, 1_000],
-    [5_000, 1_000],
+    [1_000_000, 1_000_000],
+    [5_000_000, 1_000_000],
   ]);
   const sch = schematic([], [w1]);
-  const box: [number, number, number, number] = [0, 0, 10_000, 10_000];
+  const box: [number, number, number, number] = [0, 0, 10_000_000, 10_000_000];
   assert.deepEqual(collectBoxSelection(sch, box, true), ["wire_1"]);
   assert.deepEqual(collectBoxSelection(sch, box, false), ["wire_1"]);
 });
 
 test("collectBoxSelection: a wire only partly inside the box is collected when crossing, not when enclosed", () => {
   const w1 = wire("wire_1", [
-    [-5_000, 0],
-    [5_000, 0],
+    [-5_000_000, 0],
+    [5_000_000, 0],
   ]);
   const sch = schematic([], [w1]);
-  const box: [number, number, number, number] = [0, -1_000, 10_000, 1_000];
+  const box: [number, number, number, number] = [0, -1_000_000, 10_000_000, 1_000_000];
   assert.deepEqual(collectBoxSelection(sch, box, true), ["wire_1"]);
   assert.deepEqual(collectBoxSelection(sch, box, false), []);
 });
 
 test("collectBoxSelection: a wire entirely outside the box is never collected", () => {
   const w1 = wire("wire_1", [
-    [100_000, 100_000],
-    [200_000, 200_000],
+    [100_000_000, 100_000_000],
+    [200_000_000, 200_000_000],
   ]);
   const sch = schematic([], [w1]);
-  const box: [number, number, number, number] = [0, 0, 10_000, 10_000];
+  const box: [number, number, number, number] = [0, 0, 10_000_000, 10_000_000];
   assert.deepEqual(collectBoxSelection(sch, box, true), []);
   assert.deepEqual(collectBoxSelection(sch, box, false), []);
 });
@@ -73,28 +73,28 @@ test("collectBoxSelection: a multi-bend wire's bounds cover every point, not jus
   // selection box drawn around just that bend.
   const w1 = wire("wire_1", [
     [0, 0],
-    [0, 9_000],
-    [5_000, 9_000],
+    [0, 9_000_000],
+    [5_000_000, 9_000_000],
   ]);
   const sch = schematic([], [w1]);
-  const box: [number, number, number, number] = [-1_000, 8_000, 1_000, 10_000];
+  const box: [number, number, number, number] = [-1_000_000, 8_000_000, 1_000_000, 10_000_000];
   assert.deepEqual(collectBoxSelection(sch, box, true), ["wire_1"]);
 });
 
 test("collectBoxSelection: symbols and wires both collected together, in sch.symbols-then-sch.wires order", () => {
-  const r1 = resistor("R1", [1_000, 1_000]);
+  const r1 = resistor("R1", [1_000_000, 1_000_000]);
   const w1 = wire("wire_1", [
-    [5_000, 5_000],
-    [6_000, 5_000],
+    [5_000_000, 5_000_000],
+    [6_000_000, 5_000_000],
   ]);
   const sch = schematic([r1], [w1]);
-  const box: [number, number, number, number] = [0, 0, 10_000, 10_000];
+  const box: [number, number, number, number] = [0, 0, 10_000_000, 10_000_000];
   assert.deepEqual(collectBoxSelection(sch, box, true), ["R1", "wire_1"]);
 });
 
 test("collectBoxSelection: a zero-length wire (a single point, e.g. mid-draw) contributes a degenerate box rather than being skipped or crashing", () => {
-  const w1 = wire("wire_1", [[5_000, 5_000]]);
+  const w1 = wire("wire_1", [[5_000_000, 5_000_000]]);
   const sch = schematic([], [w1]);
-  assert.deepEqual(collectBoxSelection(sch, [0, 0, 10_000, 10_000], true), ["wire_1"]);
-  assert.deepEqual(collectBoxSelection(sch, [6_000, 6_000, 10_000, 10_000], true), []);
+  assert.deepEqual(collectBoxSelection(sch, [0, 0, 10_000_000, 10_000_000], true), ["wire_1"]);
+  assert.deepEqual(collectBoxSelection(sch, [6_000_000, 6_000_000, 10_000_000, 10_000_000], true), []);
 });

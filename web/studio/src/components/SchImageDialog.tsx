@@ -8,8 +8,8 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { ImageEditorPanel } from "./ImageEditorPanel";
 import { SchDialogShell } from "./SchDialogShell";
 
-const mm = (um: number): string => String(Math.round(um) / 1000);
-const um = (s: string): number => Math.round(Number(s) * 1000);
+const mm = (um: number): string => String(Math.round(um) / 1e6);
+const um = (s: string): number => Math.round(Number(s) * 1e6);
 
 export function SchImageDialog({ id }: { id: string }) {
   const state = useStudioState();

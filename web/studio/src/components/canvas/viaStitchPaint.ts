@@ -3,8 +3,8 @@
 // the board's own vias and are drawn as any via is. A selected stitching is drawn in the selection colour (`PCB_RENDER_SETTINGS::GetColor` of a selected item).
 import type { BoardState } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
-import { OUTLINE_WIDTH_UM, stitchTicks } from "../../kicad-port/viaStitch";
-import { hairlineUm } from "./view";
+import { OUTLINE_WIDTH_NM, stitchTicks } from "../../kicad-port/viaStitch";
+import { hairlineNm } from "./view";
 import { layerColor } from "./layers";
 
 export function drawViaStitches(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, layerVisible: Readonly<Record<string, boolean>>, selection: ReadonlySet<string>): void {
@@ -16,12 +16,12 @@ export function drawViaStitches(ctx: CanvasRenderingContext2D, view: ViewTransfo
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     // `DrawPolyline( outline )`: the chain as it is held (a closed one comes back to its start).
-    ctx.lineWidth = Math.max(OUTLINE_WIDTH_UM, hairlineUm(view, 1));
+    ctx.lineWidth = Math.max(OUTLINE_WIDTH_NM, hairlineNm(view, 1));
     ctx.beginPath();
     v.outline.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
     ctx.closePath();
     ctx.stroke();
-    ctx.lineWidth = hairlineUm(view, 1);
+    ctx.lineWidth = hairlineNm(view, 1);
     ctx.beginPath();
     for (const [a, b] of stitchTicks(v.outline)) {
       ctx.moveTo(a[0], a[1]);

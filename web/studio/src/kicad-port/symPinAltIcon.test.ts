@@ -1,17 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { altIconStrokes, MAX_ALT_ICON_SIZE_UM, pinAltIcon } from "./symPinAltIcon";
-import { pinTextOffsetUm } from "./symPinText";
+import { altIconStrokes, MAX_ALT_ICON_SIZE_NM, pinAltIcon } from "./symPinAltIcon";
+import { pinTextOffsetNm } from "./symPinText";
 
-const NAME = { widthUm: 3000, sizeUm: 1270 };
+const NAME = { widthNm: 3000, sizeNm: 1270 };
 const REACH = Math.round(1.5 * Math.round(1270 / 8)); // StringBoundaryLimits' reach on every side
-const BOX_W = NAME.widthUm + 2 * REACH;
-const BOX_H = NAME.sizeUm + 2 * REACH;
+const BOX_W = NAME.widthNm + 2 * REACH;
+const BOX_H = NAME.sizeNm + 2 * REACH;
 
 test("a name inside the body: the icon follows the name, on the pin's line", () => {
   // the pin running right: connection point at the origin, body 2.54 mm along
   const right = pinAltIcon([0, 0], [2540, 0], NAME, 508);
-  assert.equal(right.sizeUm, 1270);
+  assert.equal(right.sizeNm, 1270);
   assert.equal(right.vertical, false);
   assert.ok(Math.abs(right.center[0] - (2540 + 508 + BOX_W + 1270 * 0.75)) < 1e-9);
   assert.equal(right.center[1], 0);
@@ -33,14 +33,14 @@ test("a name inside the body: the icon follows the name, on the pin's line", () 
 test("a name over the pin: the icon goes before the name, above the line (to the left of a vertical pin)", () => {
   const right = pinAltIcon([0, 0], [2540, 0], NAME, 0);
   assert.ok(Math.abs(right.center[0] - (1270 - BOX_W / 2 - 1270 * 0.75)) < 1e-9);
-  assert.ok(Math.abs(right.center[1] + (BOX_H / 2 + pinTextOffsetUm())) < 1e-9, "lifted by half the name's height and the text offset");
+  assert.ok(Math.abs(right.center[1] + (BOX_H / 2 + pinTextOffsetNm())) < 1e-9, "lifted by half the name's height and the text offset");
   const left = pinAltIcon([0, 0], [-2540, 0], NAME, 0);
   assert.ok(Math.abs(left.center[0] + (1270 - BOX_W / 2 - 1270 * 0.75)) < 1e-9, "the pin's frame mirrored in x");
   assert.equal(left.center[1], right.center[1], "still above the line");
   const up = pinAltIcon([0, 0], [0, -2540], NAME, 0);
   assert.equal(up.vertical, true);
   assert.ok(up.center[0] < 0, "left of the line");
-  assert.ok(Math.abs(up.center[0] + (BOX_H / 2 + pinTextOffsetUm())) < 1e-9);
+  assert.ok(Math.abs(up.center[0] + (BOX_H / 2 + pinTextOffsetNm())) < 1e-9);
   assert.ok(Math.abs(up.center[1] + (1270 - BOX_W / 2 - 1270 * 0.75)) < 1e-9);
   const down = pinAltIcon([0, 0], [0, 2540], NAME, 0);
   assert.ok(down.center[0] < 0 && Math.abs(down.center[0] - up.center[0]) < 1e-9, "left of a pin running down too");
@@ -48,8 +48,8 @@ test("a name over the pin: the icon goes before the name, above the line (to the
 });
 
 test("the icon is the size of the name, but never more than 1.5 mm", () => {
-  assert.equal(pinAltIcon([0, 0], [2540, 0], { widthUm: 1000, sizeUm: 2000 }, 508).sizeUm, MAX_ALT_ICON_SIZE_UM);
-  assert.equal(pinAltIcon([0, 0], [2540, 0], { widthUm: 1000, sizeUm: 1000 }, 508).sizeUm, 1000);
+  assert.equal(pinAltIcon([0, 0], [2540, 0], { widthNm: 1000, sizeNm: 2000 }, 508).sizeNm, MAX_ALT_ICON_SIZE_NM);
+  assert.equal(pinAltIcon([0, 0], [2540, 0], { widthNm: 1000, sizeNm: 1000 }, 508).sizeNm, 1000);
 });
 
 test("a pin of no length runs right", () => {
@@ -60,7 +60,7 @@ test("a pin of no length runs right", () => {
 
 test("the glyph: two arrows pointing right and the arc from the middle down to the lower one", () => {
   const g = altIconStrokes(1000);
-  assert.equal(g.widthUm, 100);
+  assert.equal(g.widthNm, 100);
   assert.equal(g.lines.length, 6);
   // the full top line from the right end to the left end, 250 above the middle
   assert.deepEqual(g.lines[0], [500, -250, -500, -250]);

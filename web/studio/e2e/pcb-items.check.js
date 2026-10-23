@@ -250,7 +250,7 @@
 
     await scenario("Text Box Properties on a box that is there: layer, border style, margins, knockout, lock; the Properties panel rows say the same", async (t) => {
       await deleteAll();
-      await cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer: "F.SilkS", text: "Edit me please, this is a longer text", start: { x: bx0 * 1000 + 4000, y: by0 * 1000 + 4000 }, end: { x: bx0 * 1000 + 24000, y: by0 * 1000 + 14000 }, margin_left_um: 800, margin_top_um: 800, margin_right_um: 800, margin_bottom_um: 800, stroke_width_um: 100, size_um: 1000, halign: "left", valign: "top" } });
+      await cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer: "F.SilkS", text: "Edit me please, this is a longer text", start: { x: bx0 * 1000 + 4000, y: by0 * 1000 + 4000 }, end: { x: bx0 * 1000 + 24000, y: by0 * 1000 + 14000 }, margin_left_nm: 800, margin_top_nm: 800, margin_right_nm: 800, margin_bottom_nm: 800, stroke_width_nm: 100, size_nm: 1000, halign: "left", valign: "top" } });
       const box = (await mine())[0];
       await select([box.id]);
       await sleep(400);
@@ -300,7 +300,7 @@
       await deleteAll();
       // the Properties panel of the last scenario changed the size of the canvas: measure it again
       toScreen = (await screenOf()) ?? toScreen;
-      await cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer: "F.SilkS", text: "Pick me", start: { x: bx0 * 1000 + 6000, y: by0 * 1000 + 6000 }, end: { x: bx0 * 1000 + 16000, y: by0 * 1000 + 10000 }, margin_left_um: 800, margin_top_um: 800, margin_right_um: 800, margin_bottom_um: 800, stroke_width_um: 100, size_um: 1000, halign: "left", valign: "top" } });
+      await cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer: "F.SilkS", text: "Pick me", start: { x: bx0 * 1000 + 6000, y: by0 * 1000 + 6000 }, end: { x: bx0 * 1000 + 16000, y: by0 * 1000 + 10000 }, margin_left_nm: 800, margin_top_nm: 800, margin_right_nm: 800, margin_bottom_nm: 800, stroke_width_nm: 100, size_nm: 1000, halign: "left", valign: "top" } });
       const box = (await mine())[0];
       await E.run("common.InteractiveSelection.clear");
       await escape();
@@ -345,7 +345,7 @@
 
     await scenario("the 3D view draws a text box on its layer: the silkscreen, an adhesive layer, a user layer", async (t) => {
       await deleteAll();
-      const mk = (layer) => cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer, text: "3D box", start: { x: bx0 * 1000 + 6000, y: by0 * 1000 + 6000 }, end: { x: bx0 * 1000 + 16000, y: by0 * 1000 + 10000 }, margin_left_um: 800, margin_top_um: 800, margin_right_um: 800, margin_bottom_um: 800, stroke_width_um: 100, size_um: 1000, halign: "left", valign: "top" } });
+      const mk = (layer) => cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer, text: "3D box", start: { x: bx0 * 1000 + 6000, y: by0 * 1000 + 6000 }, end: { x: bx0 * 1000 + 16000, y: by0 * 1000 + 10000 }, margin_left_nm: 800, margin_top_nm: 800, margin_right_nm: 800, margin_bottom_nm: 800, stroke_width_nm: 100, size_nm: 1000, halign: "left", valign: "top" } });
       await mk("F.SilkS");
       await mk("B.SilkS");
       await mk("Dwgs.User");
@@ -836,7 +836,7 @@
       toScreen = (await screenOf()) ?? toScreen;
       const base = crossPixels();
       const rev0 = E.state().revision;
-      await cmd({ op: "pcb_item", verb: "add_point", point: { layer: "F.SilkS", at: { x: (bx0 + 12) * 1000, y: (by0 + 12) * 1000 }, size_um: 10000 } });
+      await cmd({ op: "pcb_item", verb: "add_point", point: { layer: "F.SilkS", at: { x: (bx0 + 12) * 1000, y: (by0 + 12) * 1000 }, size_nm: 10000 } });
       await waitFor(() => E.state().revision !== rev0, 8000);
       await sleep(500);
       const p = (await myPoints())[0];
@@ -1111,7 +1111,7 @@
       }
       return { status: "timeout" };
     };
-    const qrAt = (dx, dy, extra = {}) => ({ layer: "F.SilkS", at: { x: Math.round((bx0 - 20 + dx) * 1000), y: Math.round((by0 + 10 + dy) * 1000) }, angle: 0, width_um: 12000, height_um: 12000, text: "HELLO", text_height_um: 1500, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_um: 0, margin_y_um: 0, ...extra });
+    const qrAt = (dx, dy, extra = {}) => ({ layer: "F.SilkS", at: { x: Math.round((bx0 - 20 + dx) * 1000), y: Math.round((by0 + 10 + dy) * 1000) }, angle: 0, width_nm: 12000, height_nm: 12000, text: "HELLO", text_height_nm: 1500, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_nm: 0, margin_y_nm: 0, ...extra });
 
     await scenario("Add Barcode: a click opens Barcode Properties with a preview of what kicad-cli plots, OK adds a QR code as one undo step and selects it, Cancel adds nothing, a text the kind cannot encode is refused", async (t) => {
       await deleteBarcodes();

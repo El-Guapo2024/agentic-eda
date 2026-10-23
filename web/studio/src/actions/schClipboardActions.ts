@@ -66,7 +66,7 @@ export async function startPaste(ctx: SchPasteContext, opts: { mode: SchPasteMod
   }
   let reply;
   try {
-    reply = await postSchParse({ text, sheet: state.currentSheetPath, mode: opts.mode, duplicate: opts.duplicate, cursor: state.cursorUm ? [state.cursorUm.x, state.cursorUm.y] : null });
+    reply = await postSchParse({ text, sheet: state.currentSheetPath, mode: opts.mode, duplicate: opts.duplicate, cursor: state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null });
   } catch (e) {
     toast(dispatch, e instanceof Error ? e.message : String(e), "error");
     return;

@@ -5,7 +5,7 @@ import type { BoardState } from "../../api/types";
 import type { TuneHoverReply, TuneReadout, TuningPattern } from "../../api/tuneTypes";
 import type { ViewTransform } from "../../state/store";
 import { copperColorKey, layerColor } from "./layers";
-import { hairlineUm } from "./view";
+import { hairlineNm } from "./view";
 import { drawStrokeText } from "../text/strokeFont";
 import { formatLength, type LengthUnit } from "../../state/units";
 import { patternBaselines, patternOutline, readoutBox, type TuneDrawState } from "../../kicad-port/tuneTool";
@@ -16,8 +16,8 @@ function dashed(ctx: CanvasRenderingContext2D, view: ViewTransform, pts: readonl
   if (pts.length < 2) return;
   ctx.save();
   ctx.strokeStyle = color;
-  ctx.lineWidth = hairlineUm(view, widthPx);
-  ctx.setLineDash([hairlineUm(view, dash[0]), hairlineUm(view, dash[1])]);
+  ctx.lineWidth = hairlineNm(view, widthPx);
+  ctx.setLineDash([hairlineNm(view, dash[0]), hairlineNm(view, dash[1])]);
   ctx.beginPath();
   pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
   if (closed) ctx.closePath();
@@ -27,9 +27,9 @@ function dashed(ctx: CanvasRenderingContext2D, view: ViewTransform, pts: readonl
 
 /** The four edit points (`EDIT_POINT`): small squares, outlined in the selection colour. */
 function drawHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, handles: readonly [number, number][]) {
-  const half = hairlineUm(view, 4);
+  const half = hairlineNm(view, 4);
   ctx.save();
-  ctx.lineWidth = hairlineUm(view, 1.5);
+  ctx.lineWidth = hairlineNm(view, 1.5);
   ctx.strokeStyle = layerColor("selection");
   ctx.fillStyle = layerColor("background");
   handles.forEach(([x, y]) => {
@@ -47,7 +47,7 @@ function drawHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, handles
  */
 export function drawReadoutBox(ctx: CanvasRenderingContext2D, view: ViewTransform, readout: TuneReadout, at: Pt, units: LengthUnit) {
   const box = readoutBox(readout, (um) => formatLength(um, units));
-  const px = (n: number) => hairlineUm(view, n);
+  const px = (n: number) => hairlineNm(view, n);
   const head = px(10);
   const text = px(12);
   const colW = [px(120), px(82), px(82)];
@@ -71,12 +71,12 @@ export function drawReadoutBox(ctx: CanvasRenderingContext2D, view: ViewTransfor
   const dark = "rgb(30, 30, 30)";
   let x = x0 + pad;
   box.header.forEach((label, i) => {
-    drawStrokeText(ctx, label, x, y0 + pad + head / 2, { sizeUm: head, justify: "left", color: dark, thicknessUm: px(1) });
+    drawStrokeText(ctx, label, x, y0 + pad + head / 2, { sizeNm: head, justify: "left", color: dark, thicknessNm: px(1) });
     x += colW[i]!;
   });
   x = x0 + pad;
   box.values.forEach((value, i) => {
-    drawStrokeText(ctx, value, x, y0 + pad * 2 + head + text / 2, { sizeUm: text, justify: "left", color: box.bad[i] ? red : green, thicknessUm: px(1.2) });
+    drawStrokeText(ctx, value, x, y0 + pad * 2 + head + text / 2, { sizeNm: text, justify: "left", color: box.bad[i] ? red : green, thicknessNm: px(1.2) });
     x += colW[i]!;
   });
 }
@@ -90,7 +90,7 @@ export function drawTuneHover(ctx: CanvasRenderingContext2D, view: ViewTransform
     ctx.save();
     ctx.globalAlpha = 0.45;
     ctx.strokeStyle = layerColor("selection");
-    ctx.lineWidth = Math.max(width, hairlineUm(view, 2)) + hairlineUm(view, 3);
+    ctx.lineWidth = Math.max(width, hairlineNm(view, 2)) + hairlineNm(view, 3);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
@@ -123,7 +123,7 @@ export function drawTune(ctx: CanvasRenderingContext2D, view: ViewTransform, dra
     ctx.save();
     ctx.globalAlpha = piece.member ? 0.85 : 0.6;
     ctx.strokeStyle = layerColor(copperColorKey(piece.layer));
-    ctx.lineWidth = Math.max(piece.width, hairlineUm(view, 1));
+    ctx.lineWidth = Math.max(piece.width, hairlineNm(view, 1));
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
@@ -137,7 +137,7 @@ export function drawTune(ctx: CanvasRenderingContext2D, view: ViewTransform, dra
     ctx.save();
     ctx.fillStyle = layerColor("selection");
     ctx.beginPath();
-    ctx.arc(draw.origin[0], draw.origin[1], hairlineUm(view, 4), 0, Math.PI * 2);
+    ctx.arc(draw.origin[0], draw.origin[1], hairlineNm(view, 4), 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }

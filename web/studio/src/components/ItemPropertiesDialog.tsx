@@ -13,7 +13,7 @@ import { canFill, fillOf, fillWidthError, SHAPE_FILL_CHOICES, type ShapeFill } f
 import { LINE_ENDING_CHOICES, LINE_ENDING_HELP, NO_ENDING, type LineEnding, type LineEndingStyle } from "../kicad-port/lineEnding";
 import type { CmdLineEnding } from "../api/pcbItemTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { formatLength, formatXY, umFrom, umTo } from "../state/units";
+import { formatLength, formatXY, nmFrom, nmTo } from "../state/units";
 
 export function ItemPropertiesDialog() {
   const state = useStudioState();
@@ -43,12 +43,12 @@ export function ItemPropertiesDialog() {
   // keystroke would be clobbered by the next /api/state poll.
   useEffect(() => {
     if (via) {
-      setViaDiameter(umTo(via.d, units));
-      setViaDrill(umTo(via.drill, units));
+      setViaDiameter(nmTo(via.d, units));
+      setViaDrill(nmTo(via.drill, units));
     }
     if (shape) {
       setShapeLayer(shape.layer);
-      setShapeWidth(umTo(shape.stroke_width, units));
+      setShapeWidth(nmTo(shape.stroke_width, units));
       setShapeFill(fillOf(shape));
       setShapeError("");
       setStartEnding(endingFields(shape.start_ending ?? NO_ENDING, units));
@@ -161,7 +161,7 @@ export function ItemPropertiesDialog() {
             <button
               disabled={!width.trim()}
               onClick={() => {
-                const um = Math.round(umFrom(Number(width), units));
+                const um = Math.round(nmFrom(Number(width), units));
                 if (Number.isFinite(um) && um > 0) api.cmd({ op: "set_track_width", id, width: um });
                 setWidth("");
               }}
@@ -173,8 +173,8 @@ export function ItemPropertiesDialog() {
             <button
               className="primary"
               onClick={async () => {
-                const diameter = Math.round(umFrom(viaDiameter, units));
-                const drill = Math.round(umFrom(viaDrill, units));
+                const diameter = Math.round(nmFrom(viaDiameter, units));
+                const drill = Math.round(nmFrom(viaDrill, units));
                 if (await api.cmd({ op: "edit_via", id, diameter, drill })) close();
               }}
             >
@@ -185,7 +185,7 @@ export function ItemPropertiesDialog() {
             <button
               className="primary"
               onClick={async () => {
-                const stroke_width = Math.round(umFrom(shapeWidth, units));
+                const stroke_width = Math.round(nmFrom(shapeWidth, units));
                 // `DIALOG_SHAPE_PROPERTIES::Validate`: a fill that is not solid needs a line to be seen by.
                 const error = canFill(shape.kind) ? fillWidthError(shape.kind, shapeFill, stroke_width) : null;
                 setShapeError(error ?? "");
@@ -236,14 +236,14 @@ interface EndingFields {
   thickness: number;
 }
 
-function endingFields(e: LineEnding, units: Parameters<typeof umTo>[1]): EndingFields {
-  return { style: e.style, length: umTo(e.length, units), width: umTo(e.width, units), thickness: umTo(e.stroke_width, units) };
+function endingFields(e: LineEnding, units: Parameters<typeof nmTo>[1]): EndingFields {
+  return { style: e.style, length: nmTo(e.length, units), width: nmTo(e.width, units), thickness: nmTo(e.stroke_width, units) };
 }
 
 /** `TransferDataFromWindow`: the style, and each size at 0 or more (`std::max( 0, .. )`). */
-function endingCmd(f: EndingFields, units: Parameters<typeof umFrom>[1]): CmdLineEnding {
-  const um = (v: number) => Math.max(0, Math.round(umFrom(v, units)));
-  return { style: f.style, length_um: um(f.length), width_um: um(f.width), stroke_width_um: um(f.thickness) };
+function endingCmd(f: EndingFields, units: Parameters<typeof nmFrom>[1]): CmdLineEnding {
+  const um = (v: number) => Math.max(0, Math.round(nmFrom(v, units)));
+  return { style: f.style, length_nm: um(f.length), width_nm: um(f.width), stroke_width_nm: um(f.thickness) };
 }
 
 /** The Start (or End) shape choice and its Length, Width and Thickness (`DIALOG_SHAPE_PROPERTIES::createLineEndingControls`). */

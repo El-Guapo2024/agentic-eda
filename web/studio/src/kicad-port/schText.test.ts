@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultPenUm, textOrigin } from "./schText";
+import { defaultPenNm, textOrigin } from "./schText";
 
 // The numbers are `kicad_text_segments`' for 1.27 mm text (crates/drc/src/stroke_font.rs): a pen of 159 um, a line 1486 um tall.
 test("a 1.27 mm text is written with a pen an eighth of its size", () => {
-  assert.equal(defaultPenUm(1270), 159);
+  assert.equal(defaultPenNm(1270), 159);
 });
 
 test("the baseline of centred left-justified text starts a bit in from the anchor and a little under it", () => {

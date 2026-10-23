@@ -9,8 +9,8 @@
 //   pcbnew.Control.rehatchShapes                    PCB_CONTROL::RehatchShapes: the hatch lines of every hatched shape worked out again from the board as it is
 import { newTextBox } from "../kicad-port/pcbTextBox";
 import { activeLayerName } from "../kicad-port/layerPresets";
-import { imageSizeUm, SCALE_PPM } from "../kicad-port/refImage";
-import { DEFAULT_POINT_SIZE_UM } from "../kicad-port/pcbExtraItems";
+import { imageSizeNm, SCALE_PPM } from "../kicad-port/refImage";
+import { DEFAULT_POINT_SIZE_NM } from "../kicad-port/pcbExtraItems";
 import { asPickedImage, chooseImageFile, loadPickedImage, readImageFile, type LoadedImage, type PickedImage } from "./imageFiles";
 import { picker } from "./pcbPicker";
 import { applyCommands, createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
@@ -55,7 +55,7 @@ function startBarcodeTool(ctx: SweepCtx): void {
       onPoint: (at) => {
         const board = api.getState().board;
         if (!board) return false;
-        const height = textStyleOf(board.board_rules?.text_graphics, layer()).heightUm;
+        const height = textStyleOf(board.board_rules?.text_graphics, layer()).heightNm;
         openBarcodeDialog({ id: null, barcode: newBarcode(layer(), at, height), onClose: next });
         return false;
       },
@@ -114,7 +114,7 @@ function startPlacePointTool(ctx: SweepCtx): void {
     kind: "point",
     prompt: "Place point: click to put a point down (Escape ends the tool)",
     onPoint: (at) => {
-      void applyCommands(api, dispatch, [{ op: "pcb_item", verb: "add_point", point: { layer: layer(), at: { x: at.x, y: at.y }, size_um: DEFAULT_POINT_SIZE_UM } }]);
+      void applyCommands(api, dispatch, [{ op: "pcb_item", verb: "add_point", point: { layer: layer(), at: { x: at.x, y: at.y }, size_nm: DEFAULT_POINT_SIZE_NM } }]);
       return true;
     },
   });
@@ -145,7 +145,7 @@ function startPlaceImageTool(ctx: SweepCtx, given: PickedImage | null): void {
 
   /** An image in the hand: the next click drops it. */
   const hold = (loaded: LoadedImage): void => {
-    const [w, h] = imageSizeUm(loaded.header.px, loaded.header.ppi, SCALE_PPM);
+    const [w, h] = imageSizeNm(loaded.header.px, loaded.header.ppi, SCALE_PPM);
     setToolPreview({ kind: "image", img: loaded.img, w, h, layer: layer() });
     picker.start({
       kind: "point",

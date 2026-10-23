@@ -40,7 +40,7 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
     let sch = design.schematic.as_mut().unwrap();
     for (i, (kind, spin, fields)) in cases().into_iter().enumerate() {
         let id = format!("lbl_fields_{i}");
-        sch.labels.push(NetLabel { id: id.clone(), net: format!("FLD{i}"), at: Point { x: 200_000, y: 20_000 + 20_320 * i as i64 }, kind });
+        sch.labels.push(NetLabel { id: id.clone(), net: format!("FLD{i}"), at: Point { x: 200_000_000, y: 20_000_000 + 20_320_000 * i as i64 }, kind });
         sch.extras.label_spins.insert(id.clone(), spin);
         if !fields.is_empty() {
             sch.extras.label_fields.insert(id, fields);

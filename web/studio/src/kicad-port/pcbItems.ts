@@ -190,7 +190,7 @@ export function itemBounds(board: BoardState, id: string, opts: { includeText?: 
       const d = board.drawings?.dimensions.find((q) => q.id === id);
       if (!d) return null;
       const pts: [number, number][] = d.lines.flatMap(([a, b]) => [a, b]);
-      const text = d.text ? textBounds({ id: d.id, content: d.text, x: d.text_at[0], y: d.text_at[1], angle: -d.computed_text_angle, layer: d.layer, size: d.text_size_um, stroke_width: d.stroke_width, justify: "center", mirror: false }) : null;
+      const text = d.text ? textBounds({ id: d.id, content: d.text, x: d.text_at[0], y: d.text_at[1], angle: -d.computed_text_angle, layer: d.layer, size: d.text_size_nm, stroke_width: d.stroke_width, justify: "center", mirror: false }) : null;
       const lines = pts.length > 0 ? padded(boundsOf(pts), d.stroke_width / 2) : null;
       return unionBounds([lines, text]);
     }

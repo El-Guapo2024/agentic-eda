@@ -25,7 +25,7 @@ import { FootprintToolbarControl, GridSelect, SymbolToolbarControl } from "./too
 // 100 µm (0.1 mm) purely so the control has *a* consistent, sensible
 // scale to move between presets on.
 const ZOOM_PRESET_PERCENTS = [25, 50, 100, 200, 400, 800];
-const scaleForZoomPercent = (pct: number) => (pct / 100) * 0.01;
+const scaleForZoomPercent = (pct: number) => (pct / 100) * 1e-5;
 
 export type ToolbarEditor = "pcb" | "schematic" | "footprint" | "symbol";
 
@@ -76,10 +76,10 @@ function BoardToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "con
 
   // The board editor's own grid list (state/gridSettings.ts), in KiCad's order, which is declaration order and not sorted by size (kicad-port/grid.ts says why);
   // "Edit Grids..." at the end of the box edits it.
-  if (item.control === "gridSelect") return <GridSelect editor="pcb" gridUm={state.gridUm} onChange={(um) => dispatch({ type: "SET_GRID_UM", um })} />;
+  if (item.control === "gridSelect") return <GridSelect editor="pcb" gridNm={state.gridNm} onChange={(um) => dispatch({ type: "SET_GRID_NM", um })} />;
 
   if (item.control === "zoomSelect") {
-    const currentPercent = Math.round((state.view.scale / 0.01) * 100);
+    const currentPercent = Math.round((state.view.scale / 1e-5) * 100);
     return (
       <div className="toolbar-control" title="Zoom">
         <select

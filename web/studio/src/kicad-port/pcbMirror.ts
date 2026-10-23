@@ -123,7 +123,7 @@ export function planMirror(board: BoardState, ids: readonly string[], centre: re
       const t = board.drawings!.texts.find((q) => q.id === id)!;
       const justify = mirroredJustify(t.justify, t.angle, dir);
       if (justify !== t.justify) {
-        cmds.push({ op: "edit_text", id, content: t.content, angle: t.angle, layer: t.layer, size_um: t.size, stroke_width: t.stroke_width, justify, mirror: t.mirror });
+        cmds.push({ op: "edit_text", id, content: t.content, angle: t.angle, layer: t.layer, size_nm: t.size, stroke_width: t.stroke_width, justify, mirror: t.mirror });
       }
       const [x, y] = mirrorPoint([t.x, t.y], centre, dir);
       cmds.push({ op: "move_text", id, x, y });

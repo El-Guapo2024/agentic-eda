@@ -16,7 +16,7 @@ export interface BreakSource {
   kind: "wire" | "line";
   pts: readonly P[];
   bus?: boolean;
-  widthUm?: number;
+  widthNm?: number;
 }
 
 /** One cut: which segment of which line, and where (`breakPos`). */
@@ -84,7 +84,7 @@ export function cutPieces(state: BreakState, cut: BreakCut, cursor: P): P[][] {
 }
 
 export interface BreakCmds {
-  cmds: Array<{ op: "delete_wire"; id: string } | { op: "add_wire"; pts: Array<{ x: number; y: number }>; bus: boolean } | { op: "delete_sch_line"; id: string } | { op: "add_sch_line"; pts: Array<{ x: number; y: number }>; width_um?: number }>;
+  cmds: Array<{ op: "delete_wire"; id: string } | { op: "add_wire"; pts: Array<{ x: number; y: number }>; bus: boolean } | { op: "delete_sch_line"; id: string } | { op: "add_sch_line"; pts: Array<{ x: number; y: number }>; width_nm?: number }>;
 }
 
 /** The verbs that replace each cut line by its pieces -- one batch, one undo step (`SCH_COMMIT::Push( "Break Wire" / "Slice Wire" )`). */
@@ -96,7 +96,7 @@ export function breakCmds(state: BreakState, cursor: P): BreakCmds["cmds"] {
     const s = cut.source;
     deletes.push(s.kind === "wire" ? { op: "delete_wire", id: s.id } : { op: "delete_sch_line", id: s.id });
     for (const piece of cutPieces(state, cut, cursor)) {
-      adds.push(s.kind === "wire" ? { op: "add_wire", pts: piece.map(xy), bus: s.bus ?? false } : { op: "add_sch_line", pts: piece.map(xy), ...(s.widthUm ? { width_um: s.widthUm } : {}) });
+      adds.push(s.kind === "wire" ? { op: "add_wire", pts: piece.map(xy), bus: s.bus ?? false } : { op: "add_sch_line", pts: piece.map(xy), ...(s.widthNm ? { width_nm: s.widthNm } : {}) });
     }
   }
   return [...deletes, ...adds];

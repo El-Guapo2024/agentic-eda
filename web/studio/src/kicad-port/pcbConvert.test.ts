@@ -28,16 +28,16 @@ const poly = (id: string, pts: [number, number][]): Shape => ({ kind: "polygon",
 const zone = (id: string, outline: [number, number][]) => ({ id, net: "GND", layer: "F.Cu", teardrop: false, outline });
 
 test("resolved settings: a non-centerline strategy with no width takes the layer's, and a positive hull gap also covers half of it", () => {
-  const hull = resolveConvertSettings({ ...DEFAULT_CONVERT_SETTINGS, strategy: "bounding_hull", gapUm: 300 }, 200);
-  assert.equal(hull.widthUm, 200);
-  assert.equal(hull.gapUm, 400);
-  const centre = resolveConvertSettings({ ...DEFAULT_CONVERT_SETTINGS, strategy: "centerline", gapUm: 300 }, 200);
-  assert.equal(centre.widthUm, 0);
-  assert.equal(centre.gapUm, 300);
-  const zeroGap = resolveConvertSettings({ ...DEFAULT_CONVERT_SETTINGS, strategy: "bounding_hull", gapUm: 0 }, 200);
-  assert.equal(zeroGap.gapUm, 0);
-  const keep = resolveConvertSettings({ ...DEFAULT_CONVERT_SETTINGS, strategy: "copy_linewidth", widthUm: 80 }, 200);
-  assert.equal(keep.widthUm, 80);
+  const hull = resolveConvertSettings({ ...DEFAULT_CONVERT_SETTINGS, strategy: "bounding_hull", gapNm: 300 }, 200);
+  assert.equal(hull.widthNm, 200);
+  assert.equal(hull.gapNm, 400);
+  const centre = resolveConvertSettings({ ...DEFAULT_CONVERT_SETTINGS, strategy: "centerline", gapNm: 300 }, 200);
+  assert.equal(centre.widthNm, 0);
+  assert.equal(centre.gapNm, 300);
+  const zeroGap = resolveConvertSettings({ ...DEFAULT_CONVERT_SETTINGS, strategy: "bounding_hull", gapNm: 0 }, 200);
+  assert.equal(zeroGap.gapNm, 0);
+  const keep = resolveConvertSettings({ ...DEFAULT_CONVERT_SETTINGS, strategy: "copy_linewidth", widthNm: 80 }, 200);
+  assert.equal(keep.widthNm, 80);
 });
 
 test("copy line width: the stroke of the top-left item", () => {
@@ -153,14 +153,14 @@ test("Create Arc: a straight track becomes an arc track on its net, an arc track
 const outset = (over: Partial<OutsetParams> = {}): OutsetParams => ({ ...DEFAULT_OUTSET_PARAMS, ...over });
 
 test("outset: a rectangle grows by the distance on every side", () => {
-  const r = outsetShapes([rect("r", 1000, 1000, 5000, 3000, 100)], outset({ outsetUm: 250, roundCorners: false, lineWidthUm: 50 }));
+  const r = outsetShapes([rect("r", 1000, 1000, 5000, 3000, 100)], outset({ outsetNm: 250, roundCorners: false, lineWidthNm: 50 }));
   assert.equal(r.successes, 1);
   assert.deepEqual(r.add, [{ layer: "F.Fab", stroke_width: 100, filled: false, kind: "rect", start: { x: 750, y: 750 }, end: { x: 5250, y: 3250 } }]);
   assert.equal(r.message, null);
 });
 
 test("outset: a rectangle with rounded corners is four sides and four arcs", () => {
-  const r = outsetShapes([rect("r", 0, 0, 4000, 2000)], outset({ outsetUm: 500, roundCorners: true, useSourceLayers: false, layer: "F.CrtYd", useSourceWidths: false, lineWidthUm: 50 }));
+  const r = outsetShapes([rect("r", 0, 0, 4000, 2000)], outset({ outsetNm: 500, roundCorners: true, useSourceLayers: false, layer: "F.CrtYd", useSourceWidths: false, lineWidthNm: 50 }));
   assert.equal(r.add.filter((s) => s.kind === "segment").length, 4);
   assert.equal(r.add.filter((s) => s.kind === "arc").length, 4);
   assert.ok(r.add.every((s) => (s as { layer: string }).layer === "F.CrtYd" && (s as { stroke_width: number }).stroke_width === 50));
@@ -170,14 +170,14 @@ test("outset: a rectangle with rounded corners is four sides and four arcs", () 
 });
 
 test("outset: the grid rounds a rectangle outwards", () => {
-  const r = outsetShapes([rect("r", 1003, 1003, 4997, 2997)], outset({ outsetUm: 0, roundCorners: false, gridRoundingUm: 10 }));
+  const r = outsetShapes([rect("r", 1003, 1003, 4997, 2997)], outset({ outsetNm: 0, roundCorners: false, gridRoundingNm: 10 }));
   assert.equal(r.successes, 1);
   const s = r.add[0] as unknown as { start: { x: number; y: number }; end: { x: number; y: number } };
   assert.deepEqual([s.start, s.end], [{ x: 1000, y: 1000 }, { x: 5000, y: 3000 }]);
 });
 
 test("outset: a rectangle that shrinks away is a failure", () => {
-  const r = outsetShapes([rect("r", 0, 0, 100, 100)], outset({ outsetUm: -60 }));
+  const r = outsetShapes([rect("r", 0, 0, 100, 100)], outset({ outsetNm: -60 }));
   assert.equal(r.failures, 1);
   assert.equal(r.successes, 0);
   assert.equal(r.message, "Unable to outset the selected items.");
@@ -185,33 +185,33 @@ test("outset: a rectangle that shrinks away is a failure", () => {
 
 test("outset: a circle gets a bigger circle, or a square when corners are not rounded", () => {
   const c: Shape = { kind: "circle", id: "c", layer: "F.Fab", stroke_width: 100, filled: false, center: [1000, 2000], end: [2000, 2000] };
-  const round = outsetShapes([c], outset({ outsetUm: 250 }));
+  const round = outsetShapes([c], outset({ outsetNm: 250 }));
   assert.deepEqual(round.add[0], { layer: "F.Fab", stroke_width: 100, filled: false, kind: "circle", center: { x: 1000, y: 2000 }, end: { x: 2250, y: 2000 } });
-  const square = outsetShapes([c], outset({ outsetUm: 250, roundCorners: false }));
+  const square = outsetShapes([c], outset({ outsetNm: 250, roundCorners: false }));
   assert.deepEqual(square.add[0], { layer: "F.Fab", stroke_width: 100, filled: false, kind: "rect", start: { x: -250, y: 750 }, end: { x: 2250, y: 3250 } });
-  assert.equal(outsetShapes([c], outset({ outsetUm: -2000 })).failures, 1);
+  assert.equal(outsetShapes([c], outset({ outsetNm: -2000 })).failures, 1);
 });
 
 test("outset: a segment becomes a stadium (two sides, two caps) or an oriented rectangle polygon", () => {
   const s = seg("s", 0, 0, 4000, 0);
-  const round = outsetShapes([s], outset({ outsetUm: 500 }));
+  const round = outsetShapes([s], outset({ outsetNm: 500 }));
   assert.equal(round.add.filter((x) => x.kind === "segment").length, 2);
   assert.equal(round.add.filter((x) => x.kind === "arc").length, 2);
-  const flat = outsetShapes([s], outset({ outsetUm: 500, roundCorners: false }));
+  const flat = outsetShapes([s], outset({ outsetNm: 500, roundCorners: false }));
   assert.equal(flat.add.length, 1);
   const p = flat.add[0] as unknown as { kind: string; pts: { x: number; y: number }[] };
   assert.equal(p.kind, "polygon");
   assert.deepEqual(p.pts, [{ x: -500, y: 500 }, { x: -500, y: -500 }, { x: 4500, y: -500 }, { x: 4500, y: 500 }]);
-  assert.equal(outsetShapes([s], outset({ outsetUm: 0 })).failures, 1, "a zero outset of a line has no stadium");
+  assert.equal(outsetShapes([s], outset({ outsetNm: 0 })).failures, 1, "a zero outset of a line has no stadium");
 });
 
 test("outset: an arc gets its two edges and two end caps; an arc smaller than the outset is skipped", () => {
   const a: Shape = { kind: "arc", id: "a", layer: "F.SilkS", stroke_width: 150, filled: false, start: [5000, 0], mid: [0, -5000], end: [-5000, 0] };
-  const r = outsetShapes([a], outset({ outsetUm: 500 }));
+  const r = outsetShapes([a], outset({ outsetNm: 500 }));
   assert.equal(r.successes, 1);
   assert.equal(r.add.length, 4);
   assert.ok(r.add.every((s) => s.kind === "arc"));
-  const small = outsetShapes([{ ...a, start: [100, 0], mid: [0, -100], end: [-100, 0] } as Shape], outset({ outsetUm: 500 }));
+  const small = outsetShapes([{ ...a, start: [100, 0], mid: [0, -100], end: [-100, 0] } as Shape], outset({ outsetNm: 500 }));
   assert.equal(small.successes, 0);
   assert.equal(small.failures, 0);
 });
@@ -219,18 +219,18 @@ test("outset: an arc gets its two edges and two end caps; an arc smaller than th
 test("outset: sources are deleted only while there has been no failure", () => {
   const ok = rect("ok", 0, 0, 1000, 1000);
   const bad = rect("bad", 0, 0, 10, 10);
-  const r = outsetShapes([bad, ok], outset({ outsetUm: -20, deleteSourceItems: true }));
+  const r = outsetShapes([bad, ok], outset({ outsetNm: -20, deleteSourceItems: true }));
   assert.deepEqual(r.remove, [], "the failure came first, so nothing is deleted afterwards");
-  const good = outsetShapes([ok, rect("ok2", 0, 0, 2000, 2000)], outset({ outsetUm: 100, deleteSourceItems: true }));
+  const good = outsetShapes([ok, rect("ok2", 0, 0, 2000, 2000)], outset({ outsetNm: 100, deleteSourceItems: true }));
   assert.deepEqual(good.remove, ["ok", "ok2"]);
-  const mixed = outsetShapes([ok, bad], outset({ outsetUm: -30, deleteSourceItems: true }));
+  const mixed = outsetShapes([ok, bad], outset({ outsetNm: -30, deleteSourceItems: true }));
   assert.deepEqual(mixed.remove, ["ok"], "the first item succeeded before the failure");
   assert.equal(mixed.message, "Some of the items could not be outset.");
 });
 
 test("outset: widths come from the source when asked (a segment's, a hollow shape's) and from the dialog otherwise", () => {
   const filled = rect("f", 0, 0, 1000, 1000, 80, true);
-  const r = outsetShapes([filled, rect("h", 0, 0, 1000, 1000, 70)], outset({ outsetUm: 100, roundCorners: false, lineWidthUm: 55 }));
+  const r = outsetShapes([filled, rect("h", 0, 0, 1000, 1000, 70)], outset({ outsetNm: 100, roundCorners: false, lineWidthNm: 55 }));
   assert.deepEqual(r.add.map((s) => s.stroke_width), [55, 70]);
 });
 

@@ -12,11 +12,11 @@
 // itself and route wires to it.
 import type { SchematicPin, SchematicSymbol } from "../../api/types";
 
-export const GRID = 1270; // 1.27mm, eda_layout::DEFAULT_GRID
-export const BASE_WIDTH = 10_160; // 10.16mm, 8 * GRID
-export const BASE_HEIGHT = 7_620; // 7.62mm, 6 * GRID
-export const HEIGHT_STEP = 2_540; // 2.54mm per pair of pins beyond 4
-export const STUB = 1_270; // pin stub length, um, drawn from the box edge outward
+export const GRID = 1_270_000; // 1.27mm, eda_layout::DEFAULT_GRID
+export const BASE_WIDTH = 10_160_000; // 10.16mm, 8 * GRID
+export const BASE_HEIGHT = 7_620_000; // 7.62mm, 6 * GRID
+export const HEIGHT_STEP = 2_540_000; // 2.54mm per pair of pins beyond 4
+export const STUB = 1_270_000; // pin stub length, nm, drawn from the box edge outward
 export const CHAR_WIDTH_FACTOR = 0.6;
 export const PIN_FONT_MM = 1.1;
 export const PIN_TEXT_MARGIN_MM = 0.8;
@@ -213,9 +213,9 @@ export function nodeSize(pins: SchematicPin[]): { width: number; height: number 
   const eastReach = eastNames.length === 0 ? 0 : longest(eastNames) + PIN_TEXT_MARGIN_MM;
   const widthFromReach = westNames.length === 0 || eastNames.length === 0 ? 0 : westReach + eastReach + PIN_FONT_MM;
 
-  const widthMm = Math.max(BASE_WIDTH / 1000, widthFromRows, widthFromReach);
-  const widthUm = Math.ceil(widthMm * 1000);
-  const width = Math.ceil(widthUm / GRID) * GRID;
+  const widthMm = Math.max(BASE_WIDTH / 1e6, widthFromRows, widthFromReach);
+  const widthNm = Math.ceil(widthMm * 1e6);
+  const width = Math.ceil(widthNm / GRID) * GRID;
 
   return { width, height };
 }

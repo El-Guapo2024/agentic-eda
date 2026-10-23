@@ -17,7 +17,7 @@ import type { Cmd } from "../api/types";
 import { incrementLabelText } from "./incrementLabelText";
 
 /** `eeschema_settings.cpp`: `drawing.default_repeat_offset_x` 0 mil, `default_repeat_offset_y` 100 mil -- um. */
-export const REPEAT_OFFSET_UM: readonly [number, number] = [0, 2540];
+export const REPEAT_OFFSET_NM: readonly [number, number] = [0, 2_540_000];
 
 type Repeatable =
   | Extract<Cmd, { op: "add_label" | "add_sch_text" | "add_power_symbol" | "add_no_connect" | "add_bus_entry" | "add_wire" | "add_sch_line" | "add_symbol" }>
@@ -44,7 +44,7 @@ export interface RepeatContext {
   nextReference: (sourceId: string) => string;
 }
 
-const shift = (p: { x: number; y: number }) => ({ x: p.x + REPEAT_OFFSET_UM[0], y: p.y + REPEAT_OFFSET_UM[1] });
+const shift = (p: { x: number; y: number }) => ({ x: p.x + REPEAT_OFFSET_NM[0], y: p.y + REPEAT_OFFSET_NM[1] });
 
 /** The commands that place the next copy of `source`. */
 export function repeatCmds(source: readonly Cmd[], ctx: RepeatContext): Cmd[] {

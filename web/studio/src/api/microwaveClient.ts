@@ -15,7 +15,7 @@ export function readShapeFile(text: string): Promise<MicrowaveShapeInfo> {
   return postJson<MicrowaveShapeInfo>("/api/microwave/shape", { text });
 }
 
-/** Whether the inductor between `start` and `end` can be `length_um` long, or the words of the info bar that says why not (`createMicrowaveInductor`). */
-export function checkInductor(req: { start: PointXY; end: PointXY; length_um: number; track_width_um: number }): Promise<{ ok: boolean; message?: string }> {
+/** Whether the inductor between `start` and `end` can be `length_nm` long, or the words of the info bar that says why not (`createMicrowaveInductor`). */
+export function checkInductor(req: { start: PointXY; end: PointXY; length_nm: number; track_width_nm: number }): Promise<{ ok: boolean; message?: string }> {
   return postJson<{ ok: boolean; message?: string }>("/api/microwave/inductor", req);
 }

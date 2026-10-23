@@ -12,7 +12,7 @@ test("a rectangle is two clicks: the first corner, then the opposite one", () =>
 test("a circle is its centre and a point on it", () => {
   let e = beginEdit("circle", [1000, 1000]);
   e = calcEdit(e, [1000 + 3000, 1000 + 4000]);
-  assert.deepEqual(toShape(e), { type: "circle", center: { x: 1000, y: 1000 }, radius_um: 5000 });
+  assert.deepEqual(toShape(e), { type: "circle", center: { x: 1000, y: 1000 }, radius_nm: 5000 });
 });
 
 test("an untouched shape is degenerate and not committed", () => {

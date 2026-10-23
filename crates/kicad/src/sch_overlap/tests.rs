@@ -42,7 +42,7 @@ fn a_resistor_with_its_fields_beside_it_is_clean() {
     let fields = format!("{} {}", field("Reference", "R1", (103.0, 98.0), "(justify left)"), field("Value", "330", (103.0, 102.0), "(justify left)"));
     let r = report(&resistor((100.0, 100.0), &fields));
     assert_eq!(r.count(), 0, "{}", r.render());
-    assert!(r.items >= 5, "body, two pins, two fields: {}", r.items);
+    assert!(r.items >= 5000, "body, two pins, two fields: {}", r.items);
 }
 
 #[test]

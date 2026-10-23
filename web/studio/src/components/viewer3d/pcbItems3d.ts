@@ -14,7 +14,7 @@ const MAX_TEXTURE_PX = 4096;
 /** The text box as a plane at height `y`, tinted with `tint` (white when none). Null for a box with no extent. */
 export function buildTextBoxMesh(b: BoardTextBox, y: number, tint?: THREE.Color, kind = "silk"): THREE.Mesh | null {
   const [x0, y0, x1, y1] = textBoxBounds(b);
-  const [wMm, hMm] = [(x1 - x0) / 1000, (y1 - y0) / 1000];
+  const [wMm, hMm] = [(x1 - x0) / 1e6, (y1 - y0) / 1e6];
   if (!(wMm > 0 && hMm > 0)) return null;
   const pxPerMm = Math.min(PX_PER_MM, MAX_TEXTURE_PX / Math.max(wMm, hMm));
   const canvas = document.createElement("canvas");
@@ -23,7 +23,7 @@ export function buildTextBoxMesh(b: BoardTextBox, y: number, tint?: THREE.Color,
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
   // micrometres of the board onto pixels of the texture, the box's top left at the texture's
-  const s = pxPerMm / 1000;
+  const s = pxPerMm / 1e6;
   ctx.setTransform(s, 0, 0, s, -x0 * s, -y0 * s);
   drawTextBox(ctx, { scale: s, x: 0, y: 0 }, b, false, false, { color: "#ffffff", cutOutText: true });
   const texture = new THREE.CanvasTexture(canvas);

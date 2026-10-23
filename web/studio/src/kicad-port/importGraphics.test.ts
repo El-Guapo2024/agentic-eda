@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DXF_UNITS, buildImportCmd, buildSchImportCmd, defaultImportValues, defaultSchImportValues, describeInfo, graphicsFormatOf, importLayers, parseLength } from "./importGraphics";
 
-const info = { ok: true, items: 8, counts: { line: 4, arc: 4 }, bbox_um: [0, -30_000, 40_000, 0] as [number, number, number, number], fits: true };
+const info = { ok: true, items: 8, counts: { line: 4, arc: 4 }, bbox_nm: [0, -30_000, 40_000, 0] as [number, number, number, number], fits: true };
 
 function build(over: Partial<ReturnType<typeof defaultImportValues>> = {}, extra: { activeLayer?: string | null; polygonOutline?: boolean; format?: "dxf" | "svg" } = {}) {
   return buildImportCmd({ format: extra.format ?? "dxf", text: "0\nEOF\n", values: { ...defaultImportValues("mm"), ...over }, units: "mm", activeLayer: extra.activeLayer === undefined ? "F.SilkS" : extra.activeLayer, info, polygonOutline: extra.polygonOutline ?? false });
@@ -29,9 +29,9 @@ test("the layer list is the board's copper and then the technical and user layer
 });
 
 test("lengths take a unit suffix and a bare number is in the display units", () => {
-  assert.equal(parseLength("0.2", "mm"), 200);
-  assert.equal(parseLength("10mil", "mm"), 254);
-  assert.equal(parseLength("1\"", "mm"), 25_400);
+  assert.equal(parseLength("0.2", "mm"), 200_000);
+  assert.equal(parseLength("10mil", "mm"), 254_000);
+  assert.equal(parseLength("1\"", "mm"), 25_400_000);
   assert.equal(parseLength("abc", "mm"), null);
 });
 
@@ -41,16 +41,16 @@ test("Place at sets the origin over the scale, as the dialog does", () => {
   if (!r.ok) return;
   const cmd = r.build(null);
   assert.equal(cmd.op, "import_graphics");
-  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm, cmd.scale], [5_000_000, -2_500_000, 2]);
+  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm, cmd.scale], [5_000_000_000, -2_500_000_000, 2000]);
 });
 
 test("interactive placement puts the picture's upper left corner at the cursor", () => {
   const r = build({ scale: "1.0" });
   assert.ok(r.ok && r.interactive);
   if (!r.ok) return;
-  const cmd = r.build({ x: 50_000, y: 20_000 });
+  const cmd = r.build({ x: 50_000_000, y: 20_000_000 });
   // The box at offset 0 starts at (0, -30 mm): the offset takes it to (50 mm, 20 mm).
-  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm], [50_000_000, 50_000_000]);
+  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm], [50_000_000_000, 50_000_000_000]);
 });
 
 test("the layer is the dialog's, or the active layer when it is not checked", () => {
@@ -67,13 +67,13 @@ test("fix discontinuities carries its tolerance and the group flag follows the c
   assert.ok(on.ok);
   if (on.ok) {
     const c = on.build(null);
-    assert.deepEqual([c.fix_tolerance_um, c.group], [500, true]);
+    assert.deepEqual([c.fix_tolerance_nm, c.group], [500_000, true]);
   }
   const off = build({ fix: false, group: false });
   assert.ok(off.ok);
   if (off.ok) {
     const c = off.build(null);
-    assert.deepEqual([c.fix_tolerance_um, c.group], [null, false]);
+    assert.deepEqual([c.fix_tolerance_nm, c.group], [null, false]);
   }
 });
 
@@ -131,22 +131,22 @@ test("the schematic's At sets the origin over the scale, as the board's dialog d
   if (!r.ok) return;
   const cmd = r.build(null);
   assert.equal(cmd.op, "import_sch_graphics");
-  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm, cmd.scale, cmd.line_width_um], [5_000_000, -2_500_000, 2, 150]);
+  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm, cmd.scale, cmd.line_width_nm], [5_000_000_000, -2_500_000_000, 2000, 150_000]);
 });
 
 test("interactive placement in the schematic puts the drawing's origin at the cursor", () => {
   const r = buildSch();
   assert.ok(r.ok && r.interactive);
   if (!r.ok) return;
-  const cmd = r.build({ x: 50_000, y: -20_000 });
-  assert.deepEqual([cmd.op, cmd.offset_x_nm, cmd.offset_y_nm], ["import_sch_graphics", 50_000_000, -20_000_000]);
+  const cmd = r.build({ x: 50_000_000, y: -20_000_000 });
+  assert.deepEqual([cmd.op, cmd.offset_x_nm, cmd.offset_y_nm], ["import_sch_graphics", 50_000_000_000, -20_000_000_000]);
 });
 
 test("the Symbol Editor's command names the symbol, the unit and the body style", () => {
   const r = buildSch({}, { editor: "symbol", symbol: { libId: "eda:Untitled", unit: 2, bodyStyle: 1 } });
   assert.ok(r.ok);
   if (!r.ok) return;
-  const cmd = r.build({ x: 1_270, y: 2_540 });
+  const cmd = r.build({ x: 1_270_000, y: 2_540_000 });
   assert.equal(cmd.op, "import_symbol_graphics");
   if (cmd.op !== "import_symbol_graphics") return;
   assert.deepEqual([cmd.lib_id, cmd.unit, cmd.body_style, cmd.offset_x_nm, cmd.offset_y_nm], ["eda:Untitled", 2, 1, 1_270_000, 2_540_000]);
@@ -168,6 +168,6 @@ test("the schematic's dialog refuses a bad scale, width or origin with a reason,
   assert.ok(svg.ok);
   if (svg.ok) {
     const c = svg.build(null);
-    assert.deepEqual([c.dxf_units, c.line_width_um], ["", 0]);
+    assert.deepEqual([c.dxf_units, c.line_width_nm], ["", 0]);
   }
 });

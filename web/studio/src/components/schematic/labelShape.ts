@@ -22,7 +22,7 @@ import { measureStrokeText } from "../text/strokeFont";
 export type LabelSpin = "left" | "up" | "right" | "bottom";
 
 /** eeschema/default_values.h DEFAULT_TEXT_SIZE (50 mil) -- this app's `SchematicLabel` carries no per-label font size, so every label uses KiCad's own factory default. */
-export const LABEL_TEXT_SIZE_UM = 1270;
+export const LABEL_TEXT_SIZE_NM = 1_270_000;
 
 /** KiROUND: round half away from zero (JS's Math.round rounds -0.5 towards +Infinity, i.e. to 0, not -1 -- wrong for KiCad's own convention on negative inputs). Every size/offset formula ported here uses this, matching the real source exactly. */
 function kiRound(x: number): number {
@@ -45,7 +45,7 @@ function rotateForSpin([x, y]: [number, number], spin: LabelSpin): [number, numb
 
 /** Finds the one wire whose first or last point lands on `at` (within a small tolerance) and reports which way it approaches -- used to infer a label's spin, since this app's label data has no explicit orientation of its own. */
 function approachDirection(wires: SchematicWire[], at: [number, number]): [number, number] | null {
-  const tol = 50; // um -- generous enough for float/rounding slop in generated wire endpoints, tight enough to not match an unrelated nearby point
+  const tol = 50_000; // nm -- generous enough for float/rounding slop in generated wire endpoints, tight enough to not match an unrelated nearby point
   for (const w of wires) {
     const pts = w.pts;
     if (pts.length < 2) continue;
@@ -74,8 +74,8 @@ export function inferSpin(wires: SchematicWire[], at: [number, number]): LabelSp
 }
 
 /** sch_text.cpp SCH_TEXT::GetPenWidth()/GetEffectiveTextPenWidth, not bold, no explicit thickness override (this app's labels carry none): round(size/8), clamped to round(size/4) (never binding here since size/8 < size/4). */
-function autoPenWidth(sizeUm: number): number {
-  return kiRound(sizeUm / 8);
+function autoPenWidth(sizeNm: number): number {
+  return kiRound(sizeNm / 8);
 }
 
 /**
@@ -84,8 +84,8 @@ function autoPenWidth(sizeUm: number): number {
  * the actual rendered text (`textBoxW`), so this needs the text content,
  * not just its shape/spin.
  */
-export function globalLabelOutline(text: string, shape: LabelShape, spin: LabelSpin, at: [number, number], sizeUm: number = LABEL_TEXT_SIZE_UM): [number, number][] {
-  const H = sizeUm;
+export function globalLabelOutline(text: string, shape: LabelShape, spin: LabelSpin, at: [number, number], sizeNm: number = LABEL_TEXT_SIZE_NM): [number, number][] {
+  const H = sizeNm;
   const E = kiRound(0.375 * H);
   const pen = autoPenWidth(H);
   const lw = pen;
@@ -148,8 +148,8 @@ export function globalLabelOutline(text: string, shape: LabelShape, spin: LabelS
 }
 
 /** Global label text position (`GetSchematicTextOffset`) and justify, so painter.ts never has to re-derive which side of the flag the text sits on. */
-export function globalLabelTextPlacement(shape: LabelShape, spin: LabelSpin, at: [number, number], sizeUm: number = LABEL_TEXT_SIZE_UM): { pos: [number, number]; justify: "left" | "center" | "right" } {
-  const H = sizeUm;
+export function globalLabelTextPlacement(shape: LabelShape, spin: LabelSpin, at: [number, number], sizeNm: number = LABEL_TEXT_SIZE_NM): { pos: [number, number]; justify: "left" | "center" | "right" } {
+  const H = sizeNm;
   const E = kiRound(0.375 * H);
   let horiz = E;
   if (shape === "input" || shape === "bidirectional" || shape === "tri_state") horiz += kiRound((H * 3) / 4);
@@ -326,23 +326,23 @@ const HIER_SHAPES: Record<LabelShape, Record<LabelSpin, [number, number][]>> = {
 };
 
 /** The small, fixed-size hierarchical-label arrow -- does not depend on the label's text at all (unlike a global label's flag). */
-export function hierLabelOutline(shape: LabelShape, spin: LabelSpin, at: [number, number], sizeUm: number = LABEL_TEXT_SIZE_UM): [number, number][] {
-  const hs = Math.floor(sizeUm / 2);
+export function hierLabelOutline(shape: LabelShape, spin: LabelSpin, at: [number, number], sizeNm: number = LABEL_TEXT_SIZE_NM): [number, number][] {
+  const hs = Math.floor(sizeNm / 2);
   return HIER_SHAPES[shape][spin].map(([x, y]) => [x * hs + at[0], y * hs + at[1]]);
 }
 
 /** Hierarchical label text position/justify -- `dist = T + (rendered text width)`, the text width itself standing in for the arrow's own reach (sch_label.cpp:2509-2526, ported). */
-export function hierLabelTextPlacement(text: string, spin: LabelSpin, at: [number, number], sizeUm: number = LABEL_TEXT_SIZE_UM): { pos: [number, number]; justify: "left" | "center" | "right" } {
-  const T = kiRound(0.15 * sizeUm);
-  const dist = T + measureStrokeText(text, sizeUm);
+export function hierLabelTextPlacement(text: string, spin: LabelSpin, at: [number, number], sizeNm: number = LABEL_TEXT_SIZE_NM): { pos: [number, number]; justify: "left" | "center" | "right" } {
+  const T = kiRound(0.15 * sizeNm);
+  const dist = T + measureStrokeText(text, sizeNm);
   const [ox, oy] = spin === "left" ? [-dist, 0] : spin === "up" ? [0, -dist] : spin === "right" ? [dist, 0] : [0, dist];
   return { pos: [at[0] + ox, at[1] + oy], justify: spin === "right" || spin === "bottom" ? "left" : spin === "left" || spin === "up" ? "right" : "center" };
 }
 
 /** A local label has no outline at all -- just text, offset off the wire the same way a global/hierarchical label's text is (sch_label.cpp's base `CreateGraphicShape` returns nothing; offset formula at sch_label.cpp:448-465, ported). V-justify is "bottom" (text sits just above a horizontal wire) in every real local label, which painter.ts applies via its own CAP_HEIGHT baseline approximation rather than this module (stroke text has no native top/bottom baseline the way outline fonts do -- see painter.ts's existing MIDDLE_OFFSET_FACTOR/CAP_HEIGHT constants). */
-export function localLabelTextPlacement(spin: LabelSpin, at: [number, number], sizeUm: number = LABEL_TEXT_SIZE_UM): { pos: [number, number]; justify: "left" | "center" | "right" } {
-  const pen = autoPenWidth(sizeUm);
-  const dist = kiRound(0.15 * sizeUm) + pen;
+export function localLabelTextPlacement(spin: LabelSpin, at: [number, number], sizeNm: number = LABEL_TEXT_SIZE_NM): { pos: [number, number]; justify: "left" | "center" | "right" } {
+  const pen = autoPenWidth(sizeNm);
+  const dist = kiRound(0.15 * sizeNm) + pen;
   const horizontal = spin === "left" || spin === "right";
   const [ox, oy] = horizontal ? [0, -dist] : [-dist, 0];
   return { pos: [at[0] + ox, at[1] + oy], justify: spin === "right" ? "left" : spin === "left" ? "right" : "center" };

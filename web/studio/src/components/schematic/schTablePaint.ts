@@ -52,17 +52,17 @@ export function paintSchTables(ctx: CanvasRenderingContext2D, view: ViewTransfor
       const color = selected ? selectedColor : c.color ? rgbaOf(c.color) : base;
       for (const line of c.lines) {
         if (!line.text) continue;
-        const sizeUm = Math.max(c.size_h, hair * 8);
-        const thicknessUm = Math.max(c.pen, hair);
+        const sizeNm = Math.max(c.size_h, hair * 8);
+        const thicknessNm = Math.max(c.pen, hair);
         if (c.size_w !== c.size_h && c.size_h > 0) {
           ctx.save();
           ctx.translate(line.x, line.y);
           ctx.rotate(angleRad);
           ctx.scale(c.size_w / c.size_h, 1);
-          drawStrokeText(ctx, line.text, 0, 0, { sizeUm, thicknessUm, justify: "left", italic: c.italic, color });
+          drawStrokeText(ctx, line.text, 0, 0, { sizeNm, thicknessNm, justify: "left", italic: c.italic, color });
           ctx.restore();
         } else {
-          drawStrokeText(ctx, line.text, line.x, line.y, { sizeUm, thicknessUm, justify: "left", angleRad, italic: c.italic, color });
+          drawStrokeText(ctx, line.text, line.x, line.y, { sizeNm, thicknessNm, justify: "left", angleRad, italic: c.italic, color });
         }
       }
     }
@@ -108,7 +108,7 @@ export function drawSchTablePreview(ctx: CanvasRenderingContext2D, view: ViewTra
   const [x0, y0] = origin;
   ctx.save();
   ctx.strokeStyle = layerColor("LAYER_NOTES");
-  ctx.lineWidth = Math.max(152.4, 1 / view.scale);
+  ctx.lineWidth = Math.max(152_400, 1 / view.scale);
   ctx.lineCap = "butt";
   ctx.beginPath();
   ctx.rect(x0, y0, grid.cols * grid.cellW, grid.rows * grid.cellH);

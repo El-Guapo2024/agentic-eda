@@ -21,11 +21,11 @@ test("DEFAULT_VIEW_CONTROL_SETTINGS matches KiCad's shipped defaults", () => {
 test("handleWheel: plain wheel zooms about the cursor, scrolling up (negative deltaY) zooms in", () => {
   const view: ViewTransform = { scale: 1, x: 0, y: 0 };
   const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
-  const before = screenToWorld(view, 400, 300);
+  const before = screenToWorld(view, 400_000, 300_000);
   const result = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaY: -100 }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
   assert.equal(result.kind, "zoom");
   assert.ok(result.view.scale > 1, "scrolling up should zoom in");
-  const after = screenToWorld(result.view, 400, 300);
+  const after = screenToWorld(result.view, 400_000, 300_000);
   assert.ok(Math.abs(after[0] - before[0]) < 1e-9, "cursor's world point should stay under the cursor");
   assert.ok(Math.abs(after[1] - before[1]) < 1e-9);
 });
@@ -82,47 +82,47 @@ test("handleWheel: reverseScrollZoom flips the zoom direction", () => {
 });
 
 test("computeAutoPanDirection: center of the screen is outside the autopan border", () => {
-  const dir = computeAutoPanDirection({ x: 400, y: 300 }, { width: 800, height: 600 });
+  const dir = computeAutoPanDirection({ x: 400_000, y: 300_000 }, { width: 800_000, height: 600_000 });
   assert.deepEqual(dir, { x: 0, y: 0 });
 });
 
 test("computeAutoPanDirection: near the left/top edge gives a negative direction sized to the penetration depth", () => {
   // margin 0.02 * min(800,600)=600 -> 12, but border = max(min(0.02*800, 0.02*600), 2) = max(min(16,12),2) = 12
-  const dir = computeAutoPanDirection({ x: 5, y: 300 }, { width: 800, height: 600 });
-  assert.equal(dir.x, -(12 - 5));
+  const dir = computeAutoPanDirection({ x: 5000, y: 300_000 }, { width: 800_000, height: 600_000 });
+  assert.equal(dir.x, -(12_000 - 5000));
   assert.equal(dir.y, 0);
 });
 
 test("computeAutoPanDirection: near the right/bottom edge gives a positive direction", () => {
-  const dir = computeAutoPanDirection({ x: 795, y: 300 }, { width: 800, height: 600 });
-  assert.equal(dir.x, 795 - (800 - 12));
+  const dir = computeAutoPanDirection({ x: 795_000, y: 300_000 }, { width: 800_000, height: 600_000 });
+  assert.equal(dir.x, 795_000 - (800_000 - 12_000));
 });
 
 test("computeAutoPanStep: no direction means no pan", () => {
-  assert.equal(computeAutoPanStep({ x: 0, y: 0 }, { width: 800, height: 600 }, 1), null);
+  assert.equal(computeAutoPanStep({ x: 0, y: 0 }, { width: 800_000, height: 600_000 }, 1), null);
 });
 
 test("computeAutoPanStep: far past the border is accelerated to borderSize*accel", () => {
-  const screenSize = { width: 800, height: 600 };
+  const screenSize = { width: 800_000, height: 600_000 };
   const borderSize = Math.min(0.02 * 800, 0.02 * 600); // 12
   const accel = 0.5 + 5.0 / 5.0; // 1.5 at the default acceleration setting
   const step = computeAutoPanStep({ x: -borderSize * 10, y: 0 }, screenSize, 1); // length 120 >= borderSize(12)
   assert.ok(step);
-  const pixelMagnitude = Math.hypot(step!.x, step!.y) * 1; // scalePxPerUm=1, so world delta == pixel magnitude
+  const pixelMagnitude = Math.hypot(step!.x, step!.y) * 1; // scalePxPerNm=1, so world delta == pixel magnitude
   assert.ok(Math.abs(pixelMagnitude - borderSize * accel) < 1e-9);
 });
 
 test("computeAutoPanStep: a world-scale > 1 shrinks the resulting world-space pan", () => {
-  const screenSize = { width: 800, height: 600 };
+  const screenSize = { width: 800_000, height: 600_000 };
   const atScale1 = computeAutoPanStep({ x: -100, y: 0 }, screenSize, 1)!;
-  const atScale2 = computeAutoPanStep({ x: -100, y: 0 }, screenSize, 2)!;
+  const atScale2 = computeAutoPanStep({ x: -100, y: 0 }, screenSize, 2000)!;
   assert.ok(Math.abs(atScale2.x) < Math.abs(atScale1.x));
-  assert.ok(Math.abs(Math.abs(atScale1.x) / Math.abs(atScale2.x) - 2) < 1e-9);
+  assert.ok(Math.abs(Math.abs(atScale1.x) / Math.abs(atScale2.x) - 2000) < 1e-9);
 });
 
 test("computeAutoPanStep: just barely into the border (<= half border) uses the raw distance, unaccelerated", () => {
-  const screenSize = { width: 800, height: 600 };
-  const borderSize = 12;
+  const screenSize = { width: 800_000, height: 600_000 };
+  const borderSize = 12_000;
   const tiny = borderSize * 0.3; // < borderSize/2
   const step = computeAutoPanStep({ x: -tiny, y: 0 }, screenSize, 1)!;
   assert.ok(Math.abs(Math.abs(step.x) - tiny) < 1e-9);
@@ -139,18 +139,18 @@ test("dragActionOf: the middle and the right button do what the settings say, th
 });
 
 test("dragZoomView: dragging up zooms in and down zooms out by exp( d.y * speed * 0.001 ), the press point staying put on the screen", () => {
-  const view: ViewTransform = { scale: 2, x: 30, y: -10 };
-  const anchor = { x: 400, y: 300 };
+  const view: ViewTransform = { scale: 2, x: 30_000, y: -10_000 };
+  const anchor = { x: 400_000, y: 300_000 };
   const before = screenToWorld(view, anchor.x, anchor.y);
-  const up = dragZoomView(view, anchor, -20, 5);
+  const up = dragZoomView(view, anchor, -20_000, 5000);
   assert.ok(Math.abs(up.scale - 2 * Math.exp(20 * 5 * 0.001)) < 1e-12, `${up.scale}`);
-  const down = dragZoomView(view, anchor, 20, 5);
-  assert.ok(down.scale < 2 && Math.abs(down.scale - 2 * Math.exp(-20 * 5 * 0.001)) < 1e-12);
+  const down = dragZoomView(view, anchor, 20_000, 5000);
+  assert.ok(down.scale < 2000 && Math.abs(down.scale - 2 * Math.exp(-20 * 5 * 0.001)) < 1e-12);
   for (const v of [up, down]) {
     const after = screenToWorld(v, anchor.x, anchor.y);
     assert.ok(Math.abs(after[0] - before[0]) < 1e-9 && Math.abs(after[1] - before[1]) < 1e-9, "the world point under the press does not move");
   }
   // a faster zoom speed zooms more for the same drag; no movement is no zoom
-  assert.ok(dragZoomView(view, anchor, -20, 10).scale > up.scale);
-  assert.equal(dragZoomView(view, anchor, 0, 5).scale, 2);
+  assert.ok(dragZoomView(view, anchor, -20_000, 10_000).scale > up.scale);
+  assert.equal(dragZoomView(view, anchor, 0, 5000).scale, 2000);
 });

@@ -4,7 +4,7 @@
 // `SCH_DIRECTIVE_LABEL::CreateGraphicShape` (eeschema at 8303b2ad). Pure: no DOM, no fonts (a text box's text
 // does not take part in hit-testing, only its border, like any unfilled shape).
 import { bezierPolyline } from "./bezierPoly";
-import { DEFAULT_PPI, imageBoxHitDistance, imageBoxUm, SCALE_PPM } from "./refImage";
+import { DEFAULT_PPI, imageBoxHitDistance, imageBoxNm, SCALE_PPM } from "./refImage";
 import type { SchGraphic, SchGraphicShape } from "../api/schEditTypes";
 
 export type P = readonly [number, number];
@@ -135,7 +135,7 @@ export function rectCorners(a: P, b: P): P[] {
 }
 
 /** `SCH_DIRECTIVE_LABEL::m_symbolSize` (20 mil) -- um. */
-export const DIRECTIVE_SYMBOL_SIZE_UM = 508;
+export const DIRECTIVE_SYMBOL_SIZE_NM = 508_000;
 
 /**
  * `SCH_DIRECTIVE_LABEL::CreateGraphicShape`: the flag's outline points -- the pole along the local +y axis, then
@@ -143,7 +143,7 @@ export const DIRECTIVE_SYMBOL_SIZE_UM = 508;
  * degrees: 0 right, 90 up, 180 left, 270 bottom.
  */
 export function directiveShape(at: P, orientation: number, shape: "dot" | "round" | "diamond" | "rectangle", pinLength: number): { poleEnd: P; outline: P[]; flagCenter: P; flagRadius: number } {
-  const S = DIRECTIVE_SYMBOL_SIZE_UM;
+  const S = DIRECTIVE_SYMBOL_SIZE_NM;
   const L = pinLength;
   // `F_DOT` shrinks the symbol to 0.7, `F_RECTANGLE` to 0.8 (CreateGraphicShape's own `symbolSize` adjustments).
   const symbol = shape === "dot" ? Math.round(S * 0.7) : shape === "rectangle" ? Math.round(S * 0.8) : S;
@@ -202,12 +202,12 @@ export function directiveShape(at: P, orientation: number, shape: "dot" | "round
 }
 
 function strokeSlack(g: SchGraphic): number {
-  return Math.max(g.width_um ?? 0, 152.4) / 2;
+  return Math.max(g.width_nm ?? 0, 152_400) / 2;
 }
 
 /** `[x0, y0, x1, y1]` of an image on the sheet (`SCH_BITMAP::GetBoundingBox`): its pixels at their definition times the scale, centred on `at`. */
 export function schImageBox(s: Extract<SchGraphicShape, { type: "image" }>): [number, number, number, number] {
-  return imageBoxUm([s.at.x, s.at.y], s.px ?? [0, 0], s.ppi ?? DEFAULT_PPI, s.scale_ppm ?? SCALE_PPM);
+  return imageBoxNm([s.at.x, s.at.y], s.px ?? [0, 0], s.ppi ?? DEFAULT_PPI, s.scale_ppm ?? SCALE_PPM);
 }
 
 /** The shape's outline as a polyline: `closed` for shapes that enclose an area. */
@@ -221,7 +221,7 @@ export function graphicOutline(g: SchGraphic): { pts: P[]; closed: boolean } {
     case "circle": {
       const c = pt(s.center);
       const out: P[] = [];
-      for (let i = 0; i < 48; i++) out.push([c[0] + s.radius_um * Math.cos((i / 48) * 2 * Math.PI), c[1] + s.radius_um * Math.sin((i / 48) * 2 * Math.PI)]);
+      for (let i = 0; i < 48; i++) out.push([c[0] + s.radius_nm * Math.cos((i / 48) * 2 * Math.PI), c[1] + s.radius_nm * Math.sin((i / 48) * 2 * Math.PI)]);
       return { pts: out, closed: true };
     }
     case "arc": {
@@ -234,7 +234,7 @@ export function graphicOutline(g: SchGraphic): { pts: P[]; closed: boolean } {
     case "rule_area":
       return { pts: s.pts.map(pt), closed: true };
     case "directive": {
-      const d = directiveShape(pt(s.at), (s.orientation ?? 0) / 1000, s.shape ?? "round", s.pin_length_um);
+      const d = directiveShape(pt(s.at), (s.orientation ?? 0) / 1000, s.shape ?? "round", s.pin_length_nm);
       return { pts: d.outline, closed: false };
     }
     case "image": {
@@ -254,8 +254,8 @@ export function graphicBounds(g: SchGraphic): Box {
   const { pts } = graphicOutline(g);
   const b = boxOfPoints(pts) ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   if (g.shape.type === "directive") {
-    const d = directiveShape(pt(g.shape.at), (g.shape.orientation ?? 0) / 1000, g.shape.shape ?? "round", g.shape.pin_length_um);
-    return inflateBox(unionBox(b, boxOfPoints([d.flagCenter]))!, DIRECTIVE_SYMBOL_SIZE_UM * 2);
+    const d = directiveShape(pt(g.shape.at), (g.shape.orientation ?? 0) / 1000, g.shape.shape ?? "round", g.shape.pin_length_nm);
+    return inflateBox(unionBox(b, boxOfPoints([d.flagCenter]))!, DIRECTIVE_SYMBOL_SIZE_NM * 2);
   }
   return inflateBox(b, slack);
 }
@@ -267,14 +267,14 @@ export function graphicHit(g: SchGraphic, p: P, tol: number): boolean {
   // `SCH_BITMAP::HitTest`: anywhere in the box, or within the accuracy of it (`KIGEOM::BoxHitTest`).
   if (s.type === "image") return imageBoxHitDistance(schImageBox(s), p[0], p[1]) <= tol;
   if (s.type === "directive") {
-    const d = directiveShape(pt(s.at), (s.orientation ?? 0) / 1000, s.shape ?? "round", s.pin_length_um);
-    if (distToPolyline(p, d.outline, false) <= slack + DIRECTIVE_SYMBOL_SIZE_UM / 2) return true;
+    const d = directiveShape(pt(s.at), (s.orientation ?? 0) / 1000, s.shape ?? "round", s.pin_length_nm);
+    if (distToPolyline(p, d.outline, false) <= slack + DIRECTIVE_SYMBOL_SIZE_NM / 2) return true;
     return Math.hypot(p[0] - d.flagCenter[0], p[1] - d.flagCenter[1]) <= d.flagRadius + tol;
   }
   if (s.type === "circle") {
     const dist = Math.hypot(p[0] - s.center.x, p[1] - s.center.y);
-    if (Math.abs(dist - s.radius_um) <= slack) return true;
-    return (g.fill ?? "none") !== "none" && dist <= s.radius_um;
+    if (Math.abs(dist - s.radius_nm) <= slack) return true;
+    return (g.fill ?? "none") !== "none" && dist <= s.radius_nm;
   }
   const { pts, closed } = graphicOutline(g);
   if (distToPolyline(p, pts, closed) <= slack) return true;

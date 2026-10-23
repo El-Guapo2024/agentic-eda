@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import type { LibrarySymbolPin, PinElectricalType, PinShape } from "../../api/types";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { useStudioState } from "../../state/store";
-import { umFrom, umTo } from "../../state/units";
+import { nmFrom, nmTo } from "../../state/units";
 import { angleDegToOrientation, orientationToAngleDeg, PIN_ORIENTATIONS, type PinOrientation } from "../../kicad-port/pinOrientation";
 import { alternatesError, PIN_SHAPE_OPTIONS as SHAPE_OPTIONS, PIN_TYPE_OPTIONS as ELECTRICAL_TYPE_OPTIONS } from "../../kicad-port/symPinAlternates";
 import { PinAlternatesGrid } from "./PinAlternatesGrid";
@@ -18,11 +18,11 @@ import { PinAlternatesGrid } from "./PinAlternatesGrid";
 const ORIENTATION_LABELS: Record<PinOrientation, string> = { right: "Right", left: "Left", up: "Up", down: "Down" };
 
 /** mm<->display-unit, reusing `state/units.ts`'s own per-user preference (mm/mil/in) by routing through its µm-scaled helpers -- a library symbol's own fields are already mm, not µm (see `LibrarySymbolPin`'s own doc), so this is the one seam that lets this dialog honor the same unit choice every other length field in the app does. */
-function mmTo(mm: number, unit: Parameters<typeof umTo>[1]): number {
-  return umTo(mm * 1000, unit);
+function mmTo(mm: number, unit: Parameters<typeof nmTo>[1]): number {
+  return nmTo(mm * 1e6, unit);
 }
-function mmFrom(display: number, unit: Parameters<typeof umFrom>[1]): number {
-  return umFrom(display, unit) / 1000;
+function mmFrom(display: number, unit: Parameters<typeof nmFrom>[1]): number {
+  return nmFrom(display, unit) / 1e6;
 }
 
 export function PinPropertiesDialog() {

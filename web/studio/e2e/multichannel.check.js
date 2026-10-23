@@ -431,11 +431,11 @@
       out.push(await post({ op: "add_track", net: "GND", layer: "F.Cu", width: 300, pts: [{ x: 3000, y: 9000 }, { x: 3000, y: 10500 }] }));
       out.push(await post({ op: "add_via", net: "SUM1", x: 5500, y: 11000, drill: 300, diameter: 600, from_layer: "F.Cu", to_layer: "B.Cu" }));
       out.push(await post({ op: "add_zone", net: "GND", layer: "B.Cu", outline: [{ x: 2500, y: 7000 }, { x: 8500, y: 7000 }, { x: 8500, y: 10500 }, { x: 2500, y: 10500 }] }));
-      out.push(await post({ op: "add_text", text: { content: "CH", at: { x: 6500, y: 12500 }, angle: 0, layer: "F.Cu", size_um: 1000, stroke_width: 150, justify: "center", mirror: false } }));
-      out.push(await post({ op: "add_text", text: { content: "SILK", at: { x: 4000, y: 12000 }, angle: 0, layer: "F.SilkS", size_um: 800, stroke_width: 150, justify: "center", mirror: false } }));
+      out.push(await post({ op: "add_text", text: { content: "CH", at: { x: 6500, y: 12500 }, angle: 0, layer: "F.Cu", size_nm: 1000, stroke_width: 150, justify: "center", mirror: false } }));
+      out.push(await post({ op: "add_text", text: { content: "SILK", at: { x: 4000, y: 12000 }, angle: 0, layer: "F.SilkS", size_nm: 800, stroke_width: 150, justify: "center", mirror: false } }));
       // channel 2's own: a track and a text in its area, a track outside every area
       out.push(await post({ op: "add_track", net: "SUM2", layer: "F.Cu", width: 200, pts: [{ x: 15000, y: 8000 }, { x: 16000, y: 8000 }] }));
-      out.push(await post({ op: "add_text", text: { content: "OLD", at: { x: 19000, y: 12500 }, angle: 0, layer: "F.Cu", size_um: 800, stroke_width: 150, justify: "center", mirror: false } }));
+      out.push(await post({ op: "add_text", text: { content: "OLD", at: { x: 19000, y: 12500 }, angle: 0, layer: "F.Cu", size_nm: 800, stroke_width: 150, justify: "center", mirror: false } }));
       out.push(await post({ op: "add_track", net: "GND", layer: "F.Cu", width: 300, pts: [{ x: 2000, y: 20000 }, { x: 8000, y: 20000 }] }));
       t(out.every((o) => o.ok), `ten edits made (${out.filter((o) => !o.ok).map((o) => o.message)})`);
       await sleep(500);

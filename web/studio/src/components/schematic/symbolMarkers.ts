@@ -14,9 +14,9 @@ export interface Box {
 }
 
 /** `DEFAULT_LINE_WIDTH_MILS` (6 mil) in um. */
-export const DEFAULT_LINE_UM = 152.4;
+export const DEFAULT_LINE_NM = 152_400;
 /** `m_ExcludeFromSimulationLineWidth` (25, mils) in um. */
-const EXCLUDE_SIM_PEN_UM = 635;
+const EXCLUDE_SIM_PEN_NM = 635_000;
 
 /** The bounding box of a symbol's graphics alone (`GetBodyBoundingBox`: no pins, no fields), or null when it draws none. A text is a point here. */
 export function bodyBoundsOf(graphics: readonly ResolvedGraphic[]): Box | null {
@@ -40,8 +40,8 @@ export function bodyBoundsOf(graphics: readonly ResolvedGraphic[]): Box | null {
         for (const p of g.pts) grow(p[0], p[1]);
         break;
       case "circle":
-        grow(g.center[0] - g.radiusUm, g.center[1] - g.radiusUm);
-        grow(g.center[0] + g.radiusUm, g.center[1] + g.radiusUm);
+        grow(g.center[0] - g.radiusNm, g.center[1] - g.radiusNm);
+        grow(g.center[0] + g.radiusNm, g.center[1] + g.radiusNm);
         break;
       case "arc":
         for (const p of [g.start, g.mid, g.end]) grow(p[0], p[1]);
@@ -75,7 +75,7 @@ export function dnpCross(body: Box, all: Box): Array<[[number, number], [number,
 
 /** The Exclude from Simulation mark: the frame (the body widened by half the pen), and the circle with its "S" curve. */
 export function simExclusionMark(body: Box): { frame: Box; pen: number; center: [number, number]; radius: number; curve: [[number, number], [number, number], [number, number], [number, number]] } {
-  const pen = EXCLUDE_SIM_PEN_UM;
+  const pen = EXCLUDE_SIM_PEN_NM;
   const half = Math.round(pen * 0.5);
   const frame: Box = { minX: body.minX - half, minY: body.minY - half, maxX: body.maxX + half, maxY: body.maxY + half };
   const offset = 2 * pen;

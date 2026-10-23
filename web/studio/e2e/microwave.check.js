@@ -144,7 +144,7 @@
   const coilLengths = async (tw) => {
     const found = {};
     for (let mm = 9; mm <= 300; mm += 0.5) {
-      const r = await post("/api/microwave/inductor", { start: { x: 0, y: 0 }, end: { x: 10000, y: 0 }, length_um: Math.round(mm * 1000), track_width_um: tw });
+      const r = await post("/api/microwave/inductor", { start: { x: 0, y: 0 }, end: { x: 10000, y: 0 }, length_nm: Math.round(mm * 1000), track_width_nm: tw });
       (found[r.ok ? "ok" : r.message] ??= []).push(mm);
     }
     const mid = (k) => (found[k] ? found[k][Math.floor(found[k].length / 2)] : null);
@@ -303,7 +303,7 @@
     });
 
     await scenario("the microwave footprints are footprints: rotated, turned over, duplicated and deleted, each one undo step; Strict does not hold them to a courtyard of their pads", async (t) => {
-      await cmd({ op: "microwave", verb: "stub", at: { x: Math.round(at(10, 20)[0] * 1000), y: Math.round(at(10, 20)[1] * 1000) }, size_um: 1000, track_width_um: TW });
+      await cmd({ op: "microwave", verb: "stub", at: { x: Math.round(at(10, 20)[0] * 1000), y: Math.round(at(10, 20)[1] * 1000) }, size_nm: 1000, track_width_nm: TW });
       await sleep(900);
       const s = (await mine())[0];
       t(!!s, "a stub on the board");
@@ -341,8 +341,8 @@
       // Strict on: a stub at a corner of the board and a gap right beside it are placed
       await setStrict(true);
       const c1 = at(0.6, 0.6);
-      await cmdStrict({ op: "microwave", verb: "gap", at: { x: Math.round(c1[0] * 1000), y: Math.round(c1[1] * 1000) }, size_um: 500, track_width_um: TW });
-      await cmdStrict({ op: "microwave", verb: "gap", at: { x: Math.round(c1[0] * 1000) + 600, y: Math.round(c1[1] * 1000) + 3000 }, size_um: 500, track_width_um: TW });
+      await cmdStrict({ op: "microwave", verb: "gap", at: { x: Math.round(c1[0] * 1000), y: Math.round(c1[1] * 1000) }, size_nm: 500, track_width_nm: TW });
+      await cmdStrict({ op: "microwave", verb: "gap", at: { x: Math.round(c1[0] * 1000) + 600, y: Math.round(c1[1] * 1000) + 3000 }, size_nm: 500, track_width_nm: TW });
       t((await mine()).length === 2, "with Strict on, footprints at the corner of the board and a few mm apart are accepted (no courtyard of their pads to refuse)");
       await setStrict(false);
       await deleteAll();
@@ -521,13 +521,13 @@
 
     await scenario("the footprints of the tools open in the Footprint Editor like any footprint of the board: Edit Footprint (Ctrl+E) loads each, the page keeps running", async (t) => {
       const [x0, y0] = at(6, 6).map((v) => Math.round(v * 1000));
-      const mk = (c) => cmd({ op: "microwave", track_width_um: TW, ...c });
-      await mk({ verb: "gap", at: { x: x0, y: y0 }, size_um: 500 });
-      await mk({ verb: "stub", at: { x: x0 + 4000, y: y0 }, size_um: 1000 });
-      await mk({ verb: "arc_stub", at: { x: x0 + 8000, y: y0 }, radius_um: 2000, angle_millideg: 60000 });
+      const mk = (c) => cmd({ op: "microwave", track_width_nm: TW, ...c });
+      await mk({ verb: "gap", at: { x: x0, y: y0 }, size_nm: 500 });
+      await mk({ verb: "stub", at: { x: x0 + 4000, y: y0 }, size_nm: 1000 });
+      await mk({ verb: "arc_stub", at: { x: x0 + 8000, y: y0 }, radius_nm: 2000, angle_millideg: 60000 });
       await mk({ verb: "function_shape", at: { x: x0 + 12000, y: y0 }, file: SHAPE });
       const coil = (await coilLengths(TW)).ok;
-      await mk({ verb: "inductor", start: { x: x0, y: y0 + 6000 }, end: { x: x0 + 10000, y: y0 + 6000 }, length_um: Math.round(coil * 1000), name: "L1" });
+      await mk({ verb: "inductor", start: { x: x0, y: y0 + 6000 }, end: { x: x0 + 10000, y: y0 + 6000 }, length_nm: Math.round(coil * 1000), name: "L1" });
       await sleep(900);
       const made = await mine();
       t(made.length === 5, `five footprints of the tools (${made.map((p) => p.footprint)})`);

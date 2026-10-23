@@ -20,8 +20,8 @@
 // The board/API data has no inherent 3rd dimension, only a flat XY
 // board plane. This file's own (only sensible) choice of axes:
 //
-//   world X = board X, in mm (board µm / 1000), unflipped.
-//   world Z = board Y, in mm (board µm / 1000), unflipped.
+//   world X = board X, in mm (board nm / 1e6), unflipped.
+//   world Z = board Y, in mm (board nm / 1e6), unflipped.
 //   world Y = board thickness, "up" out of the top (F.Cu) side.
 //
 // world Y = thickness is deliberate, not arbitrary: it matches Three.js's
@@ -58,7 +58,7 @@ import { THEME_COLORS, shapeLayerOf, type Rgba } from "../../kicad-port/appearan
 import { circleThrough, normalizeSweep } from "../canvas/painter";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { boardOutlinePolygons } from "../../kicad-port/pcbOutline";
-import { fallbackBodyHeightMm, partBodyBoxUm } from "../../kicad-port/partBody";
+import { fallbackBodyHeightMm, partBodyBoxNm } from "../../kicad-port/partBody";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { artTextAsField, graphicsOf, layersOf } from "../../kicad-port/fpArt";
 import { fieldAsText } from "../../kicad-port/fpFields";
@@ -70,7 +70,7 @@ import { zoneCopperLayers } from "../../kicad-port/zoneLayers";
 
 /** Micrometres -> millimetres (this scene's Three.js unit). */
 function mm(um: number): number {
-  return um / 1000;
+  return um / 1e6;
 }
 
 // ---------------------------------------------------------------------
@@ -586,7 +586,7 @@ export function placeholderMaterials(): PlaceholderMaterials {
  */
 export function buildPartPlaceholder(part: Part, materials: PlaceholderMaterials): THREE.Mesh | null {
   const side = part.side;
-  const body = partBodyBoxUm(part);
+  const body = partBodyBoxNm(part);
   if (!part.placed || !side || !body) return null;
   return partBodyMesh([mm(body[0]), mm(body[1]), mm(body[2]), mm(body[3])], side, isPassivePart(part) ? materials.passive : materials.ic);
 }
@@ -708,7 +708,7 @@ function addLayerShape(group: THREE.Group, s: Shape, y: number, lineMaterial: TH
   }
 }
 
-/** Texture resolution for silk text -- pixels per mm of text height, chosen crisp enough for typical zoom levels (this becomes strokeFont.ts's own "sizeUm" unit for the offscreen canvas, in pixels rather than um -- see buildSilkTextMesh). */
+/** Texture resolution for silk text -- pixels per mm of text height, chosen crisp enough for typical zoom levels (this becomes strokeFont.ts's own "sizeNm" unit for the offscreen canvas, in pixels rather than um -- see buildSilkTextMesh). */
 const TEXT_TEXTURE_PX_PER_MM = 48;
 
 /**
@@ -758,8 +758,8 @@ function buildSilkTextMesh(spec: SilkTextSpec): THREE.Mesh {
   // Baseline sits a bit above vertical center (descenders need room
   // below it too), matching the old fillText version's rough centering.
   drawStrokeText(ctx, content, padPx, canvas.height * 0.6, {
-    sizeUm: px, // "Um" in name only -- strokeFont.ts is unit-agnostic; this call's unit is texture pixels
-    thicknessUm: spec.thicknessMm !== undefined ? spec.thicknessMm * (px / sizeMm) : undefined,
+    sizeNm: px, // "Nm" in name only -- strokeFont.ts is unit-agnostic; this call's unit is texture pixels
+    thicknessNm: spec.thicknessMm !== undefined ? spec.thicknessMm * (px / sizeMm) : undefined,
     justify: "left",
     color: "#ffffff",
   });
@@ -839,20 +839,20 @@ function buildRefDesignatorMesh(part: Part): THREE.Mesh | null {
   const side = part.side;
   if (!courtyard || !side) return null;
   const [x0, y0, x1, y1] = courtyard;
-  const sizeUm = Math.max(500, Math.min(900, Math.min(x1 - x0, y1 - y0) * 0.45));
+  const sizeNm = Math.max(500_000, Math.min(900_000, Math.min(x1 - x0, y1 - y0) * 0.45));
   const cx = (x0 + x1) / 2;
   const cy = (y0 + y1) / 2;
   let tx = cx;
-  let ty = y0 - sizeUm * 0.3;
+  let ty = y0 - sizeNm * 0.3;
   let justify: "left" | "center" | "right" = "center";
-  if (part.label === "below") ty = y1 + sizeUm * 0.95;
+  if (part.label === "below") ty = y1 + sizeNm * 0.95;
   if (part.label === "left") {
-    tx = x0 - sizeUm * 0.3;
+    tx = x0 - sizeNm * 0.3;
     ty = cy;
     justify = "right";
   }
   if (part.label === "right") {
-    tx = x1 + sizeUm * 0.3;
+    tx = x1 + sizeNm * 0.3;
     ty = cy;
     justify = "left";
   }
@@ -860,7 +860,7 @@ function buildRefDesignatorMesh(part: Part): THREE.Mesh | null {
     content: part.ref,
     xMm: mm(tx),
     zMm: mm(ty),
-    sizeMm: mm(sizeUm),
+    sizeMm: mm(sizeNm),
     angleDeg: 0,
     side,
     justify,

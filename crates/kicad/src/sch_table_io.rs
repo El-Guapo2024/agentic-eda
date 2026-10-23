@@ -372,8 +372,8 @@ mod tests {
     fn the_table_kicad_wrote_reads_as_a_grid_with_its_cells() {
         let r = read_first(KICAD_TABLE);
         let t = &r.table;
-        assert_eq!((t.col_count(), t.row_count(), t.at, t.angle), (2, 2, Point { x: 122_555, y: 29_210 }, 0));
-        assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![26_670, 21_590], vec![2_540, 2_540]));
+        assert_eq!((t.col_count(), t.row_count(), t.at, t.angle), (2, 2, Point { x: 122_555_000, y: 29_210_000 }, 0));
+        assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![26_670_000, 21_590_000], vec![2_540_000, 2_540_000]));
         assert_eq!(t.texts(), vec![vec!["LED pin (by VectorIndex)", "Expected net"], vec!["LEDs0", "CON_A_1"]]);
         assert_eq!(r.uuid.as_deref(), Some("df0f6b4f-dec6-4a60-8f35-956cd22f196e"));
         assert!(!r.locked);
@@ -381,12 +381,12 @@ mod tests {
         assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_nm), (true, true, 0));
         let c = &t.cells[0];
         // 1.27 mm text, left and top, the margin 0.9525 mm (to the micrometre it is held in), no fill, in simulation
-        assert_eq!((c.style.height_nm, c.style.width_nm, c.style.h_align, c.style.v_align, c.fill, c.exclude_from_sim), (1_270, 1_270, eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, SchFill::None, false));
+        assert_eq!((c.style.height_nm, c.style.width_nm, c.style.h_align, c.style.v_align, c.fill, c.exclude_from_sim), (1_270_000, 1_270_000, eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, SchFill::None, false));
         assert!(c.margins.iter().all(|m| (*m - 952).abs() <= 1), "{:?}", c.margins);
         assert_eq!(c.uuid, "b8109563-e2fa-4fb6-9110-83137bb1a864");
         // the cells are where the file put them
         for (i, (row, col)) in [(0, 0), (0, 1), (1, 0), (1, 1)].into_iter().enumerate() {
-            let want = [Point { x: 122_555, y: 29_210 }, Point { x: 149_225, y: 29_210 }, Point { x: 122_555, y: 31_750 }, Point { x: 149_225, y: 31_750 }][i];
+            let want = [Point { x: 122_555_000, y: 29_210_000 }, Point { x: 149_225_000, y: 29_210_000 }, Point { x: 122_555_000, y: 31_750_000 }, Point { x: 149_225_000, y: 31_750_000 }][i];
             assert_eq!(t.cell_corners(row, col)[0], want);
         }
     }
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn a_table_that_stands_keeps_its_attitude_and_its_cells_places() {
-        let mut t = Table::new_sch_grid(Point { x: 50_000, y: 80_000 }, 2, 2, 20_000, 5_000, 1_270);
+        let mut t = Table::new_sch_grid(Point { x: 50_000_000, y: 80_000_000 }, 2, 2, 20_000_000, 5_000_000, 1_270_000);
         t.angle = 90_000;
         t.cells[0].text = "a \"quoted\"\nline".into();
         t.cells[1].col_span = 1;
@@ -435,8 +435,8 @@ mod tests {
 		(cells (table_cell "x" (at 1 2 0) (size 10 4) (span 1 1))))
 )"#;
         let t = read_first(text).table;
-        assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (152, 152));
-        assert_eq!((t.cells[0].style.h_align, t.cells[0].style.v_align, t.cells[0].style.height_nm), (eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, 1_270));
+        assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (152_000, 152_000));
+        assert_eq!((t.cells[0].style.h_align, t.cells[0].style.v_align, t.cells[0].style.height_nm), (eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, 1_270_000));
         // no margins: the legacy margin of the cell (the stroke's half and three quarters of 1.27 mm)
         assert!(t.cells[0].margins.iter().all(|m| *m == 76 + 953), "{:?}", t.cells[0].margins);
         // and nothing is written for the strokes of a table that draws none

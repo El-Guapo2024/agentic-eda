@@ -7,14 +7,14 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { LabelShape, Schematic, Sheet } from "../api/types";
 import type { Box, P } from "./schItemGeom";
-import { defaultPenUm } from "./schText";
+import { defaultPenNm } from "./schText";
 
 export type SheetSide = "left" | "right" | "top" | "bottom";
 
 /** `m_DefaultTextSize`: the size a sheet pin's text is set in (50 mils), micrometres. */
-export const SHEET_PIN_TEXT_SIZE_UM = 1270;
+export const SHEET_PIN_TEXT_SIZE_NM = 1_270_000;
 /** `DANGLING_SYMBOL_SIZE`: 12 mils. */
-const DANGLING_UM = 304.8;
+const DANGLING_NM = 304_800;
 /** `m_textOffsetRatio` (0.15) of the text size: `EDA_TEXT`'s margin around a label's text. */
 const TEXT_OFFSET_RATIO = 0.15;
 
@@ -25,12 +25,12 @@ export function sheetPinSide(sheet: { at: readonly [number, number]; size: reado
   return at[0] <= x ? "left" : at[0] >= x + w ? "right" : at[1] <= y ? "top" : "bottom";
 }
 
-/** `SCH_HIERLABEL::GetBodyBoundingBox` of a sheet pin on `side`: the flag and the name, from the pin's own point (`widthUm` is the name's width in the font). */
-export function sheetPinBodyBox(at: readonly [number, number], side: SheetSide, widthUm: number, sizeUm = SHEET_PIN_TEXT_SIZE_UM): Box {
-  const pen = defaultPenUm(sizeUm);
-  const margin = Math.round(sizeUm * TEXT_OFFSET_RATIO);
-  const height = sizeUm + pen + margin;
-  const length = widthUm + height; // "add height for triangular shapes"
+/** `SCH_HIERLABEL::GetBodyBoundingBox` of a sheet pin on `side`: the flag and the name, from the pin's own point (`widthNm` is the name's width in the font). */
+export function sheetPinBodyBox(at: readonly [number, number], side: SheetSide, widthNm: number, sizeNm = SHEET_PIN_TEXT_SIZE_NM): Box {
+  const pen = defaultPenNm(sizeNm);
+  const margin = Math.round(sizeNm * TEXT_OFFSET_RATIO);
+  const height = sizeNm + pen + margin;
+  const length = widthNm + height; // "add height for triangular shapes"
   let x = at[0];
   let y = at[1];
   let dx: number;
@@ -39,26 +39,26 @@ export function sheetPinBodyBox(at: readonly [number, number], side: SheetSide, 
     case "right": // the pin is on the right border: its text runs left into the sheet (`SPIN_STYLE::LEFT`)
       dx = -length;
       dy = height;
-      x += DANGLING_UM;
+      x += DANGLING_NM;
       y -= height / 2;
       break;
     case "bottom": // `SPIN_STYLE::UP`
       dx = height;
       dy = -length;
       x -= height / 2;
-      y += DANGLING_UM;
+      y += DANGLING_NM;
       break;
     case "left": // `SPIN_STYLE::RIGHT`
       dx = length;
       dy = height;
-      x -= DANGLING_UM;
+      x -= DANGLING_NM;
       y -= height / 2;
       break;
     case "top": // `SPIN_STYLE::BOTTOM`
       dx = height;
       dy = length;
       x -= height / 2;
-      y -= DANGLING_UM;
+      y -= DANGLING_NM;
       break;
   }
   return { minX: Math.min(x, x + dx), minY: Math.min(y, y + dy), maxX: Math.max(x, x + dx), maxY: Math.max(y, y + dy) };
@@ -73,7 +73,7 @@ export interface SheetPinItem {
   at: [number, number];
   side: SheetSide;
   /** The size the pin's text is set in (`EDA_TEXT::GetTextWidth`), micrometres: Sheet Pin Properties' own, else 50 mil. */
-  sizeUm: number;
+  sizeNm: number;
 }
 
 const cache = new WeakMap<Schematic, SheetPinItem[]>();
@@ -83,7 +83,7 @@ export function sheetPinItems(sch: Schematic): SheetPinItem[] {
   let items = cache.get(sch);
   if (!items) {
     items = [];
-    for (const s of sch.sheets ?? []) for (const p of s.pins ?? []) if (p.id) items.push({ id: p.id, sheetId: s.id, name: p.name, shape: p.shape, at: p.at, side: sheetPinSide(s, p.at), sizeUm: p.size_um && p.size_um > 0 ? p.size_um : SHEET_PIN_TEXT_SIZE_UM });
+    for (const s of sch.sheets ?? []) for (const p of s.pins ?? []) if (p.id) items.push({ id: p.id, sheetId: s.id, name: p.name, shape: p.shape, at: p.at, side: sheetPinSide(s, p.at), sizeNm: p.size_nm && p.size_nm > 0 ? p.size_nm : SHEET_PIN_TEXT_SIZE_NM });
     cache.set(sch, items);
   }
   return items;
@@ -99,17 +99,17 @@ export function sheetOfPin(sch: Schematic, pin: SheetPinItem): Sheet | undefined
 }
 
 /** How wide a text of the given size is, micrometres. */
-export type Measure = (text: string, sizeUm: number) => number;
+export type Measure = (text: string, sizeNm: number) => number;
 
 /** The box of a sheet pin (`SCH_SHEET_PIN::GetBoundingBox`). */
 export function sheetPinBox(pin: SheetPinItem, measure: Measure): Box {
-  return sheetPinBodyBox(pin.at, pin.side, measure(pin.name, pin.sizeUm), pin.sizeUm);
+  return sheetPinBodyBox(pin.at, pin.side, measure(pin.name, pin.sizeNm), pin.sizeNm);
 }
 
 /** `SCH_SHEET_PIN::HitTest( aPoint, aAccuracy )`: the box, grown by the accuracy. */
-export function hitSheetPin(pin: SheetPinItem, p: P, accuracyUm: number, measure: Measure): boolean {
+export function hitSheetPin(pin: SheetPinItem, p: P, accuracyNm: number, measure: Measure): boolean {
   const b = sheetPinBox(pin, measure);
-  return p[0] >= b.minX - accuracyUm && p[0] <= b.maxX + accuracyUm && p[1] >= b.minY - accuracyUm && p[1] <= b.maxY + accuracyUm;
+  return p[0] >= b.minX - accuracyNm && p[0] <= b.maxX + accuracyNm && p[1] >= b.minY - accuracyNm && p[1] <= b.maxY + accuracyNm;
 }
 
 /**

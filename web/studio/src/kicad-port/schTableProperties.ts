@@ -13,7 +13,7 @@
 // same rows under its own class (same names, same groups, same order as KiCad shows them).
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardTableCell, Cmd, Schematic, Um } from "../api/types";
+import type { BoardTableCell, Cmd, Schematic, Nm } from "../api/types";
 import type { TableCellEdit } from "../api/tableTypes";
 import { colorToHex, hexToColor, isUnspecified } from "./schProperties";
 import type { PropertyManager, PropertyDef, PropValue } from "./propertyManager";
@@ -126,10 +126,10 @@ export function registerSchTableProperties<I extends Item, C>(pm: PropertyManage
       get: (i) => i.cell!.size_h,
       available: isCell,
       // `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM`: "Don't allow text to disappear" (0.01 to 1000 mm)
-      validate: (v) => (num(v) < 10 ? "The text size must be at least 0.01 mm." : num(v) > 1_000_000 ? "Value must be less than or equal to 1000 mm" : null),
+      validate: (v) => (num(v) < 10_000 ? "The text size must be at least 0.01 mm." : num(v) > 1_000_000_000 ? "Value must be less than or equal to 1000 mm" : null),
       set: (i, v) => {
         const size = Math.round(num(v));
-        return i.cell!.size_h === size && i.cell!.size_w === size ? [] : [editCell(i, { width_um: size, height_um: size })];
+        return i.cell!.size_h === size && i.cell!.size_w === size ? [] : [editCell(i, { width_nm: size, height_nm: size })];
       },
     },
     TEXT
@@ -149,7 +149,7 @@ export function registerSchTableProperties<I extends Item, C>(pm: PropertyManage
         set: (i, v) => {
           const m = Math.round(num(v));
           if (i.cell!.margins[k] === m) return [];
-          const margins: [Um | null, Um | null, Um | null, Um | null] = [null, null, null, null];
+          const margins: [Nm | null, Nm | null, Nm | null, Nm | null] = [null, null, null, null];
           margins[k] = m;
           return [editCell(i, { margins })];
         },
@@ -169,7 +169,7 @@ export function registerSchTableProperties<I extends Item, C>(pm: PropertyManage
       get: (i) => i.table!.col_widths[i.cell!.col]!,
       available: isCell,
       validate: (v) => (num(v) <= 0 ? "The column width must be positive." : null),
-      set: (i, v) => ((i.table!.col_widths[i.cell!.col] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { col_width_um: Math.round(num(v)) })]),
+      set: (i, v) => ((i.table!.col_widths[i.cell!.col] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { col_width_nm: Math.round(num(v)) })]),
     },
     TABLE_GROUP
   );
@@ -182,7 +182,7 @@ export function registerSchTableProperties<I extends Item, C>(pm: PropertyManage
       get: (i) => i.table!.row_heights[i.cell!.row]!,
       available: isCell,
       validate: (v) => (num(v) <= 0 ? "The row height must be positive." : null),
-      set: (i, v) => ((i.table!.row_heights[i.cell!.row] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { row_height_um: Math.round(num(v)) })]),
+      set: (i, v) => ((i.table!.row_heights[i.cell!.row] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { row_height_nm: Math.round(num(v)) })]),
     },
     TABLE_GROUP
   );

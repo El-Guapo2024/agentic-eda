@@ -20,7 +20,7 @@ import { buildGrid, extractValueAndWritability, planEdit, tooSmall, type EditPla
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import { colorToHex, hexToColor, isUnspecified, strokeEditCmd, UNSPECIFIED_COLOR } from "./schProperties";
 import { circumcircle } from "./trackArc";
-import { DEFAULT_PPI, imageSizeUm, SCALE_PPM, scaleForHeightUm, scaleForWidthUm } from "./refImage";
+import { DEFAULT_PPI, imageSizeNm, SCALE_PPM, scaleForHeightNm, scaleForWidthNm } from "./refImage";
 import { registerSchTableProperties, schTableItemOf } from "./schTableProperties";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
@@ -225,14 +225,14 @@ const WIRE_STYLES: Choice[] = [{ label: "Default", value: "default" }, ...LINE_S
 const colorValue = (c: SchColor | null | undefined): string => (!c || isUnspecified(c) ? "" : colorToHex(c));
 const colorOf = (text: string): SchColor => (text === "" ? UNSPECIFIED_COLOR : (hexToColor(text) ?? UNSPECIFIED_COLOR));
 
-/** The stroke of a wire, a bus, a bus entry or a graphic line, with the width a graphic line keeps in `width_um`. */
+/** The stroke of a wire, a bus, a bus entry or a graphic line, with the width a graphic line keeps in `width_nm`. */
 function strokeOf(i: SchItem): { width: number; style: SchLineStyle; color: string } {
-  if (i.line) return { width: i.line.width_um, style: i.line.stroke?.style ?? "default", color: colorValue(i.line.stroke?.color) };
+  if (i.line) return { width: i.line.width_nm, style: i.line.stroke?.style ?? "default", color: colorValue(i.line.stroke?.color) };
   const st = i.wire?.stroke ?? i.busEntry?.stroke;
-  return { width: st?.width_um ?? 0, style: st?.style ?? "default", color: colorValue(st?.color) };
+  return { width: st?.width_nm ?? 0, style: st?.style ?? "default", color: colorValue(st?.color) };
 }
 
-const strokeCmds = (i: SchItem, patch: { widthUm?: number; style?: SchLineStyle; color?: SchColor; diameterUm?: number }): Cmd[] => {
+const strokeCmds = (i: SchItem, patch: { widthNm?: number; style?: SchLineStyle; color?: SchColor; diameterNm?: number }): Cmd[] => {
   const c = strokeEditCmd([i.id], patch);
   return c ? [c] : [];
 };
@@ -284,7 +284,7 @@ export function graphicShapeWith(s: SchGraphicShape, name: Geometry, v: number):
       if (s.type === "circle") next = { ...s, center: px(s.center, name === "Center X" ? 0 : 1) };
       break;
     case "Radius":
-      if (s.type === "circle") next = { ...s, radius_um: v };
+      if (s.type === "circle") next = { ...s, radius_nm: v };
       break;
     case "Width":
     case "Height":
@@ -295,7 +295,7 @@ export function graphicShapeWith(s: SchGraphicShape, name: Geometry, v: number):
       }
       break;
     case "Corner Radius":
-      if (s.type === "rectangle") next = { ...s, corner_radius_um: v };
+      if (s.type === "rectangle") next = { ...s, corner_radius_nm: v };
       break;
   }
   return next && JSON.stringify(next) !== JSON.stringify(s) ? next : null;
@@ -309,7 +309,7 @@ const pointOf = (s: SchGraphicShape, which: "start" | "end"): PointXY => {
     case "text_box":
       return which === "start" ? s.start : s.end;
     case "circle":
-      return which === "start" ? s.center : { x: s.center.x + s.radius_um, y: s.center.y };
+      return which === "start" ? s.center : { x: s.center.x + s.radius_nm, y: s.center.y };
     default:
       return { x: 0, y: 0 };
   }
@@ -530,13 +530,13 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         name: "Text Size",
         kind: "int",
         display: "size",
-        get: (i) => (i.text ? i.text.size_um : isTextBox(i) ? textBox(i).size_um : 0),
+        get: (i) => (i.text ? i.text.size_nm : isTextBox(i) ? textBox(i).size_nm : 0),
         // `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM`: "Don't allow text to disappear" (0.01 to 1000 mm)
-        validate: (v, _i, c) => (num(v) < 10 ? tooSmall(10, "size", c.units) : num(v) > 1_000_000 ? "Value must be less than or equal to 1000 mm" : null),
+        validate: (v, _i, c) => (num(v) < 10_000 ? tooSmall(10_000, "size", c.units) : num(v) > 1_000_000_000 ? "Value must be less than or equal to 1000 mm" : null),
         set: (i, v) => {
           const size = Math.round(num(v));
-          if (i.text) return i.text.size_um === size ? [] : [{ op: "sch_edit", verb: "edit_text", id: i.id, size_um: size }];
-          return isTextBox(i) && textBox(i).size_um !== size ? [withShape(i.graphic!, { ...textBox(i), size_um: size })] : [];
+          if (i.text) return i.text.size_nm === size ? [] : [{ op: "sch_edit", verb: "edit_text", id: i.id, size_nm: size }];
+          return isTextBox(i) && textBox(i).size_nm !== size ? [withShape(i.graphic!, { ...textBox(i), size_nm: size })] : [];
         },
       },
       TEXT_PROPS
@@ -593,9 +593,9 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     name: "Pin length",
     kind: "int",
     display: "size",
-    get: (i) => directive(i).pin_length_um,
+    get: (i) => directive(i).pin_length_nm,
     validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
-    set: (i, v) => (directive(i).pin_length_um === num(v) ? [] : [withShape(i.graphic!, { ...directive(i), pin_length_um: Math.round(num(v)) })]),
+    set: (i, v) => (directive(i).pin_length_nm === num(v) ? [] : [withShape(i.graphic!, { ...directive(i), pin_length_nm: Math.round(num(v)) })]),
   });
 
   // --------------------------------------------------------------------------------------------------------------- SCH_LINE
@@ -644,7 +644,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     display: "size",
     get: (i) => strokeOf(i).width,
     validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
-    set: (i, v) => (strokeOf(i).width === num(v) ? [] : strokeCmds(i, { widthUm: Math.round(num(v)) })),
+    set: (i, v) => (strokeOf(i).width === num(v) ? [] : strokeCmds(i, { widthNm: Math.round(num(v)) })),
   });
   add({
     owner: "SCH_LINE",
@@ -661,9 +661,9 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     name: "Diameter",
     kind: "int",
     display: "size",
-    get: (i) => i.junction!.look?.diameter_um ?? 0,
+    get: (i) => i.junction!.look?.diameter_nm ?? 0,
     validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
-    set: (i, v) => ((i.junction!.look?.diameter_um ?? 0) === num(v) ? [] : strokeCmds(i, { diameterUm: Math.round(num(v)) })),
+    set: (i, v) => ((i.junction!.look?.diameter_nm ?? 0) === num(v) ? [] : strokeCmds(i, { diameterNm: Math.round(num(v)) })),
   });
   add({
     owner: "SCH_JUNCTION",
@@ -683,7 +683,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     display: "size",
     get: (i) => strokeOf(i).width,
     validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
-    set: (i, v) => (strokeOf(i).width === num(v) ? [] : strokeCmds(i, { widthUm: Math.round(num(v)) })),
+    set: (i, v) => (strokeOf(i).width === num(v) ? [] : strokeCmds(i, { widthNm: Math.round(num(v)) })),
   });
   add({ owner: "SCH_BUS_ENTRY_BASE", name: "Color", kind: "color", get: (i) => strokeOf(i).color, set: (i, v) => (strokeOf(i).color === String(v) ? [] : strokeCmds(i, { color: colorOf(String(v)) })) });
 
@@ -749,21 +749,21 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   geometry("Start Y", "coord", (s) => pointOf(s, "start").y, hasCorners);
   geometry("Center X", "coord", (s) => pointOf(s, "start").x, typeIs("circle"));
   geometry("Center Y", "coord", (s) => pointOf(s, "start").y, typeIs("circle"));
-  geometry("Radius", "size", (s) => (s.type === "circle" ? s.radius_um : 0), typeIs("circle"));
+  geometry("Radius", "size", (s) => (s.type === "circle" ? s.radius_nm : 0), typeIs("circle"));
   geometry("End X", "coord", (s) => pointOf(s, "end").x, hasCorners);
   geometry("End Y", "coord", (s) => pointOf(s, "end").y, hasCorners);
   geometry("Width", "size", (s) => (s.type === "rectangle" || s.type === "text_box" ? Math.abs(s.end.x - s.start.x) : 0), typeIs("rectangle", "text_box"));
   geometry("Height", "size", (s) => (s.type === "rectangle" || s.type === "text_box" ? Math.abs(s.end.y - s.start.y) : 0), typeIs("rectangle", "text_box"));
-  geometry("Corner Radius", "size", (s) => (s.type === "rectangle" ? (s.corner_radius_um ?? 0) : 0), typeIs("rectangle"));
+  geometry("Corner Radius", "size", (s) => (s.type === "rectangle" ? (s.corner_radius_nm ?? 0) : 0), typeIs("rectangle"));
   add(
     {
       owner: "EDA_SHAPE",
       name: "Line Width",
       kind: "int",
       display: "size",
-      get: (i) => i.graphic!.width_um ?? 0,
+      get: (i) => i.graphic!.width_nm ?? 0,
       validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
-      set: (i, v) => ((i.graphic!.width_um ?? 0) === num(v) ? [] : [graphicCmd(i.graphic!, { width_um: Math.round(num(v)) })]),
+      set: (i, v) => ((i.graphic!.width_nm ?? 0) === num(v) ? [] : [graphicCmd(i.graphic!, { width_nm: Math.round(num(v)) })]),
     },
     SHAPE_PROPS
   );
@@ -882,13 +882,13 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         name,
         kind: "int",
         display: "size",
-        get: (i) => imageSizeUm(image(i).px ?? [0, 0], image(i).ppi ?? DEFAULT_PPI, image(i).scale_ppm ?? SCALE_PPM)[name === "Width" ? 0 : 1],
+        get: (i) => imageSizeNm(image(i).px ?? [0, 0], image(i).ppi ?? DEFAULT_PPI, image(i).scale_ppm ?? SCALE_PPM)[name === "Width" ? 0 : 1],
         validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
         set: (i, v) => {
           const want = Math.round(num(v));
           const px = image(i).px ?? [0, 0];
           const ppi = image(i).ppi ?? DEFAULT_PPI;
-          return want <= 0 ? [] : rescale(i, name === "Width" ? scaleForWidthUm(px, ppi, want) : scaleForHeightUm(px, ppi, want));
+          return want <= 0 ? [] : rescale(i, name === "Width" ? scaleForWidthNm(px, ppi, want) : scaleForHeightNm(px, ppi, want));
         },
       },
       IMAGE_PROPS

@@ -46,7 +46,7 @@ mod tests {
     fn an_ending_reads_as_parse_line_ending_reads_it() {
         let item = sexpr::parse(r#"(gr_line (start 0 0) (end 1 0) (stroke (width 0.6) (type default)) (start_shape arrow_open (length 3) (width 2.5) (stroke (width 0.6) (type dash))) (end_shape circle) (layer "F.SilkS"))"#).unwrap();
         let e = read(item.as_list().unwrap());
-        assert_eq!(e.start, LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: 3000, width_nm: 2500, stroke_width_nm: 600, stroke_style: LineStyle::Dash });
+        assert_eq!(e.start, LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: 3_000_000, width_nm: 2_500_000, stroke_width_nm: 600_000, stroke_style: LineStyle::Dash });
         assert_eq!(e.end, LineEnding::new(LineEndingStyle::Circle));
         assert_eq!(words(&e, false), " (start_shape arrow_open (length 3) (width 2.5) (stroke (width 0.6) (type dash))) (end_shape circle)");
         assert_eq!(words(&e, true), "", "a closed shape writes none");
@@ -63,7 +63,7 @@ mod tests {
         let (design, model, _) = crate::import::import_kicad_pcb(board).unwrap();
         let dr = design.drawings.as_ref().unwrap();
         let line = dr.shapes.iter().find(|s| matches!(s, eda_model::ir::Shape::Segment { .. })).unwrap();
-        assert_eq!(dr.board_items.endings_of(line.id()).start, LineEnding { style: LineEndingStyle::Arrow, length_nm: 3000, width_nm: 3000, ..Default::default() });
+        assert_eq!(dr.board_items.endings_of(line.id()).start, LineEnding { style: LineEndingStyle::Arrow, length_nm: 3_000_000, width_nm: 3_000_000, ..Default::default() });
         assert_eq!(dr.board_items.net_of(line.id()), Some("SIG"));
         let out = crate::export_kicad_pcb(&design, &model, &crate::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
         let written = out.lines().find(|l| l.contains("(gr_line (start 0 0)")).unwrap();

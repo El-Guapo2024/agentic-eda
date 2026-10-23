@@ -123,16 +123,16 @@ export function applyBoxSelectionModifiers(current: ReadonlySet<string>, hitIds:
 /** What GuessSelectionCandidates needs to know about each overlapping candidate. */
 export interface GuessCandidate {
   /** pcb_selection_tool.cpp hitTestDistance: 0 = exact/inside hit, world µm distance to the item's own outline otherwise, already clamped to some reasonable max by the caller. */
-  slopUm: number;
+  slopNm: number;
   /** An approximate "coverage area" (board µm²) used only to compare candidates relatively -- pcb_selection_tool.cpp's itemsByArea (FOOTPRINT::GetCoverageArea, with vias/zone-borders artificially shrunk). Smaller wins when one item sits inside a much bigger one. */
-  areaUm2: number;
+  areaNm2: number;
   /** The layer this candidate is considered "on" for the active-layer preference pass, or null for an item that doesn't belong to a single layer (a footprint as a whole, a through via) -- treated as always-on-layer, same effect as source's items never entering `rejected` for not matching `activeLayer`. */
   layer: string | null;
 }
 
 /** pcb_selection_tool.cpp: "Prefer exact hits to sloppy ones" -- MAX_SLOP's role is in the caller's own hitTestDistance clamp; this constant is the *second* threshold, `singlePixel`, source adds on top of the best candidate's own slop. */
-export function sloppinessThresholdUm(onePixelUm: number): number {
-  return onePixelUm;
+export function sloppinessThresholdNm(onePixelNm: number): number {
+  return onePixelNm;
 }
 
 /** pcb_selection_tool.cpp GuessSelectionCandidates: "If the user clicked on a small item within a much larger one then it's pretty clear they're trying to select the smaller one." */
@@ -144,7 +144,7 @@ export const SIZE_RATIO = 1.5;
  * silk/courtyard-active-layer heuristic -- this app has no distinct
  * silkscreen-text item type to special-case, and no footprint
  * coverage-ratio override -- no Clipper-based exact polygon coverage
- * here, just the approximate `areaUm2` the caller computed):
+ * here, just the approximate `areaNm2` the caller computed):
  *
  *   1. Prefer exact/near hits over sloppy ones (within one screen pixel
  *      of the single best hit).
@@ -156,25 +156,25 @@ export const SIZE_RATIO = 1.5;
  * the caller shows the disambiguation menu, matching source's `if
  * (collector.GetCount() > 1) { ... doSelectionMenu ... }`).
  */
-export function guessSelectionCandidates<T extends GuessCandidate>(candidates: readonly T[], onePixelUm: number, activeLayer: string | null): T[] {
+export function guessSelectionCandidates<T extends GuessCandidate>(candidates: readonly T[], onePixelNm: number, activeLayer: string | null): T[] {
   if (candidates.length <= 1) return [...candidates];
 
   let pool: readonly T[] = candidates;
 
   // 1. Prefer exact hits to sloppy ones.
-  const minSlop = Math.min(...pool.map((c) => c.slopUm));
-  const threshold = minSlop + sloppinessThresholdUm(onePixelUm);
-  const afterSlop = pool.filter((c) => c.slopUm <= threshold);
+  const minSlop = Math.min(...pool.map((c) => c.slopNm));
+  const threshold = minSlop + sloppinessThresholdNm(onePixelNm);
+  const afterSlop = pool.filter((c) => c.slopNm <= threshold);
   if (afterSlop.length > 0) pool = afterSlop;
 
   if (pool.length === 1) return [...pool];
 
   // 2. Prefer the smallest of a set of similarly-sloppy nested items.
-  const byArea = [...pool].sort((a, b) => a.areaUm2 - b.areaUm2);
+  const byArea = [...pool].sort((a, b) => a.areaNm2 - b.areaNm2);
   const rejected = new Set<T>();
   let rejecting = false;
   for (let i = 1; i < byArea.length; i++) {
-    if (byArea[i]!.areaUm2 > byArea[i - 1]!.areaUm2 * SIZE_RATIO) rejecting = true;
+    if (byArea[i]!.areaNm2 > byArea[i - 1]!.areaNm2 * SIZE_RATIO) rejecting = true;
     if (rejecting) rejected.add(byArea[i]!);
   }
   if (rejected.size > 0 && rejected.size < pool.length) {

@@ -6,7 +6,7 @@
 import { MAX_SCALE, MIN_SCALE, type Bounds, type ViewTransform } from "./view";
 
 /** `pcbIUScale.mmToIU( DEFAULT_TEXT_SIZE )` (`#define DEFAULT_TEXT_SIZE 1.0`, include/board_design_settings.h): the height the probed part is compared against. */
-const DEFAULT_TEXT_SIZE_UM = 1000;
+const DEFAULT_TEXT_SIZE_NM = 1_000_000;
 
 /** The LUT of ZoomFitCrossProbeBBox: [footprint height / default text height, factor to scale the zoom ratio by]. */
 const LUT: ReadonlyArray<readonly [number, number]> = [
@@ -35,11 +35,11 @@ export function crossProbeScale(scale: number, bounds: Bounds, width: number, he
   const bbX = w + 2 * inflate;
   const bbY = h + 2 * inflate;
   // `view->ToWorld( client size, false )`: the canvas in board units.
-  const screenX = Math.max(10, Math.abs(width / scale));
-  const screenY = Math.max(10, Math.abs(height / scale));
+  const screenX = Math.max(10_000, Math.abs(width / scale));
+  const screenY = Math.max(10_000, Math.abs(height / scale));
   let ratio = Math.max(-1.0, Math.abs(bbY / screenY));
   const kicadRatio = Math.max(Math.abs(bbX / screenX), Math.abs(bbY / screenY));
-  const compRatio = bbY / DEFAULT_TEXT_SIZE_UM;
+  const compRatio = bbY / DEFAULT_TEXT_SIZE_NM;
   // Bigger components need less scaling than small ones: interpolate the LUT.
   let bent = LUT[LUT.length - 1]![1];
   if (compRatio >= LUT[0]![0]) {

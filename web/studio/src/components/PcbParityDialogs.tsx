@@ -18,7 +18,7 @@
 //                      for click-to-place.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { umFrom, umTo } from "../state/units";
+import { nmFrom, nmTo } from "../state/units";
 import { movableItem, polarTranslation, positionRelativeSelectionAnchor, relativeMoveVector, toPolarDeg, type MovableKind } from "../kicad-port/pcbEditActions";
 import { editableSelection } from "../kicad-port/pcbTransform";
 import { itemPosition } from "../kicad-port/pcbReference";
@@ -157,7 +157,7 @@ function PositionRelativeDialog() {
     setPicking(false);
     return result;
   };
-  const shown = (um: number) => Number(umTo(um, units).toFixed(units === "mm" ? 4 : units === "mil" ? 2 : 5));
+  const shown = (um: number) => Number(nmTo(um, units).toFixed(units === "mm" ? 4 : units === "mil" ? 2 : 5));
   const selectItem = async () => {
     const id = await runPick(() => pickItem("Select reference item..."));
     const at = id && board ? itemPosition(board, id) : null;
@@ -183,7 +183,7 @@ function PositionRelativeDialog() {
   const referenceAnchor = (): { x: number; y: number } => {
     switch (anchorKind) {
       case "origin":
-        return state.localOriginUm ?? { x: 0, y: 0 };
+        return state.localOriginNm ?? { x: 0, y: 0 };
       case "grid":
         return { x: 0, y: 0 }; // BOARD_DESIGN_SETTINGS grid origin: this model has no grid-origin setting, so it is the board origin.
       case "item": {
@@ -193,7 +193,7 @@ function PositionRelativeDialog() {
       }
       case "point":
       default:
-        return { x: umFrom(pointX, units), y: umFrom(pointY, units) };
+        return { x: nmFrom(pointX, units), y: nmFrom(pointY, units) };
     }
   };
 
@@ -204,22 +204,22 @@ function PositionRelativeDialog() {
   };
   const clearA = () => {
     const o = currentOffset();
-    setA(polar ? umTo(toPolarDeg(o.x, o.y).r, units) : umTo(o.x, units));
+    setA(polar ? nmTo(toPolarDeg(o.x, o.y).r, units) : nmTo(o.x, units));
   };
   const clearB = () => {
     const o = currentOffset();
-    setB(polar ? toPolarDeg(o.x, o.y).deg : umTo(o.y, units));
+    setB(polar ? toPolarDeg(o.x, o.y).deg : nmTo(o.y, units));
   };
   const switchPolar = (nextPolar: boolean) => {
     // Convert the entered values across, as OnPolarChanged does.
     if (nextPolar) {
-      const p = toPolarDeg(umFrom(a, units), umFrom(b, units));
-      setA(umTo(p.r, units));
+      const p = toPolarDeg(nmFrom(a, units), nmFrom(b, units));
+      setA(nmTo(p.r, units));
       setB(p.deg);
     } else {
-      const t = polarTranslation(umFrom(a, units), b);
-      setA(umTo(t.x, units));
-      setB(umTo(t.y, units));
+      const t = polarTranslation(nmFrom(a, units), b);
+      setA(nmTo(t.x, units));
+      setB(nmTo(t.y, units));
     }
     setPolar(nextPolar);
   };
@@ -246,7 +246,7 @@ function PositionRelativeDialog() {
 
   const submit = async () => {
     // getTranslationInIU
-    const translation = polar ? polarTranslation(umFrom(a, units), b) : { x: Math.round(umFrom(a, units)), y: Math.round(umFrom(b, units)) };
+    const translation = polar ? polarTranslation(nmFrom(a, units), b) : { x: Math.round(nmFrom(a, units)), y: Math.round(nmFrom(b, units)) };
     const v = relativeMoveVector(referenceAnchor(), translation, selectionAnchor);
     close();
     if (v.x === 0 && v.y === 0) return;

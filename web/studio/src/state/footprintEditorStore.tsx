@@ -9,7 +9,7 @@
 // panel, no clipboard beyond the one pad-properties copy/paste slot
 // pad_tool.cpp's own Copy/Paste Pad Properties needs.
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprint, LibraryPad, PointXY, Um } from "../api/types";
+import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprint, LibraryPad, PointXY, Nm } from "../api/types";
 import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCmd, postRedo, postUndo } from "../api/client";
 import { ensureFootprintInProject } from "../api/libraryClient";
 import { duplicatePads, uniqueFootprintName } from "../kicad-port/fpEditActions";
@@ -39,14 +39,14 @@ export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
 };
 
 /** Same "click to add a point(s), commit on the last one" shape the PCB tab's own `DrawState` uses, narrowed to what the footprint editor's graphics tools need (no route/zone/measure concept here). `arc`/`bezier`: the construction managers' state, see the PCB tab's `DrawState`. */
-export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier"; pts: [Um, Um][]; arc?: ArcGeom; bezier?: BezierGeom };
+export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier"; pts: [Nm, Nm][]; arc?: ArcGeom; bezier?: BezierGeom };
 
 export interface FpMovePreview {
   refs: string[];
   /** The kind of the item a drag started on. Optional because a Duplicate pick-up carries a mixed selection (pads + graphics + text); the commit looks each ref up either way. */
   kind?: "pad" | "graphic" | "text";
-  dxUm: number;
-  dyUm: number;
+  dxNm: number;
+  dyNm: number;
   rotateQuarterTurns?: number;
 }
 
@@ -64,9 +64,9 @@ export interface FootprintEditorState {
   activeTool: FpToolId;
   drawState: FpDrawState | null;
   movePreview: FpMovePreview | null;
-  moveOriginUm: { x: number; y: number } | null;
-  cursorUm: { x: number; y: number } | null;
-  gridUm: number;
+  moveOriginNm: { x: number; y: number } | null;
+  cursorNm: { x: number; y: number } | null;
+  gridNm: number;
   gridVisible: boolean;
   /** Which of F.SilkS/F.Fab/F.CrtYd a graphics/text tool draws on. */
   activeLayer: string;
@@ -124,9 +124,9 @@ const initialState: FootprintEditorState = {
   activeTool: "select",
   drawState: null,
   movePreview: null,
-  moveOriginUm: null,
-  cursorUm: null,
-  gridUm: 250, // 0.25mm -- a reasonable footprint-editor-scale default (KiCad's own fp-editor grid list starts finer than the board editor's)
+  moveOriginNm: null,
+  cursorNm: null,
+  gridNm: 250_000, // 0.25mm -- a reasonable footprint-editor-scale default (KiCad's own fp-editor grid list starts finer than the board editor's)
   gridVisible: true,
   activeLayer: "F.SilkS",
   highContrast: false,
@@ -165,7 +165,7 @@ export type FpAction =
   | { type: "SET_MOVE_PREVIEW"; preview: FpMovePreview | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
-  | { type: "SET_GRID_UM"; um: number }
+  | { type: "SET_GRID_NM"; um: number }
   | { type: "TOGGLE_GRID_VISIBLE" }
   | { type: "TOGGLE_HIGH_CONTRAST" }
   | { type: "SET_ACTIVE_LAYER"; layer: string }
@@ -201,7 +201,7 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return {
         ...initialState,
         name: action.name,
-        gridUm: state.gridUm,
+        gridNm: state.gridNm,
         gridVisible: state.gridVisible,
         highContrast: state.padEditContrast !== null ? exitContrast(state.padEditContrast, state.highContrast) : state.highContrast,
         defaultPad: state.defaultPad,
@@ -236,11 +236,11 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
     case "SET_MOVE_PREVIEW":
       return { ...state, movePreview: action.preview };
     case "SET_MOVE_ORIGIN":
-      return { ...state, moveOriginUm: action.at };
+      return { ...state, moveOriginNm: action.at };
     case "SET_CURSOR":
-      return { ...state, cursorUm: action.at };
-    case "SET_GRID_UM":
-      return { ...state, gridUm: action.um };
+      return { ...state, cursorNm: action.at };
+    case "SET_GRID_NM":
+      return { ...state, gridNm: action.um };
     case "TOGGLE_HIGH_CONTRAST":
       return { ...state, highContrast: !state.highContrast };
     case "TOGGLE_GRID_VISIBLE":
@@ -309,8 +309,8 @@ export interface FootprintEditorApi {
    * (Escape then reverts the duplicate). With `increment` each pad takes the next free pad number.
    */
   duplicateSelection: (increment: boolean) => Promise<void>;
-  /** Commit a finished move (a drag-drop or a Duplicate pick-up) of `refs` by `(dxUm, dyUm)` as ONE undo step -- each ref is looked up, so a mixed selection works. */
-  commitMove: (refs: string[], dxUm: number, dyUm: number) => Promise<void>;
+  /** Commit a finished move (a drag-drop or a Duplicate pick-up) of `refs` by `(dxNm, dyNm)` as ONE undo step -- each ref is looked up, so a mixed selection works. */
+  commitMove: (refs: string[], dxNm: number, dyNm: number) => Promise<void>;
   /** Back to "nothing open" -- leaving the tab, or picking a different footprint before this one loaded. */
   closeFootprint: () => void;
   refresh: () => Promise<void>;
@@ -322,7 +322,7 @@ export interface FootprintEditorApi {
   graphicById: (id: string) => CmdShape | undefined;
   textById: (id: string) => CmdText | undefined;
   addPad: (pad: LibraryPad) => Promise<void>;
-  movePad: (id: string, x: Um, y: Um) => Promise<void>;
+  movePad: (id: string, x: Nm, y: Nm) => Promise<void>;
   rotatePad: (id: string, quarterTurns: number) => Promise<void>;
   deletePad: (id: string) => Promise<void>;
   editPad: (id: string, pad: LibraryPad) => Promise<boolean>;
@@ -342,11 +342,11 @@ export interface FootprintEditorApi {
   /** Pick a tool the way the toolbar does: leaving the Renumber Pads tool commits what it numbered (`evt->IsActivate()` -> `commit.Push( "Renumber Pads" )`). */
   setTool: (tool: FpToolId) => Promise<void>;
   addGraphic: (shape: CmdShape) => Promise<void>;
-  moveGraphic: (id: string, dx: Um, dy: Um) => Promise<void>;
-  editGraphic: (id: string, layer: string, strokeWidth: Um, filled: boolean) => Promise<void>;
+  moveGraphic: (id: string, dx: Nm, dy: Nm) => Promise<void>;
+  editGraphic: (id: string, layer: string, strokeWidth: Nm, filled: boolean) => Promise<void>;
   deleteGraphic: (id: string) => Promise<void>;
   addText: (text: CmdText) => Promise<void>;
-  moveText: (id: string, x: Um, y: Um) => Promise<void>;
+  moveText: (id: string, x: Nm, y: Nm) => Promise<void>;
   editText: (id: string, fields: Omit<CmdText, "id" | "at">) => Promise<void>;
   deleteText: (id: string) => Promise<void>;
   setAnchor: (at: PointXY) => Promise<void>;
@@ -457,30 +457,30 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       if (increment) dispatch({ type: "SET_LAST_PAD_NUMBER", number: lastPadNumber });
       dispatch({ type: "SET_SELECTION", refs: created });
       // `doMoveSelection( aEvent, &commit, true )`: the copies are glued to the cursor until a click drops them.
-      const at = stateRef.current.cursorUm;
+      const at = stateRef.current.cursorNm;
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at });
       dispatch({ type: "SET_DUPLICATE_PENDING", pending: true });
       dispatch({ type: "TOAST", message: `Duplicated ${created.length} item(s)`, kind: "info" });
     },
-    commitMove: async (refs, dxUm, dyUm) => {
+    commitMove: async (refs, dxNm, dyNm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       dispatch({ type: "SET_DUPLICATE_PENDING", pending: false });
       const name = stateRef.current.name;
-      if (!name || (dxUm === 0 && dyUm === 0)) return;
+      if (!name || (dxNm === 0 && dyNm === 0)) return;
       const cmds: Cmd[] = [];
       for (const id of refs) {
         const pad = api.padById(id);
         if (pad) {
-          cmds.push({ op: "move_pad", footprint: name, id, x: pad.at.x + dxUm, y: pad.at.y + dyUm });
+          cmds.push({ op: "move_pad", footprint: name, id, x: pad.at.x + dxNm, y: pad.at.y + dyNm });
           continue;
         }
         if (api.graphicById(id)) {
-          cmds.push({ op: "move_footprint_graphic", footprint: name, id, dx: dxUm, dy: dyUm });
+          cmds.push({ op: "move_footprint_graphic", footprint: name, id, dx: dxNm, dy: dyNm });
           continue;
         }
         const text = api.textById(id);
-        if (text) cmds.push({ op: "move_footprint_text", footprint: name, id, x: text.at.x + dxUm, y: text.at.y + dyUm });
+        if (text) cmds.push({ op: "move_footprint_text", footprint: name, id, x: text.at.x + dxNm, y: text.at.y + dyNm });
       }
       if (cmds.length === 0) return;
       await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds }); // one undo step, like one BOARD_COMMIT::Push

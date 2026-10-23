@@ -191,7 +191,7 @@
     return;
   }
   const rules = st0.board_rules;
-  const clearance = rules.clearance, minWidth = rules.constraints.min_track_width_um;
+  const clearance = rules.clearance, minWidth = rules.constraints.min_track_width_nm;
   const [p1, p2] = [padOf["J3.1"], padOf["J3.2"]];
   const mid = (p1[0] + p2[0]) / 2;
   // the pair leaves the pads straight down, comes together at its pitch, and runs along x = mid -+ pitch / 2: the cursor a little to the right of that, a long way down

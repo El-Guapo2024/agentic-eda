@@ -14,7 +14,7 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import { stitchPosition } from "./viaStitch";
-import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PlacementArea, PlacementSourceType, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
+import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PlacementArea, PlacementSourceType, PointXY, Shape, Track, Nm, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
 import { effectiveClassName } from "./boardSetupRules";
@@ -376,8 +376,8 @@ function zoneCmd(z: Zone, patch: Partial<Zone>): Cmd {
 }
 
 /** `edit_text` takes every field of the text: the current ones with `patch` laid over them. */
-function textCmd(t: BoardText, patch: Partial<{ content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: BoardText["justify"]; mirror: boolean }>): Cmd {
-  return { op: "edit_text", id: t.id, content: t.content, angle: t.angle, layer: t.layer, size_um: t.size, stroke_width: t.stroke_width, justify: t.justify, mirror: t.mirror, ...patch };
+function textCmd(t: BoardText, patch: Partial<{ content: string; angle: number; layer: string; size_nm: Nm; stroke_width: Nm; justify: BoardText["justify"]; mirror: boolean }>): Cmd {
+  return { op: "edit_text", id: t.id, content: t.content, angle: t.angle, layer: t.layer, size_nm: t.size, stroke_width: t.stroke_width, justify: t.justify, mirror: t.mirror, ...patch };
 }
 
 /** `edit_dimension` replaces the whole dimension: the current one with `patch` laid over it. */
@@ -733,7 +733,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         if (padKind(pad) === v) return [];
         // A pad that gets a hole needs one: half its smaller side, to the 0.05 mm, when it has none (`PAD::SetAttribute` alone would leave it with no hole at all).
         const needsHole = v !== "smd" && !pad.drill && !pad.slot;
-        const drill = needsHole ? Math.max(100, Math.round((shortest(pad) * 0.5) / 50) * 50) : undefined;
+        const drill = needsHole ? Math.max(100_000, Math.round((shortest(pad) * 0.5) / 50_000) * 50_000) : undefined;
         return edit(i, { kind: String(v) as "smd" | "through_hole" | "non_plated_hole", ...(drill ? { drill } : {}) });
       },
     },
@@ -829,8 +829,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       set: (i, v) => {
         const pad = i.pad!;
         if ((pad.slot ? "oblong" : "round") === v) return [];
-        const d = pad.slot ? Math.min(...pad.slot) : (pad.drill ?? 800);
-        return v === "oblong" ? edit(i, { drill_slot: [d, d + Math.max(200, Math.round(d / 2))] }) : edit(i, { drill: d });
+        const d = pad.slot ? Math.min(...pad.slot) : (pad.drill ?? 800_000);
+        return v === "oblong" ? edit(i, { drill_slot: [d, d + Math.max(200_000, Math.round(d / 2))] }) : edit(i, { drill: d });
       },
     },
     PAD
@@ -1069,11 +1069,11 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
 
   const ELECTRICAL = "Electrical";
   add(
-    { owner: "ZONE", name: "Clearance", kind: "int", display: "size", get: (i) => i.zone!.clearance, available: isCopperZone, validate: (v, _i, c) => rangeInt(0, 100_000, "size", c.units)(v), set: zoneSet("clearance", (v) => Math.round(num(v))) },
+    { owner: "ZONE", name: "Clearance", kind: "int", display: "size", get: (i) => i.zone!.clearance, available: isCopperZone, validate: (v, _i, c) => rangeInt(0, 100_000_000, "size", c.units)(v), set: zoneSet("clearance", (v) => Math.round(num(v))) },
     ELECTRICAL
   );
   add(
-    { owner: "ZONE", name: "Minimum Width", kind: "int", display: "size", get: (i) => i.zone!.min_thickness, available: isCopperZone, validate: (v, _i, c) => rangeInt(25, Number.MAX_SAFE_INTEGER, "size", c.units)(v), set: zoneSet("min_thickness", (v) => Math.round(num(v))) },
+    { owner: "ZONE", name: "Minimum Width", kind: "int", display: "size", get: (i) => i.zone!.min_thickness, available: isCopperZone, validate: (v, _i, c) => rangeInt(25_000, Number.MAX_SAFE_INTEGER, "size", c.units)(v), set: zoneSet("min_thickness", (v) => Math.round(num(v))) },
     ELECTRICAL
   );
   add(
@@ -1131,7 +1131,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     TEXT
   );
   /** `EDA_TEXT::GetTextThicknessProperty`: a text's pen; a dimension's label's, 15 % of its size unless it says otherwise. */
-  const thickness = (i: PcbItem): number => (i.text ? i.text.stroke_width : i.field ? i.field.thickness : i.dim!.text_thickness_um ?? Math.round(i.dim!.text_size_um * 0.15));
+  const thickness = (i: PcbItem): number => (i.text ? i.text.stroke_width : i.field ? i.field.thickness : i.dim!.text_thickness_nm ?? Math.round(i.dim!.text_size_nm * 0.15));
   add(
     {
       owner: "EDA_TEXT",
@@ -1144,7 +1144,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         const w = Math.round(num(v));
         if (thickness(i) === w) return [];
         if (i.field) return [editFieldCmd(i.part!, i.field, { thickness: w })];
-        return [i.text ? textCmd(i.text, { stroke_width: w }) : dimCmd(i.dim!, { text_thickness_um: w })];
+        return [i.text ? textCmd(i.text, { stroke_width: w }) : dimCmd(i.dim!, { text_thickness_nm: w })];
       },
     },
     TEXT
@@ -1182,7 +1182,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   fieldFlag("Visible", "visible", (f) => f.visible);
   // This model's free text is square (one size for width and height): both rows read and write it. A field has a width and a height of its own.
   const size = (name: "Width" | "Height"): void => {
-    const own = (i: PcbItem): number => (i.text ? i.text.size : i.field ? (name === "Width" ? i.field.w : i.field.h) : i.dim!.text_size_um);
+    const own = (i: PcbItem): number => (i.text ? i.text.size : i.field ? (name === "Width" ? i.field.w : i.field.h) : i.dim!.text_size_nm);
     add(
       {
         owner: "EDA_TEXT",
@@ -1198,7 +1198,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
             const f = i.field;
             return [editFieldCmd(i.part!, f, { size: name === "Width" ? [s, f.h] : [f.w, s] })];
           }
-          return [i.text ? textCmd(i.text, { size_um: s }) : dimCmd(i.dim!, { text_size_um: s })];
+          return [i.text ? textCmd(i.text, { size_nm: s }) : dimCmd(i.dim!, { text_size_nm: s })];
         },
       },
       TEXT
@@ -1387,7 +1387,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   const endingSet = (i: PcbItem, side: "start" | "end", next: LineEnding): Cmd[] => {
     const cur = endingOf(i, side);
     if (cur.style === next.style && cur.length === next.length && cur.width === next.width && cur.stroke_width === next.stroke_width) return [];
-    const ending = { style: next.style, length_um: next.length, width_um: next.width, stroke_width_um: next.stroke_width };
+    const ending = { style: next.style, length_nm: next.length, width_nm: next.width, stroke_width_nm: next.stroke_width };
     return [{ op: "pcb_item", verb: "set_shape_style", ids: [i.id], ...(side === "start" ? { start_ending: ending } : { end_ending: ending }) }];
   };
   for (const [side, cap] of [

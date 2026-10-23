@@ -207,11 +207,11 @@ mod tests {
     fn a_text_box_is_read_as_parse_pcb_textbox_reads_it() {
         let b = read_one(BOX);
         assert_eq!(b.text, "Box\nof text");
-        assert_eq!((b.start, b.end, b.layer.as_str()), (Point { x: 20_000, y: 20_000 }, Point { x: 30_000, y: 25_000 }, "F.SilkS"));
-        assert_eq!((b.margin_left_nm, b.margin_top_nm, b.margin_right_nm, b.margin_bottom_nm), (1_000, 1_500, 2_000, 2_500));
-        assert_eq!((b.border, b.stroke_width_nm, b.line_style, b.knockout), (true, 120, LineStyle::Dot, true));
+        assert_eq!((b.start, b.end, b.layer.as_str()), (Point { x: 20_000_000, y: 20_000_000 }, Point { x: 30_000_000, y: 25_000_000 }, "F.SilkS"));
+        assert_eq!((b.margin_left_nm, b.margin_top_nm, b.margin_right_nm, b.margin_bottom_nm), (1_000_000, 1_500_000, 2_000_000, 2_500_000));
+        assert_eq!((b.border, b.stroke_width_nm, b.line_style, b.knockout), (true, 120_000, LineStyle::Dot, true));
         // `(size HEIGHT WIDTH)`
-        assert_eq!((b.size_nm, b.width_nm, b.thickness_nm), (1_000, Some(1_200), 150));
+        assert_eq!((b.size_nm, b.width_nm, b.thickness_nm), (1_000_000, Some(1_200_000), 150_000));
         assert_eq!((b.halign, b.valign, b.mirror), (TextJustify::Left, TextVAlign::Top, false));
         assert_eq!(b.angle, 0);
     }
@@ -220,8 +220,8 @@ mod tests {
     fn a_box_with_no_margins_has_the_legacy_margin_and_one_with_no_effects_is_left_and_centre() {
         let b = read_one(r#"(kicad_pcb (version 20241229) (gr_text_box "x" (start 0 0) (end 5 5) (layer "F.SilkS") (border yes) (stroke (width 0.2) (type solid))))"#);
         // 0.2 / 2 + 1.524 * 0.75
-        assert_eq!(b.margin_left_nm, 100 + 1_143);
-        assert_eq!((b.halign, b.valign, b.size_nm), (TextJustify::Left, TextVAlign::Center, 1_524));
+        assert_eq!(b.margin_left_nm, 100_000 + 1_143_000);
+        assert_eq!((b.halign, b.valign, b.size_nm), (TextJustify::Left, TextVAlign::Center, 1_524_000));
         // The effects of a file that wrote none of the justification are centre and centre.
         let c = read_one(r#"(kicad_pcb (version 20241229) (gr_text_box "x" (start 0 0) (end 5 5) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15)))))"#);
         assert_eq!((c.halign, c.valign), (TextJustify::Center, TextVAlign::Center));
@@ -240,7 +240,7 @@ mod tests {
         let b = read_one(r#"(kicad_pcb (version 20241229) (gr_text_box "x" (pts (xy 0 0) (xy 5 5) (xy 0 10) (xy -5 5)) (angle 45) (layer "F.SilkS") (effects (font (size 1 1))) (border no)))"#);
         assert_eq!(b.pts.len(), 4);
         assert_eq!((b.angle, b.border, b.is_rect()), (45_000, false, false));
-        assert_eq!(b.bounds(), [-5_000, 0, 5_000, 10_000]);
+        assert_eq!(b.bounds(), [-5_000_000, 0, 5_000_000, 10_000_000]);
     }
 
     #[test]
@@ -257,7 +257,7 @@ mod tests {
         assert!(refs[0].locked && refs[0].uuid.as_deref() == Some(uuid.as_str()));
         // A rotated polygon box and the file's own angle.
         let mut p = b;
-        p.pts = vec![Point { x: 0, y: 0 }, Point { x: 5_000, y: 5_000 }, Point { x: 0, y: 10_000 }, Point { x: -5_000, y: 5_000 }];
+        p.pts = vec![Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 5_000_000 }, Point { x: 0, y: 10_000_000 }, Point { x: -5_000_000, y: 5_000_000 }];
         p.start = p.pts[0];
         p.end = p.pts[2];
         p.angle = 45_000;
@@ -277,7 +277,7 @@ mod tests {
         b.thickness_nm = 0;
         b.bold = true;
         b.italic = true;
-        b.line_spacing_permille = 1_500;
+        b.line_spacing_permille = 1_500_000;
         b.mirror = true;
         let mut out = String::from("(kicad_pcb (version 20241229)\n");
         write(&mut out, &b, false);

@@ -463,28 +463,28 @@ mod tests {
         fp.keywords = "one two".into();
         fp.attributes = FootprintAttributes { smd: true, exclude_from_bom: true, exclude_from_position_files: true, dnp: false, ..FootprintAttributes::default() };
         fp.model = Some("${KICAD9_3DMODEL_DIR}/x.step".into());
-        let mut p1 = pad("1", PadKind::Smd, LibraryPadShape::RoundRect, (-1000, 0), (800, 1200));
+        let mut p1 = pad("1", PadKind::Smd, LibraryPadShape::RoundRect, (-1_000_000, 0), (800_000, 1_200_000));
         p1.roundrect_ratio = Some(0.3);
         p1.rot = 90_000;
         p1.layers = vec!["F.Cu".into(), "F.Mask".into()];
-        p1.clearance_override = Some(200);
-        let mut p2 = pad("2", PadKind::ThroughHole, LibraryPadShape::Oval, (1000, 0), (1600, 2000));
-        p2.drill = Some(800);
-        p2.offset = Point { x: 100, y: -50 };
+        p1.clearance_override = Some(200_000);
+        let mut p2 = pad("2", PadKind::ThroughHole, LibraryPadShape::Oval, (1_000_000, 0), (1_600_000, 2_000_000));
+        p2.drill = Some(800_000);
+        p2.offset = Point { x: 100_000, y: -50_000 };
         p2.layers = vec!["*.Cu".into(), "*.Mask".into()];
-        let mut p3 = pad("3", PadKind::ThroughHole, LibraryPadShape::Circle, (0, 2000), (1700, 1700));
-        p3.drill_slot = Some((600, 1700));
-        let p4 = pad("", PadKind::NonPlatedHole, LibraryPadShape::Circle, (0, -2000), (900, 900));
+        let mut p3 = pad("3", PadKind::ThroughHole, LibraryPadShape::Circle, (0, 2_000_000), (1_700_000, 1_700_000));
+        p3.drill_slot = Some((600_000, 1_700_000));
+        let p4 = pad("", PadKind::NonPlatedHole, LibraryPadShape::Circle, (0, -2_000_000), (900_000, 900_000));
         fp.pads = vec![p1, p2, p3, p4];
         fp.graphics = vec![
-            Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: -2000, y: -1500 }, end: Point { x: 2000, y: -1500 } },
-            Shape::Arc { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: 1000, y: 0 }, mid: Point { x: 0, y: 1000 }, end: Point { x: -1000, y: 0 } },
-            Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: true, start: Point { x: -1500, y: -1000 }, end: Point { x: 1500, y: 1000 } },
-            Shape::Circle { id: String::new(), layer: "F.CrtYd".into(), stroke_width: 50, filled: false, center: Point { x: 0, y: 0 }, end: Point { x: 3000, y: 0 } },
-            Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: false, pts: vec![Point { x: 0, y: 0 }, Point { x: 500, y: 0 }, Point { x: 500, y: 500 }] },
-            Shape::Bezier { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: 0, y: 0 }, c1: Point { x: 100, y: 200 }, c2: Point { x: 300, y: 200 }, end: Point { x: 400, y: 0 } },
+            Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120_000, filled: false, start: Point { x: -2_000_000, y: -1_500_000 }, end: Point { x: 2_000_000, y: -1_500_000 } },
+            Shape::Arc { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120_000, filled: false, start: Point { x: 1_000_000, y: 0 }, mid: Point { x: 0, y: 1_000_000 }, end: Point { x: -1_000_000, y: 0 } },
+            Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: true, start: Point { x: -1_500_000, y: -1_000_000 }, end: Point { x: 1_500_000, y: 1_000_000 } },
+            Shape::Circle { id: String::new(), layer: "F.CrtYd".into(), stroke_width: 50_000, filled: false, center: Point { x: 0, y: 0 }, end: Point { x: 3_000_000, y: 0 } },
+            Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, pts: vec![Point { x: 0, y: 0 }, Point { x: 500_000, y: 0 }, Point { x: 500_000, y: 500_000 }] },
+            Shape::Bezier { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120_000, filled: false, start: Point { x: 0, y: 0 }, c1: Point { x: 100_000, y: 200_000 }, c2: Point { x: 300_000, y: 200_000 }, end: Point { x: 400_000, y: 0 } },
         ];
-        fp.texts = vec![Text { id: String::new(), content: "hello".into(), at: Point { x: 100, y: 3000 }, angle: 90_000, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Left, mirror: true }];
+        fp.texts = vec![Text { id: String::new(), content: "hello".into(), at: Point { x: 100_000, y: 3_000_000 }, angle: 90_000, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: TextJustify::Left, mirror: true }];
         fp.assign_missing_ids();
         fp
     }
@@ -502,23 +502,23 @@ mod tests {
         assert_eq!(back.pads.len(), 4);
         let by = |n: &str| back.pads.iter().find(|p| p.number == n).unwrap();
         let p1 = by("1");
-        assert_eq!((p1.shape, p1.kind, p1.rot, p1.at, p1.size), (LibraryPadShape::RoundRect, PadKind::Smd, 90_000, Point { x: -1000, y: 0 }, (800, 1200)));
+        assert_eq!((p1.shape, p1.kind, p1.rot, p1.at, p1.size), (LibraryPadShape::RoundRect, PadKind::Smd, 90_000, Point { x: -1_000_000, y: 0 }, (800_000, 1_200_000)));
         assert_eq!(p1.roundrect_ratio, Some(0.3));
         assert_eq!(p1.layers, vec!["F.Cu".to_string(), "F.Mask".to_string()]);
-        assert_eq!(p1.clearance_override, Some(200));
+        assert_eq!(p1.clearance_override, Some(200_000));
         let p2 = by("2");
-        assert_eq!((p2.shape, p2.kind, p2.drill, p2.offset), (LibraryPadShape::Oval, PadKind::ThroughHole, Some(800), Point { x: 100, y: -50 }));
-        assert_eq!(by("3").drill_slot, Some((600, 1700)));
+        assert_eq!((p2.shape, p2.kind, p2.drill, p2.offset), (LibraryPadShape::Oval, PadKind::ThroughHole, Some(800_000), Point { x: 100_000, y: -50_000 }));
+        assert_eq!(by("3").drill_slot, Some((600_000, 1_700_000)));
         let npth = back.pads.iter().find(|p| p.kind == PadKind::NonPlatedHole).unwrap();
         assert_eq!(npth.number, "");
         assert_eq!(back.graphics.len(), 6);
         assert!(back.graphics.iter().any(|g| matches!(g, Shape::Rect { filled: true, layer, .. } if layer == "F.Fab")));
-        assert!(back.graphics.iter().any(|g| matches!(g, Shape::Arc { mid, .. } if *mid == Point { x: 0, y: 1000 })));
-        assert!(back.graphics.iter().any(|g| matches!(g, Shape::Bezier { c2, .. } if *c2 == Point { x: 300, y: 200 })));
+        assert!(back.graphics.iter().any(|g| matches!(g, Shape::Arc { mid, .. } if *mid == Point { x: 0, y: 1_000_000 })));
+        assert!(back.graphics.iter().any(|g| matches!(g, Shape::Bezier { c2, .. } if *c2 == Point { x: 300_000, y: 200_000 })));
         assert!(back.graphics.iter().any(|g| matches!(g, Shape::Polygon { pts, .. } if pts.len() == 3)));
         assert_eq!(back.texts.len(), 1);
         let t = &back.texts[0];
-        assert_eq!((t.content.as_str(), t.angle, t.size_nm, t.stroke_width, t.justify, t.mirror), ("hello", 90_000, 1000, 150, TextJustify::Left, true));
+        assert_eq!((t.content.as_str(), t.angle, t.size_nm, t.stroke_width, t.justify, t.mirror), ("hello", 90_000, 1_000_000, 150_000, TextJustify::Left, true));
         assert!(back.courtyard.is_some(), "the F.CrtYd circle gives a courtyard box");
         assert!(back.pads.iter().all(|p| !p.id.is_empty()) && back.graphics.iter().all(|g| !g.id().is_empty()));
     }
@@ -530,9 +530,9 @@ mod tests {
         let mut fp = sample();
         fp.zone_connection = Some(eda_model::ir::PadConnection::Thermal);
         fp.pads[0].zone_connection = Some(eda_model::ir::PadConnection::Full);
-        fp.pads[0].thermal_gap_override = Some(250);
-        fp.pads[0].thermal_spoke_width_override = Some(300);
-        fp.pads[0].thermal_spoke_angle_mdeg = Some(30_500);
+        fp.pads[0].thermal_gap_override = Some(250_000);
+        fp.pads[0].thermal_spoke_width_override = Some(300_000);
+        fp.pads[0].thermal_spoke_angle_mdeg = Some(30_500_000);
         fp.pads[1].zone_connection = Some(eda_model::ir::PadConnection::ThtThermal);
         // 90 degrees is an oval's default angle: KiCad does not write it, and the reader gives back "not set".
         fp.pads[1].thermal_spoke_angle_mdeg = Some(90_000);
@@ -549,7 +549,7 @@ mod tests {
         let by = |n: &str| back.pads.iter().find(|p| p.number == n).unwrap();
         let p1 = by("1");
         assert_eq!(p1.zone_connection, Some(eda_model::ir::PadConnection::Full));
-        assert_eq!((p1.thermal_gap_override, p1.thermal_spoke_width_override, p1.thermal_spoke_angle_mdeg, p1.clearance_override), (Some(250), Some(300), Some(30_500), Some(200)));
+        assert_eq!((p1.thermal_gap_override, p1.thermal_spoke_width_override, p1.thermal_spoke_angle_mdeg, p1.clearance_override), (Some(250_000), Some(300_000), Some(30_500_000), Some(200_000)));
         assert_eq!((by("2").zone_connection, by("2").thermal_spoke_angle_mdeg), (Some(eda_model::ir::PadConnection::ThtThermal), None));
         assert_eq!((by("3").zone_connection, by("3").thermal_spoke_angle_mdeg), (Some(eda_model::ir::PadConnection::None), None));
         // a footprint that sets nothing writes nothing
@@ -581,12 +581,12 @@ mod tests {
         let vendor = &fp.fields[0];
         assert_eq!((vendor.name.as_str(), vendor.value.as_str(), vendor.visible), ("Vendor", "ACME", false));
         let l = vendor.layout.as_ref().expect("a property of KiCad 8 has its layout");
-        assert_eq!((l.layer.as_str(), l.at, l.size, l.visible), ("F.Fab", Point { x: 0, y: 0 }, (1000, 1000), false));
+        assert_eq!((l.layer.as_str(), l.at, l.size, l.visible), ("F.Fab", Point { x: 0, y: 0 }, (1_000_000, 1_000_000), false));
         // the Reference and the Value keep their places; the Value's text is the footprint's name, so it stores none of its own
         let reference = fp.reference.as_ref().expect("the Reference layout");
-        assert_eq!((reference.layer.as_str(), reference.at, reference.text.as_deref(), reference.visible), ("F.SilkS", Point { x: 0, y: -1430 }, None, true));
+        assert_eq!((reference.layer.as_str(), reference.at, reference.text.as_deref(), reference.visible), ("F.SilkS", Point { x: 0, y: -1_430_000 }, None, true));
         let value = fp.value.as_ref().expect("the Value layout");
-        assert_eq!((value.layer.as_str(), value.at.y, value.visible), ("F.Fab", 1430, false));
+        assert_eq!((value.layer.as_str(), value.at.y, value.visible), ("F.Fab", 1_430_000, false));
         assert!(fp.attributes.smd && fp.attributes.allow_soldermask_bridges);
         let by = |n: &str| fp.pads.iter().find(|p| p.number == n).unwrap();
         assert_eq!((by("1").shape, by("1").roundrect_ratio), (LibraryPadShape::RoundRect, Some(0.25)));
@@ -594,7 +594,7 @@ mod tests {
         assert_eq!(chamfered.shape, LibraryPadShape::ChamferedRect);
         assert_eq!(chamfered.chamfer_ratio, Some(0.2));
         assert!(chamfered.chamfer_corners.top_left && chamfered.chamfer_corners.bottom_right && !chamfered.chamfer_corners.top_right);
-        assert_eq!((by("3").shape, by("3").trapezoid_delta), (LibraryPadShape::Trapezoid, Some((0, 200))));
+        assert_eq!((by("3").shape, by("3").trapezoid_delta), (LibraryPadShape::Trapezoid, Some((0, 200_000))));
         assert_eq!(by("4").shape, LibraryPadShape::Custom, "a custom pad keeps its anchor and its basic shapes");
         let custom = by("4").custom.as_ref().expect("the custom pad's primitives");
         assert_eq!((custom.anchor, custom.primitives.len()), (eda_model::footprint::PadAnchor::Rect, 1));

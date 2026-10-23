@@ -16,7 +16,7 @@ export function modificationViewOf(state: StudioState): ModificationView | null 
   return {
     board: state.board,
     scale: state.view.scale,
-    gridUm: state.gridUm,
+    gridNm: state.gridNm,
     grids: getGridSettings("pcb").grids,
     overrides: getGridOverrides("pcb"),
     origin: [origin.x, origin.y],
@@ -30,5 +30,5 @@ export function modificationViewOf(state: StudioState): ModificationView | null 
 /** The snap for a reference point: anchors within range, else the grid (the grid alone when there is no board to look at). */
 export function modificationSnapFor(state: StudioState): Snap {
   const view = modificationViewOf(state);
-  return view ? modificationSnap(view) : (p) => snapPoint(p[0], p[1], state.gridUm);
+  return view ? modificationSnap(view) : (p) => snapPoint(p[0], p[1], state.gridNm);
 }

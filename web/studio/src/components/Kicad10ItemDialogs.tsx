@@ -14,9 +14,9 @@ import { closeGridItemDialog, closeViaStitchDialog, useKicad10Dialogs } from "..
 import type { BoardViaStitch } from "../api/pcbItemTypes";
 import { fetchState } from "../api/client";
 import { pcbContext } from "../kicad-port/pcbProperties";
-import { defaultPitchUm, layoutOf, modeOf, MODE_CHOICES, movedStitch, PATTERN_CHOICES, stitchPosition, stitchPreview, viaStitchCmd, withLayoutAndMode, type StitchLayout, type StitchMode } from "../kicad-port/viaStitch";
+import { defaultPitchNm, layoutOf, modeOf, MODE_CHOICES, movedStitch, PATTERN_CHOICES, stitchPosition, stitchPreview, viaStitchCmd, withLayoutAndMode, type StitchLayout, type StitchMode } from "../kicad-port/viaStitch";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { umFrom, umTo, type LengthUnit } from "../state/units";
+import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 import { layerColor as layerColorOf } from "./canvas/layers";
 
 export function Kicad10ItemDialogs() {
@@ -35,7 +35,7 @@ const PAGE_LABEL: Record<Page, string> = { corners: "By Corners", cornerSize: "B
 /** The text of every field of the four pages, keyed `page.field`. */
 type Fields = Record<string, string>;
 
-const fmt = (um: number, units: LengthUnit): string => String(Number(umTo(um, units).toFixed(units === "mm" ? 4 : 2)));
+const fmt = (um: number, units: LengthUnit): string => String(Number(nmTo(um, units).toFixed(units === "mm" ? 4 : 2)));
 
 /** `updateCorners`, `updateCornerSize`, `updateCenterSize`, `updatePolar`: every page's fields from the working copy (`page` left alone when given: the one being typed in). */
 function fieldsOf(g: BoardGridItem, units: LengthUnit, keep: Fields = {}, page: Page | null = null): Fields {
@@ -54,7 +54,7 @@ function fieldsOf(g: BoardGridItem, units: LengthUnit, keep: Fields = {}, page: 
 /** The working copy from the fields of `page` (`onCornersChange`, `onCornerSizeChange`, `onCenterSizeChange`, `onPolarChange`), or null while one of them is not a number. */
 function fromPage(g: BoardGridItem, page: Page, f: Fields, units: LengthUnit): BoardGridItem | null {
   const n = (k: string) => Number(f[k]);
-  const u = (k: string) => Math.round(umFrom(n(k), units));
+  const u = (k: string) => Math.round(nmFrom(n(k), units));
   const keys = Object.keys(f).filter((k) => k.startsWith(`${page}.`));
   if (keys.some((k) => !Number.isFinite(n(k)) || f[k]!.trim() === "")) return null;
   switch (page) {
@@ -90,9 +90,9 @@ function spacingOf(g: BoardGridItem, units: LengthUnit): [string, string] {
 
 /** `saveSpacingToItem( type )`. */
 function savedSpacing(g: BoardGridItem, x: string, y: string, units: LengthUnit): BoardGridItem {
-  const sx = Math.max(1, Math.round(umFrom(Number(x) || 0, units)));
+  const sx = Math.max(1, Math.round(nmFrom(Number(x) || 0, units)));
   if (g.kind === "polar") return { ...g, spacing: [sx, g.spacing[1]], phi_spacing: Math.max(0.001, Math.abs(Number(y) || 0)) };
-  return { ...g, spacing: [sx, Math.max(1, Math.round(umFrom(Number(y) || 0, units)))] };
+  return { ...g, spacing: [sx, Math.max(1, Math.round(nmFrom(Number(y) || 0, units)))] };
 }
 
 function GridItemDialog() {
@@ -310,8 +310,8 @@ function ViaStitchDialog() {
     }
     const w = req.stitch;
     const [x, y] = stitchPosition(w);
-    const size = w.via?.size_um ?? 0;
-    setForm({ work: w, x: fmt(x, units), y: fmt(y, units), pitch: fmt(w.pitch_um || defaultPitchUm(size || 600), units), seed: String(w.seed ?? 0), size: fmt(size, units), drill: fmt(w.via?.drill_um ?? 0, units) });
+    const size = w.via?.size_nm ?? 0;
+    setForm({ work: w, x: fmt(x, units), y: fmt(y, units), pitch: fmt(w.pitch_nm || defaultPitchNm(size || 600_000), units), seed: String(w.seed ?? 0), size: fmt(size, units), drill: fmt(w.via?.drill_nm ?? 0, units) });
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [req]);
@@ -327,7 +327,7 @@ function ViaStitchDialog() {
   const layout = layoutOf(form.work);
   const stitching = mode === "stitch";
   const poisson = stitching && layout === "poisson";
-  const u = (t: string) => Math.round(umFrom(Number(t), units));
+  const u = (t: string) => Math.round(nmFrom(Number(t), units));
   const preview = stitchPreview(u(form.pitch) || 0, layout, Number(form.seed) >>> 0);
 
   const ok = async () => {
@@ -344,7 +344,7 @@ function ViaStitchDialog() {
     // "Position: translate the outline to land on the requested first vertex."
     const [x0, y0] = stitchPosition(form.work);
     const [nx, ny] = [u(form.x), u(form.y)];
-    let work: BoardViaStitch = { ...form.work, pitch_um: Math.max(0, pitch || 0), seed, via: { from_layer: "F.Cu", to_layer: "B.Cu", ...form.work.via, size_um: size, drill_um: drill } };
+    let work: BoardViaStitch = { ...form.work, pitch_nm: Math.max(0, pitch || 0), seed, via: { from_layer: "F.Cu", to_layer: "B.Cu", ...form.work.via, size_nm: size, drill_nm: drill } };
     if (Number.isFinite(nx) && Number.isFinite(ny) && (nx !== x0 || ny !== y0)) work = movedStitch(work, nx - x0, ny - y0);
     const before = new Set((board.drawings?.via_stitches ?? []).map((v) => v.id));
     if (!(await api.cmdBatch([viaStitchCmd(req.id, work)]))) return setError("The board refused the via stitching.");
@@ -359,7 +359,7 @@ function ViaStitchDialog() {
 
   const scale = preview.extent > 0 ? 180 / (preview.extent + 2 * (u(form.pitch) || 1)) : 1;
   const margin = u(form.pitch) || 1;
-  const r = Math.max(1.5, ((u(form.size) || 600) / 2) * scale);
+  const r = Math.max(1.5, ((u(form.size) || 600_000) / 2) * scale);
   return (
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog" style={{ width: 560 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Via Stitching Properties" data-testid="via-stitch-properties">
@@ -398,12 +398,12 @@ function ViaStitchDialog() {
               <input type="number" step="any" value={form.size} onChange={(e) => set({ size: e.target.value })} style={{ width: 70 }} title="Via size" data-testid="vst-size" />
               <span>/</span>
               <input type="number" step="any" value={form.drill} onChange={(e) => set({ drill: e.target.value })} style={{ width: 70 }} title="Via drill" data-testid="vst-drill" /> {units}
-              <select value={form.work.via?.from_layer ?? "F.Cu"} onChange={(e) => setWork({ via: { size_um: 0, drill_um: 0, to_layer: "B.Cu", ...form.work.via, from_layer: e.target.value } })} data-testid="vst-from">
+              <select value={form.work.via?.from_layer ?? "F.Cu"} onChange={(e) => setWork({ via: { size_nm: 0, drill_nm: 0, to_layer: "B.Cu", ...form.work.via, from_layer: e.target.value } })} data-testid="vst-from">
                 {copper.map((l) => (
                   <option key={l}>{l}</option>
                 ))}
               </select>
-              <select value={form.work.via?.to_layer ?? "B.Cu"} onChange={(e) => setWork({ via: { size_um: 0, drill_um: 0, from_layer: "F.Cu", ...form.work.via, to_layer: e.target.value } })} data-testid="vst-to">
+              <select value={form.work.via?.to_layer ?? "B.Cu"} onChange={(e) => setWork({ via: { size_nm: 0, drill_nm: 0, from_layer: "F.Cu", ...form.work.via, to_layer: e.target.value } })} data-testid="vst-to">
                 {copper.map((l) => (
                   <option key={l}>{l}</option>
                 ))}

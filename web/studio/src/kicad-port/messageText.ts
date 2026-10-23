@@ -31,12 +31,12 @@ function cExp(v: number): string {
 }
 
 /**
- * `valueUm` is this app's µm (µm² for an area); converted to pcbnew IU
+ * `valueNm` is this app's µm (µm² for an area); converted to pcbnew IU
  * (nm / nm²) first, then `ToUserUnit` once per dimension, exactly as the
  * source's fall-through switch does.
  */
-export function messageTextFromValue(valueUm: number, units: MessageUnits, addUnitLabel = true, type: MessageDataType = "distance"): string {
-  const iu = type === "area" ? valueUm * 1e6 : valueUm * 1e3;
+export function messageTextFromValue(valueNm: number, units: MessageUnits, addUnitLabel = true, type: MessageDataType = "distance"): string {
+  const iu = type === "area" ? valueNm : valueNm;
   let value = iu / IU_PER_UNIT[units];
   if (type === "area") value /= IU_PER_UNIT[units];
 

@@ -12,7 +12,7 @@ const fp = {
     { id: "g_arc", kind: "arc", layer: "F.SilkS", stroke_width: 150, filled: false, start: { x: 1000, y: 0 }, mid: { x: 0, y: 1000 }, end: { x: -1000, y: 0 } },
     { id: "g_poly", kind: "polygon", layer: "F.SilkS", stroke_width: 150, filled: true, pts: [{ x: 7, y: 8 }, { x: 70, y: 80 }, { x: 0, y: 90 }] },
   ],
-  texts: [{ id: "t_1", content: "T", at: { x: 40, y: 50 }, angle: 0, layer: "F.SilkS", size_um: 1000, stroke_width: 150, justify: "center", mirror: false }],
+  texts: [{ id: "t_1", content: "T", at: { x: 40, y: 50 }, angle: 0, layer: "F.SilkS", size_nm: 1000, stroke_width: 150, justify: "center", mirror: false }],
 } as unknown as LibraryFootprint;
 
 test("an item's position is KiCad's GetPosition: a pad's and a text's anchor, a shape's by EDA_SHAPE::getPosition", () => {

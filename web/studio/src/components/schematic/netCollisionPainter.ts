@@ -23,10 +23,10 @@ export function paintNetCollision(ctx: CanvasRenderingContext2D, scale: number, 
     ctx.fill();
     ctx.stroke();
   };
-  for (const m of o.collisions) circle(m.at[0], m.at[1], m.radius_um);
+  for (const m of o.collisions) circle(m.at[0], m.at[1], m.radius_nm);
   for (const d of o.disconnections) {
-    circle(d.a[0], d.a[1], d.radius_um);
-    circle(d.b[0], d.b[1], d.radius_um);
+    circle(d.a[0], d.a[1], d.radius_nm);
+    circle(d.b[0], d.b[1], d.radius_nm);
     ctx.beginPath();
     ctx.moveTo(d.a[0], d.a[1]);
     ctx.lineTo(d.b[0], d.b[1]);

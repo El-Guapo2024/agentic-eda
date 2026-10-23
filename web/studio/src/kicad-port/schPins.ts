@@ -10,7 +10,7 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { Schematic, SchematicSymbol } from "../api/types";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
-import { pinTextPlacements, PIN_TEXT_PEN_UM, PIN_TEXT_SIZE_UM, type PinTextPlacement } from "../components/schematic/pinText";
+import { pinTextPlacements, PIN_TEXT_PEN_NM, PIN_TEXT_SIZE_NM, type PinTextPlacement } from "../components/schematic/pinText";
 import { boxOfPoints, inflateBox, pointInBox, unionBox, type Box, type P } from "./schItemGeom";
 import { ELECTRICAL_TYPE_NAMES } from "./symPinText";
 
@@ -59,7 +59,7 @@ export interface PinItem {
   /** The net the pin is on, when the sheet says. */
   net: string | null;
   /** `(pin_names ...)` / `(pin_numbers ...)` of the symbol, for the texts the pin writes. */
-  texts: { namesHidden: boolean; numbersHidden: boolean; nameOffsetUm: number };
+  texts: { namesHidden: boolean; numbersHidden: boolean; nameOffsetNm: number };
 }
 
 const cache = new WeakMap<Schematic, PinItem[]>();
@@ -113,12 +113,12 @@ export function pinsOf(sch: Schematic, reference: string, unit?: number): PinIte
 }
 
 /** How wide a text of the given size is, micrometres (`measureStrokeText`, passed in so this module stays free of the canvas font). */
-export type Measure = (text: string, sizeUm: number) => number;
+export type Measure = (text: string, sizeNm: number) => number;
 
 /** The box of a pin text: its anchor, justification and whether it runs up (a quarter turn counter-clockwise). */
-function textBox(t: PinTextPlacement, sizeUm: number, measure: Measure): Box {
-  const w = measure(t.text, sizeUm);
-  const h = sizeUm;
+function textBox(t: PinTextPlacement, sizeNm: number, measure: Measure): Box {
+  const w = measure(t.text, sizeNm);
+  const h = sizeNm;
   const x0 = t.h === "left" ? 0 : t.h === "center" ? -w / 2 : -w;
   const y0 = t.v === "top" ? 0 : t.v === "center" ? -h / 2 : -h;
   const corners: P[] = [
@@ -137,15 +137,15 @@ function textBox(t: PinTextPlacement, sizeUm: number, measure: Measure): Box {
  * number. (A pin shape's decoration -- the bubble of an inverted pin, the clock triangle -- is inside the box the line and the texts give, within the accuracy.)
  */
 export function pinBox(pin: PinItem, measure: Measure): Box {
-  const pen = PIN_TEXT_PEN_UM;
+  const pen = PIN_TEXT_PEN_NM;
   let box: Box | null = inflateBox(boxOfPoints([pin.tip, pin.root])!, pen / 2);
   const texts = pinTextPlacements({ name: pin.name, number: pin.number }, pin.tip, pin.root, pin.texts);
-  for (const t of [texts.name, texts.number]) if (t) box = unionBox(box, textBox(t, PIN_TEXT_SIZE_UM, measure));
+  for (const t of [texts.name, texts.number]) if (t) box = unionBox(box, textBox(t, PIN_TEXT_SIZE_NM, measure));
   return box!;
 }
 
 /** `Schematic()->Settings().m_PinSymbolSize / 4`: the least accuracy a pin hit test is given, micrometres (25 mils / 4). */
-export const PIN_HIT_FLOOR_UM = 158.75;
+export const PIN_HIT_FLOOR_NM = 158_750;
 
 /** How far `p` is from the pin's box, micrometres: 0 inside it. */
 export function pinDistance(pin: PinItem, p: P, measure: Measure): number {
@@ -156,21 +156,21 @@ export function pinDistance(pin: PinItem, p: P, measure: Measure): number {
 }
 
 /** `SCH_PIN::HitTest( aPosition, aAccuracy )`: `aAccuracy` is raised to the floor, so an "exact" hit (accuracy 0) still has some width. */
-export function hitPin(pin: PinItem, p: P, accuracyUm: number, measure: Measure): boolean {
-  return pointInBox(p, inflateBox(pinBox(pin, measure), Math.max(accuracyUm, PIN_HIT_FLOOR_UM)));
+export function hitPin(pin: PinItem, p: P, accuracyNm: number, measure: Measure): boolean {
+  return pointInBox(p, inflateBox(pinBox(pin, measure), Math.max(accuracyNm, PIN_HIT_FLOOR_NM)));
 }
 
 /**
  * The pin a click at `p` reaches (`GuessSelectionCandidates` for pins): with `exactOnly`, only a pin whose box holds the point as it is (accuracy 0 -- "exact hits win",
- * and a pin that is one wins over the symbol, fields and everything else under it); without it, the nearest pin within `toleranceUm` (what is left when nothing else is
+ * and a pin that is one wins over the symbol, fields and everything else under it); without it, the nearest pin within `toleranceNm` (what is left when nothing else is
  * under the pointer). `selectable` is the selection filter.
  */
-export function pickPin(sch: Schematic, p: P, toleranceUm: number, measure: Measure, exactOnly: boolean, selectable: (id: string) => boolean = () => true): PinItem | null {
+export function pickPin(sch: Schematic, p: P, toleranceNm: number, measure: Measure, exactOnly: boolean, selectable: (id: string) => boolean = () => true): PinItem | null {
   let best: { pin: PinItem; d: number } | null = null;
   for (const pin of pinItems(sch)) {
     if (!selectable(pin.id)) continue;
     const exact = hitPin(pin, p, 0, measure);
-    if (exactOnly ? !exact : !hitPin(pin, p, toleranceUm, measure)) continue;
+    if (exactOnly ? !exact : !hitPin(pin, p, toleranceNm, measure)) continue;
     // "closest": the one the point is nearest the middle of its line (an exact hit on a name text and on a neighbour's line is ambiguous in KiCad too)
     const mid: P = [(pin.tip[0] + pin.root[0]) / 2, (pin.tip[1] + pin.root[1]) / 2];
     const d = Math.hypot(p[0] - mid[0], p[1] - mid[1]);

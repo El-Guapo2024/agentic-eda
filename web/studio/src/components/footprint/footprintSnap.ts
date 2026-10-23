@@ -21,7 +21,7 @@ export interface FootprintSnapView {
   footprint: LibraryFootprint | null;
   /** Screen pixels per um. */
   scale: number;
-  gridUm: number;
+  gridNm: number;
   grids: readonly number[];
   overrides: GridOverrides | null;
   /** The grid origin of the Footprint Editor (`useFootprintGridOrigin`). */
@@ -79,7 +79,7 @@ export class FootprintSnap {
   private env(): GridEnv {
     const v = this.view!;
     const scale = v.scale > 0 ? v.scale : 1;
-    return { scale, gridUm: v.gridUm, visibleGridUm: computeVisibleGridSize(v.gridUm, scale), origin: v.origin, gridSizeOf: (c) => gridSizeFor(c, v.gridUm, v.grids, v.overrides) };
+    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: v.origin, gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides) };
   }
 
   private visibility(): Visibility {

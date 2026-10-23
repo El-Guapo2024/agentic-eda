@@ -12,15 +12,15 @@ import { fetchSchematic, fetchState } from "../api/client";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { closeTableCellDialog, closeTableDialog, openTableDialog, useTableDialogs } from "../state/tableDialogs";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
-import { lineThicknessUm } from "../kicad-port/layerDefaults";
+import { lineThicknessNm } from "../kicad-port/layerDefaults";
 import { autoPenFor, cellById, cellDialogValues, cellEditOf, gridColumn, isSelectableCell, schCellAddress, TABLE_LINE_STYLES, tableById, tableDialogValues, tablePatchOf, tablesOf, widthAfterToggle, type CellDialogValues, type TableDialogValues } from "../kicad-port/tables";
 import type { TableCellAddr, TableCmdWire, TableLineStyleName } from "../api/tableTypes";
-import { umFrom, umTo, type LengthUnit } from "../state/units";
+import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 
 const GRID: CSSProperties = { gridTemplateColumns: "150px 1fr", rowGap: 6 };
 
 /** A length in the display unit, as the field holds it. */
-const shown = (um: number, unit: LengthUnit): string => String(Math.round(umTo(um, unit) * 10_000) / 10_000);
+const shown = (um: number, unit: LengthUnit): string => String(Math.round(nmTo(um, unit) * 10_000) / 10_000);
 
 /** A length field that may be "differs" (`INDETERMINATE_STATE`): empty with `<...>` as its placeholder. */
 function LengthField(props: { value: number | null; unit: LengthUnit; onChange: (um: number | null) => void; disabled?: boolean; testId?: string }) {
@@ -33,7 +33,7 @@ function LengthField(props: { value: number | null; unit: LengthUnit; onChange: 
       disabled={disabled}
       placeholder="<...>"
       value={value === null ? "" : shown(value, unit)}
-      onChange={(e) => onChange(e.target.value === "" ? null : Math.round(umFrom(Number(e.target.value), unit)))}
+      onChange={(e) => onChange(e.target.value === "" ? null : Math.round(nmFrom(Number(e.target.value), unit)))}
     />
   );
 }
@@ -80,7 +80,7 @@ export function TablePropertiesDialog() {
     if (open.mode === "edit") {
       const t = tableById(host, open.tableId);
       if (!t) return;
-      setV(tableDialogValues(t, ((sch ? state.schematic?.locked : board?.locked) ?? []).includes(t.id), sch ? 0 : lineThicknessUm(textGraphics, t.layer)));
+      setV(tableDialogValues(t, ((sch ? state.schematic?.locked : board?.locked) ?? []).includes(t.id), sch ? 0 : lineThicknessNm(textGraphics, t.layer)));
     } else {
       const d = open.drawn;
       setV({
@@ -106,7 +106,7 @@ export function TablePropertiesDialog() {
   const rows = table?.rows ?? drawn!.rows;
   const layerSetup = board?.board_rules?.layer_setup;
   const layers = boardLayerList(board?.layers ?? [], layerSetup);
-  const defaultLine = sch ? 0 : lineThicknessUm(textGraphics, v.layer);
+  const defaultLine = sch ? 0 : lineThicknessNm(textGraphics, v.layer);
   const set = (patch: Partial<TableDialogValues>) => setV((cur) => (cur ? { ...cur, ...patch } : cur));
   const borderOn = v.borderExternal || v.borderHeader;
   const separatorsOn = v.rowSeparators || v.colSeparators;
@@ -139,9 +139,9 @@ export function TablePropertiesDialog() {
           at: { x: Math.round(d.at[0]), y: Math.round(d.at[1]) },
           cols: d.cols,
           rows: d.rows,
-          cell_w_um: Math.round(d.cellW),
-          cell_h_um: Math.round(d.cellH),
-          line_width_um: Math.round(d.lineWidth),
+          cell_w_nm: Math.round(d.cellW),
+          cell_h_nm: Math.round(d.cellH),
+          line_width_nm: Math.round(d.lineWidth),
           locked: v.locked,
           patch,
         });

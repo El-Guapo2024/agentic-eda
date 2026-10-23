@@ -3,16 +3,16 @@
 // width", "Spoke angle" and "Clearance"): what a part carries, as form state, and the `Cmd` each form commits. Pure -- no
 // React -- so the dialog stays a thin view of it. `null` is "inherited" throughout, as in KiCad (`ZONE_CONNECTION::INHERITED`,
 // an unset `std::optional`).
-import type { Cmd, PadConnection, Part, Um } from "../api/types";
+import type { Cmd, PadConnection, Part, Nm } from "../api/types";
 
 /** One pad's own zone facts, as the dialog edits them. */
 export interface PadZoneForm {
   connection: PadConnection | null;
-  gap: Um | null;
-  spokeWidth: Um | null;
+  gap: Nm | null;
+  spokeWidth: Nm | null;
   /** Millidegrees, KiCad's sign convention (as in the `.kicad_pcb`). */
   spokeAngleMdeg: number | null;
-  clearance: Um | null;
+  clearance: Nm | null;
 }
 
 export const NO_PAD_ZONE_FACTS: PadZoneForm = { connection: null, gap: null, spokeWidth: null, spokeAngleMdeg: null, clearance: null };
@@ -20,7 +20,7 @@ export const NO_PAD_ZONE_FACTS: PadZoneForm = { connection: null, gap: null, spo
 /** The footprint's own facts. */
 export interface FootprintZoneForm {
   connection: PadConnection | null;
-  clearance: Um | null;
+  clearance: Nm | null;
 }
 
 /** The pad numbers of a placed part, each once, in the order they are first met (a number can be shared by several pads, which all go on one pin; a numberless pad -- a mounting hole -- has nothing to address). */
@@ -43,7 +43,7 @@ export function footprintZoneForm(part: Part | undefined): FootprintZoneForm {
 
 /** `Cmd::SetPadZoneOverrides`: a whole-panel commit for the pads numbered `pad` of `part`. An angle is kept within one turn, a length at zero or more. */
 export function setPadZoneCmd(part: string, pad: string, f: PadZoneForm): Cmd {
-  const len = (v: Um | null) => (v == null ? null : Math.max(0, Math.round(v)));
+  const len = (v: Nm | null) => (v == null ? null : Math.max(0, Math.round(v)));
   return {
     op: "set_pad_zone_overrides",
     part,

@@ -9,7 +9,7 @@ import { getGridSettings } from "../../state/gridSettings";
 import { formatLength, type LengthUnit } from "../../state/units";
 import { scaleToZoomFactor, zoomListFor } from "../../kicad-port/zoomFit";
 import { activeEditPoint, canRemoveCorner } from "../../kicad-port/pcbPointEdit";
-import { handleToleranceUm, pointItemOf, pointsOfItem, ringOf } from "../../actions/pcbPointEditSweep";
+import { handleToleranceNm, pointItemOf, pointsOfItem, ringOf } from "../../actions/pcbPointEditSweep";
 import { boardHasItems, summarizePcbSelection } from "../../kicad-port/pcbSelectionSummary";
 import {
   defaultMenuContext,
@@ -50,13 +50,13 @@ function zoomEntries(state: StudioState): PcbMenuContext["zoom"] {
 
 /** `GRID_MENU::update` and `BuildChoiceList`: each grid in the display unit and, in brackets, the other system's; the current one checked. */
 function gridEntries(state: StudioState): PcbMenuContext["grid"] {
-  return getGridSettings("pcb").grids.map((um) => ({ label: `${formatLength(um, state.units)} (${formatLength(um, otherUnit(state.units))})`, checked: um === state.gridUm }));
+  return getGridSettings("pcb").grids.map((um) => ({ label: `${formatLength(um, state.units)} (${formatLength(um, otherUnit(state.units))})`, checked: um === state.gridNm }));
 }
 
 /** The point editor's handle under the pointer (`PCB_POINT_EDITOR::HasCorner / HasMidpoint / CanRemoveCorner`). */
 function handleUnder(state: StudioState, board: BoardState, refs: readonly string[], at: readonly [number, number]): PcbMenuContext["handle"] {
   const item = refs.length === 1 ? pointItemOf(board, new Set(refs)) : null;
-  const active = item ? activeEditPoint(pointsOfItem(item), at, handleToleranceUm(state.view.scale)) : null;
+  const active = item ? activeEditPoint(pointsOfItem(item), at, handleToleranceNm(state.view.scale)) : null;
   const ring = item ? ringOf(item) : null;
   return { corner: active?.kind === "corner", midpoint: active?.kind === "midpoint", canRemoveCorner: !!ring && active?.kind === "corner" && active.id.startsWith("v") && canRemoveCorner(ring) };
 }
@@ -87,7 +87,7 @@ export function trackViaWidthMenu(state: StudioState, board: BoardState): MenuNo
   const custom = state.pcbx.useCustomTrackVia;
   const auto = state.bcx.autoTrackWidth && !custom;
   const useIndex = !state.bcx.autoTrackWidth && !custom;
-  const width = state.currentTrackWidthUm;
+  const width = state.currentTrackWidthNm;
   const via = state.currentViaPreset;
   const mm = (um: number) => formatLength(um, state.units);
   const out: MenuNode[] = [

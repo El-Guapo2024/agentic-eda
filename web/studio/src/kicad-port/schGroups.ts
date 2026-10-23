@@ -144,12 +144,12 @@ export function groupBox(groups: readonly Group[], id: string, boxOf: BoxOf): Bo
 }
 
 /** What the group is drawn around: its members' box grown by 10 mil (`bbox.Inflate( schIUScale.MilsToIU( 10 ) )`), micrometres. */
-export const GROUP_INFLATE_UM = 254;
+export const GROUP_INFLATE_NM = 254_000;
 
 /** The box drawn for a selected or entered group (`SCH_PAINTER::draw( SCH_GROUP )`), or null when nothing is left in it. */
 export function groupBoundsOf(groups: readonly Group[], id: string, boxOf: BoxOf): Box | null {
   const b = groupBox(groups, id, boxOf);
-  return b ? inflateBox(b, GROUP_INFLATE_UM) : null;
+  return b ? inflateBox(b, GROUP_INFLATE_NM) : null;
 }
 
 /** The ids of `selection` that `SCH_GROUP_TOOL::Group` takes: groups and groupable items, not what belongs to a symbol or a sheet. Each once. */

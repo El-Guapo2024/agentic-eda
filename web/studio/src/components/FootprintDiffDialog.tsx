@@ -59,7 +59,7 @@ function Footprint({
           }
           fill="none"
           stroke={colorOf("F.CrtYd")}
-          strokeWidth={50}
+          strokeWidth={50_000}
         />
       ))}
       {shapes.map((s, i) => (
@@ -68,7 +68,7 @@ function Footprint({
           d={s.d}
           fill={s.fill ? colorOf(s.layer) : "none"}
           stroke={colorOf(s.layer)}
-          strokeWidth={Math.max(s.width, 20)}
+          strokeWidth={Math.max(s.width, 20_000)}
           strokeLinecap="round"
           strokeLinejoin="round"
         />
@@ -161,7 +161,7 @@ export function FootprintDiffDialog({
   );
   const opacity = diffOpacity(slider);
   const margin = bounds
-    ? Math.max(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0, 1000) * 0.08
+    ? Math.max(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0, 1_000_000) * 0.08
     : 0;
   const viewBox = bounds
     ? `${bounds.x0 - margin} ${bounds.y0 - margin} ${bounds.x1 - bounds.x0 + 2 * margin} ${bounds.y1 - bounds.y0 + 2 * margin}`

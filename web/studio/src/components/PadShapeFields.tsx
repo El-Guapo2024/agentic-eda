@@ -28,7 +28,7 @@ import {
   type PrimitiveKind,
 } from "../kicad-port/padShape";
 import { PADSTACK_MODES, copperLayersChoices, editLayerChoices, type PadStackState } from "../kicad-port/padStack";
-import { formatLength, umFrom, umTo, type LengthUnit } from "../state/units";
+import { formatLength, nmFrom, nmTo, type LengthUnit } from "../state/units";
 
 type PolygonShape = Extract<PadPrimitive["shape"], { kind: "polygon" }>;
 
@@ -38,9 +38,9 @@ function Len({ um, units, onChange, testid, width = 74 }: { um: number; units: L
     <input
       type="number"
       step="any"
-      value={Number(umTo(um, units).toFixed(4))}
+      value={Number(nmTo(um, units).toFixed(4))}
       data-testid={testid}
-      onChange={(e) => Number.isFinite(Number(e.target.value)) && e.target.value !== "" && onChange(Math.round(umFrom(Number(e.target.value), units)))}
+      onChange={(e) => Number.isFinite(Number(e.target.value)) && e.target.value !== "" && onChange(Math.round(nmFrom(Number(e.target.value), units)))}
       style={{ width }}
     />
   );
@@ -303,7 +303,7 @@ export function PadPrimitivePanel({ form, onForm, units }: { form: PadShapeForm;
                   onClick={() => {
                     const pts = (draft.shape as PolygonShape).pts;
                     const last = pts[pts.length - 1] ?? { x: 0, y: 0 };
-                    setDraft({ ...draft, shape: polygonWith(draft.shape as PolygonShape, { add: { x: last.x + 200, y: last.y + 200 } }) });
+                    setDraft({ ...draft, shape: polygonWith(draft.shape as PolygonShape, { add: { x: last.x + 200_000, y: last.y + 200_000 } }) });
                   }}
                   data-testid="pad-prim-point-add"
                 >

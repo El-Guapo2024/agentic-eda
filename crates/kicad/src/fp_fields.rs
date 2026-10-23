@@ -336,9 +336,9 @@ mod tests {
 
     #[test]
     fn a_property_is_written_the_way_kicad_formats_a_field() {
-        let mut l = FieldLayout::new(Point { x: 1_000, y: -2_000 }, "F.SilkS");
-        l.size = (1_200, 800);
-        l.thickness = 150;
+        let mut l = FieldLayout::new(Point { x: 1_000_000, y: -2_000_000 }, "F.SilkS");
+        l.size = (1_200_000, 800_000);
+        l.thickness = 150_000;
         l.bold = true;
         l.halign = -1;
         l.valign = 1;
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn a_bottom_side_field_is_written_unmirrored_in_the_file_frame_and_mirrored_in_its_effects() {
-        let mut l = FieldLayout::new(Point { x: 1_000, y: 0 }, "B.SilkS");
+        let mut l = FieldLayout::new(Point { x: 1_000_000, y: 0 }, "B.SilkS");
         l.angle = 90_000;
         let mut out = String::new();
         write_property(&mut out, "Value", "10k", &l, Side::Bottom, 0, "u-2");
@@ -364,10 +364,10 @@ mod tests {
     #[test]
     fn what_is_written_reads_back_to_the_same_layout() {
         for (side, rot) in [(Side::Top, 0), (Side::Top, 90_000), (Side::Bottom, 0), (Side::Bottom, 270_000)] {
-            let mut l = FieldLayout::new(Point { x: 1_234, y: -2_345 }, if side == Side::Bottom { "B.SilkS" } else { "F.SilkS" });
+            let mut l = FieldLayout::new(Point { x: 1_234_000, y: -2_345_000 }, if side == Side::Bottom { "B.SilkS" } else { "F.SilkS" });
             l.angle = 45_000;
-            l.size = (1_100, 900);
-            l.thickness = 120;
+            l.size = (1_100_000, 900_000);
+            l.thickness = 120_000;
             l.italic = true;
             l.halign = 1;
             l.valign = -1;
@@ -410,12 +410,12 @@ mod tests {
                 (property "Sheet file" "a.kicad_sch") (property "Sheetname" "root") (property "ki_description" "an inductor") (property "Manufacturer" "ACME")
                 (property "Shown" "yes" (hide no)))"#,
         );
-        let e = parse_footprint_edit_in(&node, "L1", None, Side::Top, 0, 20210722);
+        let e = parse_footprint_edit_in(&node, "L1", None, Side::Top, 0, 20_210_722_000);
         let names: Vec<&str> = e.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["Manufacturer", "Shown"]);
         assert_eq!((e.fields[0].layout.visible, e.fields[1].layout.visible), (false, true));
         // the same properties in a current file are fields like any other, shown
-        let e = parse_footprint_edit_in(&node, "L1", None, Side::Top, 0, 20241229);
+        let e = parse_footprint_edit_in(&node, "L1", None, Side::Top, 0, 20_241_229_000);
         assert_eq!(e.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["Sheet file", "Sheetname", "Manufacturer", "Shown"]);
         assert!(e.fields.iter().all(|f| f.layout.visible));
     }
@@ -435,7 +435,7 @@ mod tests {
                 (fp_text value "1u" (at 0 2 0) (layer "F.Fab") hide (effects (font (size 1 1) (thickness 0.15)))))"#,
         );
         let e = parse_footprint_edit(&node, "C3", Some("1u"), Side::Top, 0);
-        assert_eq!(e.reference.as_ref().unwrap().at, Point { x: 0, y: -2_000 });
+        assert_eq!(e.reference.as_ref().unwrap().at, Point { x: 0, y: -2_000_000 });
         assert!(!e.value.as_ref().unwrap().visible, "the bare `hide` of the old files");
         assert!(e.attrs.is_none(), "no (attr ..) is no attributes edit");
     }
@@ -455,17 +455,17 @@ mod tests {
     #[test]
     fn a_pads_margins_are_written_and_read_back_and_its_offset_is_read_on_either_side() {
         let mut e = PadEdit::none("1", 1);
-        e.offset = Some(Point { x: 300, y: -100 });
-        e.solder_mask_margin = Some(50);
-        e.solder_paste_margin = Some(-30);
+        e.offset = Some(Point { x: 300_000, y: -100_000 });
+        e.solder_mask_margin = Some(50_000);
+        e.solder_paste_margin = Some(-30_000);
         e.solder_paste_margin_ratio = Some(-0.1);
         let t = pad_text(Some(&e));
         assert_eq!(t.margins, " (solder_mask_margin 0.05) (solder_paste_margin -0.03) (solder_paste_margin_ratio -0.1)");
         for side in [Side::Top, Side::Bottom] {
             // The offset in the file's frame: x negated on the bottom side, where the whole frame is mirrored.
-            let ox = if side == Side::Bottom { -300 } else { 300 };
-            let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(ox), mm(-100), t.margins));
-            let back = parse_pad_extras(&node, side, 20241229);
+            let ox = if side == Side::Bottom { -300_000 } else { 300_000 };
+            let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(ox), mm(-100_000), t.margins));
+            let back = parse_pad_extras(&node, side, 20_241_229_000);
             assert_eq!((back.offset, back.solder_mask_margin, back.solder_paste_margin, back.solder_paste_margin_ratio), (e.offset, e.solder_mask_margin, e.solder_paste_margin, e.solder_paste_margin_ratio), "{side:?}");
         }
         assert!(pad_text(None).margins.is_empty());
@@ -474,9 +474,9 @@ mod tests {
     #[test]
     fn an_old_file_reads_a_zero_margin_as_unset() {
         let node = parse("(pad \"1\" smd rect (at 0 0) (size 1 1) (solder_mask_margin 0))");
-        let old = parse_pad_extras(&node, Side::Top, 20231231);
+        let old = parse_pad_extras(&node, Side::Top, 20_231_231_000);
         assert_eq!(old.solder_mask_margin, None);
-        let new = parse_pad_extras(&node, Side::Top, 20241229);
+        let new = parse_pad_extras(&node, Side::Top, 20_241_229_000);
         assert_eq!(new.solder_mask_margin, Some(0));
     }
 }

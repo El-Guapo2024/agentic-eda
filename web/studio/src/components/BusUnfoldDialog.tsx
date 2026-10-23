@@ -6,7 +6,7 @@
 import { useStudioDispatch, useStudioState } from "../state/store";
 
 /** The bus entry's default size: a 100 mil diagonal (`SCH_BUS_WIRE_ENTRY( pos )` ends at `pos + ( 100 mil, 100 mil )`). */
-const ENTRY_SIZE_UM = 2540;
+const ENTRY_SIZE_NM = 2_540_000;
 
 export function BusUnfoldDialog() {
   const state = useStudioState();
@@ -16,7 +16,7 @@ export function BusUnfoldDialog() {
   const close = () => dispatch({ type: "SET_BUS_UNFOLD_PICKER", picker: null });
 
   const choose = (net: string) => {
-    const size: [number, number] = [ENTRY_SIZE_UM, ENTRY_SIZE_UM];
+    const size: [number, number] = [ENTRY_SIZE_NM, ENTRY_SIZE_NM];
     const start: [number, number] = [picker.entryAt[0] + size[0], picker.entryAt[1] + size[1]];
     dispatch({ type: "SET_BUS_UNFOLD_PICKER", picker: null });
     dispatch({ type: "SET_BUS_UNFOLD", unfold: { net, entryAt: picker.entryAt, size } });

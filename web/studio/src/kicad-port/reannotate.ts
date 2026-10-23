@@ -26,7 +26,7 @@ export const VALID_PREFIX = "_-+=/\\";
 export interface ReannotateForm {
   direction: number;
   location: ReannotateOptions["location"];
-  gridUm: number;
+  gridNm: number;
   scope: ReannotateOptions["scope"];
   excludeLocked: boolean;
   exclude: string;
@@ -42,11 +42,11 @@ export interface ReannotateForm {
  * What the dialog opens with: the first order, the footprint's own location, the editor's grid, the whole board -- the selection when something is selected
  * (`TransferDataToWindow`) --, front reference start 1, back blank (it continues from the front), no prefixes.
  */
-export function defaultForm(gridUm: number, hasSelection: boolean): ReannotateForm {
+export function defaultForm(gridNm: number, hasSelection: boolean): ReannotateForm {
   return {
     direction: 0,
     location: "footprint",
-    gridUm,
+    gridNm,
     scope: hasSelection ? "selection" : "all",
     excludeLocked: false,
     exclude: "",
@@ -76,7 +76,7 @@ export function formOptions(f: ReannotateForm): ReannotateOptions {
   return {
     direction: f.direction,
     location: f.location,
-    grid_um: f.gridUm,
+    grid_nm: f.gridNm,
     scope: f.scope,
     exclude_locked: f.excludeLocked,
     exclude: f.exclude,

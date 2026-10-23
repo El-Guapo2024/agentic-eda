@@ -13,7 +13,7 @@ const SNAP_RANGE = 250;
 const SNAP_IN = 200;
 const SNAP_OUT = 300;
 
-const env = (over: Partial<GridEnv> = {}): GridEnv => ({ scale: 0.1, gridUm: 1000, visibleGridUm: 1000, origin: [0, 0], gridSizeOf: () => 1000, ...over });
+const env = (over: Partial<GridEnv> = {}): GridEnv => ({ scale: 0.1, gridNm: 1000, visibleGridNm: 1000, origin: [0, 0], gridSizeOf: () => 1000, ...over });
 const visible: Visibility = { layerVisible: () => true, highContrastLayers: null };
 const always: PcbMagnetic = { ...DEFAULT_PCB_MAGNETIC, pads: "always", tracks: "always", graphics: true };
 
@@ -50,7 +50,7 @@ test("KiROUND rounds half away from zero", () => {
 });
 
 test("the snap range never exceeds the visible grid while the grid is on, and does when it is off", () => {
-  const { h } = make({}, DEFAULT_PCB_MAGNETIC, env({ visibleGridUm: 100 }));
+  const { h } = make({}, DEFAULT_PCB_MAGNETIC, env({ visibleGridNm: 100 }));
   assert.equal(h.snapRange(), 100);
   h.setUseGrid(false);
   assert.equal(h.snapRange(), SNAP_RANGE);

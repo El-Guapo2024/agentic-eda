@@ -5,7 +5,7 @@
 // layer is a `PadShapeForm` (kicad-port/padShape.ts) with the copper's offset, which is per layer (`initPadstackLayerValues`).
 //
 // The pad's own fields are its front shape (the `F.Cu` of `PADSTACK::ALL_LAYERS`), kept by the dialog as it always has; this state holds the other layers.
-import type { PadLayerShape, PadStack, PadStackMode, Um, UnconnectedLayers } from "../api/types";
+import type { PadLayerShape, PadStack, PadStackMode, Nm, UnconnectedLayers } from "../api/types";
 import { NO_CORNERS, checkShape, shapeEdit, shapeFormOf, type PadShapeForm } from "./padShape";
 
 /** The key of the pad's own layer, the front (`PADSTACK::ALL_LAYERS` is `F_Cu`). */
@@ -17,8 +17,8 @@ export const BACK = "B.Cu";
 /** One copper layer's shape as the dialog holds it: the shape form, the copper's offset from the pad's position and what the file said of the layer besides. */
 export interface LayerForm {
   s: PadShapeForm;
-  ox: Um;
-  oy: Um;
+  ox: Nm;
+  oy: Nm;
   tokens: string[];
 }
 

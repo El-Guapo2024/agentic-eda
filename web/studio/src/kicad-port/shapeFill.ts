@@ -59,8 +59,8 @@ export function hatchDistance(s: Shape, px: number, py: number): number {
 }
 
 /** KiCad's message for a fill other than solid on a shape with no line width (dialog_shape_properties.cpp, Validate). */
-export function fillWidthError(kind: Shape["kind"], fill: ShapeFill, widthUm: number): string | null {
-  if (fill === "solid" || widthUm > 0) return null;
+export function fillWidthError(kind: Shape["kind"], fill: ShapeFill, widthNm: number): string | null {
+  if (fill === "solid" || widthNm > 0) return null;
   switch (kind) {
     case "circle":
       return "Line width must be greater than zero for an unfilled circle.";

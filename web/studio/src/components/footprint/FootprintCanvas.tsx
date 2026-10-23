@@ -34,7 +34,7 @@ import { bezierClick, bezierFinishDouble, bezierMotion, bezierRemoveLastPoint } 
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "../canvas/curveTools";
 
 /** The footprint editor's fixed graphic line width (`footprintToShapeArg`'s own 150 um). */
-const DRAW_STROKE_WIDTH_UM = 150;
+const DRAW_STROKE_WIDTH_NM = 150_000;
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useFootprintGridOrigin } from "../../state/gridOrigin";
 import { useGridSettings } from "../../state/gridSettings";
@@ -134,15 +134,15 @@ function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "poly
     case "bezier":
       return null; // built from the construction manager's `BezierCurve`, never from a bare point list
     case "segment":
-      return pts.length >= 2 ? { kind: "segment", layer, stroke_width: 150, filled: false, start: p(0), end: p(1) } : null;
+      return pts.length >= 2 ? { kind: "segment", layer, stroke_width: 150_000, filled: false, start: p(0), end: p(1) } : null;
     case "rect":
-      return pts.length >= 2 ? { kind: "rect", layer, stroke_width: 150, filled: false, start: p(0), end: p(1) } : null;
+      return pts.length >= 2 ? { kind: "rect", layer, stroke_width: 150_000, filled: false, start: p(0), end: p(1) } : null;
     case "circle":
-      return pts.length >= 2 ? { kind: "circle", layer, stroke_width: 150, filled: false, center: p(0), end: p(1) } : null;
+      return pts.length >= 2 ? { kind: "circle", layer, stroke_width: 150_000, filled: false, center: p(0), end: p(1) } : null;
     case "arc":
-      return pts.length >= 3 ? { kind: "arc", layer, stroke_width: 150, filled: false, start: p(0), mid: p(1), end: p(2) } : null;
+      return pts.length >= 3 ? { kind: "arc", layer, stroke_width: 150_000, filled: false, start: p(0), mid: p(1), end: p(2) } : null;
     case "polygon":
-      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: 150, filled: true, pts: pts.map((_, i) => p(i)) } : null;
+      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: 150_000, filled: true, pts: pts.map((_, i) => p(i)) } : null;
   }
 }
 
@@ -163,7 +163,7 @@ export function FootprintCanvas() {
   // Grid overrides (`common.Control.toggleGridOverrides`): a pad on the connected-items grid, a shape on the graphics grid, text on the text grid -- `GetItemGrid`.
   const gridList = useGridSettings("footprint").grids;
   const gridOverrides = useGridOverrides("footprint");
-  const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridUm, gridList, gridOverrides);
+  const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridNm, gridList, gridOverrides);
   /** `GetSelectionGrid`: the category of the coarsest grid of what is held. */
   const heldCategory = (ids: readonly string[]): GridCategory => {
     const cats = ids.map((id): GridCategory => (api.padById(id) ? "connectable" : api.graphicById(id) ? "graphics" : "text"));
@@ -194,7 +194,7 @@ export function FootprintCanvas() {
   const userMovedRef = useRef(false);
 
   const fp = state.footprint;
-  snap.update({ footprint: fp, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer });
+  snap.update({ footprint: fp, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer });
   snap.onChange = () => bumpSnap((n) => n + 1);
   // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
   useEffect(() => {
@@ -249,7 +249,7 @@ export function FootprintCanvas() {
     if (userMovedRef.current || containerSize.width < 50 || containerSize.height < 50) return;
     if (!fp) {
       // Nothing open: KiCad shows an empty canvas with its grid around the origin. 30 mm across, so the grid dots are readable at the default grid.
-      if (!state.name) dispatch({ type: "SET_VIEW", view: fitTransform({ minX: -15000, minY: -15000, maxX: 15000, maxY: 15000 }, containerSize.width, containerSize.height) });
+      if (!state.name) dispatch({ type: "SET_VIEW", view: fitTransform({ minX: -15_000_000, minY: -15_000_000, maxX: 15_000_000, maxY: 15_000_000 }, containerSize.width, containerSize.height) });
       return;
     }
     const pts: [number, number][] = [];
@@ -264,7 +264,7 @@ export function FootprintCanvas() {
     }
     for (const g of fp.graphics) for (const [x, y] of shapePoints(g)) pts.push([x, y]);
     for (const t of fp.texts) pts.push([t.at.x, t.at.y]);
-    if (pts.length === 0) pts.push([-3000, -3000], [3000, 3000]);
+    if (pts.length === 0) pts.push([-3_000_000, -3_000_000], [3_000_000, 3_000_000]);
     const bounds = boundsOfPoints(pts);
     if (!bounds) return;
     dispatch({ type: "SET_VIEW", view: fitTransform(bounds, containerSize.width, containerSize.height) });
@@ -306,12 +306,12 @@ export function FootprintCanvas() {
     const shown = fp && session ? { ...fp, pads: fp.pads.map((p) => ({ ...p, number: enumerateShownNumber(session, p.id ?? "", p.number) })) } : fp;
     paintFootprint(ctx, state.view, width, height, shown, {
       selection: session ? new Set([...state.selection, ...session.assigned.keys()]) : state.selection,
-      gridUm: state.gridUm,
+      gridNm: state.gridNm,
       gridVisible: state.gridVisible,
       gridOrigin: [gridOrigin.x, gridOrigin.y],
       drawState: state.drawState,
       // the rubber band follows the cursor the grid helper gave (a snapped one), not the pointer
-      cursorUm: placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorUm,
+      cursorNm: placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorNm,
       movePreview: state.movePreview,
       highContrast: state.highContrast,
       activeLayer: state.activeLayer,
@@ -327,7 +327,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, gridOrigin, state.drawState, state.cursorUm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick]);
+  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -345,10 +345,10 @@ export function FootprintCanvas() {
         const p = fp.pads[i]!;
         if (p.id && padContains(p, wx, wy)) return { kind: "pad", id: p.id };
       }
-      const tol = Math.max(80, 6 / state.view.scale);
+      const tol = Math.max(80_000, 6 / state.view.scale);
       for (let i = fp.texts.length - 1; i >= 0; i--) {
         const t = fp.texts[i]!;
-        if (t.id && Math.hypot(wx - t.at.x, wy - t.at.y) <= Math.max(tol, t.size_um / 2)) return { kind: "text", id: t.id };
+        if (t.id && Math.hypot(wx - t.at.x, wy - t.at.y) <= Math.max(tol, t.size_nm / 2)) return { kind: "text", id: t.id };
       }
       for (let i = fp.graphics.length - 1; i >= 0; i--) {
         const g = fp.graphics[i]!;
@@ -386,14 +386,14 @@ export function FootprintCanvas() {
       // A double-click: "use the current point for all remaining points", accept, and reset (no chaining).
       const at = snap.lastPoint() ?? draw.bezier?.lastPoint;
       const curve = draw.bezier && at ? bezierFinishDouble(draw.bezier, at) : null;
-      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, DRAW_STROKE_WIDTH_UM));
+      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, DRAW_STROKE_WIDTH_NM));
       dispatch({ type: "SET_DRAW_STATE", draw: null });
       return;
     }
     const shape = footprintToShapeArg(draw.shapeKind, draw.pts, state.activeLayer);
     if (shape) void api.addGraphic(shape);
     dispatch({ type: "SET_DRAW_STATE", draw: null });
-  }, [state.drawState, state.activeLayer, state.cursorUm, state.gridUm, api, dispatch]);
+  }, [state.drawState, state.activeLayer, state.cursorNm, state.gridNm, api, dispatch]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     // Throws for a synthesized pointer (the Enter-key click of common.Control.cursorClick), which has no real pointer to capture.
@@ -430,7 +430,7 @@ export function FootprintCanvas() {
     if (state.activeTool === "move" && state.duplicatePending) {
       const mp = state.movePreview;
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
-      void api.commitMove(mp?.refs ?? [...state.selection], mp?.dxUm ?? 0, mp?.dyUm ?? 0);
+      void api.commitMove(mp?.refs ?? [...state.selection], mp?.dxNm ?? 0, mp?.dyNm ?? 0);
       return;
     }
 
@@ -473,7 +473,7 @@ export function FootprintCanvas() {
     if (shapeKind === "arc") {
       const prev = state.drawState?.shapeKind === "arc" ? state.drawState.arc : undefined;
       const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap("45", e));
-      if (arc) void api.addGraphic({ kind: "arc", layer: state.activeLayer, stroke_width: DRAW_STROKE_WIDTH_UM, filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) });
+      if (arc) void api.addGraphic({ kind: "arc", layer: state.activeLayer, stroke_width: DRAW_STROKE_WIDTH_NM, filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) });
       dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom } : null });
       return;
     }
@@ -481,7 +481,7 @@ export function FootprintCanvas() {
     if (shapeKind === "bezier") {
       const prev = state.drawState?.shapeKind === "bezier" ? state.drawState.bezier : undefined;
       const { geom, curve } = bezierClick(prev, [sx, sy]);
-      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, DRAW_STROKE_WIDTH_UM));
+      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, DRAW_STROKE_WIDTH_NM));
       dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "bezier", pts: [], bezier: geom } : null });
       return;
     }
@@ -499,7 +499,7 @@ export function FootprintCanvas() {
     }
 
     if (state.activeTool === "text") {
-      void api.addText({ content: "TEXT", at: { x: sx, y: sy }, angle: 0, layer: state.activeLayer, size_um: 1000, stroke_width: 150, justify: "center", mirror: false });
+      void api.addText({ content: "TEXT", at: { x: sx, y: sy }, angle: 0, layer: state.activeLayer, size_nm: 1_000_000, stroke_width: 150_000, justify: "center", mirror: false });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       return;
     }
@@ -547,9 +547,9 @@ export function FootprintCanvas() {
       const held = [...state.selection];
       const [sx, sy] = (([x, y]) => [x, y] as [number, number])(snap.moveCursor([wx, wy], snapMods(e), held, heldCategory(held)));
       // No pointer position was known when the copies were picked up (`doMoveSelection`'s `originalCursorPos`): the first move is it.
-      if (!state.moveOriginUm) dispatch({ type: "SET_MOVE_ORIGIN", at: { x: sx, y: sy } });
-      const origin = state.moveOriginUm ?? { x: sx, y: sy };
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], dxUm: sx - origin.x, dyUm: sy - origin.y } });
+      if (!state.moveOriginNm) dispatch({ type: "SET_MOVE_ORIGIN", at: { x: sx, y: sy } });
+      const origin = state.moveOriginNm ?? { x: sx, y: sy };
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], dxNm: sx - origin.x, dyNm: sy - origin.y } });
       return;
     }
     const drag = dragRef.current;
@@ -564,8 +564,8 @@ export function FootprintCanvas() {
       // `BestSnapAnchor( cursor, { active layer }, selection grid, selection )`, the cursor being the held point plus how far the pointer has travelled (kicad-port/heldCursor.ts).
       const c = snap.moveCursor(heldCursor(drag.snapOrigin, drag.startWorld, [wx, wy]), snapMods(e), drag.refs, heldCategory(drag.refs));
       const [sx, sy] = [c[0], c[1]];
-      const origin = state.moveOriginUm ?? { x: sx, y: sy };
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: drag.moveKind, dxUm: sx - origin.x, dyUm: sy - origin.y } });
+      const origin = state.moveOriginNm ?? { x: sx, y: sy };
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: drag.moveKind, dxNm: sx - origin.x, dyNm: sy - origin.y } });
     }
   };
 
@@ -575,9 +575,9 @@ export function FootprintCanvas() {
     dragRef.current = null;
     if (!drag) return;
     if (drag.kind === "move" && state.movePreview) {
-      const { refs, dxUm, dyUm } = state.movePreview;
-      if (dxUm === 0 && dyUm === 0) dispatch({ type: "SET_MOVE_PREVIEW", preview: null }); // dragged back to where it began: nothing to commit
-      else void api.commitMove(refs, dxUm, dyUm); // one undo step for the whole drop
+      const { refs, dxNm, dyNm } = state.movePreview;
+      if (dxNm === 0 && dyNm === 0) dispatch({ type: "SET_MOVE_PREVIEW", preview: null }); // dragged back to where it began: nothing to commit
+      else void api.commitMove(refs, dxNm, dyNm); // one undo step for the whole drop
     }
   };
 

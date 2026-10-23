@@ -34,9 +34,9 @@ export function ringsPath(rings: readonly (readonly Pt[])[]): string {
 
 /** `ZoomFitScreen`: the view that fits `box` (the board's edges) in the canvas with a margin; the origin for no box. */
 export function fitView(box: readonly [number, number, number, number] | null): PreviewView {
-  if (!box) return { cx: 0, cy: 0, scale: 100 };
+  if (!box) return { cx: 0, cy: 0, scale: 100_000 };
   const [x0, y0, x1, y1] = box;
-  const scale = Math.max((x1 - x0) / (PREVIEW_SIZE.w * 0.92), (y1 - y0) / (PREVIEW_SIZE.h * 0.92), 1);
+  const scale = Math.max((x1 - x0) / (PREVIEW_SIZE.w * 0.92), (y1 - y0) / (PREVIEW_SIZE.h * 0.92), 1_000);
   return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, scale };
 }
 
@@ -47,7 +47,7 @@ export function worldAt(view: PreviewView, px: number, py: number): [number, num
 
 /** The wheel zooms about the cursor: `factor` below 1 zooms in, and the world point under the cursor stays where it is. The scale is held between 1 µm and 1 m per pixel. */
 export function zoomAbout(view: PreviewView, wx: number, wy: number, factor: number): PreviewView {
-  const scale = Math.min(Math.max(view.scale * factor, 1), 1_000_000);
+  const scale = Math.min(Math.max(view.scale * factor, 1_000), 1_000_000_000);
   const r = scale / view.scale;
   return { cx: wx - (wx - view.cx) * r, cy: wy - (wy - view.cy) * r, scale };
 }

@@ -25,8 +25,8 @@ export function TextDialog() {
   const [content, setContent] = useState("");
   const defaults = state.board?.board_rules?.text_graphics;
   const [layer, setLayer] = useState("F.SilkS");
-  const [size, setSize] = useState(() => newTextStyle(defaults, "F.SilkS").sizeUm);
-  const [strokeWidth, setStrokeWidth] = useState(() => newTextStyle(defaults, "F.SilkS").strokeWidthUm);
+  const [size, setSize] = useState(() => newTextStyle(defaults, "F.SilkS").sizeNm);
+  const [strokeWidth, setStrokeWidth] = useState(() => newTextStyle(defaults, "F.SilkS").strokeWidthNm);
   const [justify, setJustify] = useState<TextJustify>("left");
   const [mirror, setMirror] = useState(false);
   const [angle, setAngle] = useState(0);
@@ -52,8 +52,8 @@ export function TextDialog() {
       styled.current = false;
       setContent("");
       setLayer(start);
-      setSize(style.sizeUm);
-      setStrokeWidth(style.strokeWidthUm);
+      setSize(style.sizeNm);
+      setStrokeWidth(style.strokeWidthNm);
       setJustify(style.justify);
       setMirror(style.mirror);
       setAngle(0);
@@ -69,9 +69,9 @@ export function TextDialog() {
   const submit = () => {
     if (!content.trim()) return;
     if (dialog.mode === "add") {
-      api.cmd({ op: "add_text", text: { content, at: { x: dialog.at[0], y: dialog.at[1] }, angle, layer, size_um: size, stroke_width: strokeWidth, justify, mirror } });
+      api.cmd({ op: "add_text", text: { content, at: { x: dialog.at[0], y: dialog.at[1] }, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror } });
     } else {
-      api.cmd({ op: "edit_text", id: dialog.id, content, angle, layer, size_um: size, stroke_width: strokeWidth, justify, mirror });
+      api.cmd({ op: "edit_text", id: dialog.id, content, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror });
     }
     close();
   };
@@ -93,8 +93,8 @@ export function TextDialog() {
                 setLayer(e.target.value);
                 if (dialog.mode === "add" && !styled.current) {
                   const style = newTextStyle(defaults, e.target.value);
-                  setSize(style.sizeUm);
-                  setStrokeWidth(style.strokeWidthUm);
+                  setSize(style.sizeNm);
+                  setStrokeWidth(style.strokeWidthNm);
                   setMirror(style.mirror);
                 }
               }}

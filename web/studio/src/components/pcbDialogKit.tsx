@@ -3,7 +3,7 @@
 // key, and a length field that shows the display units and parses a unit suffix.
 import { useEffect, useState, type ReactNode } from "react";
 import { useStudioState } from "../state/store";
-import { umFrom, umTo } from "../state/units";
+import { nmFrom, nmTo } from "../state/units";
 import { closeSweepDialog } from "../actions/pcbSweepDialogs";
 
 /** Escape closes the dialog (`closeSweepDialog` unless a dialog handles its own stack). The key is the dialog's: it must not go on to the canvas' own Escape (cancel the tool, then clear the selection).
@@ -23,8 +23,8 @@ export function useEscape(onClose: (() => void) | null = closeSweepDialog) {
 }
 
 /** Display text of a length: the number in the display units, without trailing noise. */
-export function lengthText(valueUm: number, units: "mm" | "mil" | "in"): string {
-  return String(Number(umTo(valueUm, units).toFixed(units === "mm" ? 4 : units === "mil" ? 2 : 5)));
+export function lengthText(valueNm: number, units: "mm" | "mil" | "in"): string {
+  return String(Number(nmTo(valueNm, units).toFixed(units === "mm" ? 4 : units === "mil" ? 2 : 5)));
 }
 
 /** Parse "1.5", "0.2mm", "10mil", `0.01"` -> micrometres; a bare number is in the display units. Null when it is not a length. */
@@ -32,13 +32,13 @@ export function parseLength(text: string, units: "mm" | "mil" | "in"): number | 
   const m = /^\s*(-?\d*\.?\d+)\s*(mm|mil|in|")?\s*$/i.exec(text);
   if (!m) return null;
   const unit = m[2] ? (m[2] === '"' ? "in" : (m[2].toLowerCase() as "mm" | "mil" | "in")) : units;
-  return Math.round(umFrom(parseFloat(m[1]!), unit));
+  return Math.round(nmFrom(parseFloat(m[1]!), unit));
 }
 
 /** A length field in the display units, parsed with a unit suffix allowed ("1.5", "0.2mm", "10mil"). */
-export function useLengthField(valueUm: number) {
+export function useLengthField(valueNm: number) {
   const units = useStudioState().units;
-  const [text, setText] = useState(() => lengthText(valueUm, units));
+  const [text, setText] = useState(() => lengthText(valueNm, units));
   const parse = (): number | null => parseLength(text, units);
   return { text, setText, parse, units };
 }

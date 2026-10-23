@@ -1,30 +1,30 @@
 // The length tuner's data (crates/cli/src/tune_api.rs, crates/model/src/tuning.rs): the pattern a tuning leaves on the board, what the status box beside the
 // cursor reads, the preview of a meander. Micrometres, except `Readout`, which is millimetres (what the box prints).
 
-import type { Um } from "./types";
+import type { Nm } from "./types";
 
 /** `7` single track, `8` differential pair, `9` skew: which `pcbnew.LengthTuner.*` a pattern or a session is. */
 export type TuneKind = "single" | "diffpair" | "skew";
 
 export type PatternSide = "left" | "default" | "right";
 
-/** `MINOPTMAX`: the length (or skew) a pattern is tuned to and the range it counts as tuned within. A pattern with no target holds `1e9` um. */
+/** `MINOPTMAX`: the length (or skew) a pattern is tuned to and the range it counts as tuned within. A pattern with no target holds `1e9` nm. */
 export interface TargetRange {
-  min: Um;
-  opt: Um;
-  max: Um;
+  min: Nm;
+  opt: Nm;
+  max: Nm;
 }
 
-/** `LENGTH_UNCONSTRAINED`, micrometres: a million millimetres. */
-export const LENGTH_UNCONSTRAINED_UM = 1_000_000_000;
+/** `LENGTH_UNCONSTRAINED`, nanometres: a million millimetres. */
+export const LENGTH_UNCONSTRAINED_NM = 1_000_000_000_000;
 
 /** `DELAY_UNCONSTRAINED`, attoseconds: a million picoseconds (a pattern's delay targets are attoseconds, KiCad's internal unit of time; a picosecond is 1e6). */
 export const DELAY_UNCONSTRAINED_AS = 1_000_000_000_000;
 export const ATTOSECONDS_PER_PS = 1_000_000;
 
 export interface Pt {
-  x: Um;
-  y: Um;
+  x: Nm;
+  y: Nm;
 }
 
 /** `crates/model/src/tuning.rs` `TuningPattern` (+ `handles` and `info`, which the board state adds). `mode` is the file's word: `single`, `diff_pair`, `diff_pair_skew`. */
@@ -35,9 +35,9 @@ export interface TuningPattern {
   origin: Pt;
   end: Pt;
   initial_side: PatternSide;
-  min_amplitude: Um;
-  max_amplitude: Um;
-  spacing: Um;
+  min_amplitude: Nm;
+  max_amplitude: Nm;
+  spacing: Nm;
   corner_radius_percent: number;
   rounded: boolean;
   single_sided: boolean;
@@ -52,8 +52,8 @@ export interface TuningPattern {
   target_skew_delay?: TargetRange;
   base_line: Pt[];
   base_line_coupled?: Pt[];
-  last_track_width: Um;
-  last_diff_pair_gap: Um;
+  last_track_width: Nm;
+  last_diff_pair_gap: Nm;
   /** Nanometres. */
   last_tuning_length: number;
   /** Attoseconds: the delay of a time domain pattern the tuner reported last. */
@@ -62,16 +62,16 @@ export interface TuningPattern {
   last_status: "tuned" | "too_short" | "too_long" | string;
   member_ids: string[];
   /** `MakeEditPoints`: where the pattern starts and ends, the width of its meanders and their spacing. */
-  handles?: [Um, Um][];
+  handles?: [Nm, Nm][];
   /** `PCB_TUNING_PATTERN::GetRowData`'s "Tuning": `12.3 mm (tuned)`. */
   info?: string;
 }
 
 /** The settings the tuner and its dialog carry (the keys `apply_settings` reads), over the board's Length-tuning Patterns page. A target is a number (with the default tolerance round it), a range, or null (none). */
 export interface TuneSettings {
-  min_amplitude?: Um;
-  max_amplitude?: Um;
-  spacing?: Um;
+  min_amplitude?: Nm;
+  max_amplitude?: Nm;
+  spacing?: Nm;
   corner_radius_percent?: number;
   rounded?: boolean;
   single_sided?: boolean;
@@ -118,11 +118,11 @@ export interface TuneDelayReadout {
 
 /** One track of the new line: the line before the pattern, the meander, the line after it. */
 export interface TunePiece {
-  pts: [Um, Um][];
+  pts: [Nm, Nm][];
   member: boolean;
   net: string;
   layer: string;
-  width: Um;
+  width: Nm;
 }
 
 export interface TunePreview {
@@ -135,11 +135,11 @@ export interface TuneHoverReply {
   ok: boolean;
   hit?: boolean;
   message?: string;
-  pick?: { track_id: string; net: string; layer: string; width: Um; at: Pt };
+  pick?: { track_id: string; net: string; layer: string; width: Nm; at: Pt };
   mode?: TuneKind;
   readout?: TuneReadout;
   /** The line the track is part of. */
-  path?: [Um, Um][];
+  path?: [Nm, Nm][];
   pattern?: TuningPattern;
 }
 
@@ -155,7 +155,7 @@ export interface TuneSessionReply {
   readout?: TuneReadout;
   preview?: TunePreview;
   origin?: Pt;
-  handles?: [Um, Um][];
+  handles?: [Nm, Nm][];
 }
 
 export interface TuneFixReply {
@@ -188,5 +188,5 @@ export interface TunePatternReply {
   mode?: TuneKind;
   nets?: string[];
   info?: string;
-  constraint?: { name: string; min: Um; opt: Um; max: Um } | null;
+  constraint?: { name: string; min: Nm; opt: Nm; max: Nm } | null;
 }

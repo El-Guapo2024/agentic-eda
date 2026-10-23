@@ -12,7 +12,7 @@ import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditor
 import { useStudioState } from "../../state/store";
 import { padNumberSummary } from "../../kicad-port/pinNumbersSummary";
 import { drillColumns, withDrill } from "../../kicad-port/padTable";
-import { umFrom, umTo, type LengthUnit } from "../../state/units";
+import { nmFrom, nmTo, type LengthUnit } from "../../state/units";
 
 const TYPE_OPTIONS: { value: PadKind; label: string }[] = [
   { value: "through_hole", label: "Through-hole" },
@@ -31,8 +31,8 @@ const SHAPE_OPTIONS: { value: LibraryPadShape; label: string }[] = [
 ];
 
 /** A length cell that keeps what is being typed until it is committed (so "1." and "-" survive), and shows the value again when it changes underneath. */
-function LengthCell({ valueUm, units, disabled, onCommit, label }: { valueUm: number; units: LengthUnit; disabled?: boolean; onCommit: (um: number) => void; label: string }) {
-  const shown = String(umTo(valueUm, units));
+function LengthCell({ valueNm, units, disabled, onCommit, label }: { valueNm: number; units: LengthUnit; disabled?: boolean; onCommit: (um: number) => void; label: string }) {
+  const shown = String(nmTo(valueNm, units));
   const [text, setText] = useState(shown);
   const [focused, setFocused] = useState(false);
   useEffect(() => {
@@ -40,7 +40,7 @@ function LengthCell({ valueUm, units, disabled, onCommit, label }: { valueUm: nu
   }, [shown, focused]);
   const commit = (t: string) => {
     const n = Number(t);
-    if (t.trim() !== "" && Number.isFinite(n)) onCommit(Math.round(umFrom(n, units)));
+    if (t.trim() !== "" && Number.isFinite(n)) onCommit(Math.round(nmFrom(n, units)));
   };
   return (
     <input
@@ -141,7 +141,7 @@ export function PadTableDialog() {
                           patch(i, (p) => {
                             const kind = e.target.value as PadKind;
                             // `SetAttribute`: an SMD pad has no hole; a pad that becomes plated or non-plated needs one.
-                            return kind === "smd" ? { ...p, kind, drill: null, drill_slot: null } : { ...p, kind, drill: p.drill ?? (p.drill_slot ? null : 800) };
+                            return kind === "smd" ? { ...p, kind, drill: null, drill_slot: null } : { ...p, kind, drill: p.drill ?? (p.drill_slot ? null : 800_000) };
                           })
                         }
                       >
@@ -162,22 +162,22 @@ export function PadTableDialog() {
                       </select>
                     </td>
                     <td>
-                      <LengthCell label={`X ${i + 1}`} units={units} valueUm={r.at.x} onCommit={(x) => patch(i, (p) => ({ ...p, at: { ...p.at, x } }))} />
+                      <LengthCell label={`X ${i + 1}`} units={units} valueNm={r.at.x} onCommit={(x) => patch(i, (p) => ({ ...p, at: { ...p.at, x } }))} />
                     </td>
                     <td>
-                      <LengthCell label={`Y ${i + 1}`} units={units} valueUm={r.at.y} onCommit={(y) => patch(i, (p) => ({ ...p, at: { ...p.at, y } }))} />
+                      <LengthCell label={`Y ${i + 1}`} units={units} valueNm={r.at.y} onCommit={(y) => patch(i, (p) => ({ ...p, at: { ...p.at, y } }))} />
                     </td>
                     <td>
-                      <LengthCell label={`Size X ${i + 1}`} units={units} valueUm={r.size[0]} onCommit={(w) => patch(i, (p) => ({ ...p, size: [w, p.size[1]] }))} />
+                      <LengthCell label={`Size X ${i + 1}`} units={units} valueNm={r.size[0]} onCommit={(w) => patch(i, (p) => ({ ...p, size: [w, p.size[1]] }))} />
                     </td>
                     <td>
-                      <LengthCell label={`Size Y ${i + 1}`} units={units} valueUm={r.size[1]} onCommit={(h) => patch(i, (p) => ({ ...p, size: [p.size[0], h] }))} />
+                      <LengthCell label={`Size Y ${i + 1}`} units={units} valueNm={r.size[1]} onCommit={(h) => patch(i, (p) => ({ ...p, size: [p.size[0], h] }))} />
                     </td>
                     <td>
-                      <LengthCell label={`Drill X ${i + 1}`} units={units} valueUm={dx} disabled={!drillable} onCommit={(v) => patch(i, (p) => withDrill(p, v, drillColumns(p)[1]))} />
+                      <LengthCell label={`Drill X ${i + 1}`} units={units} valueNm={dx} disabled={!drillable} onCommit={(v) => patch(i, (p) => withDrill(p, v, drillColumns(p)[1]))} />
                     </td>
                     <td>
-                      <LengthCell label={`Drill Y ${i + 1}`} units={units} valueUm={dy} disabled={!drillable} onCommit={(v) => patch(i, (p) => withDrill(p, drillColumns(p)[0], v))} />
+                      <LengthCell label={`Drill Y ${i + 1}`} units={units} valueNm={dy} disabled={!drillable} onCommit={(v) => patch(i, (p) => withDrill(p, drillColumns(p)[0], v))} />
                     </td>
                   </tr>
                 );

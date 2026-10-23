@@ -14,7 +14,7 @@ export const SNAP_HYSTERESIS_PX = 5;
 /** BestSnapAnchor's "Tuning constant: snap radius in screen space". */
 export const SNAP_RANGE_PX = 25;
 
-const SAME_POINT_TOL = 1e-6;
+const SAME_POINT_TOL = 1e-3;
 export const samePos = (a: Pt, b: Pt): boolean => Math.abs(a[0] - b[0]) <= SAME_POINT_TOL && Math.abs(a[1] - b[1]) <= SAME_POINT_TOL;
 
 /** What the helper needs to know about the view and the grid; the editor refreshes it before each call. */
@@ -22,9 +22,9 @@ export interface GridEnv {
   /** Screen pixels per um (`ToWorld( px )` is `px / scale`). */
   scale: number;
   /** `GAL::GetGridSize()`: the current grid, um. */
-  gridUm: number;
+  gridNm: number;
   /** `GAL::GetVisibleGridSize()`: the grid as it is drawn (a fine grid is drawn coarser when zoomed out), um. */
-  visibleGridUm: number;
+  visibleGridNm: number;
   /** `GAL::GetGridOrigin()`. */
   origin: Pt;
   /** `GetGridSize( category )`: the category's own grid when overrides are on (kicad-port/gridOverrides.ts `gridSizeFor`), else the current. */
@@ -146,10 +146,10 @@ export class GridHelper {
 
   /** `GetGrid`. */
   getGrid(): Pt {
-    return [this.env.gridUm, this.env.gridUm];
+    return [this.env.gridNm, this.env.gridNm];
   }
   getVisibleGrid(): number {
-    return this.env.visibleGridUm;
+    return this.env.visibleGridNm;
   }
   getOrigin(): Pt {
     return this.env.origin;

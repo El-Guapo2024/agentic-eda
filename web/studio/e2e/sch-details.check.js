@@ -69,7 +69,7 @@
       out[id || "root"] = {
         symbols: s.symbols.map((x) => [x.id, x.unit, x.at, x.rot, x.mirror, x.dnp, x.exclude_from_bom, x.exclude_from_board, x.exclude_from_sim, x.pin_swaps, x.pins.map((p) => p.net)]),
         wires: s.wires.map((w) => [w.id, w.pts]),
-        labels: s.labels.map((l) => [l.id, l.net, l.at, l.spin, l.auto_rotate, l.size_um]),
+        labels: s.labels.map((l) => [l.id, l.net, l.at, l.spin, l.auto_rotate, l.size_nm]),
         texts: s.texts.map((t) => [t.id, t.content, t.at, t.angle, t.h, t.v]),
         power: s.power_symbols.map((p) => [p.id, p.net, p.at, p.rot, (p.fields ?? []).map((f) => [f.name, f.text, f.visible])]),
         sheets: s.sheets.map((x) => [x.id, x.at, x.size, x.pins.map((p) => [p.id, p.name, p.shape, p.at])]),
@@ -320,7 +320,7 @@
 
     await scenario("A free text: placed centred, turned and mirrored as KiCad turns and mirrors it, its justification in the file's terms", async (t) => {
       await enter(led.id);
-      const place = await post({ op: "sch_edit", verb: "place_text", content: "e2e note", at: { x: 40640, y: 50800 }, size_um: 1270 }, led.id);
+      const place = await post({ op: "sch_edit", verb: "place_text", content: "e2e note", at: { x: 40640, y: 50800 }, size_nm: 1270 }, led.id);
       const x = (await sch(led.id)).texts.find((q) => q.content === "e2e note");
       t(place.ok === true && x.h === "center" && x.v === "center" && x.vertical === false, `a new text is centred on its anchor, as KiCad's last-used justification starts (${x?.h}, ${x?.v})`);
       await post({ op: "sch_edit", verb: "edit_text", id: x.id, h: "left", v: "bottom" }, led.id);
@@ -356,7 +356,7 @@
       // the horizontal wire carried onto the middle of the vertical one: a T of two different nets
       const hit = await preview([{ op: "sch_move", verb: "move", ids: [wh.id], dx: 22860, dy: 7620 }], led.id);
       t(JSON.stringify(hit.net_collision?.collisions.map((c) => c.at)) === JSON.stringify([[83820, 45720]]), `a circle where the T would be (${JSON.stringify(hit.net_collision?.collisions)})`);
-      t(Math.abs((hit.net_collision?.collisions[0]?.radius_um ?? 0) - 1371.6) < 1, `1.5 times the 36 mil junction (${hit.net_collision?.collisions[0]?.radius_um} um)`);
+      t(Math.abs((hit.net_collision?.collisions[0]?.radius_nm ?? 0) - 1371.6) < 1, `1.5 times the 36 mil junction (${hit.net_collision?.collisions[0]?.radius_nm} um)`);
       const clear = await preview([{ op: "sch_move", verb: "move", ids: [wh.id], dx: 0, dy: 5080 }], led.id);
       t(clear.net_collision?.collisions.length === 0 && clear.net_collision?.disconnections.length === 0, "short of the other wire nothing is marked");
       // a symbol carried off its wires: a mark at each pin it left
@@ -425,7 +425,7 @@
       const real = navigator.clipboard.writeText.bind(navigator.clipboard);
       navigator.clipboard.writeText = (txt) => { copied.push(txt); return Promise.resolve(); };
       try {
-        await post({ op: "sch_edit", verb: "place_text", content: "e2e copy", at: { x: 40640, y: 50800 }, size_um: 1270 }, led.id);
+        await post({ op: "sch_edit", verb: "place_text", content: "e2e copy", at: { x: 40640, y: 50800 }, size_nm: 1270 }, led.id);
         const x = (await sch(led.id)).texts.find((q) => q.content === "e2e copy");
         const label = (await sch(led.id)).labels[0];
         await select([x.id, label.id, "pin:R1:1"]);

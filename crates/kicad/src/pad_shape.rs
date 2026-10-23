@@ -258,11 +258,11 @@ mod tests {
     fn a_trapezoid_reads_its_delta_and_writes_it_back() {
         let node = pad_node("(pad \"1\" smd trapezoid (at 0 0) (size 2 1) (rect_delta 0.4 0) (layers \"F.Cu\"))");
         let r = read_pad_shape(&node, Side::Top);
-        assert_eq!((r.shape, r.ext.trapezoid_delta), (PadShape::Trapezoid, Some((400, 0))));
+        assert_eq!((r.shape, r.ext.trapezoid_delta), (PadShape::Trapezoid, Some((400_000, 0))));
         assert_eq!(write_pad_shape(r.shape, r.roundrect_ratio, &r.ext, Side::Top).delta, " (rect_delta 0.4 0)");
         // Seen from the bottom the file's frame is mirrored: the x delta changes sign each way.
         let b = read_pad_shape(&node, Side::Bottom);
-        assert_eq!(b.ext.trapezoid_delta, Some((-400, 0)));
+        assert_eq!(b.ext.trapezoid_delta, Some((-400_000, 0)));
         assert_eq!(write_pad_shape(b.shape, b.roundrect_ratio, &b.ext, Side::Bottom).delta, " (rect_delta 0.4 0)");
     }
 
@@ -291,9 +291,9 @@ mod tests {
         let r = read_pad_shape(&node, Side::Top);
         assert_eq!(r.shape, PadShape::Custom);
         let custom = r.ext.custom.clone().unwrap();
-        assert_eq!((custom.anchor, custom.zone, custom.primitives.len()), (PadAnchor::Rect, CustomZoneMode::ConvexHull, 6));
+        assert_eq!((custom.anchor, custom.zone, custom.primitives.len()), (PadAnchor::Rect, CustomZoneMode::ConvexHull, 6000));
         assert_eq!(custom.primitives.iter().filter(|p| p.proxy).count(), 2, "gr_bbox and gr_vector are proxy items");
-        assert!(matches!(custom.primitives[0].shape, Shape::Circle { stroke_width: 2200, filled: false, center: Point { x: -2975, y: 0 }, .. }));
+        assert!(matches!(custom.primitives[0].shape, Shape::Circle { stroke_width: 2_200_000, filled: false, center: Point { x: -2_975_000, y: 0 }, .. }));
         // The text it writes reads back to the same shape, on either side.
         for side in [Side::Top, Side::Bottom] {
             let r = read_pad_shape(&node, side);
@@ -309,9 +309,9 @@ mod tests {
     #[test]
     fn the_shape_offset_is_read_from_inside_the_drill_and_mirrored_on_the_bottom() {
         let node = pad_node("(pad \"1\" thru_hole rect (at 0 0) (size 2 1) (drill 0.8 (offset 0.5 -0.25)) (layers \"*.Cu\"))");
-        assert_eq!(read_offset(&node, Side::Top), Some((500, -250)));
-        assert_eq!(read_offset(&node, Side::Bottom), Some((-500, -250)));
+        assert_eq!(read_offset(&node, Side::Top), Some((500_000, -250_000)));
+        assert_eq!(read_offset(&node, Side::Bottom), Some((-500_000, -250_000)));
         assert_eq!(read_offset(&pad_node("(pad \"1\" smd rect (at 0 0) (size 2 1))"), Side::Top), None);
-        assert_eq!(first_xy(&pad_node("(pts (xy 1 2))")), Some(Point { x: 1000, y: 2000 }));
+        assert_eq!(first_xy(&pad_node("(pts (xy 1 2))")), Some(Point { x: 1_000_000, y: 2_000_000 }));
     }
 }

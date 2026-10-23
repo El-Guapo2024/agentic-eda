@@ -10,8 +10,8 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
-/** What a DXF or SVG file holds, at an import scale and with the DXF's default unit and line width (micrometres). */
-export function readGraphics(req: { format: "dxf" | "svg"; text: string; dxf_units?: string; scale?: number; line_width_um?: number }): Promise<GraphicsInfo> {
+/** What a DXF or SVG file holds, at an import scale and with the DXF's default unit and line width (nanometres). */
+export function readGraphics(req: { format: "dxf" | "svg"; text: string; dxf_units?: string; scale?: number; line_width_nm?: number }): Promise<GraphicsInfo> {
   return postJson<GraphicsInfo>("/api/import_graphics/read", req);
 }
 

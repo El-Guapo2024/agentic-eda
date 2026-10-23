@@ -38,7 +38,7 @@ export function MaskPastePage({ hidden, onDirty }: PageProps) {
     }
     void apply.run({ op: "set_mask_paste", settings: draft }, page.markClean);
   };
-  const length = (key: "expansion_um" | "min_width_um" | "to_copper_clearance_um" | "paste_margin_um", label: string, title: string) => (
+  const length = (key: "expansion_nm" | "min_width_nm" | "to_copper_clearance_nm" | "paste_margin_nm", label: string, title: string) => (
     <FieldRow label={label} title={title} error={errors[key]} unit={units}>
       <LengthField ariaLabel={label.replace(/:$/, "")} units={units} value={draft?.[key]} invalid={!!errors[key]} onChange={(v) => set(key, v ?? Number.NaN)} />
     </FieldRow>
@@ -54,9 +54,9 @@ export function MaskPastePage({ hidden, onDirty }: PageProps) {
             Consult your PCB manufacturer's specifications for solder mask expansion, web width, and clearance settings. If no specifications are provided, setting these values to zero is recommended.
           </p>
           <div className="bs-section">Solder Mask Settings</div>
-          {length("expansion_um", "Solder mask expansion:", MASK_EXPANSION_TIP)}
-          {length("min_width_um", "Solder mask minimum web width:", WEB_TIP)}
-          {length("to_copper_clearance_um", "Solder mask to copper clearance:", MASK_COPPER_TIP)}
+          {length("expansion_nm", "Solder mask expansion:", MASK_EXPANSION_TIP)}
+          {length("min_width_nm", "Solder mask minimum web width:", WEB_TIP)}
+          {length("to_copper_clearance_nm", "Solder mask to copper clearance:", MASK_COPPER_TIP)}
           <Check checked={draft.allow_bridges_in_footprints} onChange={(v) => set("allow_bridges_in_footprints", v)} title="Disable DRC error checking for solder mask aperture bridging between pads in the same footprint.">
             Allow bridged solder mask apertures between pads within footprints
           </Check>
@@ -70,7 +70,7 @@ export function MaskPastePage({ hidden, onDirty }: PageProps) {
           </FieldRow>
 
           <div className="bs-section">Solder Paste Settings</div>
-          {length("paste_margin_um", "Solder paste clearance:", PASTE_TIP)}
+          {length("paste_margin_nm", "Solder paste clearance:", PASTE_TIP)}
           <FieldRow label="Solder paste relative clearance:" title={PASTE_RATIO_TIP} error={errors.paste_margin_ratio} unit="%">
             <NumberField
               ariaLabel="Solder paste relative clearance"

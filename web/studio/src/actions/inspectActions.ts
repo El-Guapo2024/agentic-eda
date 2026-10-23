@@ -30,7 +30,7 @@ function inspectable(state: StudioState, id: string, kinds: readonly SelectableK
 }
 
 function pickContext(state: StudioState): InspectPickContext {
-  return { filter: state.selectionFilter, layerVisible: state.layerVisible, activeLayer: state.activeLayer, highContrast: state.highContrast, selection: state.selection, onePixelUm: 1 / state.view.scale, toleranceUm: Math.max(150, 6 / state.view.scale) };
+  return { filter: state.selectionFilter, layerVisible: state.layerVisible, activeLayer: state.activeLayer, highContrast: state.highContrast, selection: state.selection, onePixelNm: 1 / state.view.scale, toleranceNm: Math.max(150_000, 6 / state.view.scale) };
 }
 
 interface Picked {

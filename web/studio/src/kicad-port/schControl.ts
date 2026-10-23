@@ -49,12 +49,12 @@ export interface TextItem {
   at: readonly [number, number];
 }
 
-/** The label or text whose anchor is nearest the point, within `tolUm` -- the hover stand-in for `RequestSelection` on a label. */
-export function nearestTextItem(items: readonly TextItem[], x: number, y: number, tolUm: number): string | null {
+/** The label or text whose anchor is nearest the point, within `tolNm` -- the hover stand-in for `RequestSelection` on a label. */
+export function nearestTextItem(items: readonly TextItem[], x: number, y: number, tolNm: number): string | null {
   let best: { id: string; d: number } | null = null;
   for (const it of items) {
     const d = Math.hypot(it.at[0] - x, it.at[1] - y);
-    if (d <= tolUm && (!best || d < best.d)) best = { id: it.id, d };
+    if (d <= tolNm && (!best || d < best.d)) best = { id: it.id, d };
   }
   return best?.id ?? null;
 }

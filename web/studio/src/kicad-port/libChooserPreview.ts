@@ -12,7 +12,7 @@ function shown(itemUnit: number, itemStyle: number, unit: number, style: number)
   return (itemUnit === 0 || itemUnit === unit) && (itemStyle === 0 || itemStyle === style);
 }
 
-const toUm = (x: number, y: number): Pt => [x * 1000, -y * 1000];
+const toNm = (x: number, y: number): Pt => [x * 1e6, -y * 1e6];
 
 const DIRECTION: Record<number, Pt> = { 0: [1, 0], 90: [0, -1], 180: [-1, 0], 270: [0, 1] };
 
@@ -23,30 +23,30 @@ export function symbolPreviewBounds(symbol: { graphics: readonly LibrarySymbolGr
     if (!shown(g.unit, g.body_style, unit, bodyStyle)) continue;
     switch (g.kind) {
       case "rectangle":
-        pts.push(toUm(g.start.x, g.start.y), toUm(g.end.x, g.end.y));
+        pts.push(toNm(g.start.x, g.start.y), toNm(g.end.x, g.end.y));
         break;
       case "polyline":
-        for (const p of g.pts) pts.push(toUm(p.x, p.y));
+        for (const p of g.pts) pts.push(toNm(p.x, p.y));
         break;
       case "circle":
-        pts.push(toUm(g.center.x - g.radius_mm, g.center.y - g.radius_mm), toUm(g.center.x + g.radius_mm, g.center.y + g.radius_mm));
+        pts.push(toNm(g.center.x - g.radius_mm, g.center.y - g.radius_mm), toNm(g.center.x + g.radius_mm, g.center.y + g.radius_mm));
         break;
       case "arc":
-        pts.push(toUm(g.start.x, g.start.y), toUm(g.mid.x, g.mid.y), toUm(g.end.x, g.end.y));
+        pts.push(toNm(g.start.x, g.start.y), toNm(g.mid.x, g.mid.y), toNm(g.end.x, g.end.y));
         break;
       case "text":
-        pts.push(toUm(g.at.x, g.at.y));
+        pts.push(toNm(g.at.x, g.at.y));
         break;
       case "text_box":
-        pts.push(toUm(g.start.x, g.start.y), toUm(g.end.x, g.end.y));
+        pts.push(toNm(g.start.x, g.start.y), toNm(g.end.x, g.end.y));
         break;
     }
   }
   for (const p of symbol.pins) {
     if (!shown(p.unit, p.body_style, unit, bodyStyle) || p.hidden) continue;
     const [dx, dy] = DIRECTION[((Math.round(p.angle_deg) % 360) + 360) % 360] ?? [1, 0];
-    const tip = toUm(p.at.x, p.at.y);
-    pts.push(tip, [tip[0] + dx * p.length_mm * 1000, tip[1] + dy * p.length_mm * 1000]);
+    const tip = toNm(p.at.x, p.at.y);
+    pts.push(tip, [tip[0] + dx * p.length_mm * 1e6, tip[1] + dy * p.length_mm * 1e6]);
   }
   return boundsOf(pts);
 }

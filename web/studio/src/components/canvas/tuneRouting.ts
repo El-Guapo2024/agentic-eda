@@ -18,8 +18,8 @@ export function toolSettings(state: Pick<StudioState, "lengthTuningMode" | "pcbx
 }
 
 /** How far from a track's edge a click still picks it: `HITTEST_THRESHOLD_PIXELS` (5) of the view, at least 0.15 mm. */
-export function pickToleranceUm(scale: number): number {
-  return Math.max(150, 5 / scale);
+export function pickToleranceNm(scale: number): number {
+  return Math.max(150_000, 5 / scale);
 }
 
 const tuneDraw = (s: S): TuneDrawState | null => (s.drawState?.kind === "tune" ? s.drawState : null);
@@ -31,14 +31,14 @@ export function summaryOf(state: Pick<StudioState, "units">, r: NonNullable<Tune
 
 /** The pointer moved with no pattern started: the status box of the track under it (`updateHoverStatus`), or none. */
 export async function hoverTune(state: S, dispatch: Dispatch<Action>, x: number, y: number): Promise<void> {
-  const reply = await tuneHover({ x, y, tolerance: pickToleranceUm(state.view.scale), layer: state.activeLayer, mode: state.lengthTuningMode, settings: toolSettings(state) });
+  const reply = await tuneHover({ x, y, tolerance: pickToleranceNm(state.view.scale), layer: state.activeLayer, mode: state.lengthTuningMode, settings: toolSettings(state) });
   dispatch({ type: "PCBX", patch: { tuneHover: reply.ok && reply.hit ? { reply, at: [x, y] } : null } });
 }
 
 /** The first click: a pattern starts on the track under the cursor. A refusal is KiCad's own message. */
 export async function startTune(state: S, dispatch: Dispatch<Action>, x: number, y: number): Promise<void> {
   const mode: TuneKind = state.lengthTuningMode;
-  const reply = await tuneStart({ x, y, tolerance: pickToleranceUm(state.view.scale), layer: state.activeLayer, mode, settings: toolSettings(state) });
+  const reply = await tuneStart({ x, y, tolerance: pickToleranceNm(state.view.scale), layer: state.activeLayer, mode, settings: toolSettings(state) });
   if (!reply.ok) {
     dispatch({ type: "TOAST", message: reply.message ?? "Select a track to tune first.", kind: "error" });
     return;

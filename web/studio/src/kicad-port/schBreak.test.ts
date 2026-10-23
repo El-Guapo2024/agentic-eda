@@ -50,12 +50,12 @@ test("the verbs delete each cut line and add its pieces, a bus staying a bus", (
 });
 
 test("a graphic line is replaced through the line verbs and keeps its width", () => {
-  const line: BreakSource = { id: "ln", kind: "line", pts: [[0, 0], [8000, 0]], widthUm: 300 };
+  const line: BreakSource = { id: "ln", kind: "line", pts: [[0, 0], [8000, 0]], widthNm: 300 };
   const s = startBreak("slice", [line], [4000, 0])!;
   const cmds = breakCmds(s, [3000, 0]);
   assert.deepEqual(cmds[0], { op: "delete_sch_line", id: "ln" });
-  assert.deepEqual(cmds[1], { op: "add_sch_line", pts: [{ x: 0, y: 0 }, { x: 3000, y: 0 }], width_um: 300 });
-  assert.deepEqual(cmds[2], { op: "add_sch_line", pts: [{ x: 4000, y: 0 }, { x: 8000, y: 0 }], width_um: 300 });
+  assert.deepEqual(cmds[1], { op: "add_sch_line", pts: [{ x: 0, y: 0 }, { x: 3000, y: 0 }], width_nm: 300 });
+  assert.deepEqual(cmds[2], { op: "add_sch_line", pts: [{ x: 4000, y: 0 }, { x: 8000, y: 0 }], width_nm: 300 });
 });
 
 test("nothing to cut: a selection of lines too short to cut gives no state", () => {

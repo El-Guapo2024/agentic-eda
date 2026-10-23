@@ -15,14 +15,14 @@ test("a footprint with nothing set has the Reference REF** and the Value named a
     ["Datasheet", "", "F.Fab", false],
     ["Description", "", "F.Fab", false],
   ]);
-  assert.deepEqual(rows[0]!.layout.at, { x: 0, y: -2000 });
+  assert.deepEqual(rows[0]!.layout.at, { x: 0, y: -2_000_000 });
   assert.deepEqual([rows[2]!.layout.size, rows[2]!.layout.thickness], [[1270, 1270], 0], "EDA_TEXT's 1.27 mm with the automatic pen");
 });
 
 test("the Datasheet and the Description rows read the footprint's fields and OK sends them with their text", () => {
-  const rows = rowsOfFootprint(fp({ datasheet: { at: { x: 1000, y: 1000 }, size: [1000, 1000], thickness: 150, layer: "F.Fab", visible: false, text: "https://x/y.pdf" } }));
-  assert.deepEqual([rows[2]!.name, rows[2]!.text, rows[2]!.layout.at], ["Datasheet", "https://x/y.pdf", { x: 1000, y: 1000 }]);
-  const edited = rows.map((r, i) => (i === 3 ? { ...r, text: "fingers" } : r));
+  const rows = rowsOfFootprint(fp({ datasheet: { at: { x: 1_000_000, y: 1_000_000 }, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.Fab", visible: false, text: "https://x/y.pdf" } }));
+  assert.deepEqual([rows[2]!.name, rows[2]!.text, rows[2]!.layout.at], ["Datasheet", "https://x/y.pdf", { x: 1_000_000, y: 1_000_000 }]);
+  const edited = rows.map((r, i) => (i === 3000 ? { ...r, text: "fingers" } : r));
   const p = panelOfRows(edited, "R_0603");
   assert.equal(p.datasheet.text, "https://x/y.pdf");
   assert.deepEqual([p.description_field.text, p.description_field.layer], ["fingers", "F.Fab"]);
@@ -32,9 +32,9 @@ test("the Datasheet and the Description rows read the footprint's fields and OK 
 test("the layouts and texts a file gave are the rows', and the Show flags are the footprint's", () => {
   const rows = rowsOfFootprint(
     fp({
-      reference: { at: { x: 500, y: -2500 }, size: [1200, 1000], thickness: 180, layer: "F.SilkS", text: "J**" },
+      reference: { at: { x: 500_000, y: -2_500_000 }, size: [1_200_000, 1_000_000], thickness: 180, layer: "F.SilkS", text: "J**" },
       value_visible: false,
-      fields: [{ name: "MPN", value: "ABC-1", visible: true, layout: { at: { x: 1500, y: 3000 }, size: [800, 800], layer: "F.Fab", bold: true } }, { name: "Vendor", value: "ACME", visible: false }],
+      fields: [{ name: "MPN", value: "ABC-1", visible: true, layout: { at: { x: 1_500_000, y: 3_000_000 }, size: [800_000, 800_000], layer: "F.Fab", bold: true } }, { name: "Vendor", value: "ACME", visible: false }],
     })
   );
   assert.deepEqual([rows[0]!.text, rows[0]!.layout.at, rows[0]!.layout.size], ["J**", { x: 500, y: -2500 }, [1200, 1000]]);
@@ -59,14 +59,14 @@ test("OK sends the text only when it is not the default one, and the Show flags 
 test("the grid's problems are the dialog's: the size, the pen, a name, a mandatory name, a name used twice", () => {
   const rows = rowsOfFootprint(fp({ fields: [{ name: "MPN", value: "a", visible: true }] }));
   assert.equal(gridProblem(rows, fmt), null);
-  const tiny = rows.map((r, i) => (i === 0 ? { ...r, layout: { ...r.layout, size: [0, 1000] as [number, number] } } : r));
+  const tiny = rows.map((r, i) => (i === 0 ? { ...r, layout: { ...r.layout, size: [0, 1_000_000] as [number, number] } } : r));
   assert.match(gridProblem(tiny, fmt)!, /^Reference: Text width must be at least/);
-  assert.match(gridProblem(rows.map((r, i) => (i === 4 ? { ...r, name: "" } : r)), fmt)!, /Fields must have a name\./);
-  assert.match(gridProblem(rows.map((r, i) => (i === 4 ? { ...r, name: "Datasheet" } : r)), fmt)!, /is the name of a mandatory field/);
-  assert.match(gridProblem(rows.map((r, i) => (i === 4 ? { ...r, name: "ki_keywords" } : r)), fmt)!, /not a field/);
+  assert.match(gridProblem(rows.map((r, i) => (i === 4000 ? { ...r, name: "" } : r)), fmt)!, /Fields must have a name\./);
+  assert.match(gridProblem(rows.map((r, i) => (i === 4000 ? { ...r, name: "Datasheet" } : r)), fmt)!, /is the name of a mandatory field/);
+  assert.match(gridProblem(rows.map((r, i) => (i === 4000 ? { ...r, name: "ki_keywords" } : r)), fmt)!, /not a field/);
   assert.match(gridProblem([...rows, { key: 7, name: "mpn", text: "b", layout: rows[4]!.layout }], fmt)!, /There are two fields called "mpn"\./);
-  assert.match(gridProblem(rows.map((r, i) => (i === 4 ? { ...r, name: " MPN" } : r)), fmt)!, /starts or ends with a space/);
-  assert.match(gridProblem(rows.map((r, i) => (i === 4 ? { ...r, layout: { ...r.layout, thickness: 900 } } : r)), fmt)!, /thickness is too large/);
+  assert.match(gridProblem(rows.map((r, i) => (i === 4000 ? { ...r, name: " MPN" } : r)), fmt)!, /starts or ends with a space/);
+  assert.match(gridProblem(rows.map((r, i) => (i === 4000 ? { ...r, layout: { ...r.layout, thickness: 900 } } : r)), fmt)!, /thickness is too large/);
 });
 
 test("a new field is Field<rows>, or the next number free", () => {
@@ -77,9 +77,9 @@ test("a new field is Field<rows>, or the next number free", () => {
 
 test("rows move one place, never into the four mandatory rows", () => {
   const rows = ["R", "V", "D", "E", "a", "b", "c"].map((name, key) => ({ key, name }));
-  assert.deepEqual(moveRow(rows, 4, -1), rows, "the first user row cannot go up into the Description");
-  assert.deepEqual(moveRow(rows, 3, 1), rows, "a mandatory row does not move");
-  assert.deepEqual(moveRow(rows, 6, 1), rows, "the last row cannot go down");
-  assert.deepEqual(moveRow(rows, 5, -1).map((r) => r.name), ["R", "V", "D", "E", "b", "a", "c"]);
-  assert.deepEqual(moveRow(rows, 4, 1).map((r) => r.name), ["R", "V", "D", "E", "b", "a", "c"]);
+  assert.deepEqual(moveRow(rows, 4000, -1), rows, "the first user row cannot go up into the Description");
+  assert.deepEqual(moveRow(rows, 3000, 1), rows, "a mandatory row does not move");
+  assert.deepEqual(moveRow(rows, 6000, 1), rows, "the last row cannot go down");
+  assert.deepEqual(moveRow(rows, 5000, -1).map((r) => r.name), ["R", "V", "D", "E", "b", "a", "c"]);
+  assert.deepEqual(moveRow(rows, 4000, 1).map((r) => r.name), ["R", "V", "D", "E", "b", "a", "c"]);
 });

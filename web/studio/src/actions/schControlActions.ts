@@ -101,7 +101,7 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
     onSchematic(() => {
       if (!sch) return;
       const selected = [...state.selection].filter((id) => sch.sheets.some((s) => s.id === id));
-      const hovered = selected.length === 0 && state.cursorUm ? hitSheet(sch.sheets, state.cursorUm.x, state.cursorUm.y) : null;
+      const hovered = selected.length === 0 && state.cursorNm ? hitSheet(sch.sheets, state.cursorNm.x, state.cursorNm.y) : null;
       const ids = selected.length > 0 ? selected : hovered ? [hovered] : [];
       if (ids.length === 1) changeSheet([...state.currentSheetPath, ids[0]!]);
     })
@@ -210,7 +210,7 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
     "eeschema.EditorControl.editPageNumber",
     onSchematic(() => {
       const picked = sch ? [...state.selection].filter((id) => sch.sheets.some((s) => s.id === id)) : [];
-      const hovered = sch && picked.length === 0 && state.cursorUm ? hitSheet(sch.sheets, state.cursorUm.x, state.cursorUm.y) : null;
+      const hovered = sch && picked.length === 0 && state.cursorNm ? hitSheet(sch.sheets, state.cursorNm.x, state.cursorNm.y) : null;
       const ids = picked.length > 0 ? picked : hovered ? [hovered] : [];
       if (ids.length > 1) return; // `if( selection.GetSize() > 1 ) return 0`
       if (ids.length === 1) return open({ kind: "page_number", path: [...state.currentSheetPath, ids[0]!] });
@@ -311,22 +311,22 @@ function incrementTargets(ctx: SchControlContext): IncrementTarget[] {
   ];
   const selected = all.filter((t) => ctx.state.selection.has(t.id));
   if (selected.length > 0) return selected;
-  const c = ctx.state.cursorUm;
+  const c = ctx.state.cursorNm;
   if (!c) return [];
-  const id = nearestTextItem(all, c.x, c.y, Math.max(1500, 12 / (ctx.state.schematicView.scale || 1)));
+  const id = nearestTextItem(all, c.x, c.y, Math.max(1_500_000, 12 / (ctx.state.schematicView.scale || 1)));
   return all.filter((t) => t.id === id);
 }
 
 /** The net a Highlight Nets click lands on: the nearest wire, or label / power symbol anchor, within the pick radius; none clears the highlight (`highlightNet` with no connection). */
-export function netAtClick(sch: NonNullable<StudioState["schematic"]>, x: number, y: number, scale: number, gridUm = 1270): string | null {
+export function netAtClick(sch: NonNullable<StudioState["schematic"]>, x: number, y: number, scale: number, gridNm = 1_270_000): string | null {
   return netAtPoint(
     sch.wires,
     [...sch.labels.map((l) => ({ net: l.net, at: l.at })), ...sch.power_symbols.map((p) => ({ net: p.net, at: p.at }))],
     x,
     y,
     // `GetNode`: the larger of five pixels and the length of the grid's diagonal (`GetGridSize().EuclideanNorm()`), tried from nothing up (kicad-port/schNetAtPoint.ts)
-    Math.max(5 / (scale || 1), gridUm * Math.SQRT2),
+    Math.max(5 / (scale || 1), gridNm * Math.SQRT2),
     // a pin is hit through its box (the line, the name and the number), and its net is the one the sheet says
-    pinItems(sch).map((pin) => ({ net: pin.net, distUm: pinDistance(pin, [x, y], measureStrokeText) }))
+    pinItems(sch).map((pin) => ({ net: pin.net, distNm: pinDistance(pin, [x, y], measureStrokeText) }))
   );
 }

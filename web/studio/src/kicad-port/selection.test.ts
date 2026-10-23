@@ -40,8 +40,8 @@ test("isCrossingSelection: left-to-right is a window (fully enclosed) select, ri
   assert.equal(isCrossingSelection(50, 50), false, "no horizontal movement: window (not < start)");
 });
 
-function candidate(slopUm: number, areaUm2: number, layer: string | null = null): GuessCandidate {
-  return { slopUm, areaUm2, layer };
+function candidate(slopNm: number, areaNm2: number, layer: string | null = null): GuessCandidate {
+  return { slopNm, areaNm2, layer };
 }
 
 test("guessSelectionCandidates: 0 or 1 candidates pass through untouched", () => {
@@ -52,14 +52,14 @@ test("guessSelectionCandidates: 0 or 1 candidates pass through untouched", () =>
 
 test("guessSelectionCandidates: prefers the exact/near hit over a sloppier one beyond one pixel", () => {
   const exact = candidate(0, 5000);
-  const sloppy = candidate(50, 5000); // 50um sloppiness, onePixelUm = 10 -> beyond threshold
+  const sloppy = candidate(50, 5000); // 50um sloppiness, onePixelNm = 10 -> beyond threshold
   const result = guessSelectionCandidates([exact, sloppy], 10, null);
   assert.deepEqual(result, [exact]);
 });
 
 test("guessSelectionCandidates: keeps near-tied hits within one pixel of each other", () => {
   const a = candidate(0, 5000);
-  const b = candidate(5, 5000); // within onePixelUm=10 of the best (0)
+  const b = candidate(5, 5000); // within onePixelNm=10 of the best (0)
   const result = guessSelectionCandidates([a, b], 10, null);
   assert.equal(result.length, 2);
 });

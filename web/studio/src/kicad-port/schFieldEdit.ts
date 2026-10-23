@@ -8,7 +8,7 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`); the text measure is the caller's.
 import type { Cmd, Schematic, SchField } from "../api/types";
-import { defaultPenUm, FIELD_SIZE_UM } from "./schText";
+import { defaultPenNm, FIELD_SIZE_NM } from "./schText";
 
 export const FIELD_ID_PREFIX = "fld:";
 
@@ -74,16 +74,16 @@ export interface FieldBox {
   maxY: number;
 }
 
-/** The width of a text set in `sizeUm`: the sum of the glyphs' advances. */
-export type Measure = (text: string, sizeUm: number) => number;
+/** The width of a text set in `sizeNm`: the sum of the glyphs' advances. */
+export type Measure = (text: string, sizeNm: number) => number;
 
 /**
  * The box a field's text takes on the sheet (`SCH_FIELD::GetBoundingBox`, `EDA_TEXT::GetTextBox`: the glyphs and the pen's reach, a little taller than the ink, justified
  * against the anchor in the text's own axes, a text that runs up the sheet turned a quarter counter-clockwise about its anchor).
  */
 export function fieldBox(f: SchField, measure: Measure): FieldBox {
-  const size = f.size_um && f.size_um > 0 ? f.size_um : FIELD_SIZE_UM;
-  const pen = f.bold ? Math.round(size / 5) : defaultPenUm(size);
+  const size = f.size_nm && f.size_nm > 0 ? f.size_nm : FIELD_SIZE_NM;
+  const pen = f.bold ? Math.round(size / 5) : defaultPenNm(size);
   const k = Math.round(pen * 1.5);
   const w = measure(shownText(f), size) + 2 * k;
   const ext = size + 2 * k;
@@ -104,15 +104,15 @@ export function fieldBox(f: SchField, measure: Measure): FieldBox {
 export const isShownField = (f: SchField): boolean => f.visible && f.text.length > 0;
 
 /**
- * The field under the point, within `tolUm` of its box; of several the one with the smallest box (the one least likely to be what a click on a crowded spot did not
+ * The field under the point, within `tolNm` of its box; of several the one with the smallest box (the one least likely to be what a click on a crowded spot did not
  * mean). Null when none.
  */
-export function hitField(sch: Pick<Schematic, "symbols" | "power_symbols" | "sheets">, x: number, y: number, tolUm: number, measure: Measure): string | null {
+export function hitField(sch: Pick<Schematic, "symbols" | "power_symbols" | "sheets">, x: number, y: number, tolNm: number, measure: Measure): string | null {
   let best: { id: string; area: number } | null = null;
   for (const it of fieldItems(sch)) {
     if (!isShownField(it.field)) continue;
     const b = fieldBox(it.field, measure);
-    if (x < b.minX - tolUm || x > b.maxX + tolUm || y < b.minY - tolUm || y > b.maxY + tolUm) continue;
+    if (x < b.minX - tolNm || x > b.maxX + tolNm || y < b.minY - tolNm || y > b.maxY + tolNm) continue;
     const area = (b.maxX - b.minX) * (b.maxY - b.minY);
     if (!best || area < best.area) best = { id: it.id, area };
   }
@@ -140,7 +140,7 @@ export interface FieldChanges {
   vertical?: boolean;
   h?: SchField["h"];
   v?: SchField["v"];
-  sizeUm?: number;
+  sizeNm?: number;
   bold?: boolean;
   italic?: boolean;
   visible?: boolean;
@@ -149,11 +149,11 @@ export interface FieldChanges {
 }
 
 /** `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM`: "Don't allow text to disappear; it can be difficult to correct if you can't select it". */
-export const FIELD_SIZE_MIN_UM = 10;
-export const FIELD_SIZE_MAX_UM = 1_000_000;
+export const FIELD_SIZE_MIN_NM = 10_000;
+export const FIELD_SIZE_MAX_NM = 1_000_000_000;
 
 /** The size of a field, as the dialog shows it (the default when the server sent none). */
-export const fieldSizeUm = (f: Pick<SchField, "size_um">): number => (f.size_um && f.size_um > 0 ? f.size_um : FIELD_SIZE_UM);
+export const fieldSizeNm = (f: Pick<SchField, "size_nm">): number => (f.size_nm && f.size_nm > 0 ? f.size_nm : FIELD_SIZE_NM);
 
 /**
  * The `edit_field` command for what the dialog changed of `field`: only the members that differ from what the field has, or null when nothing does (OK without a change
@@ -173,7 +173,7 @@ export function fieldEditCmd(field: SchField & { id: string }, c: FieldChanges):
   set("vertical", c.vertical, c.vertical !== undefined && c.vertical !== field.vertical);
   set("h", c.h, c.h !== undefined && c.h !== field.h);
   set("v", c.v, c.v !== undefined && c.v !== field.v);
-  set("size_um", c.sizeUm, c.sizeUm !== undefined && Math.round(c.sizeUm) !== fieldSizeUm(field));
+  set("size_nm", c.sizeNm, c.sizeNm !== undefined && Math.round(c.sizeNm) !== fieldSizeNm(field));
   set("bold", c.bold, c.bold !== undefined && c.bold !== !!field.bold);
   set("italic", c.italic, c.italic !== undefined && c.italic !== !!field.italic);
   set("visible", c.visible, c.visible !== undefined && c.visible !== field.visible);

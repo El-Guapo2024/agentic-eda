@@ -387,8 +387,8 @@ mod tests {
         let tree = sexpr::parse(CHART).unwrap();
         let (t, c) = read_chart(tree.as_list().unwrap()).unwrap();
         assert_eq!((t.col_count(), t.row_count(), t.layer.as_str()), (2, 2, "Dwgs.User"));
-        assert_eq!(c.precision, 2);
-        assert_eq!(c.columns.iter().map(|x| (x.id, x.heading.as_str(), x.width_nm)).collect::<Vec<_>>(), vec![(DrillChartColumnId::Symbol, "SYM", 16_000), (DrillChartColumnId::DrillDiameter, "Drill (mm)", 16_000)]);
+        assert_eq!(c.precision, 2000);
+        assert_eq!(c.columns.iter().map(|x| (x.id, x.heading.as_str(), x.width_nm)).collect::<Vec<_>>(), vec![(DrillChartColumnId::Symbol, "SYM", 16_000_000), (DrillChartColumnId::DrillDiameter, "Drill (mm)", 16_000_000)]);
         assert_eq!((c.filter.non_plated, c.filter.slots, c.show_totals, c.symbol_column), (false, false, false, 0));
         assert_eq!(c.row_shapes.get(&1), Some(&0));
         let mut out = String::new();
@@ -403,13 +403,13 @@ mod tests {
     #[test]
     fn a_map_and_a_profile_read_and_write_back() {
         let tree = sexpr::parse(r#"(drill_map (uuid "b8c07edd-23fd-4bb5-b51d-dcd8f5d85461") (layer "Dwgs.User") (offset 50 0) (size 1.5) (span "F.Cu" "B.Cu") (outline_slots yes) (guide_cross no))"#).unwrap();
-        let (m, _) = read_map(tree.as_list().unwrap(), 1_500).unwrap();
-        assert_eq!((m.offset, m.span.as_ref().map(|s| s.end.as_str())), (Point { x: 50_000, y: 0 }, Some("B.Cu")));
+        let (m, _) = read_map(tree.as_list().unwrap(), 1_500_000).unwrap();
+        assert_eq!((m.offset, m.span.as_ref().map(|s| s.end.as_str())), (Point { x: 50_000_000, y: 0 }, Some("B.Cu")));
         let mut out = String::new();
         write_map(&mut out, &DrillMap { id: "dmap_1".into(), ..m.clone() }, false);
         assert!(out.contains("(layer \"Dwgs.User\") (offset 50 0) (size 1.5) (span \"F.Cu\" \"B.Cu\") (outline_slots yes) (guide_cross no))"), "{out}");
         let bad = sexpr::parse(r#"(drill_map (layer "F.Cu"))"#).unwrap();
-        assert!(read_map(bad.as_list().unwrap(), 1_500).is_none(), "copper is no documentation layer");
+        assert!(read_map(bad.as_list().unwrap(), 1_500_000).is_none(), "copper is no documentation layer");
 
         let board = sexpr::parse(
             r#"(kicad_pcb (setup (drill_symbol_profile (group_by size slot plating span operation post_machining) (default_marks shapes_then_letters) (size 1.5) (width 0.15) (freeze_assignments yes)

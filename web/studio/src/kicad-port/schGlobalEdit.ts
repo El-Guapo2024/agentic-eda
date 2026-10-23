@@ -45,13 +45,13 @@ export function editedGraphic(g: SchGraphic, spec: GlobalEditSpec): SchGraphic |
   if (!reached) return null;
   const next: SchGraphic = { ...g, shape: { ...g.shape } as SchGraphicShape };
   if (next.shape.type === "text_box") {
-    if (spec.textSize !== null) next.shape.size_um = spec.textSize;
+    if (spec.textSize !== null) next.shape.size_nm = spec.textSize;
     if (spec.bold !== null) next.shape.bold = spec.bold;
     if (spec.italic !== null) next.shape.italic = spec.italic;
     if (spec.hAlign !== null) next.shape.h_align = spec.hAlign;
     if (spec.vAlign !== null) next.shape.v_align = spec.vAlign;
   }
-  if (spec.lineWidth !== null) next.width_um = spec.lineWidth;
+  if (spec.lineWidth !== null) next.width_nm = spec.lineWidth;
   if (spec.lineStyle !== null) next.line_style = spec.lineStyle;
   if (spec.fill !== null && FILLABLE.has(kind)) next.fill = spec.fill;
   return JSON.stringify(next) === JSON.stringify(g) ? null : next;
@@ -63,9 +63,9 @@ export function planGlobalEdit(sch: Schematic, selected: ReadonlySet<string>, sp
   const cmds: Cmd[] = [];
   if (spec.kinds.texts && spec.textSize !== null) {
     for (const t of sch.texts) {
-      if (!wanted(t.id) || t.size_um === spec.textSize) continue;
+      if (!wanted(t.id) || t.size_nm === spec.textSize) continue;
       // Text Properties' own verb: the text keeps its id, its place and its justification
-      cmds.push({ op: "sch_edit", verb: "edit_text", id: t.id, size_um: spec.textSize });
+      cmds.push({ op: "sch_edit", verb: "edit_text", id: t.id, size_nm: spec.textSize });
     }
   }
   for (const g of sch.graphics ?? []) {
@@ -75,8 +75,8 @@ export function planGlobalEdit(sch: Schematic, selected: ReadonlySet<string>, sp
   }
   if (spec.kinds.lines && spec.lineWidth !== null) {
     for (const l of sch.lines ?? []) {
-      if (!wanted(l.id) || l.width_um === spec.lineWidth) continue;
-      cmds.push({ op: "delete_sch_line", id: l.id }, { op: "add_sch_line", pts: l.pts.map(([x, y]) => ({ x, y })), width_um: spec.lineWidth });
+      if (!wanted(l.id) || l.width_nm === spec.lineWidth) continue;
+      cmds.push({ op: "delete_sch_line", id: l.id }, { op: "add_sch_line", pts: l.pts.map(([x, y]) => ({ x, y })), width_nm: spec.lineWidth });
     }
   }
   return cmds;

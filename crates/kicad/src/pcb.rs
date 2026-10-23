@@ -1495,13 +1495,13 @@ mod tests {
         let placement = PlacementSection {
             outline: vec![
                 Point { x: 0, y: 0 },
-                Point { x: 20_000, y: 0 },
-                Point { x: 20_000, y: 20_000 },
-                Point { x: 0, y: 20_000 },
+                Point { x: 20_000_000, y: 0 },
+                Point { x: 20_000_000, y: 20_000_000 },
+                Point { x: 0, y: 20_000_000 },
             ],
             footprints: vec![
-                FootprintInstance { id: "U1".into(), at: Point { x: 5_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "C1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 90_000, side: Side::Bottom, label: Default::default() },
+                FootprintInstance { id: "U1".into(), at: Point { x: 5_000_000, y: 5_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "C1".into(), at: Point { x: 10_000_000, y: 10_000_000 }, rot: 90_000, side: Side::Bottom, label: Default::default() },
             ],
             modules: Vec::new(),
         };
@@ -1512,7 +1512,7 @@ mod tests {
             schematic: None, nets: None,
             placement: Some(placement),
             routing: Some(RoutingSection {
-                tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }], arc_mid_offset: None }],
+                tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 5_000_000, y: 5_000_000 }, Point { x: 10_000_000, y: 5_000_000 }], arc_mid_offset: None }],
                 vias: vec![],
                 zones: vec![],
                 track_width_presets: vec![],
@@ -1532,11 +1532,11 @@ mod tests {
     fn the_drill_origin_is_written_as_the_aux_axis_origin_and_read_back_by_the_importer() {
         let (mut design, model) = fixture();
         assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(aux_axis_origin 0 0)"), "none set: KiCad's default");
-        design.drawings = Some(eda_model::ir::DrawingsSection { aux_origin: Some(Point { x: 12_500, y: -3_000 }), ..Default::default() });
+        design.drawings = Some(eda_model::ir::DrawingsSection { aux_origin: Some(Point { x: 12_500_000, y: -3_000_000 }), ..Default::default() });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(aux_axis_origin 12.5 -3"), "{out}");
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
-        assert_eq!(back.drawings.and_then(|d| d.aux_origin), Some(Point { x: 12_500, y: -3_000 }), "an imported board keeps its drill/place file origin");
+        assert_eq!(back.drawings.and_then(|d| d.aux_origin), Some(Point { x: 12_500_000, y: -3_000_000 }), "an imported board keeps its drill/place file origin");
         // A board saved with the default origin imports with none set (no empty drawings section is invented for it).
         let (plain, _, _) = crate::import_kicad_pcb(&export_kicad_pcb(&fixture().0, &model, &meta()).unwrap()).unwrap();
         assert!(plain.drawings.and_then(|d| d.aux_origin).is_none());
@@ -1546,12 +1546,12 @@ mod tests {
     fn the_grid_origin_is_written_and_read_back_by_the_importer() {
         let (mut design, model) = fixture();
         assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(grid_origin 0 0)"), "none set: KiCad's default");
-        design.drawings = Some(eda_model::ir::DrawingsSection { grid_origin: Some(Point { x: 13_370, y: -8_100 }), ..Default::default() });
+        design.drawings = Some(eda_model::ir::DrawingsSection { grid_origin: Some(Point { x: 13_370_000, y: -8_100_000 }), ..Default::default() });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(grid_origin 13.37 -8.1)"), "{out}");
         assert!(out.contains("(aux_axis_origin 0 0)"), "the drill/place file origin is its own setting");
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
-        assert_eq!(back.drawings.as_ref().and_then(|d| d.grid_origin), Some(Point { x: 13_370, y: -8_100 }));
+        assert_eq!(back.drawings.as_ref().and_then(|d| d.grid_origin), Some(Point { x: 13_370_000, y: -8_100_000 }));
         assert_eq!(back.drawings.and_then(|d| d.aux_origin), None);
         let (plain, _, _) = crate::import_kicad_pcb(&export_kicad_pcb(&fixture().0, &model, &meta()).unwrap()).unwrap();
         assert!(plain.drawings.and_then(|d| d.grid_origin).is_none(), "the default origin is not kept");
@@ -1575,10 +1575,10 @@ mod tests {
         assert_eq!(drawings.page, Some(eda_model::page::PageSettings { paper: "A3".into(), portrait: true, user_size_nm: None }));
         assert_eq!(drawings.title_block, Some(eda_model::ir::TitleBlock { title: "Blinky".into(), rev: "B".into(), comments: vec!["one".into()], ..Default::default() }));
         // A user size goes out in mm and comes back as the same size.
-        design.drawings.as_mut().unwrap().page = Some(eda_model::page::PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((300_000, 200_500)) });
+        design.drawings.as_mut().unwrap().page = Some(eda_model::page::PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((300_000_000, 200_500_000)) });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(paper \"User\" 300 200.5)"), "{out}");
-        assert_eq!(crate::import_kicad_pcb(&out).unwrap().0.drawings.unwrap().page.unwrap().user_size_nm, Some((300_000, 200_500)));
+        assert_eq!(crate::import_kicad_pcb(&out).unwrap().0.drawings.unwrap().page.unwrap().user_size_nm, Some((300_000_000, 200_500_000)));
         // A board saved with the defaults imports with none of them (no empty drawings section is invented for it).
         let (default_back, _, _) = crate::import_kicad_pcb(&plain).unwrap();
         assert!(default_back.drawings.is_none() || default_back.drawings.as_ref().is_some_and(|d| d.page.is_none() && d.title_block.is_none()));
@@ -1602,19 +1602,19 @@ mod tests {
     fn the_fields_attributes_and_pad_edits_of_a_footprint_are_written_and_read_back_by_the_importer() {
         use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintEdit, FootprintKind, PadEdit, UserField};
         let (mut design, mut model) = fixture();
-        let mut reference = FieldLayout::new(Point { x: 1_500, y: -2_500 }, "F.Fab");
-        reference.size = (1_200, 900);
-        reference.thickness = 180;
+        let mut reference = FieldLayout::new(Point { x: 1_500_000, y: -2_500_000 }, "F.Fab");
+        reference.size = (1_200_000, 900_000);
+        reference.thickness = 180_000;
         reference.angle = 90_000;
         reference.halign = -1;
         reference.italic = true;
-        let mut value = FieldLayout::new(Point { x: -1_000, y: 3_000 }, "F.SilkS");
+        let mut value = FieldLayout::new(Point { x: -1_000_000, y: 3_000_000 }, "F.SilkS");
         value.visible = false;
-        let mut vendor = FieldLayout::new(Point { x: 0, y: 4_000 }, "F.Fab");
+        let mut vendor = FieldLayout::new(Point { x: 0, y: 4_000_000 }, "F.Fab");
         vendor.visible = false;
         let mut pad1 = PadEdit::none("1", 1);
-        pad1.offset = Some(Point { x: 200, y: 100 });
-        pad1.solder_mask_margin = Some(40);
+        pad1.offset = Some(Point { x: 200_000, y: 100_000 });
+        pad1.solder_mask_margin = Some(40_000);
         let mut u1 = FootprintEdit::new("U1");
         u1.reference = Some(reference.clone());
         u1.value = Some(value.clone());
@@ -1654,7 +1654,7 @@ mod tests {
         use eda_model::fp_edit::{FieldLayout, FootprintEdit};
         let (mut design, model) = fixture();
         // C1 sits on the bottom, turned 90: its field's angle and position cross the mirror and the turn and come back the same.
-        let mut l = FieldLayout::new(Point { x: 800, y: -1_900 }, "B.SilkS");
+        let mut l = FieldLayout::new(Point { x: 800_000, y: -1_900_000 }, "B.SilkS");
         l.angle = 30_000;
         let mut c1 = FootprintEdit::new("C1");
         c1.reference = Some(l.clone());
@@ -1705,7 +1705,7 @@ mod tests {
         let custom = export_kicad_pro_for(&design, &model);
         let json: serde_json::Value = serde_json::from_str(&custom).expect("valid json");
         assert_eq!(json["erc"]["pin_map"][1][1], 0, "{custom}");
-        assert_eq!(json["erc"]["pin_map"].as_array().map(Vec::len), Some(12));
+        assert_eq!(json["erc"]["pin_map"].as_array().map(Vec::len), Some(12_000));
         assert_eq!(json["erc"]["rule_severities"]["lib_symbol_mismatch"], "ignore");
         assert!(json["board"]["design_settings"]["rules"]["min_clearance"].is_number(), "the board half is untouched");
         // A malformed matrix is ignored wholesale, like KiCad's own loader.
@@ -1721,11 +1721,11 @@ mod tests {
         let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
         assert!(plain["board"]["design_settings"]["drc_exclusions"].is_null(), "nothing waived: the key is not written");
         assert!(plain["board"]["design_settings"]["meta"].is_null() && plain["erc"]["meta"].is_null(), "and neither section says which schema it is at");
-        assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(2), "only the two library checks, which are always ignored");
+        assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(2000), "only the two library checks, which are always ignored");
 
         design.drawings = Some(DrawingsSection {
             drc_exclusions: vec![
-                DrcExclusion { check: "annular_width".into(), items: vec!["via-uuid".into()], ids: vec!["v1".into()], positions_nm: vec![[12_459_000, 18_390_000]], comment: "tight on purpose".into() },
+                DrcExclusion { check: "annular_width".into(), items: vec!["via-uuid".into()], ids: vec!["v1".into()], positions_nm: vec![[12_459_000_000, 18_390_000_000]], comment: "tight on purpose".into() },
                 DrcExclusion { check: "clearance".into(), items: vec!["a".into(), "b".into()], ids: vec![], positions_nm: vec![], comment: String::new() },
             ],
             ..Default::default()
@@ -1737,7 +1737,7 @@ mod tests {
                     check: "footprint_link_issues".into(),
                     location: "R1".into(),
                     comment: "bare footprint on purpose".into(),
-                    marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [113_030_000, 100_330_000], items: vec!["a4f97020-e09b-4e24-b611-b376f3c27df7".into()], ..Default::default() }),
+                    marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [113_030_000_000, 100_330_000_000], items: vec!["a4f97020-e09b-4e24-b611-b376f3c27df7".into()], ..Default::default() }),
                 },
                 eda_model::ir::ErcExclusion { check: "wire_dangling".into(), location: "W1".into(), ..Default::default() },
             ],
@@ -1781,7 +1781,7 @@ mod tests {
         design.schematic = Some(sch.clone());
         let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
         assert!(plain["schematic"].is_null(), "nothing chosen: KiCad's own 50 mils applies and the project says nothing");
-        sch.extras.connection_grid_mils = Some(25);
+        sch.extras.connection_grid_mils = Some(25_000);
         design.schematic = Some(sch);
         let json: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
         assert_eq!(json["schematic"]["connection_grid_size"], 25.0, "in mils, as `connection_grid_size` is in the project file");
@@ -1807,8 +1807,8 @@ mod tests {
         design.drawings = Some(eda_model::ir::DrawingsSection {
             zone_overrides: vec![FootprintZoneOverrides {
                 id: "U1".into(),
-                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(800) }),
-                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(600), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: Some(300), thermal_spoke_angle_mdeg: Some(45_000) }],
+                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(800_000) }),
+                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(600_000), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400_000), thermal_spoke_width: Some(300_000), thermal_spoke_angle_mdeg: Some(45_000) }],
             }],
             ..Default::default()
         });
@@ -1818,9 +1818,9 @@ mod tests {
         }
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let extra = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "U1").unwrap();
-        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(800)));
+        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(800_000)));
         let p1 = &extra.pads[0];
-        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(400), Some(300), Some(45_000), Some(600)));
+        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(400_000), Some(300_000), Some(45_000), Some(600_000)));
         assert_eq!(extra.pads[1].zone_connection, None, "the other pads inherit");
     }
 
@@ -1834,8 +1834,8 @@ mod tests {
         use eda_model::ir::{FootprintZoneFacts, FootprintZoneOverrides, PadConnection, PadZoneOverride};
         let (mut design, mut model) = fixture();
         let mut pad1 = PadEdit::none("1", 1);
-        pad1.offset = Some(Point { x: 200, y: 100 });
-        pad1.solder_mask_margin = Some(40);
+        pad1.offset = Some(Point { x: 200_000, y: 100_000 });
+        pad1.solder_mask_margin = Some(40_000);
         pad1.solder_paste_margin_ratio = Some(-0.1);
         let mut u1 = FootprintEdit::new("U1");
         u1.attrs = Some(FootprintAttrs { kind: FootprintKind::Smd, dnp: true, ..Default::default() });
@@ -1846,8 +1846,8 @@ mod tests {
             footprint_edits: vec![u1],
             zone_overrides: vec![FootprintZoneOverrides {
                 id: "U1".into(),
-                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(800) }),
-                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(600), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: Some(300), thermal_spoke_angle_mdeg: Some(45_000) }],
+                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(800_000) }),
+                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(600_000), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400_000), thermal_spoke_width: Some(300_000), thermal_spoke_angle_mdeg: Some(45_000) }],
             }],
             ..Default::default()
         });
@@ -1869,9 +1869,9 @@ mod tests {
         assert_eq!(dr.footprint_edits.iter().find(|e| e.id == "U1").and_then(|e| e.pad("1", 1)), Some(&pad1));
         // The zone half: what the importer keeps of the zone facts.
         let extra = dr.footprint_extras.iter().find(|e| e.id == "U1").expect("U1's imported facts");
-        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(800)));
+        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(800_000)));
         let p1 = &extra.pads[0];
-        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(400), Some(300), Some(45_000), Some(600)));
+        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(400_000), Some(300_000), Some(45_000), Some(600_000)));
     }
 
     #[test]
@@ -1891,16 +1891,16 @@ mod tests {
         let (mut design, model) = fixture();
         design.drawings = Some(eda_model::ir::DrawingsSection {
             shapes: vec![
-                Shape::Segment { id: "s1".into(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } },
-                Shape::Rect { id: "s2".into(), layer: "F.Fab".into(), stroke_width: 100, filled: true, start: Point { x: 0, y: 0 }, end: Point { x: 2000, y: 2000 } },
-                Shape::Circle { id: "s3".into(), layer: "B.SilkS".into(), stroke_width: 100, filled: false, center: Point { x: 5000, y: 5000 }, end: Point { x: 6000, y: 5000 } },
-                Shape::Polygon { id: "s4".into(), layer: "F.CrtYd".into(), stroke_width: 50, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 1000 }] },
-                Shape::Arc { id: "s5".into(), layer: "Cmts.User".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, mid: Point { x: 707, y: 707 }, end: Point { x: 1000, y: 1000 } },
-                Shape::Bezier { id: "s6".into(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: 0, y: 0 }, c1: Point { x: 0, y: 2000 }, c2: Point { x: 3000, y: 2000 }, end: Point { x: 3000, y: 0 } },
+                Shape::Segment { id: "s1".into(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000_000, y: 0 } },
+                Shape::Rect { id: "s2".into(), layer: "F.Fab".into(), stroke_width: 100_000, filled: true, start: Point { x: 0, y: 0 }, end: Point { x: 2_000_000, y: 2_000_000 } },
+                Shape::Circle { id: "s3".into(), layer: "B.SilkS".into(), stroke_width: 100_000, filled: false, center: Point { x: 5_000_000, y: 5_000_000 }, end: Point { x: 6_000_000, y: 5_000_000 } },
+                Shape::Polygon { id: "s4".into(), layer: "F.CrtYd".into(), stroke_width: 50_000, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 }, Point { x: 1_000_000, y: 1_000_000 }] },
+                Shape::Arc { id: "s5".into(), layer: "Cmts.User".into(), stroke_width: 100_000, filled: false, start: Point { x: 0, y: 0 }, mid: Point { x: 707_000, y: 707_000 }, end: Point { x: 1_000_000, y: 1_000_000 } },
+                Shape::Bezier { id: "s6".into(), layer: "F.SilkS".into(), stroke_width: 120_000, filled: false, start: Point { x: 0, y: 0 }, c1: Point { x: 0, y: 2_000_000 }, c2: Point { x: 3_000_000, y: 2_000_000 }, end: Point { x: 3_000_000, y: 0 } },
             ],
             texts: vec![
-                Text { id: "t1".into(), content: "REV A".into(), at: Point { x: 1000, y: 2000 }, angle: 90_000, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Left, mirror: true },
-                Text { id: "t2".into(), content: "centred".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false },
+                Text { id: "t1".into(), content: "REV A".into(), at: Point { x: 1_000_000, y: 2_000_000 }, angle: 90_000, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: TextJustify::Left, mirror: true },
+                Text { id: "t2".into(), content: "centred".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: TextJustify::Center, mirror: false },
             ],
             ..Default::default()
         });
@@ -1915,15 +1915,15 @@ mod tests {
         assert!(a.contains("(gr_arc (start 0 0) (mid 0.707 0.707) (end 1 1)"), "{a}");
         // `case SHAPE_T::BEZIER:` -- `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)) ...)`, never `fill`ed.
         let curve = a.find("(gr_curve (pts (xy 0 0) (xy 0 2) (xy 3 2) (xy 3 0))").unwrap_or_else(|| panic!("{a}"));
-        assert!(a[curve..curve + 140].contains("(stroke (width 0.12)") && !a[curve..curve + 140].contains("fill"), "{a}");
+        assert!(a[curve..curve + 140_000].contains("(stroke (width 0.12)") && !a[curve..curve + 140_000].contains("fill"), "{a}");
         // A line/arc never gets a `fill` token -- KiCad's own writer does not emit one for either.
-        assert!(!a[a.find("(gr_line").unwrap()..a.find("(gr_line").unwrap() + 200].contains("fill"), "{a}");
+        assert!(!a[a.find("(gr_line").unwrap()..a.find("(gr_line").unwrap() + 200_000].contains("fill"), "{a}");
 
         assert!(a.contains("(gr_text \"REV A\" (at 1 2 90)") && a.contains("(justify left mirror)"), "{a}");
         assert!(a.contains("(gr_text \"centred\" (at 0 0 0)"), "{a}");
         // A centred, unmirrored text must not grow a `justify` token it never had.
         let centred_start = a.find("\"centred\"").unwrap();
-        let centred_block = &a[centred_start..(centred_start + 200).min(a.len())];
+        let centred_block = &a[centred_start..(centred_start + 200_000).min(a.len())];
         assert!(!centred_block.contains("justify"), "{centred_block}");
     }
 
@@ -1949,8 +1949,8 @@ mod tests {
             layer: "B.Cu".into(),
             outline: vec![
                 Point { x: 0, y: 0 },
-                Point { x: 20_000, y: 0 },
-                Point { x: 20_000, y: 20_000 },
+                Point { x: 20_000_000, y: 0 },
+                Point { x: 20_000_000, y: 20_000_000 },
             ],
             ..Default::default()
         }];
@@ -1968,7 +1968,7 @@ mod tests {
             id: "ra1".into(),
             net: String::new(),
             layer: "F.Cu".into(),
-            outline: vec![Point { x: 1_000, y: 1_000 }, Point { x: 8_000, y: 1_000 }, Point { x: 8_000, y: 8_000 }, Point { x: 1_000, y: 8_000 }],
+            outline: vec![Point { x: 1_000_000, y: 1_000_000 }, Point { x: 8_000_000, y: 1_000_000 }, Point { x: 8_000_000, y: 8_000_000 }, Point { x: 1_000_000, y: 8_000_000 }],
             is_rule_area: true,
             keepout_tracks: true,
             keepout_vias: true,
@@ -1994,7 +1994,7 @@ mod tests {
     /// A made-up fill of kicad-cli's for every zone: a square ring on each layer of each (the writer puts what it is handed, whatever the ring).
     fn kicad_fills_of(design: &Design) -> crate::zone_fills::KicadFills {
         use crate::zone_fills::{zone_signature, KicadFills, KicadRing, ZoneEntry};
-        let ring = KicadRing { island: false, pts: vec![[2_000_000, 2_000_000], [4_000_000, 2_000_000], [4_000_000, 4_000_000], [2_000_000, 4_000_000]] };
+        let ring = KicadRing { island: false, pts: vec![[2_000_000_000, 2_000_000_000], [4_000_000_000, 2_000_000_000], [4_000_000_000, 4_000_000_000], [2_000_000_000, 4_000_000_000]] };
         let zones = design.routing.as_ref().unwrap().zones.iter().filter(|z| !z.is_rule_area).map(|z| (z.id.clone(), ZoneEntry { sig: zone_signature(z), layers: z.layer_set().into_iter().map(|l| (l.to_string(), vec![ring.clone()])).collect() })).collect();
         KicadFills::new("kicad-cli".into(), "r".into(), 1, zones)
     }
@@ -2013,11 +2013,11 @@ mod tests {
         let (mut design, model) = fixture();
         let hole = eda_model::Pad {
             number: String::new(),
-            at: (1_500, -2_000),
-            size: (3_400, 3_400),
+            at: (1_500_000, -2_000_000),
+            size: (3_400_000, 3_400_000),
             shape: eda_model::PadShape::Circle,
             kind: PadKind::NonPlatedHole,
-            drill: Some(3_200),
+            drill: Some(3_200_000),
             drill_slot: None,
             rot: 0,
             roundrect_ratio: None,
@@ -2026,7 +2026,7 @@ mod tests {
         };
         let extra = eda_model::ir::FootprintExtra {
             id: "U1".into(),
-            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(1_200) }],
+            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(1_200_000) }],
             net_tie_pad_groups: vec!["1, 2".into(), "3".into()],
             ..Default::default()
         };
@@ -2044,7 +2044,7 @@ mod tests {
         let e = back.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == "U1")).expect("U1's extras");
         assert_eq!(e.net_tie_pad_groups, vec!["1, 2".to_string(), "3".to_string()]);
         assert_eq!(e.holes.len(), 1, "the hole comes back as the footprint's own, not as a pad with copper");
-        assert_eq!((e.holes[0].pad.at, e.holes[0].pad.drill, e.holes[0].clearance), (hole.at, Some(3_200), Some(1_200)));
+        assert_eq!((e.holes[0].pad.at, e.holes[0].pad.drill, e.holes[0].clearance), (hole.at, Some(3_200_000), Some(1_200_000)));
         // A footprint with neither writes neither.
         let plain = export_kicad_pcb(&fixture().0, &model, &meta()).unwrap();
         assert!(!plain.contains("np_thru_hole") && !plain.contains("net_tie_pad_groups"));
@@ -2056,11 +2056,11 @@ mod tests {
     fn a_zone_is_written_with_kicad_clis_fill_while_it_is_the_zone_that_was_filled_and_unfilled_after() {
         use crate::zone_fills::{zone_signature, KicadFills, KicadRing, ZoneEntry};
         let (mut design, model) = fixture();
-        let zone = Zone { id: "zg".into(), net: "GND".into(), layer: "F.Cu".into(), outline: square(1_000, 1_000, 10_000), ..Default::default() };
+        let zone = Zone { id: "zg".into(), net: "GND".into(), layer: "F.Cu".into(), outline: square(1_000_000, 1_000_000, 10_000_000), ..Default::default() };
         design.routing.as_mut().unwrap().zones = vec![zone.clone()];
-        let ring = |island: bool| KicadRing { island, pts: vec![[2_000_000, 2_000_000], [8_123_456, 2_000_000], [8_123_456, 7_654_321], [2_000_000, 7_654_321]] };
+        let ring = |island: bool| KicadRing { island, pts: vec![[2_000_000_000, 2_000_000_000], [8_123_456_000, 2_000_000_000], [8_123_456_000, 7_654_321_000], [2_000_000_000, 7_654_321_000]] };
         let entry = ZoneEntry { sig: zone_signature(&zone), layers: std::collections::BTreeMap::from([("F.Cu".to_string(), vec![ring(false), ring(true)])]) };
-        let kicad = KicadFills::new("kicad-cli 10.99.0".into(), "r1".into(), 2_500, std::collections::BTreeMap::from([("zg".to_string(), entry)]));
+        let kicad = KicadFills::new("kicad-cli 10.99.0".into(), "r1".into(), 2_500_000, std::collections::BTreeMap::from([("zg".to_string(), entry)]));
 
         let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();
         let block = first_zone(&out);
@@ -2076,10 +2076,10 @@ mod tests {
         assert_eq!(first_zone(&plain).matches("(filled_polygon").count(), 0);
 
         // Edits elsewhere on the board leave the fill where it is (KiCad with auto-refill off); an edit to the zone itself empties it.
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 9_000 }, Point { x: 9_000, y: 9_000 }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 9_000_000 }, Point { x: 9_000_000, y: 9_000_000 }], arc_mid_offset: None });
         let after_a_track = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();
         assert_eq!(first_zone(&after_a_track).matches("(filled_polygon").count(), 2, "a track added since is no reason to take the copper away");
-        design.routing.as_mut().unwrap().zones[0].min_thickness += 10;
+        design.routing.as_mut().unwrap().zones[0].min_thickness += 10_000;
         let edited = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();
         assert_eq!(first_zone(&edited).matches("(filled_polygon").count(), 0, "a zone edited since its fill is written without it");
     }
@@ -2094,30 +2094,30 @@ mod tests {
             id: "zp".into(),
             net: "GND".into(),
             layer: "B.Cu".into(),
-            outline: square(1_000, 1_000, 10_000),
-            clearance: 300,
-            min_thickness: 150,
-            thermal_gap: 420,
-            thermal_spoke_width: 350,
+            outline: square(1_000_000, 1_000_000, 10_000_000),
+            clearance: 300_000,
+            min_thickness: 150_000,
+            thermal_gap: 420_000,
+            thermal_spoke_width: 350_000,
             pad_connection: eda_model::ir::PadConnection::Full,
             priority: 3,
             island_removal_mode: eda_model::ir::IslandRemovalMode::Area,
-            min_island_area: 2_500_000,
+            min_island_area: 2_500_000_000,
             fill_mode: eda_model::ir::FillMode::HatchPattern,
-            hatch_thickness: 400,
-            hatch_gap: 900,
+            hatch_thickness: 400_000,
+            hatch_gap: 900_000,
             hatch_orientation_mdeg: 45_000,
-            hatch_smoothing_level: 2,
+            hatch_smoothing_level: 2000,
             hatch_smoothing_value: 0.25,
             hatch_hole_min_area: 0.3,
             hatch_border_algorithm: 0,
             name: "GND plane".into(),
             border_style: eda_model::ir::ZoneBorderStyle::Full,
             smoothing: eda_model::ir::ZoneSmoothing::Fillet,
-            corner_radius: 600,
+            corner_radius: 600_000,
             ..Default::default()
         };
-        let mut thermal = Zone { id: "zt".into(), net: "VIN".into(), layer: "F.Cu".into(), outline: square(12_000, 1_000, 6_000), ..Default::default() };
+        let mut thermal = Zone { id: "zt".into(), net: "VIN".into(), layer: "F.Cu".into(), outline: square(12_000_000, 1_000_000, 6_000_000), ..Default::default() };
         thermal.pad_connection = eda_model::ir::PadConnection::ThtThermal;
         design.routing.as_mut().unwrap().zones = vec![pour.clone(), thermal.clone()];
         design.drawings = Some(eda_model::ir::DrawingsSection { locked_ids: vec!["zp".into()], ..Default::default() });
@@ -2163,7 +2163,7 @@ mod tests {
     #[test]
     fn a_zone_on_two_copper_layers_is_one_zone_with_a_fill_on_each_layer_and_reads_back_as_one() {
         let (mut design, model) = fixture();
-        let mut pour = Zone { id: "zl".into(), net: "GND".into(), outline: square(1_000, 1_000, 10_000), ..Default::default() };
+        let mut pour = Zone { id: "zl".into(), net: "GND".into(), outline: square(1_000_000, 1_000_000, 10_000_000), ..Default::default() };
         pour.set_layer_set(&["B.Cu", "F.Cu"]);
         assert_eq!((pour.layer.as_str(), pour.layers.clone()), ("F.Cu", vec!["F.Cu".to_string(), "B.Cu".to_string()]), "the set is kept in UI order, the front first");
         design.routing.as_mut().unwrap().zones = vec![pour.clone()];
@@ -2190,8 +2190,8 @@ mod tests {
     #[test]
     fn a_non_copper_zone_has_no_net_is_written_with_its_wildcard_and_reads_back_with_its_layers() {
         let (mut design, model) = fixture();
-        let silk = Zone { id: "zs".into(), net: "GND".into(), layer: "F.SilkS".into(), outline: square(1_000, 1_000, 6_000), ..Default::default() };
-        let mut mask = Zone { id: "zm".into(), outline: square(8_000, 1_000, 6_000), ..Default::default() };
+        let silk = Zone { id: "zs".into(), net: "GND".into(), layer: "F.SilkS".into(), outline: square(1_000_000, 1_000_000, 6_000_000), ..Default::default() };
+        let mut mask = Zone { id: "zm".into(), outline: square(8_000_000, 1_000_000, 6_000_000), ..Default::default() };
         mask.set_layer_set(&["B.Mask", "F.Mask"]);
         design.routing.as_mut().unwrap().zones = vec![silk, mask];
         let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad_fills_of(&design))).unwrap();
@@ -2215,11 +2215,11 @@ mod tests {
         // The other spellings of a layer set: `F&B.Cu` and `*.Cu` on this two-layer board, and a copper layer the board does not have is left out.
         let wild = out.replace("(layers \"*.Mask\")", "(layers \"F&B.Cu\" \"In1.Cu\")");
         let (back, _, _) = crate::import_kicad_pcb(&wild).unwrap();
-        let zone = back.routing.as_ref().unwrap().zones.iter().find(|z| z.id == "zm" || z.outline[0].x == 8_000).unwrap().clone();
+        let zone = back.routing.as_ref().unwrap().zones.iter().find(|z| z.id == "zm" || z.outline[0].x == 8_000_000).unwrap().clone();
         assert_eq!(zone.layer_set(), vec!["F.Cu", "B.Cu"], "In1.Cu is not a layer of this board");
         let all = out.replace("(layers \"*.Mask\")", "(layers \"*.Cu\")");
         let (back, _, _) = crate::import_kicad_pcb(&all).unwrap();
-        let zone = back.routing.as_ref().unwrap().zones.iter().find(|z| z.outline[0].x == 8_000).unwrap().clone();
+        let zone = back.routing.as_ref().unwrap().zones.iter().find(|z| z.outline[0].x == 8_000_000).unwrap().clone();
         assert_eq!(zone.layer_set(), vec!["F.Cu", "B.Cu"]);
     }
 
@@ -2228,8 +2228,8 @@ mod tests {
     #[test]
     fn a_zone_on_a_four_layer_stack_keeps_its_layers_in_both_orders() {
         let (mut design, mut model) = fixture();
-        model.board.layers = eda_model::rules::copper_layer_names(4);
-        let mut pour = Zone { id: "z4".into(), net: "GND".into(), outline: square(1_000, 1_000, 10_000), ..Default::default() };
+        model.board.layers = eda_model::rules::copper_layer_names(4000);
+        let mut pour = Zone { id: "z4".into(), net: "GND".into(), outline: square(1_000_000, 1_000_000, 10_000_000), ..Default::default() };
         pour.set_layer_set(&["In2.Cu", "B.Cu", "F.Cu", "In1.Cu"]);
         assert_eq!(pour.layer_set(), vec!["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
         design.routing.as_mut().unwrap().zones = vec![pour];
@@ -2248,7 +2248,7 @@ mod tests {
     #[test]
     fn a_rule_area_keeps_its_technical_layers_and_the_file_leaves_out_the_ones_the_board_has_off() {
         let (mut design, mut model) = fixture();
-        let mut keepout = Zone { id: "ka".into(), outline: square(1_000, 1_000, 6_000), is_rule_area: true, keepout_copper_pour: true, ..Default::default() };
+        let mut keepout = Zone { id: "ka".into(), outline: square(1_000_000, 1_000_000, 6_000_000), is_rule_area: true, keepout_copper_pour: true, ..Default::default() };
         keepout.set_layer_set(&["F.Cu", "B.Cu", "F.SilkS", "F.Mask"]);
         design.routing.as_mut().unwrap().zones = vec![keepout.clone()];
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -2265,7 +2265,7 @@ mod tests {
     fn an_arc_track_is_written_as_one_arc_and_read_back_as_one() {
         use eda_model::ir::Point;
         let (mut design, model) = fixture();
-        let arc = Track::new_arc("VIN".into(), "F.Cu".into(), 250, Point { x: 2_000, y: 2_000 }, Point { x: 4_000, y: 1_000 }, Point { x: 6_000, y: 2_000 });
+        let arc = Track::new_arc("VIN".into(), "F.Cu".into(), 250_000, Point { x: 2_000_000, y: 2_000_000 }, Point { x: 4_000_000, y: 1_000_000 }, Point { x: 6_000_000, y: 2_000_000 });
         assert!(arc.pts.len() > 3, "the polyline is the tessellation");
         design.routing.as_mut().unwrap().tracks.push(arc);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -2275,19 +2275,19 @@ mod tests {
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let tracks = &back.routing.unwrap().tracks;
         let arcs: Vec<_> = tracks.iter().filter_map(|t| t.arc()).collect();
-        assert_eq!(arcs, vec![(Point { x: 2_000, y: 2_000 }, Point { x: 4_000, y: 1_000 }, Point { x: 6_000, y: 2_000 })]);
+        assert_eq!(arcs, vec![(Point { x: 2_000_000, y: 2_000_000 }, Point { x: 4_000_000, y: 1_000_000 }, Point { x: 6_000_000, y: 2_000_000 })]);
     }
 
     #[test]
     fn a_track_that_was_reshaped_after_it_was_an_arc_is_written_as_segments() {
         use eda_model::ir::Point;
         let (mut design, model) = fixture();
-        let mut arc = Track::new_arc("VIN".into(), "F.Cu".into(), 250, Point { x: 2_000, y: 2_000 }, Point { x: 4_000, y: 1_000 }, Point { x: 6_000, y: 2_000 });
-        arc.pts.truncate(5); // an edit that cut the curve short: no longer the tessellation of its arc
+        let mut arc = Track::new_arc("VIN".into(), "F.Cu".into(), 250_000, Point { x: 2_000_000, y: 2_000_000 }, Point { x: 4_000_000, y: 1_000_000 }, Point { x: 6_000_000, y: 2_000_000 });
+        arc.pts.truncate(5000); // an edit that cut the curve short: no longer the tessellation of its arc
         design.routing.as_mut().unwrap().tracks.push(arc);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(out.matches("\t(arc ").count(), 0, "a stale arc is never written: {out}");
-        assert_eq!(out.matches("\t(segment ").count(), 1 + 4);
+        assert_eq!(out.matches("\t(segment ").count(), 1 + 4000);
     }
 
     #[test]
@@ -2296,33 +2296,33 @@ mod tests {
         use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern};
         let (mut design, model) = fixture();
         // The meander: a polyline of three points (two segments) beside the board's plain track.
-        design.routing.as_mut().unwrap().tracks.push(Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 10_000, y: 5_000 }, Point { x: 10_000, y: 6_000 }, Point { x: 11_000, y: 6_000 }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 10_000_000, y: 5_000_000 }, Point { x: 10_000_000, y: 6_000_000 }, Point { x: 11_000_000, y: 6_000_000 }], arc_mid_offset: None });
         design.assign_missing_ids();
         let ids: Vec<String> = design.routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
         let pattern = TuningPattern {
             id: String::new(),
             mode: TuningMode::Single,
             layer: "F.Cu".into(),
-            origin: Point { x: 10_000, y: 5_000 },
-            end: Point { x: 11_000, y: 6_000 },
+            origin: Point { x: 10_000_000, y: 5_000_000 },
+            end: Point { x: 11_000_000, y: 6_000_000 },
             initial_side: PatternSide::Left,
-            min_amplitude: 200,
-            max_amplitude: 1_000,
-            spacing: 600,
-            corner_radius_percent: 80,
+            min_amplitude: 200_000,
+            max_amplitude: 1_000_000,
+            spacing: 600_000,
+            corner_radius_percent: 80_000,
             rounded: true,
             single_sided: false,
             override_custom_rules: false,
-            target_length: TargetRange { min: 99_900, opt: 100_000, max: 100_100 },
-            target_skew: TargetRange { min: -100, opt: 0, max: 100 },
+            target_length: TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 },
+            target_skew: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             is_time_domain: false,
             target_delay: TargetRange::delay_unconstrained(),
-            target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
-            base_line: vec![Point { x: 10_000, y: 5_000 }, Point { x: 11_000, y: 6_000 }],
+            target_skew_delay: TargetRange { min: -100_000_000, opt: 0, max: 100_000_000 },
+            base_line: vec![Point { x: 10_000_000, y: 5_000_000 }, Point { x: 11_000_000, y: 6_000_000 }],
             base_line_coupled: vec![],
-            last_track_width: 200,
+            last_track_width: 200_000,
             last_diff_pair_gap: 0,
-            last_tuning_length: 1_414_213,
+            last_tuning_length: 1_414_213_000,
             last_tuning_delay: 0,
             last_netname: "VIN".into(),
             last_status: "too_short".into(),
@@ -2338,7 +2338,7 @@ mod tests {
         let members_line = out.lines().find(|l| l.trim_start().starts_with("(members") && l.contains("\"")).and_then(|l| (!l.contains("(group")).then_some(l)).unwrap_or_else(|| panic!("a members line: {out}"));
         assert_eq!(members_line.matches('"').count(), 4, "two quoted uuids: {members_line}");
         let in_members = seg_uuids.iter().filter(|u| members_line.contains(**u)).count();
-        assert_eq!(in_members, 2, "the polyline's two segments, not the plain track: {members_line}");
+        assert_eq!(in_members, 2000, "the polyline's two segments, not the plain track: {members_line}");
 
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let drawings = back.drawings.as_ref().expect("the pattern comes back");
@@ -2368,7 +2368,7 @@ mod tests {
     #[test]
     fn the_tuning_patterns_of_kicads_own_boards_are_read_with_their_tracks() {
         let Ok(dir) = std::env::var("KICAD_SRC_DIR") else { return };
-        for (file, patterns) in [("tuning_generators_load_save.kicad_pcb", 1usize), ("issue22536.kicad_pcb", 4)] {
+        for (file, patterns) in [("tuning_generators_load_save.kicad_pcb", 1usize), ("issue22536.kicad_pcb", 4000)] {
             let Ok(text) = std::fs::read_to_string(std::path::Path::new(&dir).join("qa/data/pcbnew").join(file)) else { continue };
             let (design, model, _) = crate::import_kicad_pcb(&text).unwrap();
             let got = &design.drawings.as_ref().expect("patterns").tuning_patterns;
@@ -2402,10 +2402,10 @@ mod tests {
     fn locked_items_are_written_locked_and_come_back_locked() {
         use eda_model::ir::Point;
         let (mut design, model) = fixture();
-        design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000_000, y: 8_000_000 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         design.drawings = Some(eda_model::ir::DrawingsSection {
-            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000, y: 0 } }],
-            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000, y: 2_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000_000, y: 0 } }],
+            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000_000, y: 2_000_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: TextJustify::Center, mirror: false }],
             ..Default::default()
         });
         design.assign_missing_ids();
@@ -2449,20 +2449,20 @@ mod tests {
             text_position: DimensionTextPosition::Outside,
             keep_text_aligned: true,
             text_angle: 0,
-            text_size_nm: 1_200,
-            stroke_width: 150,
-            arrow_length: 1_270,
-            extension_offset: 500,
-            extension_height: 580,
+            text_size_nm: 1_200_000,
+            stroke_width: 150_000,
+            arrow_length: 1_270_000,
+            extension_offset: 500_000,
+            extension_height: 580_000,
             arrow_direction: ArrowDirection::Inward,
-            text_thickness_nm: Some(180),
+            text_thickness_nm: Some(180_000),
         };
         let mut dims = vec![
-            dim(DimensionKind::Aligned { height: 2_000 }, Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }),
-            dim(DimensionKind::Orthogonal { height: 1_500, horizontal: false }, Point { x: 2_000, y: 14_000 }, Point { x: 6_000, y: 18_000 }),
-            dim(DimensionKind::Radial { leader_length: 3_000 }, Point { x: 15_000, y: 15_000 }, Point { x: 17_000, y: 15_000 }),
-            dim(DimensionKind::Leader, Point { x: 10_000, y: 10_000 }, Point { x: 12_000, y: 8_000 }),
-            dim(DimensionKind::Center, Point { x: 5_000, y: 5_000 }, Point { x: 6_000, y: 5_000 }),
+            dim(DimensionKind::Aligned { height: 2_000_000 }, Point { x: 2_000_000, y: 12_000_000 }, Point { x: 12_000_000, y: 12_000_000 }),
+            dim(DimensionKind::Orthogonal { height: 1_500_000, horizontal: false }, Point { x: 2_000_000, y: 14_000_000 }, Point { x: 6_000_000, y: 18_000_000 }),
+            dim(DimensionKind::Radial { leader_length: 3_000_000 }, Point { x: 15_000_000, y: 15_000_000 }, Point { x: 17_000_000, y: 15_000_000 }),
+            dim(DimensionKind::Leader, Point { x: 10_000_000, y: 10_000_000 }, Point { x: 12_000_000, y: 8_000_000 }),
+            dim(DimensionKind::Center, Point { x: 5_000_000, y: 5_000_000 }, Point { x: 6_000_000, y: 5_000_000 }),
         ];
         dims[0].override_text = Some("ten".into());
         dims[1].units = DimensionUnits::Mil;
@@ -2520,8 +2520,8 @@ mod tests {
     fn groups_are_written_with_their_members_uuids_and_read_back_with_their_ids() {
         use eda_model::ir::{Group, Point};
         let (mut design, model) = fixture();
-        design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        design.routing.as_mut().unwrap().tracks.push(Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 1_000, y: 6_000 }, Point { x: 5_000, y: 6_000 }, Point { x: 5_000, y: 9_000 }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000_000, y: 8_000_000 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 1_000_000, y: 6_000_000 }, Point { x: 5_000_000, y: 6_000_000 }, Point { x: 5_000_000, y: 9_000_000 }], arc_mid_offset: None });
         design.assign_missing_ids();
         let rt = design.routing.as_ref().unwrap();
         let (via_id, long_track) = (rt.vias[0].id.clone(), rt.tracks.iter().find(|t| t.net == "GND").unwrap().id.clone());
@@ -2533,7 +2533,7 @@ mod tests {
         let group = out.split("\t(group ").nth(1).expect("a group block");
         assert!(group.starts_with("\"decoupling\" (uuid \""), "{group}");
         // U1, C1, the via, both segments of the two-segment track; the stale id names nothing.
-        assert_eq!(group.split("(members").nth(1).unwrap().matches('"').count() / 2, 5, "{group}");
+        assert_eq!(group.split("(members").nth(1).unwrap().matches('"').count() / 2, 5000, "{group}");
         assert!(out.rfind("\t(group ").unwrap() > out.rfind("\t(segment ").unwrap(), "groups come last, like KiCad's own writer");
 
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
@@ -2554,8 +2554,8 @@ mod tests {
         use eda_model::ir::{DrawingsSection, Group, Point};
         let (mut design, model) = fixture();
         let rt = design.routing.as_mut().unwrap();
-        rt.vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        rt.vias.push(Via { id: String::new(), net: "GND".into(), at: Point { x: 12_000, y: 12_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000_000, y: 8_000_000 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: String::new(), net: "GND".into(), at: Point { x: 12_000_000, y: 12_000_000 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         design.assign_missing_ids();
         let rt = design.routing.as_ref().unwrap();
         let (track_id, via_a, via_b) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.vias[1].id.clone());
@@ -2575,7 +2575,7 @@ mod tests {
         assert_eq!(out.matches("\t(group ").count(), 4, "outer, middle, inner and the holder; the ghost is not written:\n{out}");
         let block = |name: &str| out.split("\t(group ").skip(1).find(|g| g.starts_with(&format!("\"{name}\""))).unwrap_or_else(|| panic!("no group {name}")).to_string();
         let uuids_in = |block: &str| block.split("(members").nth(1).unwrap().matches('"').count() / 2;
-        assert_eq!(uuids_in(&block("outer")), 2, "U1 and the middle group: {}", block("outer"));
+        assert_eq!(uuids_in(&block("outer")), 2000, "U1 and the middle group: {}", block("outer"));
         assert_eq!(uuids_in(&block("holder")), 1, "the via alone: {}", block("holder"));
 
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
@@ -2599,7 +2599,7 @@ mod tests {
             id: "td1".into(),
             net: "VIN".into(),
             layer: "F.Cu".into(),
-            outline: vec![eda_model::ir::Point { x: 4_000, y: 4_000 }, eda_model::ir::Point { x: 5_000, y: 4_300 }, eda_model::ir::Point { x: 5_000, y: 5_300 }],
+            outline: vec![eda_model::ir::Point { x: 4_000_000, y: 4_000_000 }, eda_model::ir::Point { x: 5_000_000, y: 4_300_000 }, eda_model::ir::Point { x: 5_000_000, y: 5_300_000 }],
             teardrop: true,
             ..Default::default()
         }];
@@ -2622,13 +2622,13 @@ mod tests {
         let rule_area = |id: &str, parent: Option<&str>, at: Nm| Zone {
             id: id.into(),
             layer: "F.Cu".into(),
-            outline: square(at, at, 2_000),
+            outline: square(at, at, 2_000_000),
             is_rule_area: true,
             keepout_pads: true,
             parent_footprint: parent.map(String::from),
             ..Default::default()
         };
-        design.routing.as_mut().unwrap().zones = vec![rule_area("own", Some("U1"), 4_000), rule_area("free", None, 12_000)];
+        design.routing.as_mut().unwrap().zones = vec![rule_area("own", Some("U1"), 4_000_000), rule_area("free", None, 12_000_000)];
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(out.matches("\t(zone").count(), 2, "both zones are written once");
         // Footprints come first (C1, then U1, which owns the zone at 4,4), then the tracks, then board-level zones.
@@ -2646,7 +2646,7 @@ mod tests {
     #[test]
     fn a_board_with_stated_constraints_writes_them_exactly_and_one_without_keeps_its_lowered_floors() {
         let (_, mut model) = fixture();
-        model.board.net_classes.push(eda_model::NetClass { name: "escape".into(), nets: vec!["VIN".into()], track_width: Some(150), clearance: Some(150), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        model.board.net_classes.push(eda_model::NetClass { name: "escape".into(), nets: vec!["VIN".into()], track_width: Some(150_000), clearance: Some(150_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         // An intent states no minimums: the floors follow the narrowest class, so the escape routing is not a violation of rules nobody wrote.
         let legacy: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).unwrap();
         let rules = &legacy["board"]["design_settings"]["rules"];
@@ -2655,12 +2655,12 @@ mod tests {
 
         // Stated minimums (Board Setup's Constraints, or the project the board came from) are written as they are.
         model.board.constraints_explicit = true;
-        model.board.track_width_min_nm = 250;
-        model.board.min_clearance_nm = 300;
-        model.board.copper_edge_clearance_nm = Some(350);
-        model.board.annular_width_min_nm = 130;
-        model.board.min_silk_text_height_nm = 1_000;
-        model.board.solder_mask.to_copper_clearance_nm = 40;
+        model.board.track_width_min_nm = 250_000;
+        model.board.min_clearance_nm = 300_000;
+        model.board.copper_edge_clearance_nm = Some(350_000);
+        model.board.annular_width_min_nm = 130_000;
+        model.board.min_silk_text_height_nm = 1_000_000;
+        model.board.solder_mask.to_copper_clearance_nm = 40_000;
         let exact: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).unwrap();
         let rules = &exact["board"]["design_settings"]["rules"];
         assert_eq!(rules["min_track_width"], 0.25, "the stated floor, not the narrowest class");
@@ -2670,22 +2670,22 @@ mod tests {
         assert_eq!(rules["min_text_height"], 1.0);
         assert_eq!(rules["solder_mask_to_copper_clearance"], 0.04);
         assert_eq!(rules["max_error"], 0.005);
-        assert_eq!(rules["min_resolved_spokes"], 2);
+        assert_eq!(rules["min_resolved_spokes"], 2000);
         assert_eq!(exact["board"]["design_settings"]["defaults"]["silk_text_size_h"], 1.0, "the Text & Graphics grid rides along");
 
         // And the importer reads every one back from that project.
         let mut back = ConstraintModel::default();
         crate::merge_project_design_rules(&mut back, &export_kicad_pro(&model));
         assert!(back.board.constraints_explicit);
-        assert_eq!((back.board.track_width_min_nm, back.board.min_clearance_nm, back.board.copper_edge_clearance_nm, back.board.annular_width_min_nm), (250, 300, Some(350), 130));
-        assert_eq!((back.board.max_error_nm, back.board.min_resolved_spokes, back.board.min_silk_text_height_nm), (5, 2, 1_000));
+        assert_eq!((back.board.track_width_min_nm, back.board.min_clearance_nm, back.board.copper_edge_clearance_nm, back.board.annular_width_min_nm), (250_000, 300_000, Some(350_000), 130_000));
+        assert_eq!((back.board.max_error_nm, back.board.min_resolved_spokes, back.board.min_silk_text_height_nm), (5000, 2000, 1_000_000));
     }
 
     #[test]
     fn solder_mask_paste_the_stackup_and_the_board_thickness_are_written_and_read_back() {
         let (design, mut model) = fixture();
-        model.board.solder_mask = eda_model::SolderMaskRules { expansion_nm: 50, min_width_nm: 120, to_copper_clearance_nm: 0, allow_bridges_in_footprints: true, tent_vias_front: false, tent_vias_back: true, paste_margin_nm: -40, paste_margin_ratio: -0.05 };
-        let stackup = eda_model::rules::default_stackup(4, 1_600);
+        model.board.solder_mask = eda_model::SolderMaskRules { expansion_nm: 50_000, min_width_nm: 120_000, to_copper_clearance_nm: 0, allow_bridges_in_footprints: true, tent_vias_front: false, tent_vias_back: true, paste_margin_nm: -40_000, paste_margin_ratio: -0.05 };
+        let stackup = eda_model::rules::default_stackup(4000, 1_600_000);
         model.board.board_thickness_nm = eda_model::rules::stackup_thickness_nm(&stackup);
         model.stackup = Some(stackup.clone());
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -2721,7 +2721,7 @@ mod tests {
     #[test]
     fn the_colours_of_the_stackup_are_written_and_read_back() {
         let (design, mut model) = fixture();
-        let mut stackup = eda_model::rules::default_stackup(2, 1_600);
+        let mut stackup = eda_model::rules::default_stackup(2000, 1_600_000);
         for (name, color) in [("F.Mask", "Red"), ("F.SilkS", "#FFEE00"), ("dielectric 1", "FR4 natural"), ("F.Cu", "Green"), ("F.Paste", "Silver"), ("B.Mask", "Not specified")] {
             stackup.layers.iter_mut().find(|l| l.name == name).unwrap().color = Some(color.into());
         }
@@ -2750,13 +2750,13 @@ mod tests {
     #[test]
     fn a_net_class_writes_its_microvia_and_pair_sizes_and_they_read_back() {
         let (design, mut model) = fixture();
-        model.board.net_classes.push(eda_model::NetClass { name: "usb".into(), nets: vec!["VIN".into()], track_width: Some(200), clearance: Some(200), via_diameter: None, via_drill: None, microvia_diameter: Some(250), microvia_drill: Some(110), diff_pair_width: Some(120), diff_pair_gap: Some(150), diff_pair_via_gap: None, priority: 0 });
+        model.board.net_classes.push(eda_model::NetClass { name: "usb".into(), nets: vec!["VIN".into()], track_width: Some(200_000), clearance: Some(200_000), via_diameter: None, via_drill: None, microvia_diameter: Some(250_000), microvia_drill: Some(110_000), diff_pair_width: Some(120_000), diff_pair_gap: Some(150_000), diff_pair_via_gap: None, priority: 0 });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(uvia_dia 0.25)") && out.contains("(uvia_drill 0.11)") && out.contains("(diff_pair_width 0.12)") && out.contains("(diff_pair_gap 0.15)"), "{out}");
         assert_eq!(out.matches("(uvia_dia 0.3)").count(), 1, "the Default class keeps KiCad's own microvia");
         let (_, back, _) = crate::import_kicad_pcb(&out).unwrap();
         let usb = back.board.net_classes.iter().find(|c| c.name == "usb").expect("the class comes back");
-        assert_eq!((usb.microvia_diameter, usb.microvia_drill, usb.diff_pair_width, usb.diff_pair_gap), (Some(250), Some(110), Some(120), Some(150)));
+        assert_eq!((usb.microvia_diameter, usb.microvia_drill, usb.diff_pair_width, usb.diff_pair_gap), (Some(250_000), Some(110_000), Some(120_000), Some(150_000)));
     }
 
     #[test]
@@ -2765,8 +2765,8 @@ mod tests {
         // the net check exists to catch, so it must not fail the export of the whole board.
         let (mut design, model) = fixture();
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: String::new(), net: String::new(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![eda_model::ir::Point { x: 1_000, y: 1_000 }, eda_model::ir::Point { x: 2_000, y: 1_000 }], arc_mid_offset: None });
-        rt.zones = vec![Zone { id: "z0".into(), net: String::new(), layer: "F.Cu".into(), outline: square(10_000, 10_000, 3_000), ..Default::default() }];
+        rt.tracks.push(Track { id: String::new(), net: String::new(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![eda_model::ir::Point { x: 1_000_000, y: 1_000_000 }, eda_model::ir::Point { x: 2_000_000, y: 1_000_000 }], arc_mid_offset: None });
+        rt.zones = vec![Zone { id: "z0".into(), net: String::new(), layer: "F.Cu".into(), outline: square(10_000_000, 10_000_000, 3_000_000), ..Default::default() }];
         let out = export_kicad_pcb(&design, &model, &meta()).expect("netless copper exports");
         assert!(out.contains("(width 0.2) (layer \"F.Cu\") (net 0)"), "{out}");
         assert!(!first_zone(&out).contains("(net "), "{}", first_zone(&out));
@@ -2822,7 +2822,7 @@ mod tests {
         model.parts.push(part("U2", "SOT-23", vec![pin("1", PinKind::Signal), pin("2", PinKind::Signal), pin("3", PinKind::Signal)]));
         design.placement.as_mut().unwrap().footprints.push(FootprintInstance {
             id: "U2".into(),
-            at: Point { x: 15_000, y: 5_000 },
+            at: Point { x: 15_000_000, y: 5_000_000 },
             rot: 90_000,
             side: Side::Bottom,
             label: Default::default(),
@@ -2845,7 +2845,7 @@ mod tests {
             }
         }
         // U1 top SOT-23, C1 bottom 0603, U2 bottom SOT-23.
-        assert_eq!(checked, 8);
+        assert_eq!(checked, 8000);
     }
 
     #[test]
@@ -2865,7 +2865,7 @@ mod tests {
             }
         }
         // Reference and value of U1 (top) and C1 (bottom).
-        assert_eq!(properties, 4);
+        assert_eq!(properties, 4000);
     }
 
     /// What kicad-cli draws a footprint's 3D model at is the footprint's `(model ...)` placement, and KiCad turns a flipped footprint's model with
@@ -2943,7 +2943,7 @@ mod tests {
         let (mut design, model) = fixture();
         let content = "Actionneur\nPiezo \"New\" Amp\\V02\r\nline 3";
         design.drawings = Some(eda_model::ir::DrawingsSection {
-            texts: vec![Text { id: "t1".into(), content: content.into(), at: Point { x: 1000, y: 2000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            texts: vec![Text { id: "t1".into(), content: content.into(), at: Point { x: 1_000_000, y: 2_000_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: TextJustify::Center, mirror: false }],
             ..Default::default()
         });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -2986,19 +2986,19 @@ mod tests {
         let extra = |content: &str| dr.text_extra(&by_text(content).id).cloned();
         // The square, centred, regular text with a stroke width is the model's own default and keeps no extras.
         assert_eq!(extra("plain"), None);
-        assert_eq!((by_text("plain").size_nm, by_text("plain").stroke_width), (1000, 150));
+        assert_eq!((by_text("plain").size_nm, by_text("plain").stroke_width), (1_000_000, 150_000));
 
         let labels = extra("High_current netclass:").expect("bold, bottom");
         assert!(labels.bold && !labels.italic && labels.valign == eda_model::ir::TextVAlign::Bottom && labels.width_nm.is_none() && !labels.auto_thickness, "{labels:?}");
-        assert_eq!((by_text("High_current netclass:").justify, by_text("High_current netclass:").stroke_width), (TextJustify::Left, 40));
+        assert_eq!((by_text("High_current netclass:").justify, by_text("High_current netclass:").stroke_width), (TextJustify::Left, 40_000));
 
         let wide = extra("Actionneur").expect("italic, narrow");
-        assert_eq!((wide.width_nm, wide.italic, wide.knockout, wide.line_spacing_permille, wide.face.as_deref(), wide.valign), (Some(1524), true, true, 1500, Some("Arial"), eda_model::ir::TextVAlign::Top));
-        assert_eq!((by_text("Actionneur").size_nm, by_text("Actionneur").stroke_width, by_text("Actionneur").justify, by_text("Actionneur").mirror), (2032, 305, TextJustify::Right, true));
+        assert_eq!((wide.width_nm, wide.italic, wide.knockout, wide.line_spacing_permille, wide.face.as_deref(), wide.valign), (Some(1_524_000), true, true, 1_500_000, Some("Arial"), eda_model::ir::TextVAlign::Top));
+        assert_eq!((by_text("Actionneur").size_nm, by_text("Actionneur").stroke_width, by_text("Actionneur").justify, by_text("Actionneur").mirror), (2_032_000, 305_000, TextJustify::Right, true));
 
         // No thickness in the file: KiCad's automatic stroke width (an eighth of the glyph width), and none is written back.
         let auto = extra("auto").expect("auto thickness");
-        assert_eq!((auto.auto_thickness, auto.width_nm, by_text("auto").size_nm, by_text("auto").stroke_width), (true, Some(1600), 1200, 200));
+        assert_eq!((auto.auto_thickness, auto.width_nm, by_text("auto").size_nm, by_text("auto").stroke_width), (true, Some(1_600_000), 1_200_000, 200_000));
 
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let block = |content: &str| -> String {
@@ -3114,13 +3114,13 @@ mod tests {
         };
         let (design, model, notes) = crate::import_kicad_pcb(&outline(["0.2032"; 4])).unwrap();
         assert_eq!(notes.outline_source, "lines");
-        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(203));
+        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(203_000));
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let lines: Vec<&str> = out.lines().filter(|l| l.contains("\"Edge.Cuts\")") && l.contains("(gr_line")).collect();
         assert_eq!(lines.len(), 4, "{out}");
         assert!(lines.iter().all(|l| l.contains("(stroke (width 0.203) (type default))")), "{lines:?}");
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
-        assert_eq!(back.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(203));
+        assert_eq!(back.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(203_000));
 
         // An outline made here says no width, and is written as it always was.
         let (made, made_model) = fixture();
@@ -3218,11 +3218,11 @@ mod tests {
         assert_eq!(dr.board_items.text_boxes.len(), 2);
         assert!(dr.board_items.text_boxes.iter().all(|t| t.id.starts_with("tbx_")), "ids of ours");
         let rev = dr.board_items.text_boxes.iter().find(|t| t.text.starts_with("Rev A")).unwrap();
-        assert_eq!((rev.start, rev.end, rev.layer.as_str()), (Point { x: 20_000, y: 20_000 }, Point { x: 40_000, y: 30_000 }, "F.SilkS"));
-        assert_eq!((rev.margin_left_nm, rev.margin_top_nm, rev.margin_right_nm, rev.margin_bottom_nm), (1_000, 1_500, 2_000, 2_500));
-        assert_eq!((rev.size_nm, rev.width_nm, rev.bold, rev.knockout, rev.border), (1_000, Some(1_200), true, true, true));
+        assert_eq!((rev.start, rev.end, rev.layer.as_str()), (Point { x: 20_000_000, y: 20_000_000 }, Point { x: 40_000_000, y: 30_000_000 }, "F.SilkS"));
+        assert_eq!((rev.margin_left_nm, rev.margin_top_nm, rev.margin_right_nm, rev.margin_bottom_nm), (1_000_000, 1_500_000, 2_000_000, 2_500_000));
+        assert_eq!((rev.size_nm, rev.width_nm, rev.bold, rev.knockout, rev.border), (1_000_000, Some(1_200_000), true, true, true));
         let turned = dr.board_items.text_boxes.iter().find(|t| t.text == "turned").unwrap();
-        assert_eq!((turned.pts.len(), turned.angle, turned.border, turned.mirror), (4, 45_000, false, true));
+        assert_eq!((turned.pts.len(), turned.angle, turned.border, turned.mirror), (4000, 45_000, false, true));
         assert!(dr.locked_ids.contains(&turned.id), "a locked text box comes back locked");
         assert_eq!(dr.groups.len(), 1, "a group holds the first text box and the line");
         assert!(dr.groups[0].member_ids.contains(&rev.id));
@@ -3263,14 +3263,14 @@ mod tests {
         assert_eq!(dr.barcodes.len(), 3);
         assert!(dr.barcodes.iter().all(|b| b.id.starts_with("bar_")), "{:?}", dr.barcodes.iter().map(|b| &b.id).collect::<Vec<_>>());
         let qr = dr.barcodes.iter().find(|b| b.text == "acode").unwrap();
-        assert_eq!((qr.at, qr.angle, qr.layer.as_str(), qr.width_nm, qr.height_nm, qr.text_height_nm), (Point { x: 258_500, y: 141_500 }, 90_000, "F.Cu", 42_000, 44_000, 3_000));
+        assert_eq!((qr.at, qr.angle, qr.layer.as_str(), qr.width_nm, qr.height_nm, qr.text_height_nm), (Point { x: 258_500_000, y: 141_500_000 }, 90_000, "F.Cu", 42_000_000, 44_000_000, 3_000_000));
         assert_eq!((qr.kind, qr.ecc, qr.show_text, qr.knockout), (eda_model::barcode::BarcodeKind::Qr, eda_model::barcode::EccLevel::M, true, false));
         let dm = dr.barcodes.iter().find(|b| b.text == "differentcode").unwrap();
-        assert_eq!((dm.kind, dm.show_text, dm.knockout, dm.margin_x_nm, dm.margin_y_nm), (eda_model::barcode::BarcodeKind::DataMatrix, false, true, 1_000, 2_000));
+        assert_eq!((dm.kind, dm.show_text, dm.knockout, dm.margin_x_nm, dm.margin_y_nm), (eda_model::barcode::BarcodeKind::DataMatrix, false, true, 1_000_000, 2_000_000));
         assert!(dr.locked_ids.contains(&dm.id), "a locked barcode comes back locked");
         // What the file left out is PCB_BARCODE's own: 40 mm square, the text printed.
         let plain = dr.barcodes.iter().find(|b| b.text == "123").unwrap();
-        assert_eq!((plain.width_nm, plain.height_nm, plain.show_text, plain.kind), (40_000, 40_000, true, eda_model::barcode::BarcodeKind::Code128));
+        assert_eq!((plain.width_nm, plain.height_nm, plain.show_text, plain.kind), (40_000_000, 40_000_000, true, eda_model::barcode::BarcodeKind::Code128));
 
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let line = |text: &str| out.lines().find(|l| l.contains("(barcode") && l.contains(&format!("(text \"{text}\")"))).unwrap_or_else(|| panic!("{text} in {out}")).trim().to_string();
@@ -3459,9 +3459,9 @@ mod tests {
         let line = |net: usize| out.lines().find(|l| l.contains("(via") && l.contains(&format!("(net {net}) "))).unwrap_or_else(|| panic!("via on net {net} in {out}")).trim().to_string();
         let blind = line(1);
         assert!(blind.starts_with("(via blind (at 10 10) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"In2.Cu\") (remove_unused_layers yes) (keep_end_layers yes) (free yes) (zone_layer_connections \"F.Cu\" \"In1.Cu\") (tenting (front no) (back no)) (capping yes) (covering (front no) (back yes)) (net "), "{blind}");
-        let micro = line(2);
+        let micro = line(2000);
         assert!(micro.starts_with("(via micro (at 20 10) (size 0.3) (drill 0.1) (layers \"F.Cu\" \"In1.Cu\") (padstack (mode front_inner_back) (layer \"Inner\" (size 0.35)) (layer \"B.Cu\" (size 0.4))) (teardrops (best_length_ratio 0.5) (max_length 1) (curved_edges no)) (net "), "{micro}");
-        let plain = line(3);
+        let plain = line(3000);
         assert!(plain.starts_with("(via (at 30 10) (size 0.8) (drill 0.4) (layers \"F.Cu\" \"B.Cu\") (net "), "{plain}");
         // Read again, the same.
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
@@ -3572,7 +3572,7 @@ mod tests {
             assert!(out.contains(want), "{want} in {out}");
         }
         assert!(!out.contains("(path "), "{out}");
-        assert!(out.trim_end().ends_with("(target x (at 40 40) (size 5) (width 0.15) (layer \"Edge.Cuts\") (tstamp 1234))\n)"), "the unread items close the board: {}", &out[out.len().saturating_sub(300)..]);
+        assert!(out.trim_end().ends_with("(target x (at 40 40) (size 5) (width 0.15) (layer \"Edge.Cuts\") (tstamp 1234))\n)"), "the unread items close the board: {}", &out[out.len().saturating_sub(300_000)..]);
         // Read again, the same.
         let (back, _, back_notes) = crate::import_kicad_pcb(&out).unwrap();
         assert_eq!(back_notes.unread_items.keys().map(String::as_str).collect::<Vec<_>>(), ["target"]);

@@ -27,8 +27,8 @@ export function layerPairsOf(board: BoardState | null, stored: LayerPairSettings
 export function netClassDiffPair(board: BoardState | null): CustomDiffPair {
   const classes = board?.board_rules?.net_classes ?? [];
   const cls = classes.find((c) => c.name === "Default") ?? classes.find((c) => c.nets.includes("*"));
-  const gapUm = cls?.diff_pair_gap ?? 180;
-  return { widthUm: cls?.diff_pair_width ?? 125, gapUm, viaGapUm: cls?.diff_pair_via_gap ?? gapUm, viaGapSameAsTrackGap: cls?.diff_pair_via_gap == null };
+  const gapNm = cls?.diff_pair_gap ?? 180_000;
+  return { widthNm: cls?.diff_pair_width ?? 125_000, gapNm, viaGapNm: cls?.diff_pair_via_gap ?? gapNm, viaGapSameAsTrackGap: cls?.diff_pair_via_gap == null };
 }
 
 export function registerPcbRouterSweep(m: Map<string, () => void>, ctx: SweepCtx): void {
@@ -84,16 +84,16 @@ export function registerPcbRouterSweep(m: Map<string, () => void>, ctx: SweepCtx
     pcbOnly(() => {
       const draw = state.drawState;
       const base = state.pcbx.customDiffPair ?? netClassDiffPair(board);
-      const value: CustomDiffPair = draw?.kind === "diffpair" && !state.pcbx.customDiffPair ? { ...base, widthUm: draw.width } : base;
+      const value: CustomDiffPair = draw?.kind === "diffpair" && !state.pcbx.customDiffPair ? { ...base, widthNm: draw.width } : base;
       openSweepDialog({
         kind: "element",
         element: createElement(DiffPairDimensionsDialog, {
           value,
           onOk: (v: CustomDiffPair) => {
             dispatch({ type: "PCBX", patch: { customDiffPair: v } });
-            const cur = state.cursorUm;
+            const cur = state.cursorNm;
             if (draw?.kind === "diffpair") {
-              void dpSetDims(v.widthUm, v.gapUm, v.viaGapSameAsTrackGap ? v.gapUm : v.viaGapUm).then(() => cur && dpMove(cur.x, cur.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(draw, preview) })));
+              void dpSetDims(v.widthNm, v.gapNm, v.viaGapSameAsTrackGap ? v.gapNm : v.viaGapNm).then(() => cur && dpMove(cur.x, cur.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(draw, preview) })));
             }
           },
         }),

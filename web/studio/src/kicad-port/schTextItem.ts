@@ -7,10 +7,10 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { SchematicText } from "../api/types";
 import type { Box } from "./schItemGeom";
-import { defaultPenUm, type HAlign, type VAlign } from "./schText";
+import { defaultPenNm, type HAlign, type VAlign } from "./schText";
 
 /** How wide a line of text is, micrometres. */
-export type Measure = (text: string, sizeUm: number) => number;
+export type Measure = (text: string, sizeNm: number) => number;
 
 /** How a text lies on its anchor. */
 export interface TextLie {
@@ -34,8 +34,8 @@ export function textLie(t: Pick<SchematicText, "angle" | "h" | "v" | "vertical">
 }
 
 /** `STROKE_FONT::GetInterline`: the glyph height times `METRICS::m_InterlinePitch` (1.68) and the legacy factor (0.9583), rounded. */
-export function interlineUm(sizeUm: number): number {
-  return Math.round(sizeUm * 1.68 * 0.9583);
+export function interlineNm(sizeNm: number): number {
+  return Math.round(sizeNm * 1.68 * 0.9583);
 }
 
 /** One line of a text: its string and where its baseline starts, in the text's own axes (x along the text, y down) from the anchor, micrometres. */
@@ -49,12 +49,12 @@ export interface TextLine {
  * Where each line of the text starts (`FONT::getLinePositions`): the first line's top is `size * 1.17` high with `interline` more for every line after it; the block is
  * shifted up by its whole height for a bottom justification and by half of it for a centre one; each line is justified on its own against the anchor.
  */
-export function schTextLines(t: Pick<SchematicText, "content" | "shown" | "size_um" | "angle" | "h" | "v" | "vertical">, measure: Measure): TextLine[] {
+export function schTextLines(t: Pick<SchematicText, "content" | "shown" | "size_nm" | "angle" | "h" | "v" | "vertical">, measure: Measure): TextLine[] {
   const lie = textLie(t);
-  const size = t.size_um;
-  const pen = defaultPenUm(size);
+  const size = t.size_nm;
+  const pen = defaultPenNm(size);
   const strings = (t.shown ?? t.content).split("\n"); // what `${NAME}` stands for, when the backend says (`shown`)
-  const interline = interlineUm(size);
+  const interline = interlineNm(size);
   const height = Math.trunc(size * 1.17) + (strings.length - 1) * interline;
   // the offsets are whole internal units, as the C++ ints are
   const offX = Math.trunc(pen / 1.52);
@@ -72,16 +72,16 @@ export function schTextLines(t: Pick<SchematicText, "content" | "shown" | "size_
  * The box the text takes on the sheet (`EDA_TEXT::GetTextBox`): the longest line and the pen's reach, `fudge` taller than the ink, the lines `interline` apart, justified
  * against the anchor; a text that runs up the sheet is turned a quarter counter-clockwise about it.
  */
-export function schTextBox(t: Pick<SchematicText, "content" | "shown" | "size_um" | "angle" | "h" | "v" | "vertical" | "at">, measure: Measure): Box {
+export function schTextBox(t: Pick<SchematicText, "content" | "shown" | "size_nm" | "angle" | "h" | "v" | "vertical" | "at">, measure: Measure): Box {
   const lie = textLie(t);
-  const size = t.size_um;
-  const pen = defaultPenUm(size);
+  const size = t.size_nm;
+  const pen = defaultPenNm(size);
   const k = Math.round(pen * 1.5);
   const lines = (t.shown ?? t.content).split("\n");
   const w = Math.max(...lines.map((l) => measure(l, size)), size * 0.5) + 2 * k;
   const ext = size + 2 * k;
   const fudge = Math.round(ext * 0.17);
-  const h = ext + fudge + (lines.length - 1) * interlineUm(size);
+  const h = ext + fudge + (lines.length - 1) * interlineNm(size);
   const x0 = lie.h === "left" ? 0 : lie.h === "center" ? -Math.trunc(w / 2) : -w;
   const y0 = lie.v === "top" ? -fudge : lie.v === "center" ? -Math.trunc(h / 2) : -h + fudge;
   const place = ([x, y]: [number, number]): [number, number] => (lie.vertical ? [t.at[0] + y, t.at[1] - x] : [t.at[0] + x, t.at[1] + y]);

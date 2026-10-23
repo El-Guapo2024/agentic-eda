@@ -220,7 +220,7 @@
       // ${NAME} in a board text, a footprint's field, the title block and a schematic text.
       step("adding a board text with variables");
       const part = st.parts.find((q) => q.placed);
-      const text = { id: "", content: "Rev ${P9A_REV} by ${Designer name} on ${LAYER} \\${P9A_REV}", at: { x: 9000, y: 28000 }, angle: 0, layer: "F.SilkS", size_um: 1000, stroke_width: 150, justify: "left", mirror: false };
+      const text = { id: "", content: "Rev ${P9A_REV} by ${Designer name} on ${LAYER} \\${P9A_REV}", at: { x: 9000, y: 28000 }, angle: 0, layer: "F.SilkS", size_nm: 1000, stroke_width: 150, justify: "left", mirror: false };
       check("a board text is added", (await edit({ op: "add_text", text })).ok);
       step("adding a plain board text");
       check("a plain board text is added", (await edit({ op: "add_text", text: { ...text, content: "plain P9A text", at: { x: 9000, y: 31000 } } })).ok);
@@ -239,7 +239,7 @@
       check("the title block is edited as stored and drawn expanded", st.title_block?.title === "Board ${P9A_REV}" && st.title_block?.shown?.title === "Board B7", JSON.stringify(st.title_block));
       check("a text with no variable is sent as it was", !("shown" in (st.drawings.texts.find((x) => x.content === "plain P9A text") ?? { shown: 1 })), "");
       step("adding a schematic text with variables");
-      const added = await edit({ op: "add_sch_text", content: "Sheet ${#}/${##} ${SHEETPATH} ${P9A_REV} ${CURRENT_DATE}", at: { x: 15000, y: 30000 }, angle_millideg: 0, size_um: 1270 }, "schematic");
+      const added = await edit({ op: "add_sch_text", content: "Sheet ${#}/${##} ${SHEETPATH} ${P9A_REV} ${CURRENT_DATE}", at: { x: 15000, y: 30000 }, angle_millideg: 0, size_nm: 1270 }, "schematic");
       await sleep(900);
       const sch = await schematic();
       const st1 = (sch.texts ?? []).find((x) => x.content.startsWith("Sheet ${#}"));
@@ -349,7 +349,7 @@
       check("the Appearance panel lists the user layer by its name, and the renamed silkscreen", apRow("User_1")?.querySelector(".ap-name")?.textContent === "Notes" && apRow("f_silks")?.querySelector(".ap-name")?.textContent === "Top art", `${apRow("User_1")?.textContent} ${apRow("f_silks")?.textContent}`);
 
       step("an item on the user layer");
-      const note = { id: "", content: "On ${LAYER}", at: { x: 9000, y: 33000 }, angle: 0, layer: "User.1", size_um: 1000, stroke_width: 150, justify: "left", mirror: false };
+      const note = { id: "", content: "On ${LAYER}", at: { x: 9000, y: 33000 }, angle: 0, layer: "User.1", size_nm: 1000, stroke_width: 150, justify: "left", mirror: false };
       check("a text is added on the user layer", (await edit({ op: "add_text", text: note })).ok);
       await sleep(900);
       st = await state();
@@ -438,7 +438,7 @@
       const savedHatch = await apply(p);
       if (savedHatch === "Saved.") steps.push("pcb");
       rules = await stored();
-      check("Zone Hatch Offsets: Apply stores the layer that has an offset, in micrometres", savedHatch === "Saved." && JSON.stringify(rules.zone_hatch_offsets) === JSON.stringify({ "F.Cu": { x_um: 1500, y_um: -2000 } }), JSON.stringify(rules.zone_hatch_offsets));
+      check("Zone Hatch Offsets: Apply stores the layer that has an offset, in micrometres", savedHatch === "Saved." && JSON.stringify(rules.zone_hatch_offsets) === JSON.stringify({ "F.Cu": { x_nm: 1500, y_nm: -2000 } }), JSON.stringify(rules.zone_hatch_offsets));
 
       step("opening Length-tuning Patterns");
       p = await openPage("Length-tuning Patterns");
@@ -446,7 +446,7 @@
       const single = "Single Track";
       const pair = "Differential Pair";
       const patternsBefore = JSON.stringify((await stored()).tuning_patterns);
-      check("Length-tuning Patterns: three groups that start as KiCad's meander settings", field(single, "Maximum amplitude")?.value && JSON.parse(patternsBefore).single_track.max_amplitude_um === 1000 && JSON.parse(patternsBefore).diff_pair.spacing_um === 1000 && JSON.parse(patternsBefore).diff_pair_skew.spacing_um === 600, patternsBefore);
+      check("Length-tuning Patterns: three groups that start as KiCad's meander settings", field(single, "Maximum amplitude")?.value && JSON.parse(patternsBefore).single_track.max_amplitude_nm === 1000 && JSON.parse(patternsBefore).diff_pair.spacing_nm === 1000 && JSON.parse(patternsBefore).diff_pair_skew.spacing_nm === 600, patternsBefore);
       step("a minimum amplitude above the maximum");
       await setText(field(single, "Minimum amplitude"), "2mm");
       const refusedPatterns = await apply(p);
@@ -459,7 +459,7 @@
       const savedPatterns = await apply(p);
       if (savedPatterns === "Saved.") steps.push("pcb");
       rules = await stored();
-      check("Length-tuning Patterns: Apply stores the groups", savedPatterns === "Saved." && rules.tuning_patterns.single_track.max_amplitude_um === 1500 && rules.tuning_patterns.single_track.min_amplitude_um === 300 && rules.tuning_patterns.single_track.corner_style === "chamfer" && rules.tuning_patterns.diff_pair.spacing_um === 1200 && rules.tuning_patterns.diff_pair_skew.spacing_um === 600, JSON.stringify(rules.tuning_patterns));
+      check("Length-tuning Patterns: Apply stores the groups", savedPatterns === "Saved." && rules.tuning_patterns.single_track.max_amplitude_nm === 1500 && rules.tuning_patterns.single_track.min_amplitude_nm === 300 && rules.tuning_patterns.single_track.corner_style === "chamfer" && rules.tuning_patterns.diff_pair.spacing_nm === 1200 && rules.tuning_patterns.diff_pair_skew.spacing_nm === 600, JSON.stringify(rules.tuning_patterns));
       await closeDialog();
 
       step("the length tuner");
@@ -521,7 +521,7 @@
       if (savedProfiles === "Saved.") steps.push("pcb");
       rules = await stored();
       const prof = rules.tuning_profiles.profiles[0];
-      check("Tuning Profiles: Apply stores the profile, its rows, its via override and the class's name for a profile", savedProfiles === "Saved." && prof?.name === "USB 90" && prof.profile_type === "differential" && prof.target_impedance === 90 && prof.enable_time_domain_tuning === true && prof.via_propagation_delay_as === 25000000 && prof.layer_entries.length === 2 && prof.layer_entries[0].width_um === 130 && prof.layer_entries[0].diff_pair_gap_um === 150 && prof.layer_entries[0].delay_as_per_mm === 6100000 && prof.via_overrides.length === 1 && rules.tuning_profiles.class_profiles.Default === "Gone" && rules.overlay.includes("tuning_profiles"), JSON.stringify(rules.tuning_profiles).slice(0, 400));
+      check("Tuning Profiles: Apply stores the profile, its rows, its via override and the class's name for a profile", savedProfiles === "Saved." && prof?.name === "USB 90" && prof.profile_type === "differential" && prof.target_impedance === 90 && prof.enable_time_domain_tuning === true && prof.via_propagation_delay_as === 25000000 && prof.layer_entries.length === 2 && prof.layer_entries[0].width_nm === 130 && prof.layer_entries[0].diff_pair_gap_nm === 150 && prof.layer_entries[0].delay_as_per_mm === 6100000 && prof.via_overrides.length === 1 && rules.tuning_profiles.class_profiles.Default === "Gone" && rules.overlay.includes("tuning_profiles"), JSON.stringify(rules.tuning_profiles).slice(0, 400));
       await setText(p.querySelector('input[aria-label="Tuning profile of Default"]'), "USB 90");
       check("naming a profile the page has clears the mark", !p.querySelector('input[aria-label="Tuning profile of Default"]').classList.contains("bs-invalid"), "");
       const savedAgain = await apply(p);
@@ -603,10 +603,10 @@
         return lastShape();
       };
       const tg = JSON.parse(JSON.stringify((await state()).board_rules.text_graphics));
-      tg.silk.line_width_um = 180; tg.silk.text_width_um = 1200; tg.silk.text_height_um = 1200; tg.silk.text_thickness_um = 200;
-      tg.copper.line_width_um = 250;
-      tg.fab.line_width_um = 90; tg.fab.text_width_um = 800; tg.fab.text_height_um = 800; tg.fab.text_thickness_um = 120;
-      tg.others.line_width_um = 130;
+      tg.silk.line_width_nm = 180; tg.silk.text_width_nm = 1200; tg.silk.text_height_nm = 1200; tg.silk.text_thickness_nm = 200;
+      tg.copper.line_width_nm = 250;
+      tg.fab.line_width_nm = 90; tg.fab.text_width_nm = 800; tg.fab.text_height_nm = 800; tg.fab.text_thickness_nm = 120;
+      tg.others.line_width_nm = 130;
       step("setting the defaults");
       check("the defaults are set for the silkscreen, copper, fab and other classes", (await edit({ op: "set_text_graphics_defaults", settings: tg })).ok);
       await sleep(900);
@@ -683,7 +683,7 @@
       const dims = (await state()).drawings?.dimensions ?? [];
       if (dims.length > dimsBefore) steps.push("pcb");
       const dim = dims.at(-1);
-      check("a dimension takes the class's text size and line thickness", dim?.layer === "F.SilkS" && dim.text_size_um === 1200 && dim.stroke_width === 180, JSON.stringify(dim && { layer: dim.layer, text: dim.text_size_um, line: dim.stroke_width }));
+      check("a dimension takes the class's text size and line thickness", dim?.layer === "F.SilkS" && dim.text_size_nm === 1200 && dim.stroke_width === 180, JSON.stringify(dim && { layer: dim.layer, text: dim.text_size_nm, line: dim.stroke_width }));
     });
   } catch (e) {
     check(`the run reached its end (stopped at: ${at})`, false, why(e));

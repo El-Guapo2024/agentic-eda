@@ -22,31 +22,31 @@ export type GridStyle = "dots" | "lines" | "small-cross";
  * through this array exactly as declared, so that jump is real, expected
  * behavior to reproduce, not a bug to "fix" by sorting.
  *
- * Values are µm (1 mil = 25.4 µm exactly); this app's board unit.
+ * Values are nm (1 mil = 25_400 nm exactly); this app's board unit.
  */
-export const DEFAULT_PCB_GRIDS_UM: readonly number[] = [
-  25400, // 1000 mil
-  12700, // 500 mil
-  6350, // 250 mil
-  5080, // 200 mil
-  2540, // 100 mil
-  1270, // 50 mil
-  635, // 25 mil
-  508, // 20 mil
-  254, // 10 mil
-  127, // 5 mil
-  50.8, // 2 mil
-  25.4, // 1 mil
-  5000, // 5.0 mm
-  2500, // 2.5 mm
-  1000, // 1.0 mm
-  500, // 0.5 mm
-  250, // 0.25 mm
-  200, // 0.2 mm
-  100, // 0.1 mm
-  50, // 0.05 mm
-  25, // 0.025 mm
-  10, // 0.01 mm
+export const DEFAULT_PCB_GRIDS_NM: readonly number[] = [
+  25_400_000, // 1000 mil
+  12_700_000, // 500 mil
+  6_350_000, // 250 mil
+  5_080_000, // 200 mil
+  2_540_000, // 100 mil
+  1_270_000, // 50 mil
+  635_000, // 25 mil
+  508_000, // 20 mil
+  254_000, // 10 mil
+  127_000, // 5 mil
+  50_800, // 2 mil
+  25_400, // 1 mil
+  5_000_000, // 5.0 mm
+  2_500_000, // 2.5 mm
+  1_000_000, // 1.0 mm
+  500_000, // 0.5 mm
+  250_000, // 0.25 mm
+  200_000, // 0.2 mm
+  100_000, // 0.1 mm
+  50_000, // 0.05 mm
+  25_000, // 0.025 mm
+  10_000, // 0.01 mm
 ];
 
 /** GAL_DISPLAY_OPTIONS's own ctor default (gal_display_options.cpp) -- what KiCad actually ships with (GAL's own raw fallback of GRID_STYLE::LINES is overwritten by this before the first paint, via the settings-changed observer). */
@@ -64,22 +64,22 @@ export const DEFAULT_GRID_TICK = 10;
  * (m_gridStyle == SMALL_CROSS) gridThreshold *= 2.0`), multiply by
  * `tick` and recheck, repeating until it's visible. This is "coarsen an
  * absurdly fine grid instead of drawing a solid smear" -- it only ever
- * changes anything when zoomed out far enough that `gridUm` is sub-pixel.
+ * changes anything when zoomed out far enough that `gridNm` is sub-pixel.
  *
- * `scalePxPerUm` is this app's ViewTransform.scale -- the same role as
+ * `scalePxPerNm` is this app's ViewTransform.scale -- the same role as
  * source's `m_worldScale` (screen pixels per world unit).
  */
-export function computeVisibleGridSize(gridUm: number, scalePxPerUm: number, style: GridStyle = DEFAULT_GRID_STYLE, tick = DEFAULT_GRID_TICK, minSpacingPx = DEFAULT_GRID_MIN_SPACING_PX): number {
-  let spacing = gridUm;
-  const threshold = (minSpacingPx / scalePxPerUm) * (style === "small-cross" ? 2 : 1);
+export function computeVisibleGridSize(gridNm: number, scalePxPerNm: number, style: GridStyle = DEFAULT_GRID_STYLE, tick = DEFAULT_GRID_TICK, minSpacingPx = DEFAULT_GRID_MIN_SPACING_PX): number {
+  let spacing = gridNm;
+  const threshold = (minSpacingPx / scalePxPerNm) * (style === "small-cross" ? 2 : 1);
   // source clamps each axis to >= 100 (world units) first as a degenerate-
-  // input guard (grid size of exactly 0); not meaningful in µm terms at
-  // any real zoom, kept only so gridUm=0 doesn't loop forever below.
-  if (spacing <= 0) spacing = 100;
+  // input guard (grid size of exactly 0); not meaningful in nm terms at
+  // any real zoom, kept only so gridNm=0 doesn't loop forever below.
+  if (spacing <= 0) spacing = 100_000;
   // A view not fitted yet (scale 0) makes the threshold infinite: KiCad's
   // VIEW never has scale 0, here the first paint can race the first fit.
   // Return the base grid rather than loop forever; tick <= 1 never grows.
-  if (!(scalePxPerUm > 0) || !Number.isFinite(threshold) || tick <= 1) return spacing;
+  if (!(scalePxPerNm > 0) || !Number.isFinite(threshold) || tick <= 1) return spacing;
   while (spacing <= threshold) spacing *= tick;
   return spacing;
 }

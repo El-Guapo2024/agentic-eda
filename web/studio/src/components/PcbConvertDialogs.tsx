@@ -25,8 +25,8 @@ export function ConversionSettingsDialog({
 }) {
   const available: ConvertStrategy[] = [...(showCopyLineWidth ? (["copy_linewidth"] as const) : []), ...(showCenterline ? (["centerline"] as const) : []), ...(showHull ? (["bounding_hull"] as const) : [])];
   const [strategy, setStrategy] = useState<ConvertStrategy>(available.includes(settings.strategy) ? settings.strategy : (available[0] ?? settings.strategy));
-  const gap = useLengthField(settings.gapUm);
-  const width = useLengthField(settings.widthUm);
+  const gap = useLengthField(settings.gapNm);
+  const width = useLengthField(settings.widthNm);
   const [del, setDel] = useState(settings.deleteOriginals);
   const g = gap.parse();
   const w = width.parse();
@@ -35,7 +35,7 @@ export function ConversionSettingsDialog({
   const submit = () => {
     if (!ok) return;
     closeSweepDialog();
-    onOk({ strategy, gapUm: hull ? (g ?? 0) : settings.gapUm, widthUm: hull ? (w ?? 0) : settings.widthUm, deleteOriginals: del });
+    onOk({ strategy, gapNm: hull ? (g ?? 0) : settings.gapNm, widthNm: hull ? (w ?? 0) : settings.widthNm, deleteOriginals: del });
   };
   const radio = (value: ConvertStrategy, label: string) => (
     <label className="filter-row" key={value}>
@@ -63,15 +63,15 @@ export function ConversionSettingsDialog({
 }
 
 /** `s_outsetPresetValue` / `s_presetLineWidths` / `s_presetGridRounding`, in micrometres. */
-const OUTSET_PRESETS_UM = [100, 110, 150, 250, 260, 500, 1000, 2000];
-const LINE_WIDTH_PRESETS_UM = [50, 100, 120, 150, 200];
+const OUTSET_PRESETS_NM = [100_000, 110_000, 150_000, 250_000, 260_000, 500_000, 1_000_000, 2_000_000];
+const LINE_WIDTH_PRESETS_NM = [50_000, 100_000, 120_000, 150_000, 200_000];
 
 export function OutsetItemsDialog({ params, layers, layerDefaultWidth, onOk }: { params: OutsetParams; layers: readonly string[]; layerDefaultWidth: (layer: string) => number; onOk: (p: OutsetParams) => void }) {
-  const outset = useLengthField(params.outsetUm);
-  const lineWidth = useLengthField(params.lineWidthUm);
-  const grid = useLengthField(params.gridRoundingUm ?? 10);
+  const outset = useLengthField(params.outsetNm);
+  const lineWidth = useLengthField(params.lineWidthNm);
+  const grid = useLengthField(params.gridRoundingNm ?? 10_000);
   const [roundCorners, setRoundCorners] = useState(params.roundCorners);
-  const [roundToGrid, setRoundToGrid] = useState(params.gridRoundingUm !== null);
+  const [roundToGrid, setRoundToGrid] = useState(params.gridRoundingNm !== null);
   const [copyLayers, setCopyLayers] = useState(params.useSourceLayers);
   const [layer, setLayer] = useState(params.layer);
   const [copyWidths, setCopyWidths] = useState(params.useSourceWidths);
@@ -84,7 +84,7 @@ export function OutsetItemsDialog({ params, layers, layerDefaultWidth, onOk }: {
   const submit = () => {
     if (error || o === null || w === null) return;
     closeSweepDialog();
-    onOk({ outsetUm: o, roundCorners, useSourceLayers: copyLayers, useSourceWidths: copyWidths, layer, lineWidthUm: w, gridRoundingUm: roundToGrid ? g : null, deleteSourceItems: del });
+    onOk({ outsetNm: o, roundCorners, useSourceLayers: copyLayers, useSourceWidths: copyWidths, layer, lineWidthNm: w, gridRoundingNm: roundToGrid ? g : null, deleteSourceItems: del });
   };
   const presets = (values: number[], set: (text: string) => void, units: "mm" | "mil" | "in") => (
     <select value="" aria-label="Presets" onChange={(e) => e.target.value && set(e.target.value)} style={{ width: 48 }}>
@@ -100,7 +100,7 @@ export function OutsetItemsDialog({ params, layers, layerDefaultWidth, onOk }: {
     <DialogShell title="Outset Items" width={420} onCancel={closeSweepDialog} onOk={submit} okDisabled={!!error}>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <LengthRow label="Outset:" field={outset} autoFocus onEnter={submit} />
-        {presets(OUTSET_PRESETS_UM, outset.setText, outset.units)}
+        {presets(OUTSET_PRESETS_NM, outset.setText, outset.units)}
       </div>
       <label className="filter-row" title="This is only possible for rectangular outsets.">
         <input type="checkbox" checked={roundToGrid} onChange={(e) => setRoundToGrid(e.target.checked)} />
@@ -134,7 +134,7 @@ export function OutsetItemsDialog({ params, layers, layerDefaultWidth, onOk }: {
       </label>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <LengthRow label="Line width:" field={lineWidth} onEnter={submit} />
-        {presets(LINE_WIDTH_PRESETS_UM, lineWidth.setText, lineWidth.units)}
+        {presets(LINE_WIDTH_PRESETS_NM, lineWidth.setText, lineWidth.units)}
         <button
           title="Use the board's default line width for the layer"
           onClick={() => {

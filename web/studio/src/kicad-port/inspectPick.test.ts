@@ -7,7 +7,7 @@ import { CLEARANCE_KINDS, inspectionPick, refineInspectionPick, type InspectPick
 const pad = (num: string, x: number, y: number, w = 600, h = 600): Pad => ({ num, net: null, x, y, w, h, round: false, th: false });
 const part = (ref: string, pads: Pad[]): Part => ({ ref, value: null, package: null, mpn: null, footprint: null, block: null, placed: true, size: [4000, 2000], at: [0, 0], rot: 0, side: "top", label: "above", courtyard: [-2000, -1000, 2000, 1000], pads }) as Part;
 const board = (parts: Part[], routing: unknown = null): BoardState => ({ name: "t", dir: "", outline: null, layers: ["F.Cu", "B.Cu"], snap: 100, parts, rules: [], routing, drawings: null, checks: [], activity: [], job: "idle" }) as unknown as BoardState;
-const ctx: InspectPickContext = { filter: DEFAULT_SELECTION_FILTER, layerVisible: {}, activeLayer: null, highContrast: false, selection: new Set(), onePixelUm: 10, toleranceUm: 150 };
+const ctx: InspectPickContext = { filter: DEFAULT_SELECTION_FILTER, layerVisible: {}, activeLayer: null, highContrast: false, selection: new Set(), onePixelNm: 10, toleranceNm: 150 };
 const u1 = part("U1", [pad("1", -1000, 0), pad("2", 1000, 0)]);
 
 test("a click on a pad inspects the pad, a click beside the pads the footprint", () => {

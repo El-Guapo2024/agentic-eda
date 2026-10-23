@@ -248,7 +248,7 @@ export class PcbGridHelper extends GridHelper {
 
   /** `AlignToSegment`: the track's end nearest the pointer, or a point on the segment that is on the grid's line through the aligned cursor; else the aligned cursor. */
   alignToSegment(p: Pt, a: Pt, b: Pt): Pt {
-    const epsilonSq = 4e-6; // `c_gridSnapEpsilon_sq = 4` nm^2, in um^2
+    const epsilonSq = 4; // `c_gridSnapEpsilon_sq = 4` nm^2
     const aligned = this.align(p);
     if (!this.enableSnap) return aligned;
     const points: Pt[] = [];

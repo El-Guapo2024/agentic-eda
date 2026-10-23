@@ -1,6 +1,6 @@
 // The schematic editor's tool verbs and drawn items -- mirrors crates/model/src/sch_extras.rs (SchGraphic) and
 // crates/ops/src/sch_edit.rs (SchCmd, sent as `{ op: "sch_edit", verb: ..., ... }`).
-import type { BoardTable, CmdLabelKind, LabelShape, PointXY, SchField, Um } from "./types";
+import type { BoardTable, CmdLabelKind, LabelShape, PointXY, SchField, Nm } from "./types";
 
 /** Stroke style of a graphic (`LINE_STYLE`); `default` follows the sheet's own default. */
 export type SchLineStyle = "default" | "solid" | "dash" | "dot" | "dash_dot" | "dash_dot_dot";
@@ -15,13 +15,13 @@ export interface SchColor {
 }
 /** The stroke Wire/Bus Properties set on a wire, bus, bus entry or graphic line (`SchExtras::strokes`); a field absent is the default (width 0 = the default width, style `default`, no colour = the layer's own). */
 export interface SchStroke {
-  width_um?: Um;
+  width_nm?: Nm;
   style?: SchLineStyle;
   color?: SchColor;
 }
 /** How an explicit junction is drawn once Junction Properties set it (`SchExtras::junction_looks`); a field absent is the default (diameter 0 = 36 mil). */
 export interface JunctionLook {
-  diameter_um?: Um;
+  diameter_nm?: Nm;
   color?: SchColor;
 }
 export type SchHAlign = "left" | "center" | "right";
@@ -30,8 +30,8 @@ export type SchVAlign = "top" | "center" | "bottom";
 export type DirectiveShape = "dot" | "round" | "diamond" | "rectangle";
 
 export type SchGraphicShape =
-  | { type: "rectangle"; start: PointXY; end: PointXY; corner_radius_um?: Um }
-  | { type: "circle"; center: PointXY; radius_um: Um }
+  | { type: "rectangle"; start: PointXY; end: PointXY; corner_radius_nm?: Nm }
+  | { type: "circle"; center: PointXY; radius_nm: Nm }
   | { type: "arc"; start: PointXY; mid: PointXY; end: PointXY }
   | { type: "bezier"; start: PointXY; c1: PointXY; c2: PointXY; end: PointXY }
   | { type: "polygon"; pts: PointXY[] }
@@ -42,13 +42,13 @@ export type SchGraphicShape =
       text: string;
       /** 0 or 90000 (millidegrees): a text box keeps its text horizontal or vertical only. */
       angle?: number;
-      size_um: Um;
+      size_nm: Nm;
       bold?: boolean;
       italic?: boolean;
       h_align?: SchHAlign;
       v_align?: SchVAlign;
       /** Border-to-text gap; 0/absent means KiCad's default (`SCH_TEXTBOX::GetLegacyTextMargin`). */
-      margin_um?: Um;
+      margin_nm?: Nm;
     }
   | { type: "rule_area"; pts: PointXY[]; exclude_from_sim?: boolean; exclude_from_bom?: boolean; exclude_from_board?: boolean; dnp?: boolean }
   | {
@@ -57,7 +57,7 @@ export type SchGraphicShape =
       /** The pole's direction in millidegrees: 0 right, 90000 up, 180000 left, 270000 down. */
       orientation?: number;
       shape?: DirectiveShape;
-      pin_length_um: Um;
+      pin_length_nm: Nm;
       netclass?: string;
       component_class?: string;
     }
@@ -83,8 +83,8 @@ export type SchGraphicShape =
 export interface SchGraphic {
   id: string;
   shape: SchGraphicShape;
-  /** Stroke width, um; 0/absent means the default line width. */
-  width_um?: Um;
+  /** Stroke width, nm; 0/absent means the default line width. */
+  width_nm?: Nm;
   line_style?: SchLineStyle;
   color?: SchColor;
   fill?: SchFill;
@@ -138,7 +138,7 @@ export type SchEditCmd =
   | { verb: "add_sheet_pin"; sheet: string; name: string; shape: LabelShape; at: PointXY }
   | { verb: "delete_sheet_pin"; id: string }
   /** Rename, reshape or move a sheet pin, or set the size (0.01 to 1000 mm), bold and italic of its text; a field left out is unchanged. */
-  | { verb: "edit_sheet_pin"; id: string; name?: string; shape?: LabelShape; at?: PointXY; size_um?: Um; bold?: boolean; italic?: boolean }
+  | { verb: "edit_sheet_pin"; id: string; name?: string; shape?: LabelShape; at?: PointXY; size_nm?: Nm; bold?: boolean; italic?: boolean }
   /** Give every placed unit of reference `id` the library symbol `lib_id` (`DIALOG_CHANGE_SYMBOLS`, change mode). */
   | { verb: "change_symbol"; id: string; lib_id: string }
   /** Update Symbol(s) from Library: the symbols placed with these library ids resolve from the project's edited library symbol (`published`). */
@@ -149,17 +149,17 @@ export type SchEditCmd =
    * Label Properties: a field left out is unchanged (`shape` is for global and hierarchical labels, `spin` is which way the text runs from the anchor). `auto_rotate` is the
    * "Auto" check of a global or hierarchical label: while it is on the label takes the spin of what it is connected to and `spin` is not applied.
    */
-  | { verb: "edit_label"; id: string; text?: string; shape?: LabelShape; spin?: "right" | "up" | "left" | "bottom"; size_um?: Um; bold?: boolean; italic?: boolean; auto_rotate?: boolean; fields?: LabelFieldEdit[] }
+  | { verb: "edit_label"; id: string; text?: string; shape?: LabelShape; spin?: "right" | "up" | "left" | "bottom"; size_nm?: Nm; bold?: boolean; italic?: boolean; auto_rotate?: boolean; fields?: LabelFieldEdit[] }
   /**
    * Place Label, Global Label and Hierarchical Label (`TwoClickPlace` after `createNewLabel`) with the properties of its dialog, as one step: `spin` (absent: read off the wire
-   * the label ends at), `size_um`, `bold`, `italic`, and `auto_rotate` (global and hierarchical only; the label then takes the spin of what it is placed on).
+   * the label ends at), `size_nm`, `bold`, `italic`, and `auto_rotate` (global and hierarchical only; the label then takes the spin of what it is placed on).
    */
-  | { verb: "place_label"; net: string; at: PointXY; kind: CmdLabelKind; spin?: "right" | "up" | "left" | "bottom"; size_um?: Um; bold?: boolean; italic?: boolean; auto_rotate?: boolean }
+  | { verb: "place_label"; net: string; at: PointXY; kind: CmdLabelKind; spin?: "right" | "up" | "left" | "bottom"; size_nm?: Nm; bold?: boolean; italic?: boolean; auto_rotate?: boolean }
   /** Place Text (`TwoClickPlace` after `createNewText`): a free text with its justification (absent: KiCad's last-used, centre and centre) and `angle` 0 or 90000. */
-  | { verb: "place_text"; content: string; at: PointXY; angle?: number; size_um: Um; h?: SchHAlign; v?: SchVAlign }
+  | { verb: "place_text"; content: string; at: PointXY; angle?: number; size_nm: Nm; h?: SchHAlign; v?: SchVAlign }
   /**
    * Field Properties on one field of a symbol, power symbol or sheet (`DIALOG_FIELD_PROPERTIES::UpdateField`): `id` is the field's (`fld:<owner>:<name>`); a member left out is
-   * unchanged. `at` is where the text's anchor goes on the sheet, `vertical` whether it runs up the sheet, `h`/`v` how it reads there; `size_um` is 0.01 to 1000 mm.
+   * unchanged. `at` is where the text's anchor goes on the sheet, `vertical` whether it runs up the sheet, `h`/`v` how it reads there; `size_nm` is 0.01 to 1000 mm.
    */
   | {
       verb: "edit_field";
@@ -169,7 +169,7 @@ export type SchEditCmd =
       vertical?: boolean;
       h?: SchHAlign;
       v?: SchVAlign;
-      size_um?: Um;
+      size_nm?: Nm;
       bold?: boolean;
       italic?: boolean;
       visible?: boolean;
@@ -180,19 +180,19 @@ export type SchEditCmd =
   | { verb: "autoplace_fields"; ids: string[] }
   /**
    * Pin Helpers (`PIN_TRICKS_MENU`): a wire stub, a no-connect or a local, hierarchical or global label on each pin (`pin:<reference>:<number>`) and sheet pin of `pins` (anything else is passed
-   * over; none is refused). A stub is one step of `grid`, the wire grid (um, 0 is 50 mil); a label says the pin's name and reads away from it. One undo step.
+   * over; none is refused). A stub is one step of `grid`, the wire grid (nm, 0 is 50 mil); a label says the pin's name and reads away from it. One undo step.
    */
-  | { verb: "pin_helper"; what: "wire" | "no_connect" | "net_label" | "hier_label" | "global_label"; pins: string[]; grid?: Um }
+  | { verb: "pin_helper"; what: "wire" | "no_connect" | "net_label" | "hier_label" | "global_label"; pins: string[]; grid?: Nm }
   /** Add a user-defined field to the symbol `id` (a reference): `DIALOG_SYMBOL_PROPERTIES::OnAddField`. It starts hidden; show it with `edit_field` and `visible`. */
   | { verb: "add_user_field"; id: string; name: string; text?: string }
   /** Remove a user-defined field from the symbol `id` (a reference): `OnDeleteField`. The four standard fields cannot go. */
   | { verb: "remove_user_field"; id: string; name: string }
-  /** Text Properties of a free text: its text, its size (um, 0.01 to 1000 mm), its angle (millidegrees; horizontal or vertical) and its justification about the anchor. */
-  | { verb: "edit_text"; id: string; text?: string; size_um?: Um; angle?: number; h?: SchHAlign; v?: SchVAlign }
+  /** Text Properties of a free text: its text, its size (nm, 0.01 to 1000 mm), its angle (millidegrees; horizontal or vertical) and its justification about the anchor. */
+  | { verb: "edit_text"; id: string; text?: string; size_nm?: Nm; angle?: number; h?: SchHAlign; v?: SchVAlign }
   /** Sheet Properties: the sheet's name and the file it shows (a bare name; one the project has is linked to, a new one gets the content). */
   | { verb: "edit_sheet"; id: string; name?: string; file?: string }
   /** Wire/Bus, Line and Junction Properties: the stroke of the wires, buses, bus entries and graphic lines named, the diameter and colour of the junctions (a colour with every channel 0 is the layer's own). */
-  | { verb: "set_stroke"; ids: string[]; width_um?: Um; style?: SchLineStyle; color?: SchColor; diameter_um?: Um }
+  | { verb: "set_stroke"; ids: string[]; width_nm?: Nm; style?: SchLineStyle; color?: SchColor; diameter_nm?: Nm }
   /** Swap Pins: the pins (item ids `pin:<reference>:<number>`, in selection order) of one symbol trade places, one after the other. */
   | { verb: "swap_pins"; pins: string[] }
   /** Swap Pin Labels: the net labels on the pins trade texts in selection order. */
@@ -221,17 +221,17 @@ export type SchTurn = "rot_ccw" | "rot_cw" | "mirror_h" | "mirror_v";
  */
 export type SchMoveCmd =
   /** `M`: every item moves rigidly; a wire on a moved pin is left where it is. `turns` are the R / Shift+R / X / Y pressed while the items were held (done after the move, about `about`, the point they are held at). */
-  | { verb: "move"; ids: string[]; dx: Um; dy: Um; turns?: SchTurn[]; about?: PointXY }
+  | { verb: "move"; ids: string[]; dx: Nm; dy: Nm; turns?: SchTurn[]; about?: PointXY }
   /** `G` and a click-drag: the items move and the wires, labels, junctions and no-connects attached follow; `vertices` names the picked points of a wire (`STARTPOINT` / `ENDPOINT`), a wire not in it is picked whole; `ortho` keeps right angles. */
-  | { verb: "drag"; ids: string[]; vertices?: Record<string, number[]>; dx: Um; dy: Um; ortho?: boolean; grid?: Um; turns?: SchTurn[]; about?: PointXY }
+  | { verb: "drag"; ids: string[]; vertices?: Record<string, number[]>; dx: Nm; dy: Nm; ortho?: boolean; grid?: Nm; turns?: SchTurn[]; about?: PointXY }
   /** `R` / Shift+`R`: a quarter turn; `about` overrides the turn point (the cursor, while the selection is held). */
-  | { verb: "rotate"; ids: string[]; vertices?: Record<string, number[]>; ccw?: boolean; about?: PointXY; grid?: Um }
+  | { verb: "rotate"; ids: string[]; vertices?: Record<string, number[]>; ccw?: boolean; about?: PointXY; grid?: Nm }
   /** `X` (`vertical` false) / `Y`. */
-  | { verb: "mirror"; ids: string[]; vertices?: Record<string, number[]>; vertical?: boolean; about?: PointXY; grid?: Um }
+  | { verb: "mirror"; ids: string[]; vertices?: Record<string, number[]>; vertical?: boolean; about?: PointXY; grid?: Nm }
   /** Align Items to Grid: each item to the grid by where most of its connection points are, with the wires on it. */
-  | { verb: "align_to_grid"; ids: string[]; grid?: Um }
+  | { verb: "align_to_grid"; ids: string[]; grid?: Nm }
   /** Align Left / Right / Top / Bottom / Center: each item by its own offset, snapped to the connection grid, with its wires. */
-  | { verb: "align"; moves: Array<{ id: string; dx: Um; dy: Um }>; grid?: Um };
+  | { verb: "align"; moves: Array<{ id: string; dx: Nm; dy: Nm }>; grid?: Nm };
 
 /**
  * What a move preview changes on the sheet (`POST /api/sch/move_preview`): the moved items' new geometry, which the view lays over the
@@ -243,8 +243,8 @@ export type SchMoveCmd =
  * nets, and for each connection it would pull apart a circle at each of the two points and the line between them. Micrometres on the sheet.
  */
 export interface SchNetCollision {
-  collisions: Array<{ at: [number, number]; radius_um: number }>;
-  disconnections: Array<{ a: [number, number]; b: [number, number]; radius_um: number }>;
+  collisions: Array<{ at: [number, number]; radius_nm: number }>;
+  disconnections: Array<{ a: [number, number]; b: [number, number]; radius_nm: number }>;
 }
 
 export interface SchMovePatch {

@@ -27,7 +27,7 @@ import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { footprintZoneForm, padZoneForm, zoneCmds, type PadZoneForm } from "../kicad-port/padZone";
 import { padById } from "../kicad-port/pcbItems";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { formatLength, umFrom, umTo } from "../state/units";
+import { formatLength, nmFrom, nmTo } from "../state/units";
 import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
 import { CopperLayersRow, PadPrimitivePanel, PadShapeRows, PadStackRows } from "./PadShapeFields";
 
@@ -85,9 +85,9 @@ export function BoardPadPropertiesDialog() {
       stack: stackStateOf(pad.stack, { s, ox, oy, tokens: [] }),
       rot: pad.rot ?? 0,
       hole: pad.slot ? "oblong" : "round",
-      drill: pad.drill ?? 800,
-      slotW: pad.slot?.[0] ?? 600,
-      slotH: pad.slot?.[1] ?? 1000,
+      drill: pad.drill ?? 800_000,
+      slotW: pad.slot?.[0] ?? 600_000,
+      slotH: pad.slot?.[1] ?? 1_000_000,
       zone: padZoneForm(part, pad.num),
       mask: pad.mask_margin ?? null,
       paste: pad.paste_margin ?? null,
@@ -108,9 +108,9 @@ export function BoardPadPropertiesDialog() {
     <input
       type="number"
       step="any"
-      value={Number(umTo(um, units).toFixed(4))}
+      value={Number(nmTo(um, units).toFixed(4))}
       data-testid={testid}
-      onChange={(e) => Number.isFinite(Number(e.target.value)) && e.target.value !== "" && onChange(Math.round(umFrom(Number(e.target.value), units)))}
+      onChange={(e) => Number.isFinite(Number(e.target.value)) && e.target.value !== "" && onChange(Math.round(nmFrom(Number(e.target.value), units)))}
       style={{ width }}
     />
   );
@@ -289,7 +289,7 @@ export function BoardPadPropertiesDialog() {
             {numbered && (
               <>
                 <span>Pad clearance</span>
-                <OverrideInput testid="pad-clearance" valueUm={form.zone.clearance} units={units} onChange={(v) => setZone({ clearance: v })} />
+                <OverrideInput testid="pad-clearance" valueNm={form.zone.clearance} units={units} onChange={(v) => setZone({ clearance: v })} />
               </>
             )}
             {override("Solder mask margin", form.mask, (v) => set("mask", v), "pad-mask")}
@@ -314,9 +314,9 @@ export function BoardPadPropertiesDialog() {
                   ))}
                 </select>
                 <span>Relief gap</span>
-                <OverrideInput testid="pad-zone-gap" valueUm={form.zone.gap} units={units} onChange={(v) => setZone({ gap: v })} />
+                <OverrideInput testid="pad-zone-gap" valueNm={form.zone.gap} units={units} onChange={(v) => setZone({ gap: v })} />
                 <span>Spoke width</span>
-                <OverrideInput testid="pad-zone-spoke-width" valueUm={form.zone.spokeWidth} units={units} onChange={(v) => setZone({ spokeWidth: v })} />
+                <OverrideInput testid="pad-zone-spoke-width" valueNm={form.zone.spokeWidth} units={units} onChange={(v) => setZone({ spokeWidth: v })} />
                 <span>Spoke angle</span>
                 <AngleOverrideInput testid="pad-zone-spoke-angle" valueMdeg={form.zone.spokeAngleMdeg} defaultDeg={s.choice === "circle" || s.choice === "custom_circle" ? 45 : 90} onChange={(v) => setZone({ spokeAngleMdeg: v })} />
               </div>

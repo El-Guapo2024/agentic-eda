@@ -6,7 +6,7 @@
 //
 // Not here: a grid's name and a grid with different X and Y sizes (the studio snaps to one square grid, so the dialog asks for one size). The grid overrides
 // (connected items, wires, vias, text and graphics each get a grid of their own) are kicad-port/gridOverrides.ts, with their own state/gridOverrides.ts.
-import { DEFAULT_PCB_GRIDS_UM } from "./grid";
+import { DEFAULT_PCB_GRIDS_NM } from "./grid";
 import { DEFAULT_FAST_GRID_1, DEFAULT_FAST_GRID_2 } from "./cursorControl";
 
 /** The editors whose grid is a choice from a list: the board editor, the Schematic Editor, the Footprint Editor and the Symbol Editor. */
@@ -34,18 +34,18 @@ export interface GridSettings {
 }
 
 /** `DefaultGridSizeList()` of the eeschema and symbol editor settings: 100, 50, 25 and 10 mil. */
-export const EESCHEMA_GRIDS_UM: readonly number[] = [2540, 1270, 635, 254];
+export const EESCHEMA_GRIDS_NM: readonly number[] = [2_540_000, 1_270_000, 635_000, 254_000];
 
 /** `DIALOG_GRID_SETTINGS::TransferDataFromWindow`: `Validate( 0.001, 1000.0, EDA_UNITS::MM )`. */
-export const GRID_MIN_UM = 1;
-export const GRID_MAX_UM = 1_000_000;
+export const GRID_MIN_NM = 1_000;
+export const GRID_MAX_NM = 1_000_000_000;
 
 /**
  * The settings an editor has until its grids are edited: the PCB list for the board and footprint editors (`defaultGridIdx` 15 -> fast grids 15 and 16), the eeschema list for
  * the schematic and the symbol editor (index 1, 50 mil -> 1 and 2).
  */
 export function defaultGridSettings(editor: GridEditor): GridSettings {
-  return SCHEMATIC_FAMILY.includes(editor) ? { grids: EESCHEMA_GRIDS_UM, fast1: 1, fast2: 2 } : { grids: DEFAULT_PCB_GRIDS_UM, fast1: DEFAULT_FAST_GRID_1, fast2: DEFAULT_FAST_GRID_2 };
+  return SCHEMATIC_FAMILY.includes(editor) ? { grids: EESCHEMA_GRIDS_NM, fast1: 1, fast2: 2 } : { grids: DEFAULT_PCB_GRIDS_NM, fast1: DEFAULT_FAST_GRID_1, fast2: DEFAULT_FAST_GRID_2 };
 }
 
 const sameSize = (a: number | undefined, b: number | undefined) => a !== undefined && b !== undefined && Math.abs(a - b) < 1e-9;
@@ -80,7 +80,7 @@ function rebuilt(old: GridSettings, grids: readonly number[]): GridSettings {
 export type GridEdit = { ok: true; settings: GridSettings; row: number } | { ok: false; error: "range" | "duplicate" };
 
 function sizeError(um: number): "range" | null {
-  return Number.isFinite(um) && um >= GRID_MIN_UM && um <= GRID_MAX_UM ? null : "range";
+  return Number.isFinite(um) && um >= GRID_MIN_NM && um <= GRID_MAX_NM ? null : "range";
 }
 
 /** `OnAddGrid`: the new grid goes in before the selected row, which becomes the new grid. A size that is in the list already is refused ("Grid size '%s' already exists."). */
@@ -133,8 +133,8 @@ export function parseGridSize(text: string, unit: "mm" | "mil" | "in"): number |
   if (!m) return null;
   const value = Number(m[1]!.replace(",", "."));
   const u = (m[2] ?? unit).toLowerCase();
-  const um = u === "mm" ? value * 1000 : u === "in" || u === "inch" || u === '"' ? value * 25_400 : value * 25.4;
-  return Number.isFinite(um) ? Math.round(um * 1e6) / 1e6 : null;
+  const um = u === "mm" ? value * 1e6 : u === "in" || u === "inch" || u === '"' ? value * 25_400_000 : value * 25_400;
+  return Number.isFinite(um) ? Math.round(um * 1e3) / 1e3 : null;
 }
 
 /** Reads one editor's saved settings back (`null`, nothing saved or damaged: the defaults), checked the way the dialog checks them. */
@@ -170,8 +170,8 @@ export function isDefaultGridSettings(s: GridSettings, editor: GridEditor): bool
 }
 
 /** `GridNext` / `GridPrev`: the grid after / before the current one in the list, wrapping round; a current grid that is not in the list goes to the first / last. */
-export function stepGrid(grids: readonly number[], currentUm: number, dir: 1 | -1): number {
-  const at = grids.findIndex((g) => sameSize(g, currentUm));
+export function stepGrid(grids: readonly number[], currentNm: number, dir: 1 | -1): number {
+  const at = grids.findIndex((g) => sameSize(g, currentNm));
   const next = at + dir;
   return grids[next < 0 ? grids.length - 1 : next >= grids.length ? 0 : next]!;
 }

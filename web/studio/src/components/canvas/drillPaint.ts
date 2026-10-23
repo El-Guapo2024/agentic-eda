@@ -10,7 +10,7 @@ import { layerIsVisible } from "../../kicad-port/layerPresets";
 import { drawStrokeText } from "../text/strokeFont";
 import { layerColor } from "./layers";
 import { realLayerKey } from "./painter";
-import { hairlineUm } from "./view";
+import { hairlineNm } from "./view";
 
 function strokeParts(ctx: CanvasRenderingContext2D, cx: number, cy: number, parts: readonly MarkerPart[]): void {
   ctx.beginPath();
@@ -29,7 +29,7 @@ export function drawDrillItems(ctx: CanvasRenderingContext2D, view: ViewTransfor
   const dr = board.drawings;
   if (!dr) return;
   const profile = dr.drill_profile ?? DEFAULT_PROFILE;
-  const width = Math.max(profile.width_um, hairlineUm(view, 1));
+  const width = Math.max(profile.width_nm, hairlineNm(view, 1));
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -49,21 +49,21 @@ export function drawDrillItems(ctx: CanvasRenderingContext2D, view: ViewTransfor
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     // "The plotted width, not the sketch width, because the outline is artwork the map really does emit"
-    ctx.lineWidth = Math.max(profile.width_um, 1, hairlineUm(view, 1));
+    ctx.lineWidth = Math.max(profile.width_nm, 1, hairlineNm(view, 1));
     ctx.beginPath();
     for (const ring of rings.filter((r) => r.length > 1)) {
       ring.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x + map.offset.x, y + map.offset.y) : ctx.lineTo(x + map.offset.x, y + map.offset.y)));
       ctx.closePath();
     }
     ctx.stroke();
-    const r = Math.trunc(map.size_um / 2);
+    const r = Math.trunc(map.size_nm / 2);
     for (const m of mapMarks(map, dr.drill_marks ?? [])) {
       ctx.lineWidth = width;
       if (m.mode === "shape") strokeParts(ctx, m.x, m.y, buildMarker(m.x, m.y, r, curatedShape(m.shape_index)));
-      else drawStrokeText(ctx, markText(m), m.x, m.y + map.size_um / 2, { sizeUm: map.size_um, thicknessUm: profile.width_um, justify: "center", color });
+      else drawStrokeText(ctx, markText(m), m.x, m.y + map.size_nm / 2, { sizeNm: map.size_nm, thicknessNm: profile.width_nm, justify: "center", color });
       if (map.guide_cross) {
         // "Reach matches the plotter exactly rather than 2 * radius"
-        const reach = map.size_um;
+        const reach = map.size_nm;
         ctx.beginPath();
         ctx.moveTo(m.x - reach, m.y);
         ctx.lineTo(m.x + reach, m.y);
@@ -73,7 +73,7 @@ export function drawDrillItems(ctx: CanvasRenderingContext2D, view: ViewTransfor
       }
       // "A slot's true extent is the cost driver, so it is outlined as well as marked": the oval the plotter builds, its long axis along the slot.
       if (map.outline_slots !== false && m.is_slot) {
-        let [w, h] = m.size_um;
+        let [w, h] = m.size_nm;
         let angle = m.orientation_deg;
         if (w > h) {
           [w, h] = [h, w];
@@ -97,8 +97,8 @@ export function drawDrillItems(ctx: CanvasRenderingContext2D, view: ViewTransfor
       const box = mapBounds(map, dr.drill_marks ?? [], profile, outlineBox(board));
       if (box) {
         ctx.save();
-        ctx.lineWidth = hairlineUm(view, 1);
-        ctx.setLineDash([hairlineUm(view, 6), hairlineUm(view, 4)]);
+        ctx.lineWidth = hairlineNm(view, 1);
+        ctx.setLineDash([hairlineNm(view, 6), hairlineNm(view, 4)]);
         ctx.strokeRect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
         ctx.restore();
       }

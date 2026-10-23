@@ -479,28 +479,28 @@ mod tests {
     }
 
     fn sample_graphics() -> Vec<SchGraphic> {
-        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: p(10_000, 20_000), end: p(30_000, 50_000), corner_radius_nm: 0 });
-        rect.width_nm = 254;
+        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: p(10_000_000, 20_000_000), end: p(30_000_000, 50_000_000), corner_radius_nm: 0 });
+        rect.width_nm = 254_000;
         rect.line_style = SchLineStyle::Dash;
         rect.fill = SchFill::Background;
-        let mut circle = SchGraphic::new(SchGraphicKind::Circle { center: p(5_000, 5_000), radius_nm: 2_500 });
+        let mut circle = SchGraphic::new(SchGraphicKind::Circle { center: p(5_000_000, 5_000_000), radius_nm: 2_500_000 });
         circle.fill = SchFill::Color;
         circle.fill_color = Some(SchColor { r: 255, g: 0, b: 0, a: 255 });
         circle.color = Some(SchColor { r: 0, g: 128, b: 0, a: 255 });
         vec![
             rect,
             circle,
-            SchGraphic::new(SchGraphicKind::Arc { start: p(0, 0), mid: p(1_000, -1_000), end: p(2_000, 0) }),
-            SchGraphic::new(SchGraphicKind::Bezier { start: p(0, 0), c1: p(1_000, 2_000), c2: p(3_000, 2_000), end: p(4_000, 0) }),
+            SchGraphic::new(SchGraphicKind::Arc { start: p(0, 0), mid: p(1_000_000, -1_000_000), end: p(2_000_000, 0) }),
+            SchGraphic::new(SchGraphicKind::Bezier { start: p(0, 0), c1: p(1_000_000, 2_000_000), c2: p(3_000_000, 2_000_000), end: p(4_000_000, 0) }),
             {
-                let mut poly = SchGraphic::new(SchGraphicKind::Polygon { pts: vec![p(0, 0), p(10_000, 0), p(10_000, 10_000)] });
+                let mut poly = SchGraphic::new(SchGraphicKind::Polygon { pts: vec![p(0, 0), p(10_000_000, 0), p(10_000_000, 10_000_000)] });
                 poly.fill = SchFill::Outline;
                 poly
             },
-            SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 0), p(20_000, 0), p(20_000, 10_000), p(0, 10_000)], exclude_from_sim: true, exclude_from_bom: false, exclude_from_board: true, dnp: true }),
-            SchGraphic::new(SchGraphicKind::TextBox { start: p(0, 0), end: p(40_000, 10_000), text: "Hello\nworld".into(), angle: 90_000, size_nm: 1_270, bold: true, italic: false, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: 0 }),
-            SchGraphic::new(SchGraphicKind::Directive { at: p(50_800, 25_400), orientation: 90_000, shape: DirectiveShape::Diamond, pin_length_nm: 2_540, netclass: "HV".into(), component_class: "Power".into() }),
-            SchGraphic::new(SchGraphicKind::Image { at: p(60_000, 40_000), scale_ppm: 750_000, data: eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, [10, 20, 30], 254)) }),
+            SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 0), p(20_000_000, 0), p(20_000_000, 10_000_000), p(0, 10_000_000)], exclude_from_sim: true, exclude_from_bom: false, exclude_from_board: true, dnp: true }),
+            SchGraphic::new(SchGraphicKind::TextBox { start: p(0, 0), end: p(40_000_000, 10_000_000), text: "Hello\nworld".into(), angle: 90_000, size_nm: 1_270_000, bold: true, italic: false, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: 0 }),
+            SchGraphic::new(SchGraphicKind::Directive { at: p(50_800_000, 25_400_000), orientation: 90_000, shape: DirectiveShape::Diamond, pin_length_nm: 2_540_000, netclass: "HV".into(), component_class: "Power".into() }),
+            SchGraphic::new(SchGraphicKind::Image { at: p(60_000_000, 40_000_000), scale_ppm: 750_000, data: eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, [10, 20, 30], 254)) }),
         ]
     }
 
@@ -574,7 +574,7 @@ mod tests {
     fn an_image_is_written_as_save_bitmap_writes_it_and_read_back_with_the_old_versions_scale_rule() {
         let data = eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, [10, 20, 30], 254));
         let mut sch = SchematicSection::default();
-        sch.extras.graphics = vec![SchGraphic::new(SchGraphicKind::Image { at: p(60_000, 40_000), scale_ppm: 1_000_000, data: data.clone() }), SchGraphic::new(SchGraphicKind::Image { at: p(1_000, 2_000), scale_ppm: 2_250_000, data: data.clone() })];
+        sch.extras.graphics = vec![SchGraphic::new(SchGraphicKind::Image { at: p(60_000_000, 40_000_000), scale_ppm: 1_000_000, data: data.clone() }), SchGraphic::new(SchGraphicKind::Image { at: p(1_000_000, 2_000_000), scale_ppm: 2_250_000, data: data.clone() })];
         sch.assign_missing_ids();
         let ids: Vec<String> = sch.extras.graphics.iter().map(|g| g.id.clone()).collect();
         sch.extras.set_locked(&ids[1], true);
@@ -587,7 +587,7 @@ mod tests {
         assert!(text.lines().filter(|l| l.trim_start().starts_with('"')).all(|l| l.trim().len() <= 78), "lines of at most 76 characters");
         let back = read_graphics(sexpr::parse(&text).unwrap().as_list().unwrap());
         assert_eq!(back.len(), 2);
-        assert!(matches!(&back[0].graphic.shape, SchGraphicKind::Image { at, scale_ppm: 1_000_000, data: d } if *at == p(60_000, 40_000) && *d == data));
+        assert!(matches!(&back[0].graphic.shape, SchGraphicKind::Image { at, scale_ppm: 1_000_000, data: d } if *at == p(60_000_000, 40_000_000) && *d == data));
         assert!(matches!(&back[1].graphic.shape, SchGraphicKind::Image { scale_ppm: 2_250_000, .. }));
         assert!(!back[0].locked && back[1].locked);
         // an old file: the scale is of a 300 ppi image
@@ -605,15 +605,15 @@ mod tests {
     #[test]
     fn scale_text_has_no_trailing_zeros() {
         assert_eq!(scale_str(1_000_000), "1");
-        assert_eq!(scale_str(500_000), "0.5");
-        assert_eq!(scale_str(2_250_000), "2.25");
-        assert_eq!(scale_str(333_333), "0.333333");
-        assert_eq!(scale_str(1_000_001), "1.000001");
+        assert_eq!(scale_str(500_000_000), "0.5");
+        assert_eq!(scale_str(2_250_000_000), "2.25");
+        assert_eq!(scale_str(333_333_000), "0.333333");
+        assert_eq!(scale_str(1_000_001_000), "1.000001");
     }
 
     #[test]
     fn text_box_margin_defaults_to_the_kicad_legacy_formula() {
-        assert_eq!(default_text_box_margin(1_270, 0), 953);
-        assert_eq!(default_text_box_margin(1_270, 200), 100 + 953);
+        assert_eq!(default_text_box_margin(1_270_000, 0), 953_000);
+        assert_eq!(default_text_box_margin(1_270_000, 200_000), 100_000 + 953_000);
     }
 }

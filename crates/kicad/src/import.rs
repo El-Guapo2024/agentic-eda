@@ -2503,7 +2503,7 @@ mod tests {
         assert_eq!(new.solder_mask_margin, Some(0), "{new:?}");
         assert_eq!(new.tokens, ["(solder_paste_margin 0)", "(solder_paste_margin_ratio 0)"]);
         let nonzero = extra(&board("20240108", "(solder_mask_margin 0.02) (solder_paste_margin -0.01)"));
-        assert_eq!((nonzero.solder_mask_margin, nonzero.tokens), (Some(20), vec!["(solder_paste_margin -0.01)".to_string()]));
+        assert_eq!((nonzero.solder_mask_margin, nonzero.tokens), (Some(20_000), vec!["(solder_paste_margin -0.01)".to_string()]));
     }
 
     /// A polygon's `(arc (start ..) (mid ..) (end ..))` is the arc, flattened as KiCad flattens it (5 micrometres from the curve), and no longer the chord between its
@@ -2529,7 +2529,7 @@ mod tests {
         let centres = [(5000.0, 1000.0), (5000.0, 3000.0), (1000.0, 3000.0), (1000.0, 1000.0)];
         let on_arc = |p: &Point| centres.iter().any(|c| ((p.x as f64 - c.0).hypot(p.y as f64 - c.1) - 1000.0).abs() <= 5.0);
         assert!(pts.iter().all(on_arc), "{pts:?}");
-        for exact in [Point { x: 5000, y: 0 }, Point { x: 6000, y: 1000 }, Point { x: 6000, y: 3000 }, Point { x: 5000, y: 4000 }, Point { x: 1000, y: 4000 }, Point { x: 0, y: 3000 }, Point { x: 0, y: 1000 }, Point { x: 1000, y: 0 }] {
+        for exact in [Point { x: 5_000_000, y: 0 }, Point { x: 6_000_000, y: 1_000_000 }, Point { x: 6_000_000, y: 3_000_000 }, Point { x: 5_000_000, y: 4_000_000 }, Point { x: 1_000_000, y: 4_000_000 }, Point { x: 0, y: 3_000_000 }, Point { x: 0, y: 1_000_000 }, Point { x: 1_000_000, y: 0 }] {
             assert!(pts.contains(&exact), "{exact:?} in {pts:?}");
         }
         // The area is the rounded rectangle's, 24 - (4 - pi) = 23.14 mm^2; the chords of the four arcs would leave 22.
@@ -2545,10 +2545,10 @@ mod tests {
     #[test]
     fn a_legacy_arc_is_three_points_turned_about_its_centre() {
         let p = |x, y| Point { x, y };
-        assert_eq!(legacy_arc(p(15_000, 5_000), p(20_000, 5_000), 90.0), (p(20_000, 5_000), p(18_536, 8_536), p(15_000, 10_000)));
-        assert_eq!(legacy_arc(p(15_000, 5_000), p(20_000, 5_000), -90.0), (p(20_000, 5_000), p(18_536, 1_464), p(15_000, 0)));
+        assert_eq!(legacy_arc(p(15_000_000, 5_000_000), p(20_000_000, 5_000_000), 90.0), (p(20_000_000, 5_000_000), p(18_536_000, 8_536_000), p(15_000_000, 10_000_000)));
+        assert_eq!(legacy_arc(p(15_000_000, 5_000_000), p(20_000_000, 5_000_000), -90.0), (p(20_000_000, 5_000_000), p(18_536_000, 1_464_000), p(15_000_000, 0)));
         // A half turn goes through the far side of the circle: the middle is a quarter turn on.
-        assert_eq!(legacy_arc(p(0, 0), p(1_000, 0), 180.0), (p(1_000, 0), p(0, 1_000), p(-1_000, 0)));
+        assert_eq!(legacy_arc(p(0, 0), p(1_000_000, 0), 180.0), (p(1_000_000, 0), p(0, 1_000_000), p(-1_000_000, 0)));
     }
 
     #[test]
@@ -2585,11 +2585,11 @@ mod tests {
         let pad = parse_pad_geometry(pad_sexpr.as_list().unwrap(), Side::Bottom, fp_rot, &mut notes).expect("pad parses");
         // Pre-mirror local frame (what `to_board` expects to mirror itself):
         // negating the file's raw -0.5975mm gives +597.5um -> rounds to 598.
-        assert_eq!(pad.at, (598, 0), "importer must undo the file's own back-side mirror, not pass x through as-is");
+        assert_eq!(pad.at, (598_000, 0), "importer must undo the file's own back-side mirror, not pass x through as-is");
 
-        let fp = FootprintInstance { id: "R34".into(), at: Point { x: 114_800, y: 137_800 }, rot: fp_rot, side: Side::Bottom, label: Default::default() };
+        let fp = FootprintInstance { id: "R34".into(), at: Point { x: 114_800_000, y: 137_800_000 }, rot: fp_rot, side: Side::Bottom, label: Default::default() };
         let board_pos = eda_model::footprint::to_board(&fp, pad.at);
-        assert_eq!(board_pos, Point { x: 114_800, y: 138_398 }, "must match kicad-cli's own reported absolute pad position (114.8, 138.3975mm), not the other pad's position 1.196mm away");
+        assert_eq!(board_pos, Point { x: 114_800_000, y: 138_398_000 }, "must match kicad-cli's own reported absolute pad position (114.8, 138.3975mm), not the other pad's position 1.196mm away");
     }
 
     /// GAPS.md #3's second over-firing source: `courtyards_overlap` was a
@@ -2616,7 +2616,7 @@ mod tests {
         // Top side: no mirror, so the asymmetric +x reach (2mm) and the -x
         // reach (0.5mm) land exactly where they're written.
         let (hw, hh) = footprint_courtyard_half(body, Side::Top).expect("courtyard found");
-        assert_eq!((hw, hh), (2000, 500), "symmetric half-extent must enclose the farthest point on each axis: max(|{{-500,2000}}|)=2000, max(|{{-500,500}}|)=500");
+        assert_eq!((hw, hh), (2_000_000, 500_000), "symmetric half-extent must enclose the farthest point on each axis: max(|{{-500,2000}}|)=2000, max(|{{-500,500}}|)=500");
 
         // Back side: the same raw numbers must be un-mirrored (x negated)
         // before taking the half-extent, exactly like a pad's `at` -- the
@@ -2627,7 +2627,7 @@ mod tests {
         // check while leaving the *centre* wrong for a caller that (unlike
         // this one) cares about which side the shroud is on.
         let (hw_b, hh_b) = footprint_courtyard_half(body, Side::Bottom).expect("courtyard found");
-        assert_eq!((hw_b, hh_b), (2000, 500));
+        assert_eq!((hw_b, hh_b), (2_000_000, 500_000));
     }
 
     #[test]
@@ -2650,8 +2650,8 @@ mod tests {
     #[test]
     fn dedup_footprint_key_gives_mixed_side_instances_of_one_lib_id_separate_slots() {
         let mut explicit: BTreeMap<String, Footprint> = BTreeMap::new();
-        let top_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (-598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
-        let bottom_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
+        let top_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (-598_000, 0), size: (715_000, 640_000), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
+        let bottom_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (598_000, 0), size: (715_000, 640_000), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
 
         let lib_id = "fixed_standard:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder";
         let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads, &[], &Default::default());
@@ -2701,9 +2701,9 @@ mod tests {
 
     #[test]
     fn tessellated_arc_keeps_exact_endpoints() {
-        let start = Point { x: 10_000, y: 0 };
-        let mid = Point { x: 7_071, y: 7_071 };
-        let end = Point { x: 0, y: 10_000 };
+        let start = Point { x: 10_000_000, y: 0 };
+        let mid = Point { x: 7_071_000, y: 7_071_000 };
+        let end = Point { x: 0, y: 10_000_000 };
         let pts = eda_model::ir::tessellate_arc(start, mid, end, eda_model::ir::TRACK_ARC_SEGMENTS);
         assert_eq!(*pts.first().unwrap(), start);
         assert_eq!(*pts.last().unwrap(), end);
@@ -2733,10 +2733,10 @@ mod tests {
         assert_eq!(classes.len(), 2, "{classes:?}");
         assert_eq!(classes[0].name, "1kV");
         assert_eq!(classes[0].nets, vec!["/1kV".to_string()]);
-        assert_eq!(classes[0].clearance, Some(2400));
-        assert_eq!(classes[0].track_width, Some(500));
-        assert_eq!(classes[0].via_diameter, Some(1000));
-        assert_eq!(classes[0].via_drill, Some(500));
+        assert_eq!(classes[0].clearance, Some(2_400_000));
+        assert_eq!(classes[0].track_width, Some(500_000));
+        assert_eq!(classes[0].via_diameter, Some(1_000_000));
+        assert_eq!(classes[0].via_drill, Some(500_000));
         assert_eq!(classes[1].name, "500V");
         assert_eq!(classes[1].nets, vec!["/500Vpp".to_string(), "/500Vpn".to_string()], "a class can own more than one pattern");
     }
@@ -2756,10 +2756,10 @@ mod tests {
         let mut model = eda_model::ConstraintModel::default();
         let before = model.board.clearance;
         merge_project_net_classes(&mut model, SAMPLE_PROJECT_JSON);
-        assert_eq!(model.board.clearance, 150, "Default class's 0.15mm clearance, not this crate's own placeholder default ({before})");
-        assert_eq!(model.board.track_width, 250);
-        assert_eq!(model.board.via_diameter, 600);
-        assert_eq!(model.board.via_drill, 300);
+        assert_eq!(model.board.clearance, 150_000, "Default class's 0.15mm clearance, not this crate's own placeholder default ({before})");
+        assert_eq!(model.board.track_width, 250_000);
+        assert_eq!(model.board.via_diameter, 600_000);
+        assert_eq!(model.board.via_drill, 300_000);
     }
 
     /// The nets a schematic's net class labels assign are in the project as `netclass_assignments` (net name -> class names), beside the patterns: a net is in the classes of both
@@ -2786,7 +2786,7 @@ mod tests {
         let mut model = eda_model::ConstraintModel::default();
         merge_project_net_classes(&mut model, project);
         assert_eq!(model.board.matching_classes("Net-(R1-Pad2)").iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["CLASS1", "ONLYALABEL"]);
-        assert_eq!(model.board.clearance, 200);
+        assert_eq!(model.board.clearance, 200_000);
     }
 
     #[test]
@@ -2827,16 +2827,16 @@ mod tests {
     fn merge_project_design_rules_reads_the_board_wide_minimums() {
         let mut model = eda_model::ConstraintModel::default();
         merge_project_design_rules(&mut model, SAMPLE_DESIGN_RULES_JSON);
-        assert_eq!(model.board.track_width_min_nm, 102, "0.1016mm rounds to 102um");
+        assert_eq!(model.board.track_width_min_nm, 102_000, "0.1016mm rounds to 102um");
         assert_eq!(model.board.min_clearance_nm, 0);
-        assert_eq!(model.board.via_diameter_min_nm, 450);
-        assert_eq!(model.board.via_drill_min_nm, 200);
-        assert_eq!(model.board.hole_to_hole_min_nm, 250);
-        assert_eq!(model.board.hole_clearance_nm, 254);
-        assert_eq!(model.board.annular_width_min_nm, 125);
-        assert_eq!(model.board.silk_clearance_nm, 150);
-        assert_eq!(model.board.min_silk_text_height_nm, 800);
-        assert_eq!(model.board.min_silk_text_thickness_nm, 120);
+        assert_eq!(model.board.via_diameter_min_nm, 450_000);
+        assert_eq!(model.board.via_drill_min_nm, 200_000);
+        assert_eq!(model.board.hole_to_hole_min_nm, 250_000);
+        assert_eq!(model.board.hole_clearance_nm, 254_000);
+        assert_eq!(model.board.annular_width_min_nm, 125_000);
+        assert_eq!(model.board.silk_clearance_nm, 150_000);
+        assert_eq!(model.board.min_silk_text_height_nm, 800_000);
+        assert_eq!(model.board.min_silk_text_thickness_nm, 120_000);
     }
 
     #[test]
@@ -2866,12 +2866,12 @@ mod tests {
             (net 0 "")
         )"#;
         let (_design, model, _notes) = import_kicad_pcb(text).expect("parses");
-        assert_eq!(model.board.track_width_min_nm, 150);
-        assert_eq!(model.board.min_clearance_nm, 100);
-        assert_eq!(model.board.via_diameter_min_nm, 400);
-        assert_eq!(model.board.via_drill_min_nm, 250, "falls back to the legacy via_min_drill token when through_hole_min is absent");
-        assert_eq!(model.board.hole_to_hole_min_nm, 200);
-        assert_eq!(model.board.annular_width_min_nm, 90);
+        assert_eq!(model.board.track_width_min_nm, 150_000);
+        assert_eq!(model.board.min_clearance_nm, 100_000);
+        assert_eq!(model.board.via_diameter_min_nm, 400_000);
+        assert_eq!(model.board.via_drill_min_nm, 250_000, "falls back to the legacy via_min_drill token when through_hole_min is absent");
+        assert_eq!(model.board.hole_to_hole_min_nm, 200_000);
+        assert_eq!(model.board.annular_width_min_nm, 90_000);
     }
 
     #[test]
@@ -2891,8 +2891,8 @@ mod tests {
         )"#;
         let (design, model, notes) = import_kicad_pcb(text).expect("parses");
         assert_eq!(model.board.layers, vec!["F.Cu".to_string(), "B.Cu".to_string()]);
-        assert_eq!(model.board.track_width, 250);
-        assert_eq!(model.board.clearance, 200);
+        assert_eq!(model.board.track_width, 250_000);
+        assert_eq!(model.board.clearance, 200_000);
         assert_eq!(model.parts.len(), 1);
         assert_eq!(model.parts[0].reference, "R1");
         assert_eq!(model.footprints.len(), 1);
@@ -2901,7 +2901,7 @@ mod tests {
         assert_eq!(model.nets[0].pins, vec!["R1.1".to_string(), "R1.2".to_string()]);
         let pl = design.placement.unwrap();
         assert_eq!(pl.footprints.len(), 1);
-        assert_eq!(pl.footprints[0].at, Point { x: 10_000, y: 10_000 });
+        assert_eq!(pl.footprints[0].at, Point { x: 10_000_000, y: 10_000_000 });
         assert_eq!(pl.outline.len(), 4);
         assert_eq!(notes.outline_source, "lines");
         assert!(!notes.outline_open);
@@ -2935,9 +2935,9 @@ mod tests {
         let seg = dr.shapes.iter().find(|s| s.layer() == "F.SilkS" && matches!(s, Shape::Segment { .. })).expect("segment on F.SilkS");
         assert!(!seg.id().is_empty());
         let Shape::Segment { stroke_width, start, end, .. } = seg else { unreachable!() };
-        assert_eq!(*stroke_width, 150);
-        assert_eq!(*start, Point { x: 1000, y: 1000 });
-        assert_eq!(*end, Point { x: 5000, y: 1000 });
+        assert_eq!(*stroke_width, 150_000);
+        assert_eq!(*start, Point { x: 1_000_000, y: 1_000_000 });
+        assert_eq!(*end, Point { x: 5_000_000, y: 1_000_000 });
 
         let rect = dr.shapes.iter().find(|s| s.layer() == "F.Fab").expect("rect on F.Fab");
         assert!(matches!(rect, Shape::Rect { filled: true, .. }), "{rect:?}");
@@ -2954,11 +2954,11 @@ mod tests {
         let t = &dr.texts[0];
         assert!(!t.id.is_empty());
         assert_eq!(t.content, "REV A");
-        assert_eq!(t.at, Point { x: 3000, y: 3000 });
+        assert_eq!(t.at, Point { x: 3_000_000, y: 3_000_000 });
         assert_eq!(t.angle, 90_000);
         assert_eq!(t.layer, "F.SilkS");
-        assert_eq!(t.size_nm, 1000);
-        assert_eq!(t.stroke_width, 150);
+        assert_eq!(t.size_nm, 1_000_000);
+        assert_eq!(t.stroke_width, 150_000);
         assert_eq!(t.justify, TextJustify::Left);
         assert!(t.mirror);
     }
@@ -2979,8 +2979,8 @@ mod tests {
         assert_eq!(dr.shapes.len(), 1);
         let Shape::Bezier { layer, stroke_width, start, c1, c2, end, .. } = &dr.shapes[0] else { panic!("{:?}", dr.shapes[0]) };
         assert_eq!(layer, "F.SilkS");
-        assert_eq!(*stroke_width, 150);
-        assert_eq!((*start, *c1, *c2, *end), (Point { x: 1000, y: 1000 }, Point { x: 1000, y: 3000 }, Point { x: 4000, y: 3000 }, Point { x: 4000, y: 1000 }));
+        assert_eq!(*stroke_width, 150_000);
+        assert_eq!((*start, *c1, *c2, *end), (Point { x: 1_000_000, y: 1_000_000 }, Point { x: 1_000_000, y: 3_000_000 }, Point { x: 4_000_000, y: 3_000_000 }, Point { x: 4_000_000, y: 1_000_000 }));
     }
 
     /// `(setup (pad_to_mask_clearance ..) (solder_mask_min_width ..)
@@ -2999,7 +2999,7 @@ mod tests {
         };
         let (_, model, _) = import_kicad_pcb(&text("(tenting (front yes) (back no))")).expect("parses");
         let m = &model.board.solder_mask;
-        assert_eq!((m.expansion_nm, m.min_width_nm), (50, 100));
+        assert_eq!((m.expansion_nm, m.min_width_nm), (50_000, 100_000));
         assert!(m.allow_bridges_in_footprints);
         assert!(m.tent_vias_front && !m.tent_vias_back);
 
@@ -3012,7 +3012,7 @@ mod tests {
 
         let (_, mut with_pro, _) = import_kicad_pcb(&text("(tenting (front yes) (back yes))")).expect("parses");
         merge_project_design_rules(&mut with_pro, r#"{"board":{"design_settings":{"rules":{"solder_mask_to_copper_clearance":0.07}}}}"#);
-        assert_eq!(with_pro.board.solder_mask.to_copper_clearance_nm, 70);
+        assert_eq!(with_pro.board.solder_mask.to_copper_clearance_nm, 70_000);
     }
 
     /// Per-pad layer sets and mask margins, footprint margin / allow-bridges /
@@ -3044,11 +3044,11 @@ mod tests {
         let inst = design.placement.as_ref().expect("placement").footprints.iter().find(|f| f.id == "U1").expect("U1").clone();
         let dr = design.drawings.expect("drawings");
         let fp = dr.footprint_extras.iter().find(|e| e.id == "U1").expect("extra for U1");
-        assert_eq!(fp.solder_mask_margin, Some(30));
+        assert_eq!(fp.solder_mask_margin, Some(30_000));
         assert!(fp.allow_soldermask_bridges);
         assert_eq!(fp.net_tie_pad_groups, vec!["1, 2".to_string()]);
         assert_eq!(fp.pads.len(), 2);
-        assert_eq!(fp.pads[0].solder_mask_margin, Some(20));
+        assert_eq!(fp.pads[0].solder_mask_margin, Some(20_000));
         assert_eq!(fp.pads[0].layers, vec!["F.Cu".to_string(), "F.Mask".to_string(), "F.SilkS".to_string()]);
         assert_eq!(fp.pads[1].layers, vec!["B.Cu".to_string(), "B.Mask".to_string(), "F.Cu".to_string(), "F.Mask".to_string()]);
         assert_eq!(fp.pads[1].solder_mask_margin, None);
@@ -3059,10 +3059,10 @@ mod tests {
         let art = &model.footprints.iter().find(|f| f.name == "lib:fp").expect("the footprint").art;
         assert_eq!(art.shapes.len(), 3);
         let silk = art.shapes.iter().find(|g| g.shape.layer() == "F.SilkS").expect("silk line");
-        assert_eq!(silk.shape.points(), vec![Point { x: -1_000, y: 0 }, Point { x: 1_000, y: 0 }]);
-        assert_eq!(silk.shape.stroke_width(), 120);
+        assert_eq!(silk.shape.points(), vec![Point { x: -1_000_000, y: 0 }, Point { x: 1_000_000, y: 0 }]);
+        assert_eq!(silk.shape.stroke_width(), 120_000);
         // Placed rotated 90 deg (file angle 90 = counter-clockwise) about (10, 20): local (-1, 0) -> (10, 21).
-        assert_eq!(silk.placed(&inst).shape.points(), vec![Point { x: 10_000, y: 21_000 }, Point { x: 10_000, y: 19_000 }]);
+        assert_eq!(silk.placed(&inst).shape.points(), vec![Point { x: 10_000_000, y: 21_000_000 }, Point { x: 10_000_000, y: 19_000_000 }]);
         let mask = art.shapes.iter().find(|g| g.shape.layer() == "F.Mask").expect("mask rect");
         assert!(matches!(&mask.shape, Shape::Rect { filled: true, .. } | Shape::Polygon { filled: true, .. }), "{:?}", mask.shape);
         assert!(art.shapes.iter().any(|g| g.shape.layer() == "F.Fab"));
@@ -3072,7 +3072,7 @@ mod tests {
 
         // Via tenting: an explicit `no` is kept, `none` inherits (no entry).
         assert_eq!(dr.via_tenting.len(), 1);
-        assert_eq!((dr.via_tenting[0].at, dr.via_tenting[0].front, dr.via_tenting[0].back), (Point { x: 5000, y: 5000 }, Some(false), None));
+        assert_eq!((dr.via_tenting[0].at, dr.via_tenting[0].front, dr.via_tenting[0].back), (Point { x: 5_000_000, y: 5_000_000 }, Some(false), None));
     }
 
     /// Footprint text and `gr_text` on silk: the footprint's Reference and Value are its fields (hidden one hidden, back-side anchor
@@ -3099,11 +3099,11 @@ mod tests {
         let t = edit.value.as_ref().expect("Value");
         assert_eq!((t.layer.as_str(), t.visible, t.mirror, t.keep_upright, t.board_angle(&inst)), ("B.SilkS", true, true, true, 180_000));
         // Back footprint: the file's local x is already mirrored, so +3.7 lands to the right.
-        assert_eq!(t.board_position(&inst), Point { x: 13_700, y: 10_000 });
+        assert_eq!(t.board_position(&inst), Point { x: 13_700_000, y: 10_000_000 });
         assert_eq!(dr.silk_texts.len(), 1);
         let g = &dr.silk_texts[0];
         assert_eq!(g.text, "REV v2\nline2");
-        assert_eq!((g.size, g.thickness, g.halign, g.valign, g.keep_upright, g.bold), ((1500, 1200), 200, -1, 1, false, true));
+        assert_eq!((g.size, g.thickness, g.halign, g.valign, g.keep_upright, g.bold), ((1_500_000, 1_200_000), 200_000, -1, 1, false, true));
         assert_eq!(g.angle_file_mdeg, 90_000);
     }
     /// A KiCad 10 file lists no nets at the top and names a net where it is used (`PCB_IO_KICAD_SEXPR_PARSER::parseNet`): the net of a pad, a track, a via or a zone is the

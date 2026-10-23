@@ -11,7 +11,7 @@
 // both are inner. This model has no microvia type, so that checkbox and `VIATYPE::MICROVIA` are left out.
 //
 // Pure: no store, no DOM. Unit-tested in globalEditTracksVias.test.ts.
-import type { BoardState, Um } from "../api/types";
+import type { BoardState, Nm } from "../api/types";
 import { netsContext } from "./appearanceNets";
 import { ancestors } from "./groupTree";
 
@@ -54,9 +54,9 @@ export interface TracksViasFilter {
   layerOn: boolean;
   layer: string;
   trackWidthOn: boolean;
-  trackWidth: Um;
+  trackWidth: Nm;
   viaSizeOn: boolean;
-  viaSize: Um;
+  viaSize: Nm;
 }
 
 /** The state of the tri-state "Vias" box (`updateViasCheckbox`): off when no type is ticked, on when all are, and in between otherwise. */

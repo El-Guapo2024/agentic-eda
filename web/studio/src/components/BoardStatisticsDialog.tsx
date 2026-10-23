@@ -25,13 +25,13 @@ let savedOptions: BoardStatsOptions = {
   subtract_holes_from_copper_areas: false,
 };
 
-type DrillCol = "qty" | "shape" | "x_um" | "y_um" | "plated" | "is_pad" | "start_layer" | "stop_layer";
+type DrillCol = "qty" | "shape" | "x_nm" | "y_nm" | "plated" | "is_pad" | "start_layer" | "stop_layer";
 
 const DRILL_COLS: { key: DrillCol; label: string }[] = [
   { key: "qty", label: "Count" },
   { key: "shape", label: "Shape" },
-  { key: "x_um", label: "X Size" },
-  { key: "y_um", label: "Y Size" },
+  { key: "x_nm", label: "X Size" },
+  { key: "y_nm", label: "Y Size" },
   { key: "plated", label: "Plated" },
   { key: "is_pad", label: "Via/Pad" },
   { key: "start_layer", label: "Start Layer" },
@@ -47,10 +47,10 @@ function compareDrills(a: BoardStatsDrill, b: BoardStatsDrill, col: DrillCol, as
         return d.qty;
       case "shape":
         return d.shape === "round" ? 0 : 1;
-      case "x_um":
-        return d.x_um;
-      case "y_um":
-        return d.y_um;
+      case "x_nm":
+        return d.x_nm;
+      case "y_nm":
+        return d.y_nm;
       case "plated":
         return d.plated ? 1 : 0;
       case "is_pad":
@@ -163,17 +163,17 @@ export function BoardStatisticsDialog() {
 
   const boardRows: [string, string][] = b
     ? [
-        ["Dimensions:", b.has_outline ? `${messageTextFromValue(b.width_um, units, false)} x ${dist(b.height_um)}` : "unknown"],
-        ["Area:", b.has_outline ? area(b.area_um2) : "unknown"],
-        ["Front copper area:", area(b.front_copper_area_um2)],
-        ["Back copper area:", area(b.back_copper_area_um2)],
-        ["Min track clearance:", dist(b.min_clearance_um)],
-        ["Min track width:", dist(b.min_track_width_um)],
-        ["Min drill diameter:", dist(b.min_drill_um)],
-        ["Board stackup thickness:", dist(b.thickness_um)],
-        ["Front footprint area:", area(b.front_courtyard_area_um2)],
+        ["Dimensions:", b.has_outline ? `${messageTextFromValue(b.width_nm, units, false)} x ${dist(b.height_nm)}` : "unknown"],
+        ["Area:", b.has_outline ? area(b.area_nm2) : "unknown"],
+        ["Front copper area:", area(b.front_copper_area_nm2)],
+        ["Back copper area:", area(b.back_copper_area_nm2)],
+        ["Min track clearance:", dist(b.min_clearance_nm)],
+        ["Min track width:", dist(b.min_track_width_nm)],
+        ["Min drill diameter:", dist(b.min_drill_nm)],
+        ["Board stackup thickness:", dist(b.thickness_nm)],
+        ["Front footprint area:", area(b.front_courtyard_area_nm2)],
         ["Front footprint density:", b.has_outline ? `${b.front_density_pct.toFixed(2)} %` : ""],
-        ["Back footprint area:", area(b.back_courtyard_area_um2)],
+        ["Back footprint area:", area(b.back_courtyard_area_nm2)],
         ["Back footprint density:", b.has_outline ? `${b.back_density_pct.toFixed(2)} %` : ""],
       ]
     : [];
@@ -261,8 +261,8 @@ export function BoardStatisticsDialog() {
                   <tr key={i}>
                     <td style={{ textAlign: "right" }}>{d.qty}</td>
                     <td>{d.shape === "round" ? "Round" : "Slot"}</td>
-                    <td style={{ textAlign: "right" }}>{dist(d.x_um)}</td>
-                    <td style={{ textAlign: "right" }}>{dist(d.y_um)}</td>
+                    <td style={{ textAlign: "right" }}>{dist(d.x_nm)}</td>
+                    <td style={{ textAlign: "right" }}>{dist(d.y_nm)}</td>
                     <td>{d.plated ? "PTH" : "NPTH"}</td>
                     <td>{d.is_pad ? "Pad" : "Via"}</td>
                     <td>{d.start_layer ?? "N/A"}</td>

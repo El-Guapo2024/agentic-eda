@@ -42,13 +42,13 @@ export function schFieldOf(f: FieldRow, unit = 1, unitCount = 1): SchField {
   return {
     name: f.name,
     text,
-    at: [f.at.x * 1000, -f.at.y * 1000],
+    at: [f.at.x * 1e6, -f.at.y * 1e6],
     vertical: Math.abs(f.angle_deg % 180) === 90,
     h: f.h_align,
     v: f.v_align,
     visible: !f.hidden,
     id: libFieldId(f.name),
-    size_um: f.size_mm * 1000,
+    size_nm: f.size_mm * 1e6,
     bold: f.bold,
     italic: f.italic,
     name_shown: f.show_name,
@@ -63,12 +63,12 @@ export function fieldsOnShow(rows: readonly FieldRow[], showHidden: boolean, uni
 /** The text a field draws. */
 export const fieldShownText = (f: SchField): string => shownText(f);
 
-/** The field under the point, within `tolUm` of its box; of several the one with the smallest box. Null when none. */
-export function hitLibField(fields: readonly SchField[], x: number, y: number, tolUm: number, measure: Measure): string | null {
+/** The field under the point, within `tolNm` of its box; of several the one with the smallest box. Null when none. */
+export function hitLibField(fields: readonly SchField[], x: number, y: number, tolNm: number, measure: Measure): string | null {
   let best: { id: string; area: number } | null = null;
   for (const f of fields) {
     const b = fieldBox(f, measure);
-    if (x < b.minX - tolUm || x > b.maxX + tolUm || y < b.minY - tolUm || y > b.maxY + tolUm) continue;
+    if (x < b.minX - tolNm || x > b.maxX + tolNm || y < b.minY - tolNm || y > b.maxY + tolNm) continue;
     const area = (b.maxX - b.minX) * (b.maxY - b.minY);
     if (!best || area < best.area) best = { id: f.id!, area };
   }

@@ -15,7 +15,7 @@ const GRAPHIC_LAYERS = ["F.SilkS", "F.Fab", "F.CrtYd"];
 
 /** 100% is one screen pixel per 100 um, the same reference the board toolbar's zoom box uses. */
 const ZOOM_PRESET_PERCENTS = [25, 50, 100, 200, 400, 800, 1600, 3200];
-const PERCENT_OF_SCALE = 100 / 0.01;
+const PERCENT_OF_SCALE = 100 / 1e-5;
 
 function editorCanvasRect(): DOMRect | null {
   return document.querySelector(".editor-canvas-col .pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -25,16 +25,16 @@ function editorCanvasRect(): DOMRect | null {
 const EDIT_GRIDS = "edit-grids";
 
 /** The grid box of an editor's toolbar: its own list of grids (state/gridSettings.ts), then a line and "Edit Grids..." (`EDA_DRAW_FRAME::OnSelectGrid`). */
-export function GridSelect({ editor, gridUm, onChange }: { editor: GridEditor; gridUm: number; onChange: (um: number) => void }) {
+export function GridSelect({ editor, gridNm, onChange }: { editor: GridEditor; gridNm: number; onChange: (um: number) => void }) {
   const { units } = useStudioState();
   const { grids } = useGridSettings(editor);
   const { run, isEnabled } = useActionRunner();
   // A grid that left the list (it was edited away in another editor's session) stays on screen as the box's current value until another is chosen.
-  const options = grids.includes(gridUm) ? grids : [...grids, gridUm];
+  const options = grids.includes(gridNm) ? grids : [...grids, gridNm];
   return (
     <div className="toolbar-control" title="Grid">
       <select
-        value={gridUm}
+        value={gridNm}
         onChange={(e) => {
           if (e.target.value === EDIT_GRIDS) run("common.Control.editGrids");
           else onChange(Number(e.target.value));
@@ -83,7 +83,7 @@ function ZoomSelect({ view, onView }: { view: { scale: number; x: number; y: num
 export function FootprintToolbarControl({ control }: { control: string }) {
   const state = useFpState();
   const dispatch = useFpDispatch();
-  if (control === "gridSelect") return <GridSelect editor="footprint" gridUm={state.gridUm} onChange={(um) => dispatch({ type: "SET_GRID_UM", um })} />;
+  if (control === "gridSelect") return <GridSelect editor="footprint" gridNm={state.gridNm} onChange={(um) => dispatch({ type: "SET_GRID_NM", um })} />;
   if (control === "zoomSelect") return <ZoomSelect view={state.view} onView={(view) => dispatch({ type: "SET_VIEW", view })} />;
   if (control === "layerSelector") {
     return (

@@ -20,7 +20,7 @@ export type ConvertTarget = "label" | "global_label" | "hier_label" | "directive
 
 export type ConvertSource =
   | { kind: "label"; id: string; net: string; at: readonly [number, number]; scope: LabelScope; shape: LabelShape | null; spin: Spin }
-  | { kind: "text"; id: string; content: string; at: readonly [number, number]; angleDeg: number; sizeUm: number }
+  | { kind: "text"; id: string; content: string; at: readonly [number, number]; angleDeg: number; sizeNm: number }
   | { kind: "text_box"; id: string; graphic: SchGraphic }
   | { kind: "directive"; id: string; graphic: SchGraphic };
 
@@ -31,9 +31,9 @@ export interface Conversion {
 }
 
 /** `eeschema/default_values.h` DEFAULT_TEXT_SIZE (50 mil), um. */
-const DEFAULT_TEXT_SIZE_UM = 1270;
+const DEFAULT_TEXT_SIZE_NM = 1_270_000;
 /** `DEFAULT_PINNED_LENGTH`-style default pole of a directive label (100 mil), um. */
-const DIRECTIVE_POLE_UM = 2540;
+const DIRECTIVE_POLE_NM = 2_540_000;
 
 const sourceTarget = (s: ConvertSource): ConvertTarget =>
   s.kind === "label" ? (s.scope === "local" ? "label" : s.scope === "global" ? "global_label" : "hier_label") : s.kind === "text" ? "text" : s.kind === "text_box" ? "text_box" : "directive_label";
@@ -105,7 +105,7 @@ function textBoxLabelPosition(s: Extract<ConvertSource, { kind: "text_box" }>, g
 
 /** The rectangle a text box gets around a source's text -- its extent grown by the margin, plus 1/20 of the margin so the text does not rewrap. */
 function textBoxAround(s: ConvertSource, text: string, measure: Measure): SchGraphicInput {
-  const size = s.kind === "text" ? s.sizeUm : DEFAULT_TEXT_SIZE_UM;
+  const size = s.kind === "text" ? s.sizeNm : DEFAULT_TEXT_SIZE_NM;
   const lines = text.split("\n");
   const along = Math.max(...lines.map((l) => measure(l, size)), size);
   const across = size * CAP_HEIGHT_RATIO + (lines.length - 1) * size * INTERLINE_PITCH;
@@ -128,7 +128,7 @@ function textBoxAround(s: ConvertSource, text: string, measure: Measure): SchGra
       end: { x: Math.round(right + margin + (vertical ? 0 : slop)), y: Math.round(bottom + margin) },
       text,
       angle: vertical ? 90_000 : 0,
-      size_um: size,
+      size_nm: size,
       h_align: "left",
       v_align: "top",
     },
@@ -167,7 +167,7 @@ export function convertCmds(sources: readonly ConvertSource[], target: ConvertTa
       }
       case "text": {
         const angle = s.kind === "text" ? Math.round(s.angleDeg * 1000) : s.kind === "label" ? spinAngle(spin) : 0;
-        adds.push({ op: "add_sch_text", content: text, at: { x: at[0], y: at[1] }, angle_millideg: angle, size_um: s.kind === "text" ? s.sizeUm : DEFAULT_TEXT_SIZE_UM });
+        adds.push({ op: "add_sch_text", content: text, at: { x: at[0], y: at[1] }, angle_millideg: angle, size_nm: s.kind === "text" ? s.sizeNm : DEFAULT_TEXT_SIZE_NM });
         const id = textId(text, at, taken);
         taken.add(id);
         predictedIds.push(id);
@@ -176,7 +176,7 @@ export function convertCmds(sources: readonly ConvertSource[], target: ConvertTa
       case "directive_label": {
         // A directive label has no text of its own: a text becomes its `Netclass` field ("If we're copying from a text object assume the text is the netclass name").
         const netclass = s.kind === "text" || s.kind === "text_box" ? text : "";
-        const graphic: SchGraphicInput = { shape: { type: "directive", at: { x: at[0], y: at[1] }, orientation: spinOrientation(spin), shape: "round", pin_length_um: DIRECTIVE_POLE_UM, netclass, component_class: "" } };
+        const graphic: SchGraphicInput = { shape: { type: "directive", at: { x: at[0], y: at[1] }, orientation: spinOrientation(spin), shape: "round", pin_length_nm: DIRECTIVE_POLE_NM, netclass, component_class: "" } };
         adds.push({ op: "sch_edit", verb: "add_graphic", graphic });
         const id = graphicId(graphic.shape, taken);
         taken.add(id);

@@ -17,7 +17,7 @@ import { useSymDispatch, useSymState } from "../state/symbolEditorStore";
 import { setGridsDialogOpen, useCommonDialogs } from "../state/commonDialogs";
 import { getGridSettings, setGridSettings } from "../state/gridSettings";
 import { getGridOverrides, setGridOverrides } from "../state/gridOverrides";
-import { formatLength, umTo, type LengthUnit } from "../state/units";
+import { formatLength, nmTo, type LengthUnit } from "../state/units";
 import { effectiveHotkey, displayHotkey } from "../actions/hotkeys";
 import { GRID_EDITORS, GRID_EDITOR_LABEL, insertGrid, moveGrid, parseGridSize, removeGrid, replaceGrid, resetGrids, type GridEdit, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
 import { overrideRows, rebuildOverrides, safeOverrideIndex, type GridOverrides } from "../kicad-port/gridOverrides";
@@ -48,7 +48,7 @@ function gridLabel(um: number, units: LengthUnit): string {
 
 /** A size as it is typed into the entry: the number in the display unit, without trailing zeros. */
 function entryText(um: number, units: LengthUnit): string {
-  return String(Number(umTo(um, units).toFixed(6)));
+  return String(Number(nmTo(um, units).toFixed(6)));
 }
 
 export function GridsDialog() {
@@ -66,7 +66,7 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
   const symDispatch = useSymDispatch();
   const units = state.units;
 
-  const currentGrid: Record<GridEditor, number> = { pcb: state.gridUm, footprint: fp.gridUm, symbol: sym.gridUm, schematic: state.schGridUm };
+  const currentGrid: Record<GridEditor, number> = { pcb: state.gridNm, footprint: fp.gridNm, symbol: sym.gridNm, schematic: state.schGridNm };
   const [pages, setPages] = useState<Record<GridEditor, Page>>(() => {
     const page = (e: GridEditor): Page => {
       const settings = getGridSettings(e);
@@ -100,10 +100,10 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
       setGridOverrides(e, o);
       const um = s.grids[r];
       if (um === undefined || Math.abs(um - currentGrid[e]) < 1e-9) continue;
-      if (e === "pcb") dispatch({ type: "SET_GRID_UM", um });
-      else if (e === "schematic") dispatch({ type: "SET_SCH_GRID_UM", um });
-      else if (e === "footprint") fpDispatch({ type: "SET_GRID_UM", um });
-      else symDispatch({ type: "SET_GRID_UM", um });
+      if (e === "pcb") dispatch({ type: "SET_GRID_NM", um });
+      else if (e === "schematic") dispatch({ type: "SET_SCH_GRID_NM", um });
+      else if (e === "footprint") fpDispatch({ type: "SET_GRID_NM", um });
+      else symDispatch({ type: "SET_GRID_NM", um });
     }
     close();
   };

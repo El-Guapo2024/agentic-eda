@@ -4,10 +4,10 @@ import { netNavigatorItems, stepNetItem, type NavSchematic } from "./netNavigato
 
 const sch: NavSchematic = {
   pins: [
-    { ref: "R2", number: "1", name: "~", tip: [20_000, 10_000] },
-    { ref: "R1", number: "2", name: null, tip: [10_000, 10_000] },
-    { ref: "U1", number: "7", name: "VIN", tip: [30_000, 10_000] },
-    { ref: "C1", number: "1", name: null, tip: [5_000, 5_000] },
+    { ref: "R2", number: "1", name: "~", tip: [20_000_000, 10_000_000] },
+    { ref: "R1", number: "2", name: null, tip: [10_000_000, 10_000_000] },
+    { ref: "U1", number: "7", name: "VIN", tip: [30_000_000, 10_000_000] },
+    { ref: "C1", number: "1", name: null, tip: [5_000_000, 5_000_000] },
   ],
   wires: [
     { net: "VIN", pins: ["R1.2", "R2.1"] },
@@ -15,14 +15,14 @@ const sch: NavSchematic = {
     { net: "GND", pins: ["C1.1"] },
   ],
   labels: [
-    { id: "lbl_b", net: "VIN", at: [40_000, 12_700], scope: "local" },
-    { id: "lbl_a", net: "VIN", at: [41_000, 12_700], scope: "global" },
-    { id: "lbl_g", net: "GND", at: [1_000, 1_000], scope: "local" },
+    { id: "lbl_b", net: "VIN", at: [40_000_000, 12_700_000], scope: "local" },
+    { id: "lbl_a", net: "VIN", at: [41_000_000, 12_700_000], scope: "global" },
+    { id: "lbl_g", net: "GND", at: [1_000_000, 1_000_000], scope: "local" },
   ],
   powerSymbols: [{ id: "#PWR01", net: "VIN", pin: { number: "1", name: "VIN" } }],
   noConnects: [
-    { id: "nc_1", at: [30_000, 10_000] }, // on U1.7 (a VIN pin)
-    { id: "nc_2", at: [99_000, 99_000] }, // nowhere
+    { id: "nc_1", at: [30_000_000, 10_000_000] }, // on U1.7 (a VIN pin)
+    { id: "nc_2", at: [99_000_000, 99_000_000] }, // nowhere
   ],
 };
 
@@ -51,7 +51,7 @@ test("netNavigatorItems: another net sees only its own", () => {
 
 test("netNavigatorItems: coordinates follow the units", () => {
   const items = netNavigatorItems(sch, "GND", "mil");
-  assert.match(items[0]!.text, /^Label 'GND' at \(39\.37 mils, 39\.37 mils\)$/);
+  assert.match(items[0]!.text, /^Label 'GND' at \(39_000\.37 mils, 39_000\.37 mils\)$/);
 });
 
 test("stepNetItem: Tab / Shift+Tab walk the list and wrap at both ends", () => {

@@ -228,7 +228,7 @@
       tid("vst-ok").click();
       await waitFor(async () => (await stitches()).length === n0 + 1, 10000);
       const s = (await stitches()).at(-1);
-      t(!!s && s.net === gnd && s.pitch_um === 2000, `OK makes the stitching on ${gnd} at a 2 mm pitch`);
+      t(!!s && s.net === gnd && s.pitch_nm === 2000, `OK makes the stitching on ${gnd} at a 2 mm pitch`);
       if (!s) return;
       await sleep(600);
       t(E.state().selection.some((x) => x.id === s.id || x === s.id), "the new stitching is selected, not its vias");
@@ -263,8 +263,8 @@
         setValue(pitch, "3");
         pitch.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
         pitch.blur?.();
-        await waitFor(async () => (await stitches()).find((x) => x.id === s.id)?.pitch_um === 3000, 10000);
-        t((await stitches()).find((x) => x.id === s.id)?.pitch_um === 3000, "Pitch 3 mm makes the stitching again at 3 mm");
+        await waitFor(async () => (await stitches()).find((x) => x.id === s.id)?.pitch_nm === 3000, 10000);
+        t((await stitches()).find((x) => x.id === s.id)?.pitch_nm === 3000, "Pitch 3 mm makes the stitching again at 3 mm");
       }
       const viaIds = new Set(((await stitches()).find((x) => x.id === s.id)?.member_ids) ?? []);
       await select([s.id]);
@@ -337,7 +337,7 @@
       await waitFor(async () => (await maps()).length === n0 + 1, 8000);
       const st = await board();
       const m = (st.drawings?.drill_maps ?? []).at(-1);
-      t(!!m && /User|Fab/.test(m.layer) && m.offset.x === 0 && m.size_um === 1500, `a map on ${m?.layer}, at no offset, with 1.5 mm marks`);
+      t(!!m && /User|Fab/.test(m.layer) && m.offset.x === 0 && m.size_nm === 1500, `a map on ${m?.layer}, at no offset, with 1.5 mm marks`);
       if (!m) return;
       await sleep(500);
       t(E.state().selection.some((x) => x.id === m.id || x === m.id), "the new map is selected");

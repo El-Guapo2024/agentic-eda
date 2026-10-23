@@ -13,8 +13,8 @@ export interface InspectPickContext {
   highContrast: boolean;
   selection: ReadonlySet<string>;
   /** Board micrometres per screen pixel's reciprocal: `1 / view.scale`. */
-  onePixelUm: number;
-  toleranceUm: number;
+  onePixelNm: number;
+  toleranceNm: number;
 }
 
 /** The kinds of item `clearanceTypes` (pads, vias, tracks, arcs, zones, shapes, footprints) and `constraintTypes` (those and fields and texts) collect. */
@@ -23,10 +23,10 @@ export const CONSTRAINT_KINDS: readonly SelectableKind[] = [...CLEARANCE_KINDS, 
 
 /** `filterCollectorForInspection` and the guess: the id of the item a click at `(x, y)` inspects, among the `kinds`. */
 export function inspectionPick(board: BoardState, x: number, y: number, ctx: InspectPickContext, kinds: readonly SelectableKind[]): string | null {
-  let all = collectSelectionCandidates(board, x, y, ctx.toleranceUm, ctx.filter, ctx.layerVisible, ctx.activeLayer, ctx.highContrast, ctx.selection, false).filter((c) => kinds.includes(c.kind));
+  let all = collectSelectionCandidates(board, x, y, ctx.toleranceNm, ctx.filter, ctx.layerVisible, ctx.activeLayer, ctx.highContrast, ctx.selection, false).filter((c) => kinds.includes(c.kind));
   const copper = all.some((c) => c.kind === "pad" || c.kind === "via" || c.kind === "track" || c.kind === "zone");
   if (copper) all = all.filter((c) => c.kind !== "part");
-  const guessed = all.length > 1 ? guessSelectionCandidates(all, ctx.onePixelUm, ctx.activeLayer) : all;
+  const guessed = all.length > 1 ? guessSelectionCandidates(all, ctx.onePixelNm, ctx.activeLayer) : all;
   return guessed[0]?.id ?? null;
 }
 

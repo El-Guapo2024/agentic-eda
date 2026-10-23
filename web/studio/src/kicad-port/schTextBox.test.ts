@@ -17,7 +17,7 @@ test("wrapping breaks at spaces and keeps explicit newlines", () => {
 });
 
 test("horizontal text: the first baseline sits a cap height below the top margin, lines one interline pitch apart", () => {
-  const l = layoutTextBox({ start: [0, 0], end: [10_000, 5_000], text: "one\ntwo", angle: 0, sizeUm: 1_000, hAlign: "left", vAlign: "top", marginUm: 500 }, measure);
+  const l = layoutTextBox({ start: [0, 0], end: [10_000, 5_000], text: "one\ntwo", angle: 0, sizeNm: 1_000, hAlign: "left", vAlign: "top", marginNm: 500 }, measure);
   assert.equal(l.vertical, false);
   assert.deepEqual(l.origin, [0, 0]);
   assert.equal(l.lines.length, 2);
@@ -27,14 +27,14 @@ test("horizontal text: the first baseline sits a cap height below the top margin
 });
 
 test("alignment: right aligns to the right margin, bottom to the bottom margin", () => {
-  const l = layoutTextBox({ start: [0, 0], end: [10_000, 5_000], text: "x", angle: 0, sizeUm: 1_000, hAlign: "right", vAlign: "bottom", marginUm: 500 }, measure);
+  const l = layoutTextBox({ start: [0, 0], end: [10_000, 5_000], text: "x", angle: 0, sizeNm: 1_000, hAlign: "right", vAlign: "bottom", marginNm: 500 }, measure);
   assert.equal(l.lines[0]!.u, 9_500);
   assert.equal(l.lines[0]!.justify, "right");
   assert.equal(Math.round(l.lines[0]!.v), 5_000 - 500, "the baseline is the bottom margin's line");
 });
 
 test("vertical text lays its frame out from the bottom-left corner, along the box's height", () => {
-  const l = layoutTextBox({ start: [0, 0], end: [4_000, 10_000], text: "abcdefghijklmnopqrstuvwxyz", angle: 90_000, sizeUm: 1_000, hAlign: "left", vAlign: "top", marginUm: 500 }, measure);
+  const l = layoutTextBox({ start: [0, 0], end: [4_000, 10_000], text: "abcdefghijklmnopqrstuvwxyz", angle: 90_000, sizeNm: 1_000, hAlign: "left", vAlign: "top", marginNm: 500 }, measure);
   assert.equal(l.vertical, true);
   assert.deepEqual(l.origin, [0, 10_000]);
   // 10 mm of height minus two 0.5 mm margins: 9 characters per line at 1 mm each, but the word is one long token.

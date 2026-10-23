@@ -159,10 +159,10 @@ export interface CleanupGraphicsOptions {
   /** "Fix discontinuities in board outlines". */
   fixBoardOutlines: boolean;
   /** "Tolerance": the outline gap fixed (`s_defaultTolerance` = 2 mm). */
-  toleranceUm: number;
+  toleranceNm: number;
 }
 
-export const DEFAULT_CLEANUP_GRAPHICS: CleanupGraphicsOptions = { mergeRects: false, deleteRedundant: false, fixBoardOutlines: false, toleranceUm: 2000 };
+export const DEFAULT_CLEANUP_GRAPHICS: CleanupGraphicsOptions = { mergeRects: false, deleteRedundant: false, fixBoardOutlines: false, toleranceNm: 2_000_000 };
 
 /** `CLEANUP_ITEM` descriptions (cleanup_item.cpp). */
 export const CLEANUP_LABELS = {
@@ -273,7 +273,7 @@ export function planCleanupGraphics(shapes: readonly Shape[], o: CleanupGraphics
 
   if (o.fixBoardOutlines && !dryRun) {
     const edge = shapes.filter((s) => s.layer === "Edge.Cuts" && !deleted.has(s.id));
-    const res = healShapes(edge, o.toleranceUm);
+    const res = healShapes(edge, o.toleranceNm);
     for (const id of res.remove) {
       deleted.add(id);
       remove.push(id);

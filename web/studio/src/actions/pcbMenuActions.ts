@@ -20,7 +20,7 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
     (param) => {
       if (state.tab === "pcb") fn(param);
     };
-  const base = { width: board?.board_rules?.track_width ?? 250, via: { diameter: board?.board_rules?.via_diameter ?? 600, drill: board?.board_rules?.via_drill ?? 300 } };
+  const base = { width: board?.board_rules?.track_width ?? 250_000, via: { diameter: board?.board_rules?.via_diameter ?? 600_000, drill: board?.board_rules?.via_drill ?? 300_000 } };
   const widths = (): number[] => [base.width, ...(board?.routing?.track_width_presets ?? [])];
   const vias = () => [base.via, ...(board?.routing?.via_presets ?? [])];
   const index = (param: unknown): number => (typeof param === "number" ? Math.round(param) : 0);
@@ -29,7 +29,7 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
   const reroute = (d: Dispatch<Action>, width: number) => {
     const draw = state.drawState;
     if (draw?.kind !== "route") return;
-    const cursor = state.cursorUm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
+    const cursor = state.cursorNm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
     d({ type: "SET_DRAW_STATE", draw: { ...draw, width } });
     void routeMove(cursor.x, cursor.y, undefined, width).then((preview) => {
       if (preview.ok) d({ type: "SET_DRAW_STATE", draw: drawStateFromPreview({ ...draw, width }, preview) });
@@ -42,7 +42,7 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
     pcbOnly(() => {
       dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
       dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
-      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthUm: base.width });
+      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: base.width });
       dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: base.via });
       reroute(dispatch, base.width);
     })
@@ -56,7 +56,7 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
       dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
       // `SetTrackWidthIndex`: "m_useCustomTrackVia = false"
       dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
-      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthUm: width });
+      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: width });
       reroute(dispatch, width);
     })
   );

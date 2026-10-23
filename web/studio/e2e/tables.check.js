@@ -256,7 +256,7 @@
 
   await scenario("sheet: the context menu of a cell offers the table edits, and Merge Cells only for a block", async (t) => {
     // a table to ask the menu on (made by the verb, as the dialog would)
-    const draw = { op: "sch_table", verb: "draw", layer: "", at: { x: 40_000, y: 150_000 }, cols: 3, rows: 3, cell_w_um: 20_320, cell_h_um: 5_080, line_width_um: 0 };
+    const draw = { op: "sch_table", verb: "draw", layer: "", at: { x: 40_000, y: 150_000 }, cols: 3, rows: 3, cell_w_nm: 20_320, cell_h_nm: 5_080, line_width_nm: 0 };
     const res = await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd: draw, strict: false }) }).then((r) => r.json());
     await sleep(900);
     const tables = await sheetTables();

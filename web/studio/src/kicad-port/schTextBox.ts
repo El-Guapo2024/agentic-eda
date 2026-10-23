@@ -10,21 +10,21 @@ export const INTERLINE_PITCH = 1.68;
 export const CAP_HEIGHT_RATIO = 0.95;
 
 /** `SCH_TEXTBOX::GetLegacyTextMargin` on the notes layer: half the stroke width plus 0.75 of the text height (um). */
-export function defaultTextBoxMargin(sizeUm: number, strokeWidthUm: number): number {
-  return Math.round(strokeWidthUm / 2) + Math.round(sizeUm * 0.75);
+export function defaultTextBoxMargin(sizeNm: number, strokeWidthNm: number): number {
+  return Math.round(strokeWidthNm / 2) + Math.round(sizeNm * 0.75);
 }
 
-export type Measure = (text: string, sizeUm: number) => number;
+export type Measure = (text: string, sizeNm: number) => number;
 
-/** Greedy word wrap of `text` to `maxWidthUm` (explicit newlines are kept; a single word longer than the width stays whole on its own line). */
-export function wrapText(text: string, maxWidthUm: number, sizeUm: number, measure: Measure): string[] {
+/** Greedy word wrap of `text` to `maxWidthNm` (explicit newlines are kept; a single word longer than the width stays whole on its own line). */
+export function wrapText(text: string, maxWidthNm: number, sizeNm: number, measure: Measure): string[] {
   const out: string[] = [];
   for (const paragraph of text.split("\n")) {
     const words = paragraph.split(" ");
     let line = "";
     for (const word of words) {
       const candidate = line === "" ? word : `${line} ${word}`;
-      if (line !== "" && measure(candidate, sizeUm) > maxWidthUm) {
+      if (line !== "" && measure(candidate, sizeNm) > maxWidthNm) {
         out.push(line);
         line = word;
       } else {
@@ -57,10 +57,10 @@ export interface TextBoxSpec {
   text: string;
   /** 0 or 90000 (millidegrees). */
   angle: number;
-  sizeUm: number;
+  sizeNm: number;
   hAlign: "left" | "center" | "right";
   vAlign: "top" | "center" | "bottom";
-  marginUm: number;
+  marginNm: number;
 }
 
 /**
@@ -76,16 +76,16 @@ export function layoutTextBox(spec: TextBoxSpec, measure: Measure): TextBoxLayou
   const vertical = Math.round(spec.angle / 1000) % 180 === 90;
   const along = vertical ? bottom - top : right - left; // the text direction's extent
   const across = vertical ? right - left : bottom - top;
-  const m = spec.marginUm;
-  const lines = wrapText(spec.text, Math.max(along - 2 * m, 0), spec.sizeUm, measure);
-  const pitch = spec.sizeUm * INTERLINE_PITCH;
-  const blockHeight = spec.sizeUm * CAP_HEIGHT_RATIO + (lines.length - 1) * pitch;
+  const m = spec.marginNm;
+  const lines = wrapText(spec.text, Math.max(along - 2 * m, 0), spec.sizeNm, measure);
+  const pitch = spec.sizeNm * INTERLINE_PITCH;
+  const blockHeight = spec.sizeNm * CAP_HEIGHT_RATIO + (lines.length - 1) * pitch;
   // `GetDrawPos`: the first baseline's offset from the top margin is the cap height; the block as a whole aligns per vAlign.
   const v0 = spec.vAlign === "top" ? m : spec.vAlign === "bottom" ? across - m - blockHeight : (across - blockHeight) / 2;
   const u = spec.hAlign === "left" ? m : spec.hAlign === "right" ? along - m : along / 2;
   return {
     origin: vertical ? [left, bottom] : [left, top],
     vertical,
-    lines: lines.map((text, i) => ({ text, u, v: v0 + spec.sizeUm * CAP_HEIGHT_RATIO + i * pitch, justify: spec.hAlign })),
+    lines: lines.map((text, i) => ({ text, u, v: v0 + spec.sizeNm * CAP_HEIGHT_RATIO + i * pitch, justify: spec.hAlign })),
   };
 }

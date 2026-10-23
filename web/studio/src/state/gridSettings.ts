@@ -5,7 +5,9 @@
 import { useSyncExternalStore } from "react";
 import { GRID_EDITORS, isDefaultGridSettings, normalizeGridSettings, parseStoredGridSettings, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
 
-const STORAGE_KEY = "eda-studio.grid-settings";
+/** The grids in nanometres. `OLD_STORAGE_KEY` held them in micrometres, before the design was in nanometres. */
+const STORAGE_KEY = "eda-studio.grid-settings.nm";
+const OLD_STORAGE_KEY = "eda-studio.grid-settings";
 
 function storage(): Storage | null {
   try {
@@ -15,7 +17,31 @@ function storage(): Storage | null {
   }
 }
 
-let current: Record<GridEditor, GridSettings> = parseStoredGridSettings(storage()?.getItem(STORAGE_KEY) ?? null);
+/** The stored grids, an old micrometre list read x1000 (and moved to the new key, once). */
+function readStored(): string | null {
+  const s = storage();
+  if (!s) return null;
+  try {
+    const now = s.getItem(STORAGE_KEY);
+    if (now !== null) return now;
+    const old = s.getItem(OLD_STORAGE_KEY);
+    if (old === null) return null;
+    const parsed: unknown = JSON.parse(old);
+    if (parsed && typeof parsed === "object") {
+      for (const v of Object.values(parsed as Record<string, { grids?: unknown }>)) {
+        if (v && Array.isArray(v.grids)) v.grids = v.grids.map((g) => (typeof g === "number" ? g * 1000 : g));
+      }
+    }
+    const moved = JSON.stringify(parsed);
+    s.setItem(STORAGE_KEY, moved);
+    s.removeItem(OLD_STORAGE_KEY);
+    return moved;
+  } catch {
+    return null;
+  }
+}
+
+let current: Record<GridEditor, GridSettings> = parseStoredGridSettings(readStored());
 const listeners = new Set<() => void>();
 
 export function getGridSettings(editor: GridEditor): GridSettings {

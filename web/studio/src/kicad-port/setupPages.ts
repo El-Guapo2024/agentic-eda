@@ -53,26 +53,26 @@ export function sameFormatting(a: FormattingSettings | undefined | null, b: Form
 // ------------------------------------------------------------------------------------------------------------------------------------ Zone Hatch Offsets
 
 /** The most a hatch offset may be: a metre. */
-export const MAX_HATCH_OFFSET_UM = 1_000_000;
+export const MAX_HATCH_OFFSET_NM = 1_000_000_000;
 
 /** One row of the page: a copper layer and its offset. `NaN` is text that is no length (the page's checks name it). */
 export interface HatchRow {
   layer: string;
-  x_um: number;
-  y_um: number;
+  x_nm: number;
+  y_nm: number;
 }
 
 /** The rows in `LSET::AllCuMask().UIOrder()` (front to back, as the board lists its copper layers), each with the offset the board has for it (0, 0 when none). */
 export function hatchRows(copper: readonly string[], offsets: HatchOffsets | undefined | null): HatchRow[] {
-  return copper.map((layer) => ({ layer, x_um: offsets?.[layer]?.x_um ?? 0, y_um: offsets?.[layer]?.y_um ?? 0 }));
+  return copper.map((layer) => ({ layer, x_nm: offsets?.[layer]?.x_nm ?? 0, y_nm: offsets?.[layer]?.y_nm ?? 0 }));
 }
 
 /** The problem of each row, by layer. */
 export function hatchProblems(rows: readonly HatchRow[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const r of rows) {
-    if (!Number.isFinite(r.x_um) || !Number.isFinite(r.y_um)) out[r.layer] = "The offset must be a length.";
-    else if (Math.abs(r.x_um) > MAX_HATCH_OFFSET_UM || Math.abs(r.y_um) > MAX_HATCH_OFFSET_UM) out[r.layer] = `The hatch offset of ${r.layer} is at most ${MAX_HATCH_OFFSET_UM / 1000} mm either way`;
+    if (!Number.isFinite(r.x_nm) || !Number.isFinite(r.y_nm)) out[r.layer] = "The offset must be a length.";
+    else if (Math.abs(r.x_nm) > MAX_HATCH_OFFSET_NM || Math.abs(r.y_nm) > MAX_HATCH_OFFSET_NM) out[r.layer] = `The hatch offset of ${r.layer} is at most ${MAX_HATCH_OFFSET_NM / 1e6} mm either way`;
   }
   return out;
 }
@@ -80,12 +80,12 @@ export function hatchProblems(rows: readonly HatchRow[]): Record<string, string>
 /** The page a draft sends: the layers that have an offset (one at 0, 0 is the same as none). */
 export function hatchToSend(rows: readonly HatchRow[]): HatchOffsets {
   const out: HatchOffsets = {};
-  for (const r of rows) if (r.x_um !== 0 || r.y_um !== 0) out[r.layer] = { x_um: Math.round(r.x_um), y_um: Math.round(r.y_um) };
+  for (const r of rows) if (r.x_nm !== 0 || r.y_nm !== 0) out[r.layer] = { x_nm: Math.round(r.x_nm), y_nm: Math.round(r.y_nm) };
   return out;
 }
 
 export function sameHatchOffsets(a: HatchOffsets | undefined | null, b: HatchOffsets | undefined | null): boolean {
-  const norm = (o: HatchOffsets | undefined | null) => JSON.stringify(Object.entries(o ?? {}).filter(([, v]) => v.x_um !== 0 || v.y_um !== 0).sort(([x], [y]) => (x < y ? -1 : 1)));
+  const norm = (o: HatchOffsets | undefined | null) => JSON.stringify(Object.entries(o ?? {}).filter(([, v]) => v.x_nm !== 0 || v.y_nm !== 0).sort(([x], [y]) => (x < y ? -1 : 1)));
   return norm(a) === norm(b);
 }
 
@@ -95,14 +95,14 @@ export type TuningGroup = "single_track" | "diff_pair" | "diff_pair_skew";
 export const TUNING_GROUPS: readonly TuningGroup[] = ["single_track", "diff_pair", "diff_pair_skew"];
 
 /** `MEANDER_SETTINGS()` with the spacing `BOARD_DESIGN_SETTINGS` gives a single track and a skew pattern (0.6 mm). */
-export const DEFAULT_SINGLE_TRACK_MEANDER: MeanderSettings = { min_amplitude_um: 200, max_amplitude_um: 1_000, spacing_um: 600, corner_style: "round", corner_radius_percentage: 80, single_sided: false };
+export const DEFAULT_SINGLE_TRACK_MEANDER: MeanderSettings = { min_amplitude_nm: 200_000, max_amplitude_nm: 1_000_000, spacing_nm: 600_000, corner_style: "round", corner_radius_percentage: 80, single_sided: false };
 /** The same with a differential pair's spacing (1 mm). */
-export const DEFAULT_DIFF_PAIR_MEANDER: MeanderSettings = { ...DEFAULT_SINGLE_TRACK_MEANDER, spacing_um: 1_000 };
+export const DEFAULT_DIFF_PAIR_MEANDER: MeanderSettings = { ...DEFAULT_SINGLE_TRACK_MEANDER, spacing_nm: 1_000_000 };
 
 export const DEFAULT_TUNING_PATTERNS: TuningPatterns = { single_track: DEFAULT_SINGLE_TRACK_MEANDER, diff_pair: DEFAULT_DIFF_PAIR_MEANDER, diff_pair_skew: DEFAULT_SINGLE_TRACK_MEANDER };
 
 /** The most an amplitude or a spacing may be, µm. */
-export const MAX_MEANDER_UM = 100_000;
+export const MAX_MEANDER_NM = 100_000_000;
 
 /** The page a board has: what its backend says, else KiCad's start. */
 export function tuningPatternsOf(p: TuningPatterns | undefined | null): TuningPatterns {
@@ -118,13 +118,13 @@ export function tuningPatternsProblems(p: TuningPatterns): Record<string, string
   const out: Record<string, string> = {};
   for (const group of TUNING_GROUPS) {
     const s = p[group];
-    for (const [field, v] of [["min_amplitude", s.min_amplitude_um], ["max_amplitude", s.max_amplitude_um], ["spacing", s.spacing_um]] as const) {
+    for (const [field, v] of [["min_amplitude", s.min_amplitude_nm], ["max_amplitude", s.max_amplitude_nm], ["spacing", s.spacing_nm]] as const) {
       const name = field.replace("_", " ");
       if (!Number.isFinite(v)) out[`${group}.${field}`] = `The ${name} must be a length.`;
       else if (v <= 0) out[`${group}.${field}`] = `The ${name} must be above 0.`;
-      else if (v > MAX_MEANDER_UM) out[`${group}.${field}`] = `The ${name} is at most ${MAX_MEANDER_UM / 1000} mm.`;
+      else if (v > MAX_MEANDER_NM) out[`${group}.${field}`] = `The ${name} is at most ${MAX_MEANDER_NM / 1e6} mm.`;
     }
-    if (!out[`${group}.min_amplitude`] && !out[`${group}.max_amplitude`] && s.min_amplitude_um > s.max_amplitude_um) out[`${group}.min_amplitude`] = "The minimum amplitude cannot be above the maximum amplitude.";
+    if (!out[`${group}.min_amplitude`] && !out[`${group}.max_amplitude`] && s.min_amplitude_nm > s.max_amplitude_nm) out[`${group}.min_amplitude`] = "The minimum amplitude cannot be above the maximum amplitude.";
     if (!Number.isInteger(s.corner_radius_percentage) || s.corner_radius_percentage < 0 || s.corner_radius_percentage > 100) out[`${group}.corner_radius_percentage`] = "The corner radius is a percentage from 0 to 100.";
   }
   return out;
@@ -165,7 +165,7 @@ export function emptyProfile(): TuningProfile {
  */
 export function addTrackRow(p: TuningProfile, copper: readonly string[]): TuningProfile {
   const rows = p.layer_entries;
-  const row = { signal_layer: "", top_reference_layer: null as string | null, bottom_reference_layer: null as string | null, width_um: 0, diff_pair_gap_um: 0, delay_as_per_mm: 0 };
+  const row = { signal_layer: "", top_reference_layer: null as string | null, bottom_reference_layer: null as string | null, width_nm: 0, diff_pair_gap_nm: 0, delay_as_per_mm: 0 };
   const front = () => {
     if (copper.length > 0) row.signal_layer = copper[0]!;
     if (copper.length > 1) row.bottom_reference_layer = copper[1]!;
@@ -230,7 +230,7 @@ export function checkProfiles(d: ProfilesDraft, copper: readonly string[]): Prof
         errors[i] = errors[i] ?? "Duplicated signal layer configuration in tuning profile";
       }
       seen.add(e.signal_layer);
-      if (![e.width_um, e.diff_pair_gap_um].every((v) => Number.isFinite(v) && v >= 0 && v <= 100_000)) rowFail("the width and the gap are from 0 to 100 mm");
+      if (![e.width_nm, e.diff_pair_gap_nm].every((v) => Number.isFinite(v) && v >= 0 && v <= 100_000_000)) rowFail("the width and the gap are from 0 to 100 mm");
       if (!Number.isFinite(e.delay_as_per_mm) || e.delay_as_per_mm < 0 || e.delay_as_per_mm > MAX_DELAY_AS) rowFail("the delay is from 0 to 2147 ps/mm");
     });
     p.via_overrides.forEach((v, row) => {

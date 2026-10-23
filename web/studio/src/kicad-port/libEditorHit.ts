@@ -7,13 +7,13 @@
 // turned with `resolveLibPoint` / `resolvePin` exactly as the painter does.
 import type { CmdShape, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, LibraryFootprint } from "../api/types";
 import { distToSegment, shapeHitDistance } from "../components/canvas/itemHitTest";
-import { libPointToInternalUm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
+import { libPointToInternalNm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 import { cmdShapeToShape } from "./itemBoxes";
-import { textBoxDistanceUm } from "./symTextBox";
+import { textBoxDistanceNm } from "./symTextBox";
 
 /** The two editors' tolerance: `Math.max( 80, 6 px )` in um. */
 export function pickTolerance(scale: number): number {
-  return Math.max(80, scale > 0 ? 6 / scale : 80);
+  return Math.max(80_000, scale > 0 ? 6 / scale : 80_000);
 }
 
 /** A point in a pad's own frame (`at`, then its rotation). */
@@ -63,7 +63,7 @@ export function pickFootprintItem(fp: LibraryFootprint, x: number, y: number, sc
   const tol = pickTolerance(scale);
   for (let i = fp.texts.length - 1; i >= 0; i--) {
     const t = fp.texts[i]!;
-    if (t.id && Math.hypot(x - t.at.x, y - t.at.y) <= Math.max(tol, t.size_um / 2)) return { kind: "text", id: t.id };
+    if (t.id && Math.hypot(x - t.at.x, y - t.at.y) <= Math.max(tol, t.size_nm / 2)) return { kind: "text", id: t.id };
   }
   for (let i = fp.graphics.length - 1; i >= 0; i--) {
     const g = fp.graphics[i]!;
@@ -72,20 +72,20 @@ export function pickFootprintItem(fp: LibraryFootprint, x: number, y: number, sc
   return null;
 }
 
-const um = (p: { x: number; y: number }): [number, number] => libPointToInternalUm([p.x, p.y]);
+const um = (p: { x: number; y: number }): [number, number] => libPointToInternalNm([p.x, p.y]);
 
 /** Distance from a point to a library symbol graphic's outline, in internal um. */
 export function symbolGraphicDistance(g: LibrarySymbolGraphic, x: number, y: number): number {
   if (g.kind === "circle") {
     const [cx, cy] = um(g.center);
-    return Math.abs(Math.hypot(x - cx, y - cy) - g.radius_mm * 1000);
+    return Math.abs(Math.hypot(x - cx, y - cy) - g.radius_mm * 1e6);
   }
   if (g.kind === "text") {
     const [tx, ty] = um(g.at);
     return Math.hypot(x - tx, y - ty);
   }
   // `SCH_TEXTBOX::HitTest`: anywhere in the box, not on its border alone
-  if (g.kind === "text_box") return textBoxDistanceUm(g, x, y);
+  if (g.kind === "text_box") return textBoxDistanceNm(g, x, y);
   let pts: [number, number][];
   if (g.kind === "rectangle") {
     const [x0, y0] = um(g.start);

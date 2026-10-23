@@ -70,11 +70,11 @@ export function originMarkerColor(gridColor: string, backgroundColor: string): s
 
 /**
  * What `COMMON_TOOLS::GridOrigin`'s dialog (`WX_PT_ENTRY_DIALOG`, "X:" "Y:") hands back: the two entries read as numbers in the display unit
- * (`toUm` converts one), as an origin in um -- or null when either is not a number.
+ * (`toNm` converts one), as an origin in um -- or null when either is not a number.
  */
-export function originFromEntries(xText: string, yText: string, toUm: (value: number) => number): Origin | null {
+export function originFromEntries(xText: string, yText: string, toNm: (value: number) => number): Origin | null {
   const x = Number(xText.trim().replace(",", "."));
   const y = Number(yText.trim().replace(",", "."));
   if (xText.trim() === "" || yText.trim() === "" || !Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return { x: Math.round(toUm(x)), y: Math.round(toUm(y)) };
+  return { x: Math.round(toNm(x)), y: Math.round(toNm(y)) };
 }

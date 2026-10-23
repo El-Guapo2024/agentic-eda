@@ -20,7 +20,7 @@ import { on, opacityOf } from "./appearancePaint";
 import { imageFor } from "./imageCache";
 import { layerColor } from "./layers";
 import { layerAlpha, withAlpha, type PaintOptions } from "./painter";
-import { hairlineUm } from "./view";
+import { hairlineNm } from "./view";
 import type { ViewTransform } from "../../state/store";
 
 const layerKeyOf = (layer: string): string => layer.replace(/\./g, "_");
@@ -74,15 +74,15 @@ function paintRefImage(ctx: CanvasRenderingContext2D, view: ViewTransform, i: Bo
     // not here yet: the box it will fill, so it can be seen and picked
     ctx.globalAlpha *= alpha;
     ctx.strokeStyle = layerColor(i.layer.replace(/\./g, "_"));
-    ctx.lineWidth = hairlineUm(view, 1);
-    ctx.setLineDash([hairlineUm(view, 4), hairlineUm(view, 3)]);
+    ctx.lineWidth = hairlineNm(view, 1);
+    ctx.setLineDash([hairlineNm(view, 4), hairlineNm(view, 3)]);
     ctx.strokeRect(x0, y0, i.w, i.h);
   }
   ctx.restore();
   if (selected) {
     ctx.save();
     ctx.strokeStyle = layerColor("LAYER_ANCHOR");
-    ctx.lineWidth = hairlineUm(view, 2);
+    ctx.lineWidth = hairlineNm(view, 2);
     ctx.strokeRect(x0, y0, i.w, i.h);
     ctx.restore();
   }
@@ -120,7 +120,7 @@ export function drawPoints(ctx: CanvasRenderingContext2D, view: ViewTransform, b
     const selected = opts.selection.has(p.id);
     withAlpha(ctx, layerAlpha(opts, layerStateKey(p.layer)), () => {
       ctx.save();
-      ctx.lineWidth = hairlineUm(view, selected ? 2 : 1);
+      ctx.lineWidth = hairlineNm(view, selected ? 2 : 1);
       ctx.lineCap = "round";
       ctx.strokeStyle = selected ? layerColor("selection") : layerColor("LAYER_POINTS");
       ctx.beginPath();
@@ -143,7 +143,7 @@ export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
   drawTextBoxes(ctx, view, board, opts);
   drawBarcodes(ctx, view, board, opts);
   drawPoints(ctx, view, board, opts);
-  const cursor = opts.snappedCursor ?? (opts.cursorUm ? ([opts.cursorUm.x, opts.cursorUm.y] as const) : null);
+  const cursor = opts.snappedCursor ?? (opts.cursorNm ? ([opts.cursorNm.x, opts.cursorNm.y] as const) : null);
   // The image in the hand follows the cursor, centred on it, at the alpha it will have.
   if (toolPreview?.kind === "image" && cursor && !opts.movePreview) {
     const { img, w, h, layer } = toolPreview;
@@ -153,7 +153,7 @@ export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
     ctx.restore();
     ctx.save();
     ctx.strokeStyle = layerColor("LAYER_ANCHOR");
-    ctx.lineWidth = hairlineUm(view, 2);
+    ctx.lineWidth = hairlineNm(view, 2);
     ctx.strokeRect(cursor[0] - Math.trunc(w / 2), cursor[1] - Math.trunc(h / 2), w, h);
     ctx.restore();
   }
@@ -165,7 +165,7 @@ export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
     ctx.save();
     ctx.fillStyle = "rgba(77, 77, 128, 0.3)";
     ctx.strokeStyle = "rgb(102, 255, 255)";
-    ctx.lineWidth = hairlineUm(view, 1);
+    ctx.lineWidth = hairlineNm(view, 1);
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
     ctx.lineTo(end.x, end.y);
@@ -179,8 +179,8 @@ export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
   if (toolPreview?.kind === "rect" && cursor && !opts.movePreview) {
     ctx.save();
     ctx.strokeStyle = layerColor("selection");
-    ctx.lineWidth = hairlineUm(view, 1.5);
-    ctx.setLineDash([hairlineUm(view, 5), hairlineUm(view, 3)]);
+    ctx.lineWidth = hairlineNm(view, 1.5);
+    ctx.setLineDash([hairlineNm(view, 5), hairlineNm(view, 3)]);
     ctx.strokeRect(toolPreview.from[0], toolPreview.from[1], cursor[0] - toolPreview.from[0], cursor[1] - toolPreview.from[1]);
     ctx.restore();
   }
@@ -218,8 +218,8 @@ export function drawBarcode(ctx: CanvasRenderingContext2D, view: ViewTransform, 
   } else if (b.text.length > 0 || state?.status === "failed") {
     // not here yet (or none: an empty text has nothing to encode): the box, crossed
     const c = symbolCorners(b);
-    ctx.lineWidth = hairlineUm(view, 1);
-    ctx.setLineDash([hairlineUm(view, 4), hairlineUm(view, 3)]);
+    ctx.lineWidth = hairlineNm(view, 1);
+    ctx.setLineDash([hairlineNm(view, 4), hairlineNm(view, 3)]);
     ctx.beginPath();
     c.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
     ctx.closePath();
@@ -230,7 +230,7 @@ export function drawBarcode(ctx: CanvasRenderingContext2D, view: ViewTransform, 
     ctx.stroke();
   } else {
     const c = symbolCorners(b);
-    ctx.lineWidth = hairlineUm(view, 1);
+    ctx.lineWidth = hairlineNm(view, 1);
     ctx.beginPath();
     c.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
     ctx.closePath();
@@ -273,7 +273,7 @@ export function drawTextBox(ctx: CanvasRenderingContext2D, view: ViewTransform, 
   }
   if (b.border && b.stroke_width > 0) {
     ctx.strokeStyle = color;
-    const w = Math.max(b.stroke_width, hairlineUm(view, selected ? 2 : 1));
+    const w = Math.max(b.stroke_width, hairlineNm(view, selected ? 2 : 1));
     ctx.lineWidth = w;
     ctx.setLineDash(dashPattern(b.line_style === "default" ? "solid" : b.line_style, w));
     trace();
@@ -282,8 +282,8 @@ export function drawTextBox(ctx: CanvasRenderingContext2D, view: ViewTransform, 
   } else if (selected) {
     // A box with no border still shows where it is when it is picked.
     ctx.strokeStyle = color;
-    ctx.lineWidth = hairlineUm(view, 1);
-    ctx.setLineDash([hairlineUm(view, 4), hairlineUm(view, 3)]);
+    ctx.lineWidth = hairlineNm(view, 1);
+    ctx.setLineDash([hairlineNm(view, 4), hairlineNm(view, 3)]);
     trace();
     ctx.stroke();
     ctx.setLineDash([]);
@@ -298,7 +298,7 @@ export function drawTextBox(ctx: CanvasRenderingContext2D, view: ViewTransform, 
     if (cut) ctx.globalCompositeOperation = "destination-out";
     const textColor = cut ? "#000000" : b.knockout ? layerColor("background") : color;
     for (const l of layout.lines) {
-      drawStrokeText(ctx, l.text, l.x, l.y, { sizeUm: b.size, thicknessUm: lineMode ? hairlineUm(view, 1) : b.thickness, justify: "left", italic: b.italic, color: textColor });
+      drawStrokeText(ctx, l.text, l.x, l.y, { sizeNm: b.size, thicknessNm: lineMode ? hairlineNm(view, 1) : b.thickness, justify: "left", italic: b.italic, color: textColor });
     }
   }
   ctx.restore();

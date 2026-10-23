@@ -8,22 +8,22 @@
 // opens `EditSheetProperties`; a new sheet starts as "Untitled Sheet" / "untitled.kicad_sch".
 
 /** mil -> um. */
-const MIL_UM = 25.4;
+const MIL_NM = 25_400;
 /** `MIN_SHEET_WIDTH` (500 mil), um. */
-export const MIN_SHEET_WIDTH_UM = 500 * MIL_UM;
+export const MIN_SHEET_WIDTH_NM = 500 * MIL_NM;
 /** `MIN_SHEET_HEIGHT` (150 mil), um. */
-export const MIN_SHEET_HEIGHT_UM = 150 * MIL_UM;
+export const MIN_SHEET_HEIGHT_NM = 150 * MIL_NM;
 
 /** The name and file a sheet is created with (`SHEET_NAME` / `SHEET_FILENAME` fields of a fresh sheet). */
 export const DEFAULT_SHEET_NAME = "Untitled Sheet";
 export const DEFAULT_SHEET_FILE = "untitled.kicad_sch";
 
 /** `sizeSheet( sheet, cursor )`: the sheet's `[width, height]` for a first corner at `start` and the cursor at `cursor`. */
-export function sheetSize(start: readonly [number, number], cursor: readonly [number, number], gridUm: number): [number, number] {
-  const w = Math.max(cursor[0] - start[0], MIN_SHEET_WIDTH_UM);
-  const h = Math.max(cursor[1] - start[1], MIN_SHEET_HEIGHT_UM);
+export function sheetSize(start: readonly [number, number], cursor: readonly [number, number], gridNm: number): [number, number] {
+  const w = Math.max(cursor[0] - start[0], MIN_SHEET_WIDTH_NM);
+  const h = Math.max(cursor[1] - start[1], MIN_SHEET_HEIGHT_NM);
   // `GetNearestGridPosition( pos + size )` then `Resize( grid - pos )`
-  const snap = (v: number) => (gridUm > 0 ? Math.round(v / gridUm) * gridUm : v);
+  const snap = (v: number) => (gridNm > 0 ? Math.round(v / gridNm) * gridNm : v);
   return [snap(start[0] + w) - start[0], snap(start[1] + h) - start[1]];
 }
 

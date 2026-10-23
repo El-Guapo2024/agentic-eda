@@ -22,7 +22,7 @@ const sheet = (groups: Group[]): Schematic =>
     junctions: [],
     lines: [],
     graphics: [],
-    sheets: [{ id: "sheet_a", pins: [{ id: "shpin_a" }], at: [0, 0], size: [10, 10] }],
+    sheets: [{ id: "sheet_a", pins: [{ id: "shpin_a" }], at: [0, 0], size: [10_000, 10_000] }],
     groups,
   }) as unknown as Schematic;
 
@@ -31,11 +31,11 @@ const nested = () => sheet([g("grp_inner", "pair", ["R1", "R2"]), g("grp_outer",
 
 // boxes: R1 (0..10), R2 (20..30), R3 (100..110), w1 (10..20 in x, a thin one), l1 far away
 const boxes: Record<string, Box> = {
-  R1: { minX: 0, minY: 0, maxX: 10, maxY: 10 },
-  R2: { minX: 20, minY: 0, maxX: 30, maxY: 10 },
-  R3: { minX: 100, minY: 0, maxX: 110, maxY: 10 },
-  w1: { minX: 10, minY: 5, maxX: 20, maxY: 5 },
-  l1: { minX: 200, minY: 0, maxX: 210, maxY: 10 },
+  R1: { minX: 0, minY: 0, maxX: 10_000, maxY: 10_000 },
+  R2: { minX: 20_000, minY: 0, maxX: 30_000, maxY: 10_000 },
+  R3: { minX: 100_000, minY: 0, maxX: 110_000, maxY: 10_000 },
+  w1: { minX: 10_000, minY: 5000, maxX: 20_000, maxY: 5000 },
+  l1: { minX: 200_000, minY: 0, maxX: 210_000, maxY: 10_000 },
 };
 const boxOf: BoxOf = (id) => boxes[id] ?? null;
 
@@ -73,28 +73,28 @@ test("a window takes a group whole or not at all; a crossing box takes any membe
   const sch = nested();
   const hits = (ids: string[]) => ids;
   // window around R1, R2 and w1 (the whole of outer): outer
-  const around = { minX: -5, minY: -5, maxX: 35, maxY: 15 };
+  const around = { minX: -5000, minY: -5000, maxX: 35_000, maxY: 15_000 };
   assert.deepEqual(boxSelectionWithGroups(sch, hits(["R1", "R2", "w1"]), around, false, null, boxOf), ["grp_outer"]);
   // window around R1 and R2 only: inner's box (0..30) is inside, outer's is too (w1 is between them): the same
   // window around just R1: its group's box is not inside, so R1 on its own is not selected either
-  assert.deepEqual(boxSelectionWithGroups(sch, hits(["R1"]), { minX: -5, minY: -5, maxX: 15, maxY: 15 }, false, null, boxOf), []);
+  assert.deepEqual(boxSelectionWithGroups(sch, hits(["R1"]), { minX: -5000, minY: -5000, maxX: 15_000, maxY: 15_000 }, false, null, boxOf), []);
   // a window around R3, in no group: R3
-  assert.deepEqual(boxSelectionWithGroups(sch, hits(["R3"]), { minX: 90, minY: -5, maxX: 120, maxY: 15 }, false, null, boxOf), ["R3"]);
+  assert.deepEqual(boxSelectionWithGroups(sch, hits(["R3"]), { minX: 90, minY: -5000, maxX: 120_000, maxY: 15_000 }, false, null, boxOf), ["R3"]);
   // a crossing box that touches R1 only: the outermost group of R1
-  assert.deepEqual(boxSelectionWithGroups(sch, hits(["R1"]), { minX: -5, minY: -5, maxX: 15, maxY: 15 }, true, null, boxOf), ["grp_outer"]);
+  assert.deepEqual(boxSelectionWithGroups(sch, hits(["R1"]), { minX: -5000, minY: -5000, maxX: 15_000, maxY: 15_000 }, true, null, boxOf), ["grp_outer"]);
   // R3 and a member: the group and R3
-  assert.deepEqual(boxSelectionWithGroups(sch, hits(["R1", "R3"]), { minX: -5, minY: -5, maxX: 120, maxY: 15 }, true, null, boxOf), ["grp_outer", "R3"]);
+  assert.deepEqual(boxSelectionWithGroups(sch, hits(["R1", "R3"]), { minX: -5000, minY: -5000, maxX: 120_000, maxY: 15_000 }, true, null, boxOf), ["grp_outer", "R3"]);
   // the entered group's own members are picked one by one, also by a window; what is outside it is left out
-  assert.deepEqual(boxSelectionWithGroups(sch, hits(["R1", "R2", "R3"]), { minX: -5, minY: -5, maxX: 120, maxY: 15 }, false, "grp_inner", boxOf), ["R1", "R2"]);
+  assert.deepEqual(boxSelectionWithGroups(sch, hits(["R1", "R2", "R3"]), { minX: -5000, minY: -5000, maxX: 120_000, maxY: 15_000 }, false, "grp_inner", boxOf), ["R1", "R2"]);
   // a pin the box found is taken as a pin, unless its group is selected too
-  assert.deepEqual(boxSelectionWithGroups(sch, ["pin:R1:1"], { minX: -5, minY: -5, maxX: 15, maxY: 15 }, true, null, boxOf), ["pin:R1:1"]);
-  assert.deepEqual(boxSelectionWithGroups(sch, ["R1", "pin:R1:1"], { minX: -5, minY: -5, maxX: 15, maxY: 15 }, true, null, boxOf), ["grp_outer"]);
+  assert.deepEqual(boxSelectionWithGroups(sch, ["pin:R1:1"], { minX: -5000, minY: -5000, maxX: 15_000, maxY: 15_000 }, true, null, boxOf), ["pin:R1:1"]);
+  assert.deepEqual(boxSelectionWithGroups(sch, ["R1", "pin:R1:1"], { minX: -5000, minY: -5000, maxX: 15_000, maxY: 15_000 }, true, null, boxOf), ["grp_outer"]);
 });
 
 test("a window that holds a group inside a bigger one selects the bigger one, as KiCad does", () => {
   // inner = {R1, R2} sits in outer = {inner, R3}: outer's box reaches R3, far off; a window around R1 and R2 holds inner's box and not outer's
   const sch = sheet([g("grp_inner", "pair", ["R1", "R2"]), g("grp_outer", "all", ["grp_inner", "R3"])]);
-  const window = { minX: -5, minY: -5, maxX: 35, maxY: 15 };
+  const window = { minX: -5000, minY: -5000, maxX: 35_000, maxY: 15_000 };
   // inner's members come in, and `TopLevelGroup` promotes them to the outermost group: "if( EDA_GROUP* top = SCH_GROUP::TopLevelGroup( start, m_enteredGroup, .. ) )"
   assert.deepEqual(boxSelectionWithGroups(sch, ["R1", "R2"], window, false, null, boxOf), ["grp_outer"]);
 });
@@ -135,8 +135,8 @@ test("a group stands for the items below it, nested groups opened", () => {
 
 test("a group's box is its members' box grown by 10 mil, and says nothing when nothing is left", () => {
   const groups = nested().groups!;
-  assert.deepEqual(groupBoundsOf(groups, "grp_inner", boxOf), { minX: -254, minY: -254, maxX: 30 + 254, maxY: 10 + 254 });
-  assert.deepEqual(groupBoundsOf(groups, "grp_outer", boxOf), { minX: -254, minY: -254, maxX: 30 + 254, maxY: 10 + 254 });
+  assert.deepEqual(groupBoundsOf(groups, "grp_inner", boxOf), { minX: -254_000, minY: -254_000, maxX: 30_000 + 254_000, maxY: 10_000 + 254_000 });
+  assert.deepEqual(groupBoundsOf(groups, "grp_outer", boxOf), { minX: -254_000, minY: -254_000, maxX: 30_000 + 254_000, maxY: 10_000 + 254_000 });
   assert.equal(groupBoundsOf(groups, "grp_inner", () => null), null);
   assert.equal(groupBoundsOf(groups, "R1", boxOf), null, "an item is no group");
 });
@@ -163,7 +163,7 @@ test("the selection keeps a group that is still on the sheet", () => {
 test("a paste brings its groups: drawn selected while carried and selected as groups afterwards", () => {
   const before = nested();
   const preview: SchPastePreview = {
-    symbols: [{ id: "R4", unit: 1, at: [0, 0] }, { id: "R5", unit: 1, at: [10, 0] }] as unknown as SchPastePreview["symbols"],
+    symbols: [{ id: "R4", unit: 1, at: [0, 0] }, { id: "R5", unit: 1, at: [10_000, 0] }] as unknown as SchPastePreview["symbols"],
     power_symbols: [],
     wires: [],
     labels: [],

@@ -224,7 +224,7 @@ mod tests {
 
     fn layers(n: usize) -> Vec<String> {
         let mut v = vec!["F.Cu".to_string()];
-        v.extend((1..=n.saturating_sub(2)).map(|i| format!("In{i}.Cu")));
+        v.extend((1..=n.saturating_sub(2000)).map(|i| format!("In{i}.Cu")));
         v.push("B.Cu".to_string());
         v
     }
@@ -258,15 +258,15 @@ mod tests {
     #[test]
     fn a_front_inner_back_padstack_is_read_as_its_three_shapes() {
         let pad = pad_of(FRONT_INNER_BACK, Side::Top, 4);
-        assert_eq!((pad.shape, pad.size), (PadShape::Oval, (3048, 1524)));
+        assert_eq!((pad.shape, pad.size), (PadShape::Oval, (3_048_000, 1_524_000)));
         let stack = &pad.ext.stack;
         assert_eq!(stack.mode, PadStackMode::FrontInnerBack);
-        assert_eq!(stack.inner, Some(PadLayerShape::plain(PadShape::Oval, (1270, 1270))));
-        assert_eq!(stack.back, Some(PadLayerShape::plain(PadShape::Oval, (2540, 1016))));
+        assert_eq!(stack.inner, Some(PadLayerShape::plain(PadShape::Oval, (1_270_000, 1_270_000))));
+        assert_eq!(stack.back, Some(PadLayerShape::plain(PadShape::Oval, (2_540_000, 1_016_000))));
         assert_eq!(stack.unconnected, UnconnectedLayers::KeepAll);
         // What the board's layers have: the front, the two inner layers together, the back.
         let groups = pad.shape_groups(Side::Top, &layers(4));
-        assert_eq!(groups.iter().map(|g| (g.layers.clone(), g.shape.size)).collect::<Vec<_>>(), vec![(vec!["F.Cu".to_string()], (3048, 1524)), (vec!["In1.Cu".to_string(), "In2.Cu".to_string()], (1270, 1270)), (vec!["B.Cu".to_string()], (2540, 1016))]);
+        assert_eq!(groups.iter().map(|g| (g.layers.clone(), g.shape.size)).collect::<Vec<_>>(), vec![(vec!["F.Cu".to_string()], (3_048_000, 1_524_000)), (vec!["In1.Cu".to_string(), "In2.Cu".to_string()], (1_270_000, 1_270_000)), (vec!["B.Cu".to_string()], (2_540_000, 1_016_000))]);
     }
 
     #[test]
@@ -291,9 +291,9 @@ mod tests {
         }
         // On the bottom the file's `F.Cu` is the footprint's back: the main fields of the file hold what the model calls its back.
         let bottom = pad_of(FRONT_INNER_BACK, Side::Bottom, 4);
-        assert_eq!((bottom.shape, bottom.size), (PadShape::Oval, (2540, 1016)), "the file's B.Cu is the footprint's own side");
-        assert_eq!(bottom.ext.stack.back.as_ref().map(|s| s.size), Some((3048, 1524)), "the file's main fields are its back");
-        assert_eq!(bottom.ext.stack.inner.as_ref().map(|s| s.size), Some((1270, 1270)));
+        assert_eq!((bottom.shape, bottom.size), (PadShape::Oval, (2_540_000, 1_016_000)), "the file's B.Cu is the footprint's own side");
+        assert_eq!(bottom.ext.stack.back.as_ref().map(|s| s.size), Some((3_048_000, 1_524_000)), "the file's main fields are its back");
+        assert_eq!(bottom.ext.stack.inner.as_ref().map(|s| s.size), Some((1_270_000, 1_270_000)));
     }
 
     #[test]
@@ -305,8 +305,8 @@ mod tests {
         let stack = &pad.ext.stack;
         assert_eq!(stack.mode, PadStackMode::Custom);
         assert_eq!(stack.layers.keys().map(String::as_str).collect::<Vec<_>>(), vec!["B.Cu", "In1.Cu", "In2.Cu"], "the front is the pad's own");
-        assert_eq!(stack.layers["In2.Cu"].size, (1270, 0), "`PADSTACK::SetSize` takes a negative size to zero");
-        assert_eq!(stack.layers["B.Cu"].size, (1524, 1524));
+        assert_eq!(stack.layers["In2.Cu"].size, (1_270_000, 0), "`PADSTACK::SetSize` takes a negative size to zero");
+        assert_eq!(stack.layers["B.Cu"].size, (1_524_000, 1_524_000));
         let groups = pad.shape_groups(Side::Top, &layers(4));
         assert_eq!(groups.len(), 4, "four layers, four shapes");
         // Written back, the layers in the board's order and without the front, as `format( const PAD* )` does.
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(inner.tokens, vec!["(thermal_gap 0.3)".to_string(), "(clearance 0.2)".to_string(), "(zone_connect 2)".to_string()]);
         let back = pad.ext.stack.back.as_ref().unwrap();
         let custom = back.custom.as_ref().unwrap();
-        assert_eq!((custom.anchor, custom.primitives.len()), (PadAnchor::Rect, 2));
+        assert_eq!((custom.anchor, custom.primitives.len()), (PadAnchor::Rect, 2000));
         let written = write_padstack(&pad, Side::Top, &layers(2));
         assert!(written.contains("(layer \"Inner\" (shape circle) (size 1.5 1.5) (thermal_gap 0.3) (clearance 0.2) (zone_connect 2))"), "{written}");
         assert!(written.contains("(layer \"B.Cu\" (shape custom) (size 1 1) (options (anchor rect)) (primitives (gr_line (start 0 0) (end 1 0) (width 0.2)) (gr_poly"), "{written}");
@@ -345,6 +345,6 @@ mod tests {
         assert!(pad.ext.stack.is_default());
         assert_eq!(write_padstack(&pad, Side::Top, &layers(2)), "");
         let all = library_copper_layers();
-        assert_eq!((all.len(), all[1].as_str(), all[30].as_str(), all[31].as_str()), (32, "In1.Cu", "In30.Cu", "B.Cu"));
+        assert_eq!((all.len(), all[1].as_str(), all[30].as_str(), all[31].as_str()), (32_000, "In1.Cu", "In30.Cu", "B.Cu"));
     }
 }

@@ -16,8 +16,8 @@ export function polygonOutline(sch: Schematic, id: string): { kind: PolyKind; pt
   return null;
 }
 
-/** `cursor` (um) and `tolUm` (the point editor's handle size at this zoom) decide the corner entries, which depend on where the pointer is. */
-export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolUm = 0, opts: { allowPinSwaps?: boolean; inGroup?: boolean } = {}): SchSelectionSummary {
+/** `cursor` (um) and `tolNm` (the point editor's handle size at this zoom) decide the corner entries, which depend on where the pointer is. */
+export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolNm = 0, opts: { allowPinSwaps?: boolean; inGroup?: boolean } = {}): SchSelectionSummary {
   const s = emptySummary();
   s.allowPinSwaps = opts.allowPinSwaps ?? false;
   s.inGroup = opts.inGroup ?? false;
@@ -89,8 +89,8 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[], curso
   // The point editor's corner entries: one selected polygon or rule area, the pointer on its outline (create) or on one of its corners (remove).
   const poly = ids.length === 1 && cursor ? polygonOutline(sch, ids[0]!) : null;
   if (poly && cursor) {
-    s.canAddCorner = canAddCorner(poly.pts, cursor, tolUm);
-    s.canRemoveCorner = canRemoveCorner(poly.kind, poly.pts, cursor, tolUm);
+    s.canAddCorner = canAddCorner(poly.pts, cursor, tolNm);
+    s.canRemoveCorner = canRemoveCorner(poly.kind, poly.pts, cursor, tolNm);
   }
   // `SCH_SHEET::HasUndefinedPins` needs the sheet's own file (read when the action runs); a sheet with at least one pin may have an unreferenced one, so Cleanup Sheet Pins is offered for it.
   if (s.sheets === 1) {

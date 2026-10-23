@@ -37,10 +37,10 @@ import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
 import { resolveLibSymbol, symbolBounds as libSymbolBounds, type ResolvedGraphic } from "./libSymbol";
 import { resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
-import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement, type LabelSpin } from "./labelShape";
-import { DEFAULT_PIN_TEXTS, PIN_TEXT_PEN_UM, PIN_TEXT_SIZE_UM, pinTextPlacements, type PinTexts } from "./pinText";
+import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_NM, localLabelTextPlacement, type LabelSpin } from "./labelShape";
+import { DEFAULT_PIN_TEXTS, PIN_TEXT_PEN_NM, PIN_TEXT_SIZE_NM, pinTextPlacements, type PinTexts } from "./pinText";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
-import { defaultPenUm, FIELD_SIZE_UM, textOrigin, type SchField } from "../../kicad-port/schText";
+import { defaultPenNm, FIELD_SIZE_NM, textOrigin, type SchField } from "../../kicad-port/schText";
 import { shownText } from "../../kicad-port/schFieldEdit";
 import { schTextLines, textLie } from "../../kicad-port/schTextItem";
 import { ercMarkerPosition } from "./ercMarkerPosition";
@@ -97,15 +97,15 @@ const REF_FONT = 1.6;
 const VALUE_FONT = 1.4;
 const PIN_FONT = 1.1;
 /** eeschema/default_values.h DEFAULT_JUNCTION_DIAM (36 mils) -- radius, um. A schematic can override this per-file (KiCad's own `(junction (diameter ...))`), which this app's backend doesn't expose yet, so this is the factory default only. */
-const JUNCTION_RADIUS_UM = 457.2;
+const JUNCTION_RADIUS_NM = 457_200;
 /** eeschema `default_line_thickness` (6 mil) -- um, the width of a graphic line with none of its own. */
-const NOTES_LINE_UM = 152.4;
+const NOTES_LINE_NM = 152_400;
 /** eeschema/default_values.h DEFAULT_NOCONNECT_SIZE (48 mils, the marker's full width) -- half-width, um, i.e. how far each arm of the top-level `no_connects[]` X reaches from center. Read directly from sch_painter.cpp: `d = max(m_size, 3*defaultPen)/2 = max(48,18)/2 = 24 mil`. */
-const NOCONNECT_HALF_UM = 609.6;
-/** Radius, um, of an ERC marker's circle -- not a KiCad constant (real KiCad's MARKER_BASE is a small fixed-pixel icon, screen-space-constant regardless of zoom; this canvas has no such primitive, so markers scale with the sheet like everything else here). Sized against this file's own JUNCTION_RADIUS_UM/NOCONNECT_HALF_UM just above rather than canvas/painter.ts's PCB-scale DRC_MARKER_RADIUS_UM (300) -- a schematic's own features already read larger at a normal working zoom, so a marker sized to match sits comfortably between the two. */
-const ERC_MARKER_RADIUS_UM = 450;
+const NOCONNECT_HALF_NM = 609_600;
+/** Radius, um, of an ERC marker's circle -- not a KiCad constant (real KiCad's MARKER_BASE is a small fixed-pixel icon, screen-space-constant regardless of zoom; this canvas has no such primitive, so markers scale with the sheet like everything else here). Sized against this file's own JUNCTION_RADIUS_NM/NOCONNECT_HALF_NM just above rather than canvas/painter.ts's PCB-scale DRC_MARKER_RADIUS_NM (300) -- a schematic's own features already read larger at a normal working zoom, so a marker sized to match sits comfortably between the two. */
+const ERC_MARKER_RADIUS_NM = 450_000;
 /** A pin whose own `electrical_type` is `no_connect` draws a *smaller* X at its own tip -- eeschema's TARGET_PIN_RADIUS (15 mil), confirmed in sch_painter.cpp as this exact pin-level marker's half-size, distinct from the top-level no-connect marker's own (larger) size above. */
-const PIN_NC_HALF_UM = 381;
+const PIN_NC_HALF_NM = 381_000;
 const FIELD_FONT = 1.0; // footprint field: small, per the task's "footprint field in purple and small"
 
 /**
@@ -118,11 +118,11 @@ const FIELD_FONT = 1.0; // footprint field: small, per the task's "footprint fie
  * so this app does not need the name/number-size-derived fallback branch
  * real KiCad falls back to only when PinSymbolSize is explicitly zeroed.
  */
-const PIN_DECOR_UM = 635;
-/** 2x PIN_DECOR_UM -- how far past the body-attachment point (R) an inverted/inverted-clock pin's bubble-to-tip line, or a low-input/low-clock/low-output wedge's leg, reaches. */
-const PIN_DECOR_D_UM = PIN_DECOR_UM * 2;
+const PIN_DECOR_NM = 635_000;
+/** 2x PIN_DECOR_NM -- how far past the body-attachment point (R) an inverted/inverted-clock pin's bubble-to-tip line, or a low-input/low-clock/low-output wedge's leg, reaches. */
+const PIN_DECOR_D_NM = PIN_DECOR_NM * 2;
 /** eeschema/default_values.h DEFAULT_PIN_NAME_OFFSET (20 mil) -- how far a pin's name sits past its body-attachment point, into the body ("inside" placement). This app's `LibSymbol` carries no per-symbol `(pin_names (offset ...))` override (not part of the coordinator's described contract), so every symbol uses KiCad's own factory default rather than varying per real library symbol -- real symbols that explicitly set `offset 0` (name drawn *outside*, past the pin's free end, as GND/power symbols typically do, though their pin is hidden anyway so it goes unseen) are the one case this simplification visibly diverges from. */
-const PIN_NAME_OFFSET_UM = 508;
+const PIN_NAME_OFFSET_NM = 508_000;
 
 /** eeschema's `scope`-based label coloring (LAYER_LOCLABEL/LAYER_GLOBLABEL/LAYER_HIERLABEL) -- replaces an earlier heuristic (power/ground net-name sniffing) that only ever approximated "is this a global rail", now that the real scope is reported directly. */
 function labelLayerColor(scope: LabelScope): string {
@@ -178,7 +178,7 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
   else if (symbol.mirror === "y") ctx.scale(-1, 1);
 
   const hair = 1 / view.scale;
-  ctx.lineWidth = Math.max(300, hair);
+  ctx.lineWidth = Math.max(300_000, hair);
 
   if (passive) {
     ctx.strokeStyle = layerColor("LAYER_DEVICE");
@@ -186,7 +186,7 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
   } else {
     ctx.fillStyle = layerColor("LAYER_DEVICE_BACKGROUND");
     ctx.strokeStyle = layerColor("LAYER_DEVICE");
-    ctx.lineWidth = Math.max(400, hair);
+    ctx.lineWidth = Math.max(400_000, hair);
     ctx.fillRect(0, 0, width, height);
     ctx.strokeRect(0, 0, width, height);
   }
@@ -194,13 +194,13 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
   if (selected) {
     ctx.save();
     ctx.strokeStyle = layerColor("LAYER_SELECTION_SHADOWS");
-    ctx.lineWidth = Math.max(800, hair * 3);
-    ctx.strokeRect(-200, -200, width + 400, height + 400);
+    ctx.lineWidth = Math.max(800_000, hair * 3);
+    ctx.strokeRect(-200_000, -200_000, width + 400_000, height + 400_000);
     ctx.restore();
   }
 
   // Pins.
-  ctx.lineWidth = Math.max(150, hair);
+  ctx.lineWidth = Math.max(150_000, hair);
   ctx.strokeStyle = layerColor("LAYER_PIN");
   ports.forEach((port, portIdx) => {
     const [lx, ly] = localPortPoint(port, width, height);
@@ -212,18 +212,18 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
     ctx.lineTo(sx, sy);
     ctx.stroke();
     if (pin) {
-      const pad = 200;
+      const pad = 200_000;
       // Pin name: just inside the body edge (KiCad shows this and the
       // number simultaneously by default -- there's no "hide names"
       // toggle in this app's model -- each in its own real KiCad color,
       // LAYER_PINNAM/LAYER_PINNUM, not one falling back to the other).
       if (pin.name) {
-        const sizeUm = PIN_FONT * 1000;
+        const sizeNm = PIN_FONT * 1e6;
         const color = layerColor("LAYER_PINNAM");
         if (port.side === "left") {
-          drawStrokeText(ctx, pin.name, lx + pad, ly + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "left", color });
+          drawStrokeText(ctx, pin.name, lx + pad, ly + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "left", color });
         } else if (port.side === "right") {
-          drawStrokeText(ctx, pin.name, lx - pad, ly + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "right", color });
+          drawStrokeText(ctx, pin.name, lx - pad, ly + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "right", color });
         } else {
           // top/bottom: text sits fully above (top-side pin) or fully
           // below (bottom-side pin) the stub point. Baseline sits close
@@ -233,24 +233,24 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
           // top-side pin; for a bottom-side pin the baseline is pushed
           // down by one cap-height (CAP_HEIGHT) so the text's *top*
           // lands at the pad point instead.
-          const y = port.side === "top" ? ly - pad : ly + pad + sizeUm * CAP_HEIGHT;
-          drawStrokeText(ctx, pin.name, lx, y, { sizeUm, justify: "center", color });
+          const y = port.side === "top" ? ly - pad : ly + pad + sizeNm * CAP_HEIGHT;
+          drawStrokeText(ctx, pin.name, lx, y, { sizeNm, justify: "center", color });
         }
       }
       // Pin number: along the stub itself, at its midpoint, offset to
       // sit just above the line (below it for a top-side stub, which
       // points the opposite way) rather than on top of it.
       if (pin.number) {
-        const sizeUm = PIN_FONT * 0.85 * 1000;
+        const sizeNm = PIN_FONT * 0.85 * 1e6;
         const color = layerColor("LAYER_PINNUM");
         const mx = (lx + sx) / 2;
         const my = (ly + sy) / 2;
         if (port.side === "left" || port.side === "right") {
           // Sits just above the stub line (bottom-anchored -- see CAP_HEIGHT's comment).
-          drawStrokeText(ctx, pin.number, mx, my - pad * 0.5, { sizeUm, justify: "center", color });
+          drawStrokeText(ctx, pin.number, mx, my - pad * 0.5, { sizeNm, justify: "center", color });
         } else {
           const justify = port.side === "top" ? "right" : "left";
-          drawStrokeText(ctx, pin.number, mx + (port.side === "top" ? -pad * 0.5 : pad * 0.5), my + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify, color });
+          drawStrokeText(ctx, pin.number, mx + (port.side === "top" ? -pad * 0.5 : pad * 0.5), my + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify, color });
         }
       }
       // No-connect: a small blue X centered on the stub's free end --
@@ -258,8 +258,8 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
       if (pin.kind === "nc") {
         ctx.save();
         ctx.strokeStyle = layerColor("LAYER_NOCONNECT");
-        ctx.lineWidth = Math.max(150, hair);
-        const s = PIN_NC_HALF_UM;
+        ctx.lineWidth = Math.max(150_000, hair);
+        const s = PIN_NC_HALF_NM;
         ctx.beginPath();
         ctx.moveTo(sx - s, sy - s);
         ctx.lineTo(sx + s, sy + s);
@@ -345,14 +345,14 @@ function drawPassiveGlyph(ctx: CanvasRenderingContext2D, kind: NonNullable<Resol
  * One line of text where KiCad puts it: `anchor` and the justification in the text's own axes, a vertical text turned a quarter
  * counter-clockwise about the anchor (`kicad-port/schText.ts`, `FONT::Draw`'s placement).
  */
-function drawKicadText(ctx: CanvasRenderingContext2D, text: string, anchor: [number, number], o: { sizeUm: number; h: "left" | "center" | "right"; v: "top" | "center" | "bottom"; vertical: boolean; color: string; thicknessUm?: number; italic?: boolean }) {
+function drawKicadText(ctx: CanvasRenderingContext2D, text: string, anchor: [number, number], o: { sizeNm: number; h: "left" | "center" | "right"; v: "top" | "center" | "bottom"; vertical: boolean; color: string; thicknessNm?: number; italic?: boolean }) {
   if (!text) return;
-  const thickness = o.thicknessUm ?? defaultPenUm(o.sizeUm);
-  const [dx, dy] = textOrigin(measureStrokeText(text, o.sizeUm), o.sizeUm, thickness, o.h, o.v);
+  const thickness = o.thicknessNm ?? defaultPenNm(o.sizeNm);
+  const [dx, dy] = textOrigin(measureStrokeText(text, o.sizeNm), o.sizeNm, thickness, o.h, o.v);
   ctx.save();
   ctx.translate(anchor[0], anchor[1]);
   if (o.vertical) ctx.rotate(-Math.PI / 2);
-  drawStrokeText(ctx, text, dx, dy, { sizeUm: o.sizeUm, thicknessUm: thickness, justify: "left", color: o.color, italic: o.italic });
+  drawStrokeText(ctx, text, dx, dy, { sizeNm: o.sizeNm, thicknessNm: thickness, justify: "left", color: o.color, italic: o.italic });
   ctx.restore();
 }
 
@@ -381,18 +381,18 @@ function fieldColor(name: string): string {
 function drawSchFields(ctx: CanvasRenderingContext2D, fields: SchField[], unitSuffix = "", color?: string) {
   for (const f of fields) {
     if (!f.text || (!f.visible && !paintedShowHiddenFields)) continue;
-    const sizeUm = f.size_um && f.size_um > 0 ? f.size_um : FIELD_SIZE_UM;
+    const sizeNm = f.size_nm && f.size_nm > 0 ? f.size_nm : FIELD_SIZE_NM;
     // `f.shown` is what `${NAME}` in the text stands for (`SCH_FIELD::GetShownText`); a Reference has none, it is written with its unit letter.
     const text = shownText({ name: f.name, text: f.name === "Reference" ? f.text + unitSuffix : (f.shown ?? f.text), name_shown: f.name_shown });
     const picked = f.id !== undefined && paintedSelection.has(f.id);
     drawKicadText(ctx, text, f.at, {
-      sizeUm,
+      sizeNm,
       h: f.h,
       v: f.v,
       vertical: f.vertical,
       color: picked ? layerColor("LAYER_SELECTION_SHADOWS") : !f.visible ? layerColor("LAYER_HIDDEN") : (color ?? fieldColor(f.name)),
       // a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans
-      thicknessUm: f.bold ? Math.round(sizeUm / 5) : undefined,
+      thicknessNm: f.bold ? Math.round(sizeNm / 5) : undefined,
       italic: f.italic,
     });
   }
@@ -411,19 +411,19 @@ function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol,
   // kicad-port/schFields.ts: beside the body for a resistor/capacitor standing on its end (a wire leaves both ends, straight through
   // "above and below"), above and below and centred for everything else.
   const at = fieldAnchors(bbox, verticalTwoPin);
-  const refSizeUm = REF_FONT * 1000;
-  drawStrokeText(ctx, (symbol.reference ?? symbol.id) + unitSuffix, at.ref[0], at.ref[1], { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, justify: at.justify, color: layerColor("LAYER_REFERENCEPART") });
+  const refSizeNm = REF_FONT * 1e6;
+  drawStrokeText(ctx, (symbol.reference ?? symbol.id) + unitSuffix, at.ref[0], at.ref[1], { sizeNm: refSizeNm, thicknessNm: refSizeNm * BOLD_THICKNESS_FACTOR, justify: at.justify, color: layerColor("LAYER_REFERENCEPART") });
   if (symbol.value || symbol.mpn) {
-    const sizeUm = VALUE_FONT * 1000;
-    drawStrokeText(ctx, symbol.shown?.value ?? symbol.value ?? symbol.mpn ?? "", at.value[0], at.value[1], { sizeUm, justify: at.justify, color: layerColor("LAYER_VALUEPART") });
+    const sizeNm = VALUE_FONT * 1e6;
+    drawStrokeText(ctx, symbol.shown?.value ?? symbol.value ?? symbol.mpn ?? "", at.value[0], at.value[1], { sizeNm, justify: at.justify, color: layerColor("LAYER_VALUEPART") });
   }
   // Footprint field: small, LAYER_FIELDS purple -- a real field KiCad
   // draws alongside ref/value (this app has no separate "hide field"
   // flag per field, so it always shows when the symbol has a package).
   const pkg = symbol.shown?.footprint ?? symbol.footprint ?? symbol.package;
   if (pkg) {
-    const sizeUm = FIELD_FONT * 1000;
-    drawStrokeText(ctx, pkg, at.footprint[0], at.footprint[1], { sizeUm, justify: at.justify, color: layerColor("LAYER_FIELDS") });
+    const sizeNm = FIELD_FONT * 1e6;
+    drawStrokeText(ctx, pkg, at.footprint[0], at.footprint[1], { sizeNm, justify: at.justify, color: layerColor("LAYER_FIELDS") });
   }
 }
 
@@ -437,9 +437,9 @@ function fillPaint(fill: LibFill): "none" | "outline" | "background" {
 }
 
 /** sch_shape.cpp's stroke-width resolution: an explicit positive width wins (clamped to a sane minimum); zero means "use the schematic's own default line thickness"; negative explicitly means "no stroke" (rare -- a hatch-only shape). */
-function effectiveStrokeWidthUm(strokeWidthUm: number): number | null {
-  if (strokeWidthUm > 0) return Math.max(strokeWidthUm, 21.2);
-  if (strokeWidthUm === 0) return 152.4; // DEFAULT_LINE_WIDTH_MILS, 6 mil
+function effectiveStrokeWidthNm(strokeWidthNm: number): number | null {
+  if (strokeWidthNm > 0) return Math.max(strokeWidthNm, 21_200);
+  if (strokeWidthNm === 0) return 152_400; // DEFAULT_LINE_WIDTH_MILS, 6 mil
   return null;
 }
 
@@ -471,12 +471,12 @@ function applyFill(ctx: CanvasRenderingContext2D, mode: "none" | "outline" | "ba
 /** Exported for `components/symbol/symbolPainter.ts` (the Symbol Editor tab): the exact same resolved-graphic drawing logic applies there -- a library symbol's own graphics are this same `ResolvedGraphic` shape, just resolved with an identity transform/no instance offset instead of a placed instance's. */
 export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphic, strokeColor: string) {
   if (g.kind === "text") {
-    drawStrokeText(ctx, g.content, g.at[0], g.at[1], { sizeUm: g.sizeUm, angleRad: -(g.angleDeg * Math.PI) / 180, justify: "center", color: strokeColor });
+    drawStrokeText(ctx, g.content, g.at[0], g.at[1], { sizeNm: g.sizeNm, angleRad: -(g.angleDeg * Math.PI) / 180, justify: "center", color: strokeColor });
     return;
   }
 
   const mode = fillPaint(g.fill);
-  const widthUm = effectiveStrokeWidthUm(g.strokeWidthUm);
+  const widthNm = effectiveStrokeWidthNm(g.strokeWidthNm);
   applyFill(ctx, mode, strokeColor);
 
   ctx.beginPath();
@@ -491,7 +491,7 @@ export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphi
       g.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       break;
     case "circle":
-      ctx.arc(g.center[0], g.center[1], g.radiusUm, 0, Math.PI * 2);
+      ctx.arc(g.center[0], g.center[1], g.radiusNm, 0, Math.PI * 2);
       break;
     case "arc": {
       const center = arcCenter(g.start, g.mid, g.end);
@@ -514,16 +514,16 @@ export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphi
     // stroke is the open path as given (sch_painter.cpp: fill closes,
     // stroke does not) -- fill before closing the path for the stroke.
     if (mode !== "none") ctx.fill();
-    if (widthUm !== null) {
-      ctx.lineWidth = widthUm;
+    if (widthNm !== null) {
+      ctx.lineWidth = widthNm;
       ctx.stroke();
     }
     return;
   }
   if (g.kind === "rectangle" || g.kind === "circle" || g.kind === "arc") ctx.closePath();
   if (mode !== "none" && g.kind !== "arc") ctx.fill();
-  if (widthUm !== null) {
-    ctx.lineWidth = widthUm;
+  if (widthNm !== null) {
+    ctx.lineWidth = widthNm;
     ctx.stroke();
   }
 }
@@ -537,8 +537,8 @@ function isHorizontalPin(dir: [number, number]): boolean {
 export function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
   const { pin, tip: P, root: R, dir } = rp;
   const [dx, dy] = dir;
-  const r = PIN_DECOR_UM;
-  const d = PIN_DECOR_D_UM;
+  const r = PIN_DECOR_NM;
+  const d = PIN_DECOR_D_NM;
   const line = (a: [number, number], b: [number, number]) => {
     ctx.moveTo(a[0], a[1]);
     ctx.lineTo(b[0], b[1]);
@@ -561,7 +561,7 @@ export function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin
   };
 
   if (pin.electrical_type === "no_connect") {
-    const t = PIN_NC_HALF_UM;
+    const t = PIN_NC_HALF_NM;
     line(R, P);
     line([P[0] - t, P[1] - t], [P[0] + t, P[1] + t]);
     line([P[0] + t, P[1] - t], [P[0] - t, P[1] + t]);
@@ -619,17 +619,17 @@ export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin, colo
   const { pin, tip, root } = rp;
   const placed = pinTextPlacements(pin, tip, root, texts);
   if (placed.name) {
-    drawKicadText(ctx, placed.name.text, placed.name.at, { sizeUm: PIN_TEXT_SIZE_UM, h: placed.name.h, v: placed.name.v, vertical: placed.name.vertical, color: colors?.name ?? layerColor("LAYER_PINNAM"), thicknessUm: PIN_TEXT_PEN_UM });
+    drawKicadText(ctx, placed.name.text, placed.name.at, { sizeNm: PIN_TEXT_SIZE_NM, h: placed.name.h, v: placed.name.v, vertical: placed.name.vertical, color: colors?.name ?? layerColor("LAYER_PINNAM"), thicknessNm: PIN_TEXT_PEN_NM });
   }
   if (placed.number) {
-    drawKicadText(ctx, placed.number.text, placed.number.at, { sizeUm: PIN_TEXT_SIZE_UM, h: placed.number.h, v: placed.number.v, vertical: placed.number.vertical, color: colors?.number ?? layerColor("LAYER_PINNUM"), thicknessUm: PIN_TEXT_PEN_UM });
+    drawKicadText(ctx, placed.number.text, placed.number.at, { sizeNm: PIN_TEXT_SIZE_NM, h: placed.number.h, v: placed.number.v, vertical: placed.number.vertical, color: colors?.number ?? layerColor("LAYER_PINNUM"), thicknessNm: PIN_TEXT_PEN_NM });
   }
 }
 
 function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: ResolvedPin[], showHiddenPins = false, texts: PinTexts = DEFAULT_PIN_TEXTS) {
   const hair = 1 / view.scale;
   ctx.strokeStyle = layerColor("LAYER_PIN");
-  ctx.lineWidth = Math.max(PIN_TEXT_PEN_UM, hair);
+  ctx.lineWidth = Math.max(PIN_TEXT_PEN_NM, hair);
   for (const rp of pins) {
     // `SCH_PAINTER::draw( SCH_PIN )`: a hidden pin is drawn only while "Show Hidden Pins" is on, and then in the hidden-items colour (`LAYER_HIDDEN`).
     if (rp.pin.hidden && !showHiddenPins) continue;
@@ -651,7 +651,7 @@ function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, inst
   if (selected) {
     ctx.save();
     ctx.strokeStyle = layerColor("LAYER_SELECTION_SHADOWS");
-    ctx.lineWidth = Math.max(800, hair * 3);
+    ctx.lineWidth = Math.max(800_000, hair * 3);
     ctx.strokeRect(bbox.minX - 400, bbox.minY - 400, bbox.maxX - bbox.minX + 800, bbox.maxY - bbox.minY + 800);
     ctx.restore();
   }
@@ -676,18 +676,18 @@ function drawPowerSymbolText(ctx: CanvasRenderingContext2D, ps: PowerSymbol, res
     drawSchFields(ctx, ps.fields, "", on ? layerColor("LAYER_SELECTION_SHADOWS") : undefined);
     return;
   }
-  const sizeUm = VALUE_FONT * 1000;
+  const sizeNm = VALUE_FONT * 1e6;
   const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_VALUEPART");
   if (resolvedPin && (resolvedPin.dir[0] !== 0 || resolvedPin.dir[1] !== 0)) {
     const { root: R, dir } = resolvedPin;
-    const anchor: [number, number] = [R[0] + dir[0] * PIN_NAME_OFFSET_UM, R[1] + dir[1] * PIN_NAME_OFFSET_UM];
+    const anchor: [number, number] = [R[0] + dir[0] * PIN_NAME_OFFSET_NM, R[1] + dir[1] * PIN_NAME_OFFSET_NM];
     if (isHorizontalPin(dir)) {
-      drawStrokeText(ctx, ps.net, anchor[0], anchor[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: dir[0] >= 0 ? "left" : "right", color });
+      drawStrokeText(ctx, ps.net, anchor[0], anchor[1] + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: dir[0] >= 0 ? "left" : "right", color });
     } else {
-      drawStrokeText(ctx, ps.net, anchor[0], anchor[1], { sizeUm, angleRad: -Math.PI / 2, justify: dir[1] < 0 ? "left" : "right", color });
+      drawStrokeText(ctx, ps.net, anchor[0], anchor[1], { sizeNm, angleRad: -Math.PI / 2, justify: dir[1] < 0 ? "left" : "right", color });
     }
   } else {
-    drawStrokeText(ctx, ps.net, ps.at[0] + PIN_NAME_OFFSET_UM, ps.at[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "left", color });
+    drawStrokeText(ctx, ps.net, ps.at[0] + PIN_NAME_OFFSET_NM, ps.at[1] + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "left", color });
   }
 }
 
@@ -704,13 +704,13 @@ function drawPowerSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, ps:
     ctx.save();
     ctx.fillStyle = strokeColor;
     ctx.beginPath();
-    ctx.arc(ps.at[0], ps.at[1], Math.max(150, 1 / view.scale), 0, Math.PI * 2);
+    ctx.arc(ps.at[0], ps.at[1], Math.max(150_000, 1 / view.scale), 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
   if (resolvedPin && !resolvedPin.pin.hidden) {
     ctx.strokeStyle = layerColor("LAYER_PIN");
-    ctx.lineWidth = Math.max(PIN_TEXT_PEN_UM, 1 / view.scale);
+    ctx.lineWidth = Math.max(PIN_TEXT_PEN_NM, 1 / view.scale);
     ctx.beginPath();
     drawPinDecoration(ctx, resolvedPin);
     ctx.stroke();
@@ -724,7 +724,7 @@ function drawSelectedPin(ctx: CanvasRenderingContext2D, view: ViewTransform, pin
   ctx.save();
   ctx.strokeStyle = color;
   ctx.lineCap = "round";
-  ctx.lineWidth = Math.max(PIN_TEXT_PEN_UM * 2.5, 3 / view.scale);
+  ctx.lineWidth = Math.max(PIN_TEXT_PEN_NM * 2.5, 3 / view.scale);
   ctx.beginPath();
   ctx.moveTo(pin.tip[0], pin.tip[1]);
   ctx.lineTo(pin.root[0], pin.root[1]);
@@ -739,21 +739,21 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
   const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : labelLayerColor(l.scope);
   const hair = 1 / view.scale;
   // the size, bold and italic Label Properties set (`EDA_TEXT`): a bold text is written with a fifth of its size for a pen, an italic one leans
-  const sizeUm = l.size_um && l.size_um > 0 ? l.size_um : LABEL_TEXT_SIZE_UM;
-  const look = { thicknessUm: l.bold ? Math.round(sizeUm / 5) : undefined, italic: l.italic };
+  const sizeNm = l.size_nm && l.size_nm > 0 ? l.size_nm : LABEL_TEXT_SIZE_NM;
+  const look = { thicknessNm: l.bold ? Math.round(sizeNm / 5) : undefined, italic: l.italic };
 
   if (l.scope === "local" || !l.shape) {
     const spin = l.spin ?? inferSpin(wires, l.at);
-    const { pos, justify } = localLabelTextPlacement(spin, l.at, sizeUm);
+    const { pos, justify } = localLabelTextPlacement(spin, l.at, sizeNm);
     // V BOTTOM: stroke text has no native top/bottom baseline (see this
     // file's CAP_HEIGHT comment) -- a local label's text sits just above
     // its anchor, so the baseline itself (no cap-height push needed,
     // unlike the box-renderer's generic top/bottom approximation) lands
     // close enough.
     if (spin === "up" || spin === "bottom") {
-      drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeUm, angleRad: -Math.PI / 2, justify, color, ...look });
+      drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeNm, angleRad: -Math.PI / 2, justify, color, ...look });
     } else {
-      drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeUm, justify, color, ...look });
+      drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeNm, justify, color, ...look });
     }
     return;
   }
@@ -761,17 +761,17 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
   const spin = l.spin ?? inferSpin(wires, l.at);
   const shape: LabelShape = l.shape;
   ctx.strokeStyle = color;
-  ctx.lineWidth = Math.max(l.scope === "global" ? 159 : 159, hair);
+  ctx.lineWidth = Math.max(l.scope === "global" ? 159_000 : 159_000, hair);
   ctx.beginPath();
-  const outline = l.scope === "global" ? globalLabelOutline(l.net, shape, spin, l.at, sizeUm) : hierLabelOutline(shape, spin, l.at, sizeUm);
+  const outline = l.scope === "global" ? globalLabelOutline(l.net, shape, spin, l.at, sizeNm) : hierLabelOutline(shape, spin, l.at, sizeNm);
   outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
   ctx.stroke();
 
-  const { pos, justify } = l.scope === "global" ? globalLabelTextPlacement(shape, spin, l.at, sizeUm) : hierLabelTextPlacement(l.net, spin, l.at, sizeUm);
+  const { pos, justify } = l.scope === "global" ? globalLabelTextPlacement(shape, spin, l.at, sizeNm) : hierLabelTextPlacement(l.net, spin, l.at, sizeNm);
   if (spin === "up" || spin === "bottom") {
-    drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeUm, angleRad: -Math.PI / 2, justify, color, ...look });
+    drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeNm, angleRad: -Math.PI / 2, justify, color, ...look });
   } else {
-    drawStrokeText(ctx, l.net, pos[0], pos[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify, color, ...look });
+    drawStrokeText(ctx, l.net, pos[0], pos[1] + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify, color, ...look });
   }
 }
 
@@ -785,7 +785,7 @@ function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText, on: boolea
   ctx.save();
   ctx.translate(t.at[0], t.at[1]);
   if (textLie(t).vertical) ctx.rotate(-Math.PI / 2);
-  for (const line of schTextLines(t, measureStrokeText)) drawStrokeText(ctx, line.text, line.x, line.y, { sizeUm: t.size_um, justify: "left", color });
+  for (const line of schTextLines(t, measureStrokeText)) drawStrokeText(ctx, line.text, line.x, line.y, { sizeNm: t.size_nm, justify: "left", color });
   ctx.restore();
 }
 
@@ -808,23 +808,23 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
   const [w, h] = s.size;
   ctx.save();
   ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_SHEET");
-  ctx.lineWidth = Math.max(152.4, hair);
+  ctx.lineWidth = Math.max(152_400, hair);
   ctx.strokeRect(x, y, w, h);
   ctx.restore();
 
-  const nameSizeUm = 1270;
+  const nameSizeNm = 1_270_000;
   if (s.fields?.length) {
     drawSchFields(ctx, s.fields);
   } else {
-    drawStrokeText(ctx, s.name, x, y - 400, { sizeUm: nameSizeUm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
-    drawStrokeText(ctx, s.file, x, y + h + 400 + nameSizeUm * 0.8, { sizeUm: nameSizeUm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
+    drawStrokeText(ctx, s.name, x, y - 400, { sizeNm: nameSizeNm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
+    drawStrokeText(ctx, s.file, x, y + h + 400_000 + nameSizeNm * 0.8, { sizeNm: nameSizeNm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
   }
 
   // A sheet pin sits on the border it names (`SCH_SHEET_PIN::SetSide`): its flag points into the sheet from that edge and its name is
   // written inside, after the flag -- so a wire reaches the pin from outside and the name never runs over it.
   const sheetLabelColor = layerColor("LAYER_SHEETLABEL");
   ctx.save();
-  ctx.lineWidth = Math.max(159, hair);
+  ctx.lineWidth = Math.max(159_000, hair);
   for (const p of s.pins) {
     // a selected pin (`SCH_SHEET_PIN_T`) is drawn in the selection colour
     const pinColor = p.id && selection.has(p.id) ? layerColor("LAYER_SELECTION_SHADOWS") : sheetLabelColor;
@@ -833,18 +833,18 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
     const edge = px <= x ? "left" : px >= x + w ? "right" : py <= y ? "top" : "bottom";
     const spin: LabelSpin = edge === "left" ? "right" : edge === "right" ? "left" : edge === "top" ? "bottom" : "up";
     // the size, bold and italic Sheet Pin Properties set (`SCH_SHEET_PIN` is an `EDA_TEXT`): a bold text is written with a fifth of its size for a pen, an italic one leans
-    const sizeUm = p.size_um && p.size_um > 0 ? p.size_um : LABEL_TEXT_SIZE_UM;
-    const look = { thicknessUm: p.bold ? Math.round(sizeUm / 5) : undefined, italic: p.italic };
+    const sizeNm = p.size_nm && p.size_nm > 0 ? p.size_nm : LABEL_TEXT_SIZE_NM;
+    const look = { thicknessNm: p.bold ? Math.round(sizeNm / 5) : undefined, italic: p.italic };
     ctx.beginPath();
-    hierLabelOutline(p.shape, spin, [px, py], sizeUm).forEach(([ox, oy], i) => (i === 0 ? ctx.moveTo(ox, oy) : ctx.lineTo(ox, oy)));
+    hierLabelOutline(p.shape, spin, [px, py], sizeNm).forEach(([ox, oy], i) => (i === 0 ? ctx.moveTo(ox, oy) : ctx.lineTo(ox, oy)));
     ctx.stroke();
     // the name runs into the sheet from the flag (`SCH_HIERLABEL::GetSchematicTextOffset`: `GetTextOffset() + GetTextWidth()`, the text offset being 0.15 of the size), along the
     // sheet on the left and right borders and up it on the top and bottom ones (`SetSide`'s spin)
-    const dist = Math.round(0.15 * sizeUm) + sizeUm;
-    if (edge === "left") drawStrokeText(ctx, p.name, px + dist, py + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "left", color: pinColor, ...look });
-    else if (edge === "right") drawStrokeText(ctx, p.name, px - dist, py + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "right", color: pinColor, ...look });
-    else if (edge === "top") drawStrokeText(ctx, p.name, px, py + dist, { sizeUm, angleRad: -Math.PI / 2, justify: "left", color: pinColor, ...look });
-    else drawStrokeText(ctx, p.name, px, py - dist, { sizeUm, angleRad: -Math.PI / 2, justify: "right", color: pinColor, ...look });
+    const dist = Math.round(0.15 * sizeNm) + sizeNm;
+    if (edge === "left") drawStrokeText(ctx, p.name, px + dist, py + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "left", color: pinColor, ...look });
+    else if (edge === "right") drawStrokeText(ctx, p.name, px - dist, py + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "right", color: pinColor, ...look });
+    else if (edge === "top") drawStrokeText(ctx, p.name, px, py + dist, { sizeNm, angleRad: -Math.PI / 2, justify: "left", color: pinColor, ...look });
+    else drawStrokeText(ctx, p.name, px, py - dist, { sizeNm, angleRad: -Math.PI / 2, justify: "right", color: pinColor, ...look });
   }
   ctx.restore();
 }
@@ -853,9 +853,9 @@ function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: N
   const hair = 1 / view.scale;
   ctx.save();
   ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_NOCONNECT");
-  ctx.lineWidth = Math.max(152.4, hair);
+  ctx.lineWidth = Math.max(152_400, hair);
   const [x, y] = nc.at;
-  const s = NOCONNECT_HALF_UM;
+  const s = NOCONNECT_HALF_NM;
   ctx.beginPath();
   ctx.moveTo(x - s, y - s);
   ctx.lineTo(x + s, y + s);
@@ -879,7 +879,7 @@ function drawBusEntry(ctx: CanvasRenderingContext2D, view: ViewTransform, be: Bu
   const [x, y] = be.at;
   const [dx, dy] = be.size;
   ctx.save();
-  const look = strokeLook(be.stroke, 150);
+  const look = strokeLook(be.stroke, 150_000);
   ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : (look.color ?? layerColor("LAYER_BUS"));
   ctx.lineWidth = Math.max(look.width, hair);
   ctx.setLineDash(look.dash);
@@ -890,9 +890,9 @@ function drawBusEntry(ctx: CanvasRenderingContext2D, view: ViewTransform, be: Bu
   ctx.restore();
 }
 
-/** The stroke Wire/Bus Properties set over the layer's defaults: the line width (`fallbackUm` when none), its dash pattern and its own colour (null: the layer's). */
-function strokeLook(st: SchStroke | null | undefined, fallbackUm: number): { width: number; dash: number[]; color: string | null } {
-  const width = st?.width_um ? st.width_um : fallbackUm;
+/** The stroke Wire/Bus Properties set over the layer's defaults: the line width (`fallbackNm` when none), its dash pattern and its own colour (null: the layer's). */
+function strokeLook(st: SchStroke | null | undefined, fallbackNm: number): { width: number; dash: number[]; color: string | null } {
+  const width = st?.width_nm ? st.width_nm : fallbackNm;
   return { width, dash: dashPattern(st?.style, width), color: st?.color && (st.color.r || st.color.g || st.color.b || st.color.a) ? rgba(st.color) : null };
 }
 
@@ -918,11 +918,11 @@ function drawErcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch:
     const [x, y] = resolved.at;
     const on = i === selected;
     const color = on ? layerColor("LAYER_DRC_HIGHLIGHTED") : layerColor(v.severity === "error" ? "LAYER_ERC_ERR" : v.severity === "warning" ? "LAYER_ERC_WARN" : "LAYER_ERC_EXCLUSION");
-    const r = on ? ERC_MARKER_RADIUS_UM * 1.4 : ERC_MARKER_RADIUS_UM;
+    const r = on ? ERC_MARKER_RADIUS_NM * 1.4 : ERC_MARKER_RADIUS_NM;
     ctx.save();
     ctx.fillStyle = color;
     ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(100, hair);
+    ctx.lineWidth = Math.max(100_000, hair);
     // Out of date: dimmed and dashed, like the PCB's DRC markers.
     if (stale) ctx.setLineDash([r * 0.35, r * 0.25]);
     ctx.beginPath();
@@ -932,7 +932,7 @@ function drawErcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch:
     ctx.globalAlpha = stale ? 0.55 : 1;
     ctx.stroke();
     ctx.setLineDash([]);
-    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeUm: r * 1.3, justify: "center", color, thicknessUm: r * 0.22 });
+    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeNm: r * 1.3, justify: "center", color, thicknessNm: r * 0.22 });
     ctx.restore();
   });
 }
@@ -945,11 +945,11 @@ function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch
     if (!resolved) return;
     const [x, y] = resolved.at;
     const on = i === selected;
-    const r = on ? ERC_MARKER_RADIUS_UM * 1.5 : ERC_MARKER_RADIUS_UM * 1.1;
+    const r = on ? ERC_MARKER_RADIUS_NM * 1.5 : ERC_MARKER_RADIUS_NM * 1.1;
     ctx.save();
     ctx.strokeStyle = "#4ea1ff";
     ctx.fillStyle = "#4ea1ff";
-    ctx.lineWidth = Math.max(100, hair);
+    ctx.lineWidth = Math.max(100_000, hair);
     ctx.beginPath();
     ctx.moveTo(x, y - r);
     ctx.lineTo(x + r, y);
@@ -988,9 +988,9 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     // wire, just `LAYER_BUS` instead of `LAYER_WIRE` -- same convention
     // real eeschema uses (a visibly different, blue by default, color; not
     // a different line width).
-    const look = strokeLook(w.stroke, 150);
+    const look = strokeLook(w.stroke, 150_000);
     ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : (look.color ?? layerColor(w.bus ? "LAYER_BUS" : "LAYER_WIRE"));
-    ctx.lineWidth = Math.max(on ? Math.max(300, look.width * 2) : look.width, hair * (on ? 2.5 : 1));
+    ctx.lineWidth = Math.max(on ? Math.max(300_000, look.width * 2) : look.width, hair * (on ? 2.5 : 1));
     ctx.setLineDash(look.dash);
     ctx.beginPath();
     w.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
@@ -1009,7 +1009,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   ctx.fillStyle = layerColor("LAYER_JUNCTION");
   for (const [x, y] of junctionPoints(sch.wires, junctionAnchors)) {
     ctx.beginPath();
-    ctx.arc(x, y, Math.max(JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
+    ctx.arc(x, y, Math.max(JUNCTION_RADIUS_NM, hair * 2), 0, Math.PI * 2);
     ctx.fill();
   }
   // Explicit junctions (`J`, `SCH_JUNCTION`): the same dot, drawn wherever one was placed -- on a crossing it is what joins the two
@@ -1019,7 +1019,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     const own = j.look?.color && (j.look.color.r || j.look.color.g || j.look.color.b || j.look.color.a) ? rgba(j.look.color) : null;
     ctx.fillStyle = opts.selection.has(j.id) ? layerColor("LAYER_SELECTION_SHADOWS") : (own ?? layerColor("LAYER_JUNCTION"));
     ctx.beginPath();
-    ctx.arc(j.at[0], j.at[1], Math.max(j.look?.diameter_um ? j.look.diameter_um / 2 : JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
+    ctx.arc(j.at[0], j.at[1], Math.max(j.look?.diameter_nm ? j.look.diameter_nm / 2 : JUNCTION_RADIUS_NM, hair * 2), 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -1027,7 +1027,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // thickness (`default_line_thickness`, 6 mil) when none was set.
   for (const l of sch.lines ?? []) {
     const on = opts.selection.has(l.id);
-    const look = strokeLook(l.stroke, l.width_um > 0 ? l.width_um : NOTES_LINE_UM);
+    const look = strokeLook(l.stroke, l.width_nm > 0 ? l.width_nm : NOTES_LINE_NM);
     ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : (look.color ?? layerColor("LAYER_NOTES"));
     ctx.lineWidth = Math.max(look.width, hair * (on ? 2.5 : 1));
     ctx.setLineDash(look.dash);
@@ -1063,7 +1063,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     for (const f of l.fields ?? []) {
       if (!f.shown || (!f.visible && !paintedShowHiddenFields)) continue;
       const color = !f.visible ? layerColor("LAYER_HIDDEN") : f.intersheet_refs ? layerColor("LAYER_GLOBLABEL") : f.name === "Netclass" ? layerColor("LAYER_NETCLASS_REFS") : layerColor("LAYER_FIELDS");
-      drawKicadText(ctx, f.shown, f.at, { sizeUm: f.size_um || FIELD_SIZE_UM, h: f.h, v: "center", vertical: f.vertical, color, italic: f.italic });
+      drawKicadText(ctx, f.shown, f.at, { sizeNm: f.size_nm || FIELD_SIZE_NM, h: f.h, v: "center", vertical: f.vertical, color, italic: f.italic });
     }
   }
 

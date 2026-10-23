@@ -523,7 +523,7 @@
   });
 
   await scenario("a net whose class names a tuning profile with the time domain is tuned in picoseconds", async (t) => {
-    const profile = { name: "FR4", profile_type: "single", target_impedance: 50, enable_time_domain_tuning: true, layer_entries: [{ signal_layer: "F.Cu", top_reference_layer: null, bottom_reference_layer: null, width_um: 200, diff_pair_gap_um: 0, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 0, via_overrides: [] };
+    const profile = { name: "FR4", profile_type: "single", target_impedance: 50, enable_time_domain_tuning: true, layer_entries: [{ signal_layer: "F.Cu", top_reference_layer: null, bottom_reference_layer: null, width_nm: 200, diff_pair_gap_nm: 0, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 0, via_overrides: [] };
     const set = await cmd({ op: "set_tuning_profiles", settings: { profiles: [profile], class_profiles: { Default: "FR4" } } });
     t(set.ok === true, `Board Setup's Tuning Profiles take a profile of 6.1 ps/mm and the Default class names it: ${JSON.stringify(set)}`);
     await commit([line("PA1", "F.Cu", [[6000, 28000], [26000, 28000]])]);

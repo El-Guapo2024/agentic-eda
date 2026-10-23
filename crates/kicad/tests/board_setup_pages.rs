@@ -29,7 +29,7 @@ fn profile() -> TuningProfile {
         profile_type: ProfileType::Differential,
         target_impedance: 90.0,
         enable_time_domain_tuning: true,
-        layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: 130, diff_pair_gap_nm: 150, delay_as_per_mm: 6_100_000 }],
+        layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: 130_000, diff_pair_gap_nm: 150_000, delay_as_per_mm: 6_100_000 }],
         via_propagation_delay_as: 25_000_000,
         via_overrides: vec![ViaOverride { signal_layer_from: "F.Cu".into(), signal_layer_to: "B.Cu".into(), via_layer_from: "F.Cu".into(), via_layer_to: "B.Cu".into(), delay_as: 30_000_000 }],
     }
@@ -40,7 +40,7 @@ fn the_board_file_brings_the_dash_ratios_and_the_hatch_offsets_in_and_out() {
     let (design, model, _) = import_kicad_pcb(BOARD).expect("imports");
     assert_eq!((model.board.formatting.dash_length_ratio, model.board.formatting.gap_length_ratio), (8.0, 2.5));
     assert_eq!(model.board.hatch_offsets.keys().collect::<Vec<_>>(), ["F.Cu"], "a layer at 0, 0 has none and In7.Cu is not a layer of this board");
-    assert_eq!(model.board.hatch_offsets["F.Cu"], HatchOffset { x_nm: 1_500, y_nm: -2_000 });
+    assert_eq!(model.board.hatch_offsets["F.Cu"], HatchOffset { x_nm: 1_500_000, y_nm: -2_000_000 });
     let text = export(&design, &model);
     assert!(text.contains("(dashed_line_dash_ratio 8.000000)") && text.contains("(dashed_line_gap_ratio 2.500000)"), "{text}");
     assert!(text.contains("(zone_defaults (property (layer \"F.Cu\") (hatch_position (xy 1.5 -2))))"), "{text}");
@@ -67,7 +67,7 @@ fn the_project_carries_the_footprint_boxes_the_tuning_patterns_and_the_profiles(
     let (design, mut model, _) = import_kicad_pcb(BOARD).expect("imports");
     model.board.formatting.apply_to_fp_fields = true;
     model.board.formatting.apply_to_fp_shapes = true;
-    model.board.tuning_patterns.diff_pair = MeanderSettings { min_amplitude_nm: 300, max_amplitude_nm: 900, spacing_nm: 1_100, corner_style: CornerStyle::Chamfer, corner_radius_percentage: 40, single_sided: true };
+    model.board.tuning_patterns.diff_pair = MeanderSettings { min_amplitude_nm: 300_000, max_amplitude_nm: 900_000, spacing_nm: 1_100_000, corner_style: CornerStyle::Chamfer, corner_radius_percentage: 40, single_sided: true };
     model.board.tuning_profiles.profiles = vec![profile()];
     let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
     let ds = &pro["board"]["design_settings"];
@@ -94,7 +94,7 @@ fn the_project_carries_the_footprint_boxes_the_tuning_patterns_and_the_profiles(
 fn a_class_that_names_a_profile_moves_the_net_classes_into_the_project() {
     let (design, mut model, _) = import_kicad_pcb(BOARD).expect("imports");
     model.nets = vec![Net { name: "GND".into(), pins: vec![] }, Net { name: "USB_DP".into(), pins: vec![] }, Net { name: "USB_DM".into(), pins: vec![] }];
-    model.board.net_classes = vec![NetClass { name: "USB".into(), nets: vec!["USB_*".into()], track_width: Some(130), clearance: Some(150), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(130), diff_pair_gap: Some(150), diff_pair_via_gap: None, priority: 0 }];
+    model.board.net_classes = vec![NetClass { name: "USB".into(), nets: vec!["USB_*".into()], track_width: Some(130_000), clearance: Some(150_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(130_000), diff_pair_gap: Some(150_000), diff_pair_via_gap: None, priority: 0 }];
     model.board.tuning_profiles.class_profiles = [("USB".to_string(), "USB 90".to_string()), ("Default".to_string(), "".to_string()), ("Orphan".to_string(), "Gone".to_string())].into_iter().filter(|(_, p)| !p.is_empty()).collect();
     let text = export(&design, &model);
     assert!(!text.contains("(net_class "), "KiCad would move the board's classes into the project and drop the project's: {text}");
@@ -137,7 +137,7 @@ fn class(name: &str, nets: &[&str], clearance: Option<i64>, track: Option<i64>) 
 fn a_net_in_several_classes_moves_the_net_classes_into_the_project_in_precedence_order() {
     let (design, mut model, _) = import_kicad_pcb(BOARD).expect("imports");
     model.nets = ["VBUS", "V3.3", "V3X3", "USB_DP", "GND"].iter().map(|n| Net { name: n.to_string(), pins: vec![] }).collect();
-    model.board.net_classes = vec![class("power", &["VBUS", "V3\\.3"], Some(400), None), class("fast", &["USB_*", "VBUS"], Some(100), Some(500))];
+    model.board.net_classes = vec![class("power", &["VBUS", "V3\\.3"], Some(400_000), None), class("fast", &["USB_*", "VBUS"], Some(100_000), Some(500_000))];
     let text = export(&design, &model);
     assert!(!text.contains("(net_class "), "VBUS is in two classes: the project has them");
     let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
@@ -151,7 +151,7 @@ fn a_net_in_several_classes_moves_the_net_classes_into_the_project_in_precedence
     assert_eq!(pattern("USB_DP"), ["fast"]);
 
     // A net in one class alone each keeps the board file's classes.
-    model.board.net_classes = vec![class("power", &["VBUS"], Some(400), None), class("fast", &["USB_*"], Some(100), Some(500))];
+    model.board.net_classes = vec![class("power", &["VBUS"], Some(400_000), None), class("fast", &["USB_*"], Some(100_000), Some(500_000))];
     assert!(export(&design, &model).contains("(net_class \"power\""), "one class for each net: the legacy blocks are enough");
     assert!(export_kicad_pro_for(&design, &model).contains("\"rule_severities\"") && !export_kicad_pro_for(&design, &model).contains("net_settings"));
 }

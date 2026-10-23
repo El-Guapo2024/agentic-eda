@@ -25,8 +25,8 @@ export interface Pt {
  * `mirroredX` flips the horizontal sense (view->IsMirroredX()); this app
  * never mirrors its views, so callers pass false.
  */
-export function cursorMove(cursor: Pt, gridUm: number | Pt, dir: CursorDir, fast: boolean, mirroredX = false): Pt {
-  const g = typeof gridUm === "number" ? { x: gridUm, y: gridUm } : gridUm;
+export function cursorMove(cursor: Pt, gridNm: number | Pt, dir: CursorDir, fast: boolean, mirroredX = false): Pt {
+  const g = typeof gridNm === "number" ? { x: gridNm, y: gridNm } : gridNm;
   const gx = fast ? g.x * 10 : g.x;
   const gy = fast ? g.y * 10 : g.y;
   switch (dir) {
@@ -57,9 +57,9 @@ export function viewCenteredOn(view: ViewTransform, width: number, height: numbe
  * current grid, NOT the selection grid CursorControl asks the grid helper
  * for), then `view->SetCenter(center)`.
  */
-export function panByGrid(view: ViewTransform, width: number, height: number, gridUm: number, dir: CursorDir, mirroredX = false): ViewTransform {
+export function panByGrid(view: ViewTransform, width: number, height: number, gridNm: number, dir: CursorDir, mirroredX = false): ViewTransform {
   const c = viewCenter(view, width, height);
-  const next = cursorMove(c, gridUm * 10, dir, false, mirroredX);
+  const next = cursorMove(c, gridNm * 10, dir, false, mirroredX);
   return viewCenteredOn(view, width, height, next);
 }
 
@@ -68,7 +68,7 @@ export function panByGrid(view: ViewTransform, width: number, height: number, gr
  * the cursor's new screen position is outside the canvas, re-centre the view
  * on it (`m_view->SetCenter( clampedPosition )`); otherwise the view is left
  * alone. (The other half, warping the real OS pointer, is not possible from
- * a web page -- the crosshair is drawn from `state.cursorUm` instead.)
+ * a web page -- the crosshair is drawn from `state.cursorNm` instead.)
  * Returns the same `view` object when nothing changes.
  */
 export function warpViewToInclude(view: ViewTransform, width: number, height: number, pos: Pt): ViewTransform {
@@ -77,7 +77,7 @@ export function warpViewToInclude(view: ViewTransform, width: number, height: nu
   return viewCenteredOn(view, width, height, pos);
 }
 
-/** app_settings.cpp GRID_SETTINGS defaults for pcbnew/footprint editor: `defaultGridIdx = 15` -> fast_grid_1; `defaultGridIdx + 1` -> fast_grid_2. Indexes into DEFAULT_PCB_GRIDS_UM (kicad-port/grid.ts). */
+/** app_settings.cpp GRID_SETTINGS defaults for pcbnew/footprint editor: `defaultGridIdx = 15` -> fast_grid_1; `defaultGridIdx + 1` -> fast_grid_2. Indexes into DEFAULT_PCB_GRIDS_NM (kicad-port/grid.ts). */
 export const DEFAULT_FAST_GRID_1 = 15;
 export const DEFAULT_FAST_GRID_2 = 16;
 

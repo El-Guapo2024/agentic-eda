@@ -56,7 +56,7 @@ export async function postExchangePlan(references: readonly string[], footprint:
   return j.entries ?? [];
 }
 
-/** A footprint drawn for the Compare dialog, in the footprint's own frame, micrometres. */
+/** A footprint drawn for the Compare dialog, in the footprint's own frame, nanometres. */
 export interface FootprintDrawing {
   pads: { num: string; x: number; y: number; w: number; h: number; shape: string; rot: number; ratio: number | null; drill: number | null; slot: [number, number] | null; th: boolean }[];
   /** The graphics, as board shapes. */

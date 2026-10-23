@@ -34,13 +34,13 @@ export const MODE_CHOICES: { label: string; value: StitchMode }[] = [
 ];
 
 /** `pcbIUScale.mmToIU( 0.1 )`, `mmToIU( 2.0 )`, `mmToIU( 0.5 )`: the outline's width, the tick spacing and the tick length of `ViewDraw`, µm. */
-export const OUTLINE_WIDTH_UM = 100;
-export const TICK_SPACING_UM = 2_000;
-export const TICK_LENGTH_UM = 500;
+export const OUTLINE_WIDTH_NM = 100_000;
+export const TICK_SPACING_NM = 2_000_000;
+export const TICK_LENGTH_NM = 500_000;
 
 export const layoutOf = (v: BoardViaStitch): StitchLayout => v.layout ?? "plain";
 export const modeOf = (v: BoardViaStitch): StitchMode => v.mode ?? "stitch";
-export const pitchOf = (v: BoardViaStitch): number => v.pitch_um ?? 0;
+export const pitchOf = (v: BoardViaStitch): number => v.pitch_nm ?? 0;
 
 /** `usesGridCells`. */
 export function usesGridCells(v: BoardViaStitch): boolean {
@@ -48,20 +48,20 @@ export function usesGridCells(v: BoardViaStitch): boolean {
 }
 
 /** `defaultPitch`: twice the via, and at least 2 mm. */
-export function defaultPitchUm(viaSizeUm: number): number {
-  return Math.max(2_000, viaSizeUm * 2);
+export function defaultPitchNm(viaSizeNm: number): number {
+  return Math.max(2_000_000, viaSizeNm * 2);
 }
 
 /** `cellForPosition`: the grid cell of a position (µm; worked in nanometres, as KiCad does), or the position where the layout has no grid. */
 export function cellForPosition(v: BoardViaStitch, at: readonly [number, number]): V {
   if (!usesGridCells(v)) return [at[0], at[1]];
-  const pitch = Math.max(1, (pitchOf(v) || defaultPitchUm(v.via?.size_um ?? 600)) * 1000);
+  const pitch = Math.max(1, pitchOf(v) || defaultPitchNm(v.via?.size_nm ?? 600_000));
   const roundDiv = (a: number, b: number) => (a >= 0 ? Math.trunc((a + Math.trunc(b / 2)) / b) : -Math.trunc((-a + Math.trunc(b / 2)) / b));
-  const ox = (v.origin_offset?.x ?? 0) * 1000;
-  const oy = (v.origin_offset?.y ?? 0) * 1000;
-  const row = roundDiv(at[1] * 1000 - oy, pitch);
+  const ox = v.origin_offset?.x ?? 0;
+  const oy = v.origin_offset?.y ?? 0;
+  const row = roundDiv(at[1] - oy, pitch);
   const shift = layoutOf(v) === "staggered" && ((row % 2) + 2) % 2 !== 0 ? Math.trunc(pitch / 2) : 0;
-  return [roundDiv(at[0] * 1000 - ox - shift, pitch), row];
+  return [roundDiv(at[0] - ox - shift, pitch), row];
 }
 
 /** `ExcludePosition`: the stitching with the via at `at` taken out -- its cell on a grid, its position otherwise. */
@@ -150,9 +150,9 @@ export function stitchTicks(outline: readonly PointXY[]): [V, V][] {
     const perp: V = [-dy, dx];
     const toward = perp[0] * (cx - mx) + perp[1] * (cy - my) >= 0;
     const inward: V = toward ? perp : [-perp[0], -perp[1]];
-    for (let t = TICK_SPACING_UM; t < len; t += TICK_SPACING_UM) {
+    for (let t = TICK_SPACING_NM; t < len; t += TICK_SPACING_NM) {
       const base: V = [p1.x + dx * t, p1.y + dy * t];
-      out.push([base, [base[0] + inward[0] * TICK_LENGTH_UM, base[1] + inward[1] * TICK_LENGTH_UM]]);
+      out.push([base, [base[0] + inward[0] * TICK_LENGTH_NM, base[1] + inward[1] * TICK_LENGTH_NM]]);
     }
   }
   return out;

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useStudioState } from "../state/store";
 import { setGridOriginDialogOpen, useCommonDialogs } from "../state/commonDialogs";
 import { useFootprintGridOrigin } from "../state/gridOrigin";
-import { umFrom, umTo } from "../state/units";
+import { nmFrom, nmTo } from "../state/units";
 import { originFromEntries, originOf } from "../kicad-port/gridOrigin";
 import { useActionRunner } from "../actions/useActionRunner";
 
@@ -24,15 +24,15 @@ export function GridOriginDialog() {
   useEffect(() => {
     if (!open) return;
     const digits = unit === "mm" ? 4 : unit === "mil" ? 2 : 5;
-    setX(umTo(origin.x, unit).toFixed(digits));
-    setY(umTo(origin.y, unit).toFixed(digits));
+    setX(nmTo(origin.x, unit).toFixed(digits));
+    setY(nmTo(origin.y, unit).toFixed(digits));
     // Only when the dialog opens -- not when the origin changes under it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   if (!open) return null;
   const close = () => setGridOriginDialogOpen(false);
-  const entered = originFromEntries(x, y, (v) => umFrom(v, unit));
+  const entered = originFromEntries(x, y, (v) => nmFrom(v, unit));
   const ok = () => {
     if (!entered) return;
     run("common.Control.gridSetOrigin", entered);

@@ -512,7 +512,7 @@
     check("OK adds the 4 outline lines as graphic lines and the 4 corners as arc shapes", nl.length === 4 && ng.length === 4 && ng.every((g) => g.shape.type === "arc"), `${nl.length} lines, ${ng.map((g) => g.shape.type)}`);
     const [lx0, ly0, lx1, ly1] = span(nl.flatMap((l) => l.pts));
     check("At 10, 5 mm: the outline spans x 10 to 50 mm and y -25 to 5 mm (the DXF's Y axis points up, the sheet's down)", lx0 === 10000 && lx1 === 50000 && ly0 === -25000 && ly1 === 5000, [lx0, ly0, lx1, ly1]);
-    check("no line width in the file or the dialog is the sheet's default width (0)", nl.every((l) => l.width_um === 0) && ng.every((g) => !g.width_um));
+    check("no line width in the file or the dialog is the sheet's default width (0)", nl.every((l) => l.width_nm === 0) && ng.every((g) => !g.width_nm));
     check("the dialog closed and the 8 new items are selected", dialogs().length === 0 && E.state().selection.length === 8, `${E.state().selection.length} selected, ${JSON.stringify(dialogs())}`);
     await undoDomain("schematic");
     appliedSch--;
@@ -524,7 +524,7 @@
     appliedSch++;
     nl = newLines(q.sch);
     const [bx0, , bx1] = span(nl.flatMap((l) => l.pts));
-    check("scale 2 doubles the 2 x 1 mm box and its default line width (0.15 becomes 0.3 mm)", nl.length === 4 && bx1 - bx0 === 4000 && nl.every((l) => l.width_um === 300), `${nl.length} lines, width ${bx1 - bx0}, widths ${nl.map((l) => l.width_um)}`);
+    check("scale 2 doubles the 2 x 1 mm box and its default line width (0.15 becomes 0.3 mm)", nl.length === 4 && bx1 - bx0 === 4000 && nl.every((l) => l.width_nm === 300), `${nl.length} lines, width ${bx1 - bx0}, widths ${nl.map((l) => l.width_nm)}`);
     await undoDomain("schematic");
     appliedSch--;
 
@@ -534,7 +534,7 @@
     ng = newGraphics(q.sch);
     const poly2 = ng.find((g) => g.shape.type === "polygon");
     const [px0, py0, px1, py1] = poly2 ? span(poly2.shape.pts.map((p) => [p.x, p.y])) : [0, 0, 0, 0];
-    check("an SVG's rounded rect is one polygon of its own stroke width (0.1 mm), 40 x 30 mm, y down as it has it", ng.length === 1 && !!poly2 && poly2.width_um === 100 && px0 === 0 && py0 === 0 && px1 === 40000 && py1 === 30000, JSON.stringify(ng.map((g) => [g.shape.type, g.width_um])));
+    check("an SVG's rounded rect is one polygon of its own stroke width (0.1 mm), 40 x 30 mm, y down as it has it", ng.length === 1 && !!poly2 && poly2.width_nm === 100 && px0 === 0 && py0 === 0 && px1 === 40000 && py1 === 30000, JSON.stringify(ng.map((g) => [g.shape.type, g.width_nm])));
     await undoDomain("schematic");
     appliedSch--;
 

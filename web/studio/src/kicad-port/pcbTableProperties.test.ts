@@ -10,7 +10,7 @@ const board = (...tables: BoardTable[]): BoardState =>
     dir: "/t",
     outline: null,
     layers: ["F.Cu", "B.Cu"],
-    snap: 100,
+    snap: 100_000,
     parts: [],
     rules: [],
     routing: null,
@@ -45,7 +45,7 @@ test("a table and a cell are items of their own, named as KiCad names them", () 
 
 test("a big selection resolves tables and cells through the index too", () => {
   const b = board(fixtureTable(4, 4));
-  const ids = ["tbl_a", ...Array.from({ length: 16 }, (_, k) => `tbl_a:${Math.floor(k / 4)}:${k % 4}`)];
+  const ids = ["tbl_a", ...Array.from({ length: 16_000 }, (_, k) => `tbl_a:${Math.floor(k / 4)}:${k % 4}`)];
   assert.equal(pcbItemsOf(b, ids).length, 17);
   assert.equal(pcbItemsOf(b, ids)[5]!.type, "PCB_TABLECELL");
 });
@@ -60,7 +60,7 @@ test("a table: the board item's rows, then Start X / Y and the Table Properties 
   ]);
   assert.equal(rowOf(b, ["tbl_a"], "Layer")!.value, "F.SilkS");
   assert.equal(rowOf(b, ["tbl_a"], "External Border")!.value, true);
-  assert.equal(rowOf(b, ["tbl_a"], "Border Width")!.value, 100);
+  assert.equal(rowOf(b, ["tbl_a"], "Border Width")!.value, 100_000);
   assert.equal(rowOf(b, ["tbl_a"], "Border Style")!.value, "solid");
   assert.equal(rowOf(b, ["tbl_a"], "Border Color")!.value, "", "no colour is the layer's own");
 });
@@ -79,19 +79,19 @@ test("the table rows edit one field each, with the verb that sets it", () => {
   assert.deepEqual(edit(b, ["tbl_a"], "Header Border", false), [{ op: "table", verb: "set", id: "tbl_a", patch: { props: { header: false } } }]);
   assert.deepEqual(edit(b, ["tbl_a"], "Row Separators", false), [{ op: "table", verb: "set", id: "tbl_a", patch: { props: { rows: false } } }]);
   assert.deepEqual(edit(b, ["tbl_a"], "Cell Separators", false), [{ op: "table", verb: "set", id: "tbl_a", patch: { props: { cols: false } } }]);
-  assert.deepEqual(edit(b, ["tbl_a"], "Border Width", 250), [{ op: "table", verb: "set", id: "tbl_a", patch: { props: { border_width_um: 250 } } }]);
-  assert.deepEqual(edit(b, ["tbl_a"], "Separators Width", 80), [{ op: "table", verb: "set", id: "tbl_a", patch: { props: { separators_width_um: 80 } } }]);
+  assert.deepEqual(edit(b, ["tbl_a"], "Border Width", 250_000), [{ op: "table", verb: "set", id: "tbl_a", patch: { props: { border_width_nm: 250_000 } } }]);
+  assert.deepEqual(edit(b, ["tbl_a"], "Separators Width", 80_000), [{ op: "table", verb: "set", id: "tbl_a", patch: { props: { separators_width_nm: 80_000 } } }]);
   assert.deepEqual(edit(b, ["tbl_a"], "Separators Style", "dash_dot"), [{ op: "table", verb: "set", id: "tbl_a", patch: { props: { separators_style: "dash_dot" } } }]);
   assert.deepEqual(edit(b, ["tbl_a"], "Border Color", "#ff0000"), [{ op: "table", verb: "set", id: "tbl_a", patch: { props: { border_color: { r: 255, g: 0, b: 0, a: 255 } } } }]);
   assert.deepEqual(edit(b, ["tbl_a"], "External Border", true), [], "already on");
-  assert.deepEqual(edit(b, ["tbl_a"], "Start X", 5000), [{ op: "table", verb: "set", id: "tbl_a", patch: { at: { x: 5000, y: 0 } } }]);
-  assert.deepEqual(edit(b, ["tbl_a"], "Start Y", 7000), [{ op: "table", verb: "set", id: "tbl_a", patch: { at: { x: 0, y: 7000 } } }]);
+  assert.deepEqual(edit(b, ["tbl_a"], "Start X", 5_000_000), [{ op: "table", verb: "set", id: "tbl_a", patch: { at: { x: 5_000_000, y: 0 } } }]);
+  assert.deepEqual(edit(b, ["tbl_a"], "Start Y", 7_000_000), [{ op: "table", verb: "set", id: "tbl_a", patch: { at: { x: 0, y: 7_000_000 } } }]);
   assert.deepEqual(edit(b, ["tbl_a"], "Layer", "F.Fab"), [{ op: "table", verb: "set", id: "tbl_a", layer: "F.Fab" }]);
 });
 
 test("a table is moved and locked by the board item's rows, with the generic verbs", () => {
   const b = board(fixtureTable(1, 1));
-  assert.deepEqual(edit(b, ["tbl_a"], "Position X", 2000), [{ op: "move_items", ids: ["tbl_a"], dx: 2000, dy: 0 }]);
+  assert.deepEqual(edit(b, ["tbl_a"], "Position X", 2_000_000), [{ op: "move_items", ids: ["tbl_a"], dx: 2_000_000, dy: 0 }]);
   assert.deepEqual(edit(b, ["tbl_a"], "Locked", true), [{ op: "set_locked", ids: ["tbl_a"], locked: true }]);
 });
 
@@ -106,31 +106,31 @@ test("a cell: text, font, thickness, bold, justification, margins and the table'
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Text")!.value, "r1c1");
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Font")!.value, "KiCad Font");
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Auto Thickness")!.value, true);
-  assert.equal(rowOf(b, ["tbl_a:1:1"], "Thickness")!.value, 159, "the pen the text is drawn with while the thickness is automatic");
+  assert.equal(rowOf(b, ["tbl_a:1:1"], "Thickness")!.value, 159_000, "the pen the text is drawn with while the thickness is automatic");
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Horizontal Justification")!.value, "left");
-  assert.equal(rowOf(b, ["tbl_a:1:1"], "Margin Left")!.value, 1000);
-  assert.equal(rowOf(b, ["tbl_a:1:1"], "Column Width")!.value, 10_000);
-  assert.equal(rowOf(b, ["tbl_a:1:1"], "Row Height")!.value, 5_000);
+  assert.equal(rowOf(b, ["tbl_a:1:1"], "Margin Left")!.value, 1_000_000);
+  assert.equal(rowOf(b, ["tbl_a:1:1"], "Column Width")!.value, 10_000_000);
+  assert.equal(rowOf(b, ["tbl_a:1:1"], "Row Height")!.value, 5_000_000);
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Mirrored")!.writable, false, "no verb mirrors a cell on its own");
 });
 
 test("a cell's rows send edit_cells for that cell, and a selection of cells sends one for each", () => {
   const b = board(fixtureTable(2, 3));
-  const one = (edit_: Record<string, unknown>) => [{ op: "table", verb: "edit_cells", id: "tbl_a", cells: [[1, 2]], edit: edit_ }];
+  const one = (edit_: Record<string, unknown>) => [{ op: "table", verb: "edit_cells", id: "tbl_a", cells: [[1, 2000]], edit: edit_ }];
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Text", "hello"), one({ text: "hello" }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Bold", true), one({ bold: true }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Italic", true), one({ italic: true }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Font", "Arial"), one({ face: "Arial" }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Font", "KiCad Font"), [], "the stroke font it already has");
-  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Width", 1500), one({ width_um: 1500 }));
-  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Height", 1600), one({ height_um: 1600 }));
-  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Thickness", 200), one({ thickness_um: 200 }));
-  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Auto Thickness", false), one({ thickness_um: 159 }), "off keeps the pen it was drawn with");
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Width", 1_500_000), one({ width_nm: 1_500_000 }));
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Height", 1_600_000), one({ height_nm: 1_600_000 }));
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Thickness", 200_000), one({ thickness_nm: 200_000 }));
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Auto Thickness", false), one({ thickness_nm: 159_000 }), "off keeps the pen it was drawn with");
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Horizontal Justification", "right"), one({ h_align: "right" }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Vertical Justification", "top"), one({ v_align: "top" }));
-  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Margin Top", 700), one({ margins: [null, 700, null, null] }));
-  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Column Width", 12_000), one({ col_width_um: 12_000 }));
-  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Row Height", 4_000), one({ row_height_um: 4_000 }));
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Margin Top", 700_000), one({ margins: [null, 700_000, null, null] }));
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Column Width", 12_000_000), one({ col_width_nm: 12_000_000 }));
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Row Height", 4_000_000), one({ row_height_nm: 4_000_000 }));
   assert.equal(edit(b, ["tbl_a:0:0", "tbl_a:0:1", "tbl_a:0:2"], "Bold", true).length, 3);
 });
 

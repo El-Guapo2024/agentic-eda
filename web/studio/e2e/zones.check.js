@@ -32,7 +32,7 @@
   const closeDialogs = async () => { for (let i = 0; i < 3; i++) { const b = buttonText(document, "Cancel"); if (!b) break; b.click(); await sleep(150); } };
   const notes = () => [...document.querySelectorAll(".status-bar [role=status]")].map((e) => e.textContent);
   /** The fills of each zone as the server serves them: [layer, filled, number of islands]. */
-  const byZone = (f) => Object.fromEntries(f.zones.map((z) => [`${z.id}@${z.layer}`, [z.filled, z.fragments.length, Math.round(z.area_um2 / 1e6)]]));
+  const byZone = (f) => Object.fromEntries(f.zones.map((z) => [`${z.id}@${z.layer}`, [z.filled, z.fragments.length, Math.round(z.area_nm2 / 1e6)]]));
   const rings = async (layer) => { const text = await fetch("/api/board.kicad_pcb").then((r) => r.text()); return (text.match(new RegExp(`\\(filled_polygon\\s*\\(layer "${layer}"\\)`, "g")) ?? []).length; };
   const waitFill = async (pred, ms = 15000) => { const t0 = Date.now(); let f = await fill(); while (!pred(f) && Date.now() - t0 < ms) { await sleep(300); f = await fill(); } return f; };
   const zonesOf = async () => ((await state()).routing?.zones ?? []).filter((z) => !z.is_rule_area);
@@ -60,7 +60,7 @@
     await scenario("a board that was never filled shows its zones as outlines, and says so", async (t) => {
       const f = await fill();
       t(f.source === null, "no fill has been made: no source");
-      t(f.zones.length >= 2 && f.zones.every((z) => z.filled === false && z.fragments.length === 0 && z.area_um2 === 0), `every zone is unfilled (${f.zones.length} zone layers)`);
+      t(f.zones.length >= 2 && f.zones.every((z) => z.filled === false && z.fragments.length === 0 && z.area_nm2 === 0), `every zone is unfilled (${f.zones.length} zone layers)`);
       t(notes().some((n) => /\d+ zones? not filled \(B\)/.test(n)), `the status bar says ${JSON.stringify(notes())}`);
       t((await rings(A.layer)) === 0, "the derived .kicad_pcb has no filled_polygon: a board that was never filled is written unfilled");
     });
@@ -74,7 +74,7 @@
       const seconds = (Date.now() - t0) / 1000;
       t(r.ok === true && /filled \d+ zones? in [\d.]+ s/.test(r.toast ?? ""), `the toast says what was filled (${r.toast}) in ${seconds.toFixed(1)} s`);
       const f = await waitFill((x) => x.zones.every((z) => z.filled));
-      t(f.zones.every((z) => z.filled && z.fragments.length > 0 && z.area_um2 > 1e6), `every zone has a fill with copper: ${JSON.stringify(byZone(f))}`);
+      t(f.zones.every((z) => z.filled && z.fragments.length > 0 && z.area_nm2 > 1e6), `every zone has a fill with copper: ${JSON.stringify(byZone(f))}`);
       t(/^kicad-cli /.test(f.source?.engine ?? "") && f.source.zones >= 2 && f.source.stale === 0 && f.source.seconds > 0, `the source is kicad-cli's (${JSON.stringify(f.source)})`);
       await sleep(900);
       t(notes().every((n) => !/not filled|Filling/.test(n)), `the status bar says nothing more about the zones (${JSON.stringify(notes())})`);

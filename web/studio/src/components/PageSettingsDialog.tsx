@@ -6,19 +6,19 @@
 import { Fragment, useEffect, useState } from "react";
 import { useStudioApi, useStudioState } from "../state/store";
 import { setPageSettingsOpen, useCommonDialogs } from "../state/commonDialogs";
-import { umFrom, umTo } from "../state/units";
+import { nmFrom, nmTo } from "../state/units";
 import {
   COMMENT_COUNT,
-  DEFAULT_USER_SIZE_UM,
-  MAX_PAGE_SIZE_EESCHEMA_UM,
-  MAX_PAGE_SIZE_PCBNEW_UM,
+  DEFAULT_USER_SIZE_NM,
+  MAX_PAGE_SIZE_EESCHEMA_NM,
+  MAX_PAGE_SIZE_PCBNEW_NM,
   PAGE_FORMATS,
   USER_PAPER,
   USER_PAPER_LABEL,
   isoDate,
   normalizePaper,
   paperOf,
-  paperSizeUm,
+  paperSizeNm,
   paperToCmd,
   samePaper,
   titleBlockFields,
@@ -36,7 +36,7 @@ function PageExample({ width, height }: { width: number; height: number }) {
   const w = Math.max(width, 1);
   const h = Math.max(height, 1);
   const scale = EXAMPLE_PX / Math.max(w, h);
-  const mm = 1000 * scale;
+  const mm = 1e6 * scale;
   const frame = 10 * mm;
   const tbW = 110 * mm;
   const tbH = 34 * mm;
@@ -72,8 +72,8 @@ export function PageSettingsDialog() {
     setPortrait(p.portrait);
     // The custom size fields hold the last custom size (`GetCustomWidthMils`) whatever the format, KiCad's 17 x 11 in before one was set.
     const digits = unit === "mm" ? 3 : unit === "mil" ? 1 : 4;
-    setUserW(umTo(p.userSize?.[0] ?? DEFAULT_USER_SIZE_UM[0], unit).toFixed(digits));
-    setUserH(umTo(p.userSize?.[1] ?? DEFAULT_USER_SIZE_UM[1], unit).toFixed(digits));
+    setUserW(nmTo(p.userSize?.[0] ?? DEFAULT_USER_SIZE_NM[0], unit).toFixed(digits));
+    setUserH(nmTo(p.userSize?.[1] ?? DEFAULT_USER_SIZE_NM[1], unit).toFixed(digits));
     setTb(titleBlockFields(current.titleBlock));
     setPick(isoDate(new Date()));
     // Only when the dialog opens -- not on every edit that changes the document under it.
@@ -82,14 +82,14 @@ export function PageSettingsDialog() {
 
   if (!target) return null;
   const close = () => setPageSettingsOpen(null);
-  const maxUm = target === "pcb" ? MAX_PAGE_SIZE_PCBNEW_UM : MAX_PAGE_SIZE_EESCHEMA_UM;
+  const maxNm = target === "pcb" ? MAX_PAGE_SIZE_PCBNEW_NM : MAX_PAGE_SIZE_EESCHEMA_NM;
 
   const isUser = paper === USER_PAPER;
-  const userSizeUm: [number, number] = [umFrom(Number(userW), unit), umFrom(Number(userH), unit)];
-  const edited: Paper = normalizePaper({ paper, portrait, userSize: isUser ? userSizeUm : null });
-  const error = isUser ? userSizeError(userSizeUm[0], userSizeUm[1], maxUm) : null;
+  const userSizeNm: [number, number] = [nmFrom(Number(userW), unit), nmFrom(Number(userH), unit)];
+  const edited: Paper = normalizePaper({ paper, portrait, userSize: isUser ? userSizeNm : null });
+  const error = isUser ? userSizeError(userSizeNm[0], userSizeNm[1], maxNm) : null;
   // `GetPageLayoutInfoFromDialog`: the sketch follows the choice as it is made; a User size that is not a size yet sketches the old page.
-  const sketch = error ? paperSizeUm(normalizePaper(paperOf(current.page))) : paperSizeUm(edited);
+  const sketch = error ? paperSizeNm(normalizePaper(paperOf(current.page))) : paperSizeNm(edited);
 
   const before = normalizePaper(paperOf(current.page));
   const beforeTb = titleBlockToSend(titleBlockFields(current.titleBlock));

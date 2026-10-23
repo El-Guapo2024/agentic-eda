@@ -1,6 +1,6 @@
 // The table verbs of crates/ops/src/pcb_tables.rs (`TableCmd`, sent as `{ op: "table", verb: ..., ... }`) and the pieces of them the dialogs build: the fields of the Table
 // Properties and Table Cell Properties dialogs (crates/model/src/table_edit.rs `TablePatch`, `CellEdit`).
-import type { PointXY, Um } from "./types";
+import type { PointXY, Nm } from "./types";
 
 export type TableLineStyleName = "default" | "solid" | "dash" | "dot" | "dash_dot" | "dash_dot_dot";
 
@@ -11,7 +11,7 @@ export type TableVAlign = "top" | "center" | "bottom";
 export interface TableBorderEdit {
   external: boolean;
   header: boolean;
-  width_um: Um;
+  width_nm: Nm;
   style?: TableLineStyleName;
 }
 
@@ -19,7 +19,7 @@ export interface TableBorderEdit {
 export interface TableSeparatorsEdit {
   rows: boolean;
   cols: boolean;
-  width_um: Um;
+  width_nm: Nm;
   style?: TableLineStyleName;
 }
 
@@ -27,13 +27,13 @@ export interface TableSeparatorsEdit {
 export interface TableStrokeProps {
   external?: boolean;
   header?: boolean;
-  border_width_um?: Um;
+  border_width_nm?: Nm;
   border_style?: TableLineStyleName;
   /** A colour with no alpha is `COLOR4D::UNSPECIFIED` and clears it. */
   border_color?: { r: number; g: number; b: number; a: number };
   rows?: boolean;
   cols?: boolean;
-  separators_width_um?: Um;
+  separators_width_nm?: Nm;
   separators_style?: TableLineStyleName;
   separators_color?: { r: number; g: number; b: number; a: number };
 }
@@ -56,16 +56,16 @@ export interface TableCellEdit {
   italic?: boolean;
   /** The font's name; an empty one is the default font. */
   face?: string;
-  width_um?: Um;
-  height_um?: Um;
+  width_nm?: Nm;
+  height_nm?: Nm;
   /** 0 is KiCad's automatic stroke width. */
-  thickness_um?: Um;
+  thickness_nm?: Nm;
   h_align?: TableHAlign;
   v_align?: TableVAlign;
   /** left, top, right, bottom; null leaves one alone. */
-  margins?: [Um | null, Um | null, Um | null, Um | null];
-  col_width_um?: Um;
-  row_height_um?: Um;
+  margins?: [Nm | null, Nm | null, Nm | null, Nm | null];
+  col_width_nm?: Nm;
+  row_height_nm?: Nm;
   /** A sheet cell's background (`SCH_TABLECELL_DESC`'s "Background Fill"): none, the outline's colour, the sheet's background or `fill_color`. */
   fill?: "none" | "outline" | "background" | "color";
   /** "Background Fill Color". */
@@ -88,7 +88,7 @@ export interface TableBoardNumbers {
 }
 
 export type TableCmdWire =
-  | { verb: "draw"; layer: string; at: PointXY; cols: number; rows: number; cell_w_um: Um; cell_h_um: Um; line_width_um: Um; locked?: boolean; patch?: TablePatch }
+  | { verb: "draw"; layer: string; at: PointXY; cols: number; rows: number; cell_w_nm: Nm; cell_h_nm: Nm; line_width_nm: Nm; locked?: boolean; patch?: TablePatch }
   | { verb: "place_stackup"; layer: string; at: PointXY; units?: string }
   | { verb: "place_characteristics"; layer: string; at: PointXY; units?: string; numbers: TableBoardNumbers }
   | { verb: "delete"; id: string }

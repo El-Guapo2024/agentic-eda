@@ -126,9 +126,9 @@ function LayerColumn({ title, copper, value, onPick, name }: { title: string; co
 }
 
 export function DiffPairDimensionsDialog({ value, onOk }: { value: CustomDiffPair; onOk: (v: CustomDiffPair) => void }) {
-  const width = useLengthField(value.widthUm);
-  const gap = useLengthField(value.gapUm);
-  const viaGap = useLengthField(value.viaGapUm);
+  const width = useLengthField(value.widthNm);
+  const gap = useLengthField(value.gapNm);
+  const viaGap = useLengthField(value.viaGapNm);
   const [same, setSame] = useState(value.viaGapSameAsTrackGap);
   const w = width.parse();
   const g = gap.parse();
@@ -138,7 +138,7 @@ export function DiffPairDimensionsDialog({ value, onOk }: { value: CustomDiffPai
   const submit = () => {
     if (error || w === null || g === null) return;
     closeSweepDialog();
-    onOk({ widthUm: w, gapUm: g, viaGapUm: same || v === null ? g : v, viaGapSameAsTrackGap: same });
+    onOk({ widthNm: w, gapNm: g, viaGapNm: same || v === null ? g : v, viaGapSameAsTrackGap: same });
   };
   return (
     <DialogShell title="Differential Pair Dimensions" width={340} onCancel={closeSweepDialog} onOk={submit} okDisabled={!!error}>
@@ -215,9 +215,9 @@ export function SelectLayerDialog({ layers, copper, current, onPick, onCancel }:
  * studio refuses one that is not a positive length rather than route at width 0.
  */
 export function TrackViaSizeDialog({ value, onOk }: { value: CustomTrackVia; onOk: (v: CustomTrackVia) => void }) {
-  const track = useLengthField(value.trackUm);
-  const diameter = useLengthField(value.viaDiameterUm);
-  const drill = useLengthField(value.viaDrillUm);
+  const track = useLengthField(value.trackNm);
+  const diameter = useLengthField(value.viaDiameterNm);
+  const drill = useLengthField(value.viaDrillNm);
   const [error, setError] = useState<string | null>(null);
   const submit = () => {
     // `UNIT_BINDER::GetIntValue` of a field that is not a length is 0 (and so "too small"); a track width that is none is the studio's own refusal
@@ -230,7 +230,7 @@ export function TrackViaSizeDialog({ value, onOk }: { value: CustomTrackVia; onO
       return;
     }
     closeSweepDialog();
-    onOk({ trackUm: t, viaDiameterUm: d, viaDrillUm: h });
+    onOk({ trackNm: t, viaDiameterNm: d, viaDrillNm: h });
   };
   return (
     <DialogShell title="Track and Via Dimensions" width={320} onCancel={closeSweepDialog} onOk={submit}>

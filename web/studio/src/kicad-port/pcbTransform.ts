@@ -258,8 +258,8 @@ export interface CarryStart {
   /** What the Move (or drag) takes in the hand: the selection `RequestSelection` hands it, locked items out, pads as their footprints. */
   refs: string[];
   /** The point R turns the selection about, and the point F mirrors it about -- measured where it was picked up. */
-  pivotUm?: [number, number];
-  flipPivotUm?: [number, number];
+  pivotNm?: [number, number];
+  flipPivotNm?: [number, number];
   /** Part of the selection was locked and stayed where it was. */
   lockedOut: boolean;
 }
@@ -270,5 +270,5 @@ export function carryStart(board: BoardState, selection: readonly string[], snap
   if (ids.length === 0) return { refs: [], lockedOut };
   const pivot = rotationPivot(board, ids, snap);
   const flip = flipPivot(board, ids);
-  return { refs: ids, pivotUm: pivot ?? undefined, flipPivotUm: flip ?? undefined, lockedOut };
+  return { refs: ids, pivotNm: pivot ?? undefined, flipPivotNm: flip ?? undefined, lockedOut };
 }

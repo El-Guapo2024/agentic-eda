@@ -599,9 +599,9 @@
     // ----- Edit Text & Graphics Properties: dimensions, the layer filter and the layer default values
     await scenario("Edit Text & Graphics Properties: PCB dimensions are a scope, the layer filter lists every layer, Set to layer default values restyles", async (t) => {
       const y0 = Math.max(...placed.map((p) => (p.courtyard ? p.courtyard[3] : p.at[1]))) + 6000;
-      await post({ op: "add_text", text: { content: "HELLO", at: { x: 5000, y: y0 }, angle: 0, layer: "F.SilkS", size_um: 2000, stroke_width: 500, justify: "center", mirror: false } });
+      await post({ op: "add_text", text: { content: "HELLO", at: { x: 5000, y: y0 }, angle: 0, layer: "F.SilkS", size_nm: 2000, stroke_width: 500, justify: "center", mirror: false } });
       await post({ op: "add_shape", shape: { kind: "segment", layer: "F.SilkS", stroke_width: 400, filled: false, start: { x: 2000, y: y0 + 2000 }, end: { x: 9000, y: y0 + 2000 } } });
-      await post({ op: "add_dimension", dimension: { layer: "Dwgs.User", kind: { kind: "aligned", height: 2000 }, start: { x: 2000, y: y0 + 5000 }, end: { x: 12000, y: y0 + 5000 }, prefix: "", suffix: "", units: "mm", units_format: "no_suffix", precision: 1, suppress_trailing_zeros: false, text_position: "outside", keep_text_aligned: true, text_angle: 0, text_size_um: 1500, text_thickness_um: 400, stroke_width: 300, arrow_length: 1270, extension_offset: 500, extension_height: 600, arrow_direction: "inward" } });
+      await post({ op: "add_dimension", dimension: { layer: "Dwgs.User", kind: { kind: "aligned", height: 2000 }, start: { x: 2000, y: y0 + 5000 }, end: { x: 12000, y: y0 + 5000 }, prefix: "", suffix: "", units: "mm", units_format: "no_suffix", precision: 1, suppress_trailing_zeros: false, text_position: "outside", keep_text_aligned: true, text_angle: 0, text_size_nm: 1500, text_thickness_nm: 400, stroke_width: 300, arrow_length: 1270, extension_offset: 500, extension_height: 600, arrow_direction: "inward" } });
       await sleep(700);
       const dr = async () => (await state()).drawings;
       const d0 = await dr();
@@ -631,7 +631,7 @@
       const mine = { text: d1.texts.find((x) => x.content === "HELLO"), seg: d1.shapes.find((s) => s.kind === "segment" && s.start[1] === y0 + 2000), dim: d1.dimensions.find((d) => d.start[1] === y0 + 5000) };
       t(mine.text?.size === 1000 && mine.text?.stroke_width === 100, `the silkscreen text is 1 mm with 0.1 mm lines, the silk defaults of Board Setup (${mine.text?.size}, ${mine.text?.stroke_width})`);
       t(mine.seg?.stroke_width === 100, `the silkscreen line is 0.1 mm (${mine.seg?.stroke_width})`);
-      t(mine.dim?.stroke_width === 100 && mine.dim?.text_size_um === 1000 && mine.dim?.text_thickness_um === 150 && mine.dim?.precision === 4, `the dimension took the other-layers defaults and the dimension settings (line ${mine.dim?.stroke_width}, text ${mine.dim?.text_size_um}/${mine.dim?.text_thickness_um}, ${mine.dim?.precision} decimals)`);
+      t(mine.dim?.stroke_width === 100 && mine.dim?.text_size_nm === 1000 && mine.dim?.text_thickness_nm === 150 && mine.dim?.precision === 4, `the dimension took the other-layers defaults and the dimension settings (line ${mine.dim?.stroke_width}, text ${mine.dim?.text_size_nm}/${mine.dim?.text_thickness_nm}, ${mine.dim?.precision} decimals)`);
       await undo();
       const d2 = await dr();
       const back = { text: d2.texts.find((x) => x.content === "HELLO"), dim: d2.dimensions.find((d) => d.start[1] === y0 + 5000) };

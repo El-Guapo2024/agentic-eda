@@ -12,11 +12,11 @@ import { DEFAULT_PIN_TEXTS, type PinTexts } from "./pinText";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
 
 export type ResolvedGraphic =
-  | { kind: "rectangle"; start: [number, number]; end: [number, number]; strokeWidthUm: number; fill: LibFill }
-  | { kind: "polyline"; pts: [number, number][]; strokeWidthUm: number; fill: LibFill }
-  | { kind: "circle"; center: [number, number]; radiusUm: number; strokeWidthUm: number; fill: LibFill }
-  | { kind: "arc"; start: [number, number]; mid: [number, number]; end: [number, number]; strokeWidthUm: number; fill: LibFill }
-  | { kind: "text"; content: string; at: [number, number]; angleDeg: number; sizeUm: number };
+  | { kind: "rectangle"; start: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill }
+  | { kind: "polyline"; pts: [number, number][]; strokeWidthNm: number; fill: LibFill }
+  | { kind: "circle"; center: [number, number]; radiusNm: number; strokeWidthNm: number; fill: LibFill }
+  | { kind: "arc"; start: [number, number]; mid: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill }
+  | { kind: "text"; content: string; at: [number, number]; angleDeg: number; sizeNm: number };
 
 export interface ResolvedLibSymbol {
   graphics: ResolvedGraphic[];
@@ -27,7 +27,7 @@ export interface ResolvedLibSymbol {
   texts: PinTexts;
 }
 
-const mmToUm = (v: Mm) => v * 1000;
+const mmToNm = (v: Mm) => v * 1e6;
 
 /** 0 = shared by every unit/body-style -- eeschema's own convention (lib_symbol.h), confirmed directly against source this session: an item with `unit`/`body_style` 0 is drawn for every instance regardless of which unit/style that instance is. */
 function visibleFor(itemUnit: number, itemBodyStyle: number, instanceUnit: number, instanceBodyStyle: number): boolean {
@@ -97,7 +97,7 @@ export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): Re
   const texts: PinTexts = {
     namesHidden: sym.pin_names_hidden ?? DEFAULT_PIN_TEXTS.namesHidden,
     numbersHidden: sym.pin_numbers_hidden ?? DEFAULT_PIN_TEXTS.numbersHidden,
-    nameOffsetUm: sym.pin_name_offset === undefined ? DEFAULT_PIN_TEXTS.nameOffsetUm : sym.pin_name_offset * 1000,
+    nameOffsetNm: sym.pin_name_offset === undefined ? DEFAULT_PIN_TEXTS.nameOffsetNm : sym.pin_name_offset * 1e6,
   };
   return { graphics, pins, bbox: { minX, minY, maxX, maxY }, texts };
 }
@@ -110,15 +110,15 @@ function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatri
   };
   switch (g.kind) {
     case "rectangle":
-      return { kind: "rectangle", start: pt(g.start), end: pt(g.end), strokeWidthUm: mmToUm(g.stroke_width), fill: g.fill };
+      return { kind: "rectangle", start: pt(g.start), end: pt(g.end), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill };
     case "polyline":
-      return { kind: "polyline", pts: g.pts.map(pt), strokeWidthUm: mmToUm(g.stroke_width), fill: g.fill };
+      return { kind: "polyline", pts: g.pts.map(pt), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill };
     case "circle":
-      return { kind: "circle", center: pt(g.center), radiusUm: mmToUm(g.radius), strokeWidthUm: mmToUm(g.stroke_width), fill: g.fill };
+      return { kind: "circle", center: pt(g.center), radiusNm: mmToNm(g.radius), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill };
     case "arc":
-      return { kind: "arc", start: pt(g.start), mid: pt(g.mid), end: pt(g.end), strokeWidthUm: mmToUm(g.stroke_width), fill: g.fill };
+      return { kind: "arc", start: pt(g.start), mid: pt(g.mid), end: pt(g.end), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill };
     case "text":
-      return { kind: "text", content: g.content, at: pt(g.at), angleDeg: g.angle_deg, sizeUm: mmToUm(g.size_mm) };
+      return { kind: "text", content: g.content, at: pt(g.at), angleDeg: g.angle_deg, sizeNm: mmToNm(g.size_mm) };
   }
 }
 

@@ -79,14 +79,14 @@ fn arcs_circles_rectangles_and_curves_are_kept_as_the_shapes_they_are() {
     let (design, model, notes) = import_kicad_pcb(&board(rounded_board_items())).expect("imports");
     assert_eq!(notes.outline_source, "shapes");
     assert!(!notes.outline_open && notes.outline_errors.is_empty(), "{:?}", notes.outline_errors);
-    assert_eq!(notes.outline_shapes, 12);
+    assert_eq!(notes.outline_shapes, 12_000);
     assert!(design.drawings.as_ref().expect("drawings").outline_is_shapes);
-    assert_eq!(counts(&design), [("arc", 4), ("circle", 1), ("curve", 1), ("line", 5), ("rect", 1)].into_iter().collect());
+    assert_eq!(counts(&design), [("arc", 4000), ("circle", 1), ("curve", 1), ("line", 5000), ("rect", 1)].into_iter().collect());
     assert_eq!(model.board.outline_closed, Some(true));
 
     // The arc is the file's arc, three points and all: its middle point survives to the micrometre.
-    let arc = edge_shapes(&design).into_iter().find(|s| matches!(s, Shape::Arc { start, .. } if *start == p(35_000, 0))).expect("the top-right arc");
-    assert_eq!(arc.points(), vec![p(35_000, 0), p(38_536, 1_464), p(40_000, 5_000)]);
+    let arc = edge_shapes(&design).into_iter().find(|s| matches!(s, Shape::Arc { start, .. } if *start == p(35_000_000, 0))).expect("the top-right arc");
+    assert_eq!(arc.points(), vec![p(35_000_000, 0), p(38_536_000, 1_464_000), p(40_000_000, 5_000_000)]);
 
     // `placement.outline` is the summary of what they make: the round corners are many points, not the 8 of the chord outline.
     let outline = &design.placement.as_ref().expect("placement").outline;
@@ -99,12 +99,12 @@ fn arcs_circles_rectangles_and_curves_are_kept_as_the_shapes_they_are() {
 fn the_writer_emits_the_same_items_and_not_the_summary_polygon_as_well() {
     let (design, model, _) = import_kicad_pcb(&board(rounded_board_items())).expect("imports");
     let text = export(&design, &model);
-    assert_eq!(count_in(&text, "(gr_arc "), 4, "{text}");
+    assert_eq!(count_in(&text, "(gr_arc "), 4000, "{text}");
     assert_eq!(count_in(&text, "(gr_circle "), 1);
     assert_eq!(count_in(&text, "(gr_rect "), 1);
     assert_eq!(count_in(&text, "(gr_curve "), 1);
-    assert_eq!(count_in(&text, "(gr_line "), 5, "the five lines of the file, not also the summary polygon's sides");
-    assert_eq!(count_in(&text, "(layer \"Edge.Cuts\")"), 12);
+    assert_eq!(count_in(&text, "(gr_line "), 5000, "the five lines of the file, not also the summary polygon's sides");
+    assert_eq!(count_in(&text, "(layer \"Edge.Cuts\")"), 12_000);
 
     // And back in again they are the same shapes, with the same ids and the same geometry.
     let (again, _, notes) = import_kicad_pcb(&text).expect("re-imports");
@@ -131,7 +131,7 @@ fn a_closed_loop_of_lines_is_still_the_plain_polygon_and_is_written_as_lines() {
     assert!(edge_shapes(&design).is_empty());
     assert_eq!(design.placement.as_ref().expect("placement").outline.len(), 4);
     let text = export(&design, &model);
-    assert_eq!(count_in(&text, "(gr_line "), 4);
+    assert_eq!(count_in(&text, "(gr_line "), 4000);
 }
 
 #[test]
@@ -164,13 +164,13 @@ fn an_outline_that_does_not_close_stays_open_and_is_reported() {
     assert_eq!(notes.outline_errors.len(), 1, "{:?}", notes.outline_errors);
     assert!(notes.outline_errors[0].contains("(not a closed shape)") && notes.outline_errors[0].contains("(5.000, 0.000) mm"), "{}", notes.outline_errors[0]);
     // The five lines are the five lines; nothing was added to close the gap.
-    assert_eq!(counts(&design), [("line", 5)].into_iter().collect());
+    assert_eq!(counts(&design), [("line", 5000)].into_iter().collect());
     let text = export(&design, &model);
-    assert_eq!(count_in(&text, "(gr_line "), 5, "the exported file has the same gap");
+    assert_eq!(count_in(&text, "(gr_line "), 5000, "the exported file has the same gap");
     // The summary is KiCad's inferred rectangle round the edges.
     let outline = &design.placement.as_ref().expect("placement").outline;
     assert_eq!(outline.len(), 4);
-    assert_eq!((outline.iter().map(|q| q.x).min(), outline.iter().map(|q| q.x).max()), (Some(0), Some(10_000)));
+    assert_eq!((outline.iter().map(|q| q.x).min(), outline.iter().map(|q| q.x).max()), (Some(0), Some(10_000_000)));
 }
 
 #[test]
@@ -189,7 +189,7 @@ fn a_footprints_edge_cuts_are_board_shapes_in_board_space() {
     );
     let (design, _model, notes) = import_kicad_pcb(&text).expect("imports");
     assert_eq!(notes.outline_source, "shapes");
-    assert_eq!(counts(&design), [("arc", 2), ("line", 2), ("rect", 1)].into_iter().collect());
+    assert_eq!(counts(&design), [("arc", 2000), ("line", 2000), ("rect", 1)].into_iter().collect());
     assert!(notes.outline_errors.is_empty(), "{:?}", notes.outline_errors);
     // Turned 90 degrees about (20, 15), the slot lies along y: the line (-3,-1)-(3,-1) is at x = 20 + 1 (KiCad turns clockwise on screen).
     let line = edge_shapes(&design).into_iter().find(|s| matches!(s, Shape::Segment { .. })).expect("a line");
@@ -213,8 +213,8 @@ fn a_board_from_before_kicad_7_closes_its_outline_through_its_centre_start_angle
     assert!(!notes.outline_open && notes.outline_errors.is_empty(), "{:?}", notes.outline_errors);
     assert_eq!(model.board.outline_closed, Some(true));
     let arc = edge_shapes(&design).into_iter().find(|s| matches!(s, Shape::Arc { .. })).expect("the arc");
-    assert_eq!(arc.points(), vec![p(20_000, 5_000), p(18_536, 8_536), p(15_000, 10_000)]);
-    assert_eq!(arc.stroke_width(), 100, "the legacy (width ..) is the stroke width");
+    assert_eq!(arc.points(), vec![p(20_000_000, 5_000_000), p(18_536_000, 8_536_000), p(15_000_000, 10_000_000)]);
+    assert_eq!(arc.stroke_width(), 100_000, "the legacy (width ..) is the stroke width");
     // The exported file writes it in today's grammar and it reads back as the same arc.
     let text = export(&design, &model);
     assert!(text.contains("(gr_arc (start 20 5) (mid 18.536 8.536) (end 15 10)"), "{text}");

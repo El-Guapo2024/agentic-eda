@@ -15,7 +15,7 @@ export function breakSources(sch: Schematic, ids: readonly string[]): BreakSourc
       continue;
     }
     const l = (sch.lines ?? []).find((x) => x.id === id);
-    if (l) out.push({ id, kind: "line", pts: l.pts, widthUm: l.width_um });
+    if (l) out.push({ id, kind: "line", pts: l.pts, widthNm: l.width_nm });
   }
   return out;
 }

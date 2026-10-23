@@ -92,14 +92,14 @@ fn a_board_with_trapezoid_chamfered_and_custom_pads_keeps_every_one_of_them() {
     assert_eq!(pads.len(), 4);
 
     let trap = pad(pads, "1");
-    assert_eq!((trap.shape, trap.size, trap.ext.trapezoid_delta), (PadShape::Trapezoid, (2000, 1000), Some((400, 0))));
+    assert_eq!((trap.shape, trap.size, trap.ext.trapezoid_delta), (PadShape::Trapezoid, (2_000_000, 1_000_000), Some((400_000, 0))));
 
     let chamfered = pad(pads, "2");
     assert_eq!((chamfered.shape, chamfered.roundrect_ratio, chamfered.ext.chamfer_ratio), (PadShape::ChamferedRect, Some(0.2), Some(0.25)));
     assert_eq!(chamfered.ext.chamfer_corners, ChamferCorners { top_left: true, bottom_right: true, ..Default::default() });
 
     let custom = pad(pads, "3");
-    assert_eq!((custom.shape, custom.rot), (PadShape::Custom, 330_000 % 360_000), "the pad's own angle is the file's: 30 degrees counter-clockwise");
+    assert_eq!((custom.shape, custom.rot), (PadShape::Custom, 330_000_000 % 360_000), "the pad's own angle is the file's: 30 degrees counter-clockwise");
     let c = custom.ext.custom.as_ref().expect("a custom pad's shapes");
     assert_eq!((c.anchor, c.zone), (PadAnchor::Rect, CustomZoneMode::ConvexHull));
     let kinds: Vec<&str> = c.primitives.iter().map(|p| match p.shape {
@@ -115,7 +115,7 @@ fn a_board_with_trapezoid_chamfered_and_custom_pads_keeps_every_one_of_them() {
     assert!(c.primitives[0].shape.is_filled() && !c.primitives[3].shape.is_filled());
 
     let offset = pad(pads, "4");
-    assert_eq!((offset.shape, offset.ext.offset, offset.drill), (PadShape::Oval, Some((300, 0)), Some(700)));
+    assert_eq!((offset.shape, offset.ext.offset, offset.drill), (PadShape::Oval, Some((300_000, 0)), Some(700_000)));
 
     // It writes them the way KiCad does ...
     let text = export(&design, &model);
@@ -163,8 +163,8 @@ fn a_custom_pad_on_the_back_covers_the_mirror_image_of_the_one_on_the_front() {
         let back = board.pads.iter().find(|p| p.id == format!("Q2.{number}")).expect("back pad");
         let (f, b) = (front.copper.bbox(0), back.copper.bbox(0));
         // Mirrored about x = 20: x -> 40 - x.
-        let mirrored = (40_000 - f.2, f.1, 40_000 - f.0, f.3);
-        let tol = 2;
+        let mirrored = (40_000_000 - f.2, f.1, 40_000_000 - f.0, f.3);
+        let tol = 2000;
         assert!((mirrored.0 - b.0).abs() <= tol && (mirrored.1 - b.1).abs() <= tol && (mirrored.2 - b.2).abs() <= tol && (mirrored.3 - b.3).abs() <= tol, "pad {number}: {f:?} mirrored {mirrored:?} vs {b:?}");
     }
 }
@@ -181,7 +181,7 @@ fn qa_boards_dir() -> PathBuf {
 #[test]
 fn the_custom_pads_of_kicads_qa_boards_keep_their_primitives_through_a_round_trip() {
     let qa = qa_boards_dir();
-    for (name, custom_pads) in [("custom_pads.kicad_pcb", 2usize), ("padstacks.kicad_pcb", 3), ("stonehenge.kicad_pcb", 20)] {
+    for (name, custom_pads) in [("custom_pads.kicad_pcb", 2000usize), ("padstacks.kicad_pcb", 3000), ("stonehenge.kicad_pcb", 20_000)] {
         let Ok(text) = std::fs::read_to_string(qa.join(name)) else {
             eprintln!("skipped: no QA board {name}");
             continue;
@@ -232,7 +232,7 @@ fn pad_areas_mm2(text: &str) -> Vec<(String, f64)> {
         let footprint = model.footprint_of(part).expect("a footprint");
         for pad in &footprint.pads {
             let centre = eda_model::footprint::to_board(fp, pad.at);
-            let area = eda_drc::pad_shape::pad_polygons(fp, pad, centre, 5).area() / 1e6;
+            let area = eda_drc::pad_shape::pad_polygons(fp, pad, centre, 5000).area() / 1e6;
             out.push((format!("{}.{}", fp.id, pad.number), area));
         }
     }

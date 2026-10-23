@@ -19,7 +19,7 @@ import { boardOutlineBounds, buildBackgroundTexture, buildBoardGroup, disposeObj
 import { useViewerColors } from "../viewer3d/useViewerColors";
 
 /** The margin of board round the footprint, µm. */
-const MARGIN_UM = 1500;
+const MARGIN_NM = 1_500_000;
 /** The rows of the Appearance manager that `preview_show_board_body` turns off. */
 const BODY_ROWS = new Set(["board", "soldermask_top", "soldermask_bottom", "solder_paste"]);
 
@@ -43,21 +43,21 @@ export function previewExtent(part: Part | null): [number, number, number, numbe
     add(part.courtyard[0], part.courtyard[1]);
     add(part.courtyard[2], part.courtyard[3]);
   }
-  if (!Number.isFinite(x0)) return [-3000, -3000, 3000, 3000];
+  if (!Number.isFinite(x0)) return [-3_000_000, -3_000_000, 3_000_000, 3_000_000];
   return [x0, y0, x1, y1];
 }
 
 /** A board that is the one footprint at the origin on a margin of board: what `buildBoardGroup` draws. */
 export function previewBoard(part: Part | null): BoardState {
   const [x0, y0, x1, y1] = previewExtent(part);
-  const m = MARGIN_UM;
+  const m = MARGIN_NM;
   const outline: [number, number][] = [
     [x0 - m, y0 - m],
     [x1 + m, y0 - m],
     [x1 + m, y1 + m],
     [x0 - m, y1 + m],
   ];
-  return { name: "preview", dir: "", outline, layers: ["F.Cu", "B.Cu"], snap: 100, parts: part ? [part] : [], rules: [], routing: null, drawings: null, checks: [], activity: [], job: "idle" } as BoardState;
+  return { name: "preview", dir: "", outline, layers: ["F.Cu", "B.Cu"], snap: 100_000, parts: part ? [part] : [], rules: [], routing: null, drawings: null, checks: [], activity: [], job: "idle" } as BoardState;
 }
 
 interface Scene3D {
@@ -362,7 +362,7 @@ function disposeOwned(group: THREE.Group): void {
 /** The camera home and the distance: the piece of board and the models on it. */
 function fitCamera(t: Scene3D, part: Part | null): void {
   const [x0, y0, x1, y1] = previewExtent(part);
-  const box = new THREE.Box3(new THREE.Vector3((x0 - MARGIN_UM) / 1000, -2, (y0 - MARGIN_UM) / 1000), new THREE.Vector3((x1 + MARGIN_UM) / 1000, 2, (y1 + MARGIN_UM) / 1000));
+  const box = new THREE.Box3(new THREE.Vector3((x0 - MARGIN_NM) / 1e6, -2, (y0 - MARGIN_NM) / 1e6), new THREE.Vector3((x1 + MARGIN_NM) / 1e6, 2, (y1 + MARGIN_NM) / 1e6));
   t.models.updateMatrixWorld(true);
   const covered = new THREE.Box3().setFromObject(t.models);
   if (!covered.isEmpty()) box.union(covered);

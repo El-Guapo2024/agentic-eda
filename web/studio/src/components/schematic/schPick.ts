@@ -12,7 +12,7 @@ import { hitItems } from "./schItems";
 import { hitSymbol, hitWire } from "./schHit";
 
 /** The accuracy of an "exact" hit: about the width of a pen (6 mils), micrometres. */
-const EXACT_UM = 150;
+const EXACT_NM = 150_000;
 
 /** Which pins take part: `first` (a click: an exact pin hit wins, a near one is the last resort), `only` (`RequestSelection( { SCH_PIN_T } )`) or `none` (every other tool: a pin is no movable item). */
 export type PinPick = "first" | "only" | "none";
@@ -37,7 +37,7 @@ export function pickItem(sch: Schematic, x: number, y: number, scale: number, se
   // `GuessSelectionCandidates`: "Prefer exact hits to sloppy ones" -- an item the point is on, within the width of a pen, is picked before one that is only near it (a sheet's border
   // before the box of a pin of its sheet that the pick radius reaches)
   const isPlaced = (r: { kind: string; id: string }) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id);
-  const placed = hitItems(sch, x, y, EXACT_UM).find(isPlaced)?.id ?? hitItems(sch, x, y, tolerance).find(isPlaced)?.id ?? null;
+  const placed = hitItems(sch, x, y, EXACT_NM).find(isPlaced)?.id ?? hitItems(sch, x, y, tolerance).find(isPlaced)?.id ?? null;
   if (placed) return placed;
   const wire = pickable(hitWire(sch, x, y, tolerance));
   if (wire) return wire;

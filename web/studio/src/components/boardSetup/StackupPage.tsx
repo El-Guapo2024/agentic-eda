@@ -16,7 +16,7 @@ import {
   isMaterialEditable,
   isThicknessEditable,
   mmText,
-  stackupThicknessUm,
+  stackupThicknessNm,
   validateStackup,
   withCopperLayers,
   withKnownKinds,
@@ -69,7 +69,7 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
   const source = useMemo<StackupSettings | undefined>(() => {
     if (!rules) return undefined;
     const copper = rules.copper_layers ?? rules.layer_names?.length ?? board?.layers.length ?? 2;
-    return { copper_layers: copper, stackup: withKnownKinds(rules.stackup ?? defaultStackup(copper, rules.board_thickness_um ?? 1600)) };
+    return { copper_layers: copper, stackup: withKnownKinds(rules.stackup ?? defaultStackup(copper, rules.board_thickness_nm ?? 1_600_000)) };
   }, [rules, board?.layers.length]);
   const page = usePageDraft<StackupSettings>(source);
   const apply = usePageApply();
@@ -185,7 +185,7 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
             </table>
           </div>
           <div className="bs-stack-total" title="BuildBoardThicknessFromStackup: every layer's thickness added up">
-            Board thickness from stackup: {mmText(stackupThicknessUm(draft.stackup))} mm
+            Board thickness from stackup: {mmText(stackupThicknessNm(draft.stackup))} mm
           </div>
 
           <div className="bs-section">Board Finish</div>

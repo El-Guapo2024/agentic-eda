@@ -46,7 +46,7 @@ export function buildMarker(x: number, y: number, r: number, shapeId: number): M
   return out;
 }
 
-export const DEFAULT_PROFILE: BoardDrillProfile = { size_um: 1500, width_um: 150, mark_policy: "shapes_then_letters", group_by: [], freeze_assignments: true };
+export const DEFAULT_PROFILE: BoardDrillProfile = { size_nm: 1_500_000, width_nm: 150_000, mark_policy: "shapes_then_letters", group_by: [], freeze_assignments: true };
 
 /** `drawChartSymbols`: the mark of each row that has a shape, centred in its symbol cell and fitted to it ("so a tall symbol size cannot spill into the neighbouring row"). */
 export function chartSymbols(chart: BoardDrillChart, table: BoardTable, profile: BoardDrillProfile): { x: number; y: number; r: number; shape: number }[] {
@@ -60,7 +60,7 @@ export function chartSymbols(chart: BoardDrillChart, table: BoardTable, profile:
     const xs = cell.corners.map((p) => p[0]);
     const ys = cell.corners.map((p) => p[1]);
     const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-    const r = Math.min(Math.trunc(profile.size_um / 2), Math.trunc(Math.min(x1 - x0, y1 - y0) / 3));
+    const r = Math.min(Math.trunc(profile.size_nm / 2), Math.trunc(Math.min(x1 - x0, y1 - y0) / 3));
     if (r <= 0) continue;
     out.push({ x: Math.trunc((x0 + x1) / 2), y: Math.trunc((y0 + y1) / 2), r, shape: curatedShape(shapeIndex) });
   }
@@ -78,12 +78,12 @@ export function mapMarks(map: BoardDrillMap, marks: readonly BoardDrillMark[]): 
 
 /** The text a letter or size mark draws: the letter, or the hole's own diameter in millimetres to two places ("The hole's own diameter, not the glyph size"). */
 export function markText(m: BoardDrillMark): string {
-  return m.mode === "letter" ? m.letter : (m.diameter_um / 1000).toFixed(2);
+  return m.mode === "letter" ? m.letter : (m.diameter_nm / 1e6).toFixed(2);
 }
 
 /** `GetSymbolExtent`: "Numeric marks can reach three character sizes either side of their hole." */
 export function symbolExtent(map: BoardDrillMap, profile: BoardDrillProfile): number {
-  return 3 * map.size_um + 2 * profile.width_um;
+  return 3 * map.size_nm + 2 * profile.width_nm;
 }
 
 /** `GetBoundingBox`: the holes' extent grown by the marks' reach, merged with the board outline's box, slid by the offset. */

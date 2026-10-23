@@ -28,7 +28,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { incrementLabelText } from "../kicad-port/incrementLabelText";
 import { labelOrientationForPoint, orientationSceneOf } from "../kicad-port/schAutoRotate";
 import { lastPlaced, rememberPlaced, type LabelSpinName } from "../kicad-port/schLastPlaced";
-import { mmToUm, umToMm } from "../kicad-port/schProperties";
+import { mmToNm, nmToMm } from "../kicad-port/schProperties";
 import { inferSpin } from "./schematic/labelShape";
 import type { LabelShape } from "../api/types";
 
@@ -58,7 +58,7 @@ export function LabelDialog() {
   // "" is "From the wire": the spin is read off the wire the label ends at when it is placed, and kept (KiCad's label always has a spin of its own)
   const [spin, setSpin] = useState<LabelSpinName | "">("right");
   const [auto, setAuto] = useState(false);
-  const [size, setSize] = useState(umToMm(1270));
+  const [size, setSize] = useState(nmToMm(1_270_000));
   const [bold, setBold] = useState(false);
   const [italic, setItalic] = useState(false);
 
@@ -71,7 +71,7 @@ export function LabelDialog() {
     setShape(last.shape);
     setSpin(last.spin);
     setAuto(last.autoRotate);
-    setSize(umToMm(1270));
+    setSize(nmToMm(1_270_000));
     setBold(last.bold);
     setItalic(last.italic);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,9 +90,9 @@ export function LabelDialog() {
   if (!pending) return null;
   const close = () => dispatch({ type: "SET_SCH_LABEL_PENDING", pending: null });
 
-  const sizeUm = mmToUm(size);
+  const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
-  const sizeOk = sizeUm !== null && sizeUm >= 10 && sizeUm <= 1_000_000;
+  const sizeOk = sizeNm !== null && sizeNm >= 10 && sizeNm <= 1_000_000;
   const canAdd = text.trim().length > 0 && sizeOk;
 
   const submit = () => {
@@ -105,7 +105,7 @@ export function LabelDialog() {
       at: { x: pending.at[0], y: pending.at[1] },
       kind,
       ...(spin || plainSpin ? { spin: (spin || plainSpin) as LabelSpinName } : {}),
-      ...(sizeUm !== null && sizeUm !== 1270 ? { size_um: sizeUm } : {}),
+      ...(sizeNm !== null && sizeNm !== 1_270_000 ? { size_nm: sizeNm } : {}),
       ...(bold ? { bold: true } : {}),
       ...(italic ? { italic: true } : {}),
       ...(autoOn ? { auto_rotate: true } : {}),

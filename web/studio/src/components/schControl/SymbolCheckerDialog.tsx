@@ -12,8 +12,8 @@ export function SymbolCheckerDialog({ onClose }: { onClose: () => void }) {
   const symbol = sym.symbol;
   if (!symbol) return null;
   // The editor's grid in internal units (nanometres): a pin must sit on at least a 25 mil grid.
-  const gridIu = Math.round(sym.gridUm * 1000);
-  const messages = checkLibSymbol(symbol, gridIu, (mm) => formatLength(mm * 1000, studio.units));
+  const gridIu = Math.round(sym.gridNm);
+  const messages = checkLibSymbol(symbol, gridIu, (mm) => formatLength(mm * 1e6, studio.units));
   return (
     <SchDialogFrame title={messages.length === 0 ? "Symbol Checker" : "Symbol Warnings"} width={560} onClose={onClose}>
       {messages.length === 0 ? (

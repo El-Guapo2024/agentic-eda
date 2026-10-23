@@ -32,7 +32,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Cmd, FillMode, IslandRemovalMode, PadConnection, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { umFrom, umTo } from "../state/units";
+import { nmFrom, nmTo } from "../state/units";
 import { fetchPlacementSources } from "../api/multichannelClient";
 import { chooseMode, NO_CHOICES, placementFormOf, placementOf, placementOptions, placementSelection, type PlacementChoices, type PlacementForm } from "../kicad-port/multichannel";
 import { duplicatedZoneOutline } from "../kicad-port/boardControl";
@@ -73,17 +73,17 @@ const ISLAND_REMOVAL_OPTIONS: { value: IslandRemovalMode; label: string }[] = [
 ];
 
 /** A length field bound to one `ZoneSettingsFields` key, shown/edited in the status bar's current unit -- converts to/from µm only at the input boundary, same spirit `MoveExactDialog.tsx` already uses. */
-function LengthInput({ valueUm, unit, onChange, disabled, testid }: { valueUm: number; unit: Parameters<typeof umTo>[1]; onChange: (um: number) => void; disabled?: boolean; testid?: string }) {
+function LengthInput({ valueNm, unit, onChange, disabled, testid }: { valueNm: number; unit: Parameters<typeof nmTo>[1]; onChange: (um: number) => void; disabled?: boolean; testid?: string }) {
   return (
     <input
       data-testid={testid}
       type="number"
       step="any"
       disabled={disabled}
-      value={umTo(valueUm, unit)}
+      value={nmTo(valueNm, unit)}
       onChange={(e) => {
         const n = Number(e.target.value);
-        if (Number.isFinite(n)) onChange(Math.round(umFrom(n, unit)));
+        if (Number.isFinite(n)) onChange(Math.round(nmFrom(n, unit)));
       }}
       style={{ width: 90 }}
     />
@@ -348,13 +348,13 @@ export function ZoneDialog() {
                   <>
                     <span>Clearance</span>
                     <span>
-                      <LengthInput valueUm={settings.clearance} unit={units} onChange={(v) => set("clearance", v)} /> {units}
+                      <LengthInput valueNm={settings.clearance} unit={units} onChange={(v) => set("clearance", v)} /> {units}
                     </span>
                   </>
                 )}
                 <span>Minimum width</span>
                 <span>
-                  <LengthInput valueUm={settings.min_thickness} unit={units} onChange={(v) => set("min_thickness", v)} testid="zone-min-width" /> {units}
+                  <LengthInput valueNm={settings.min_thickness} unit={units} onChange={(v) => set("min_thickness", v)} testid="zone-min-width" /> {units}
                 </span>
                 {kind === "copper" && (
                   <>
@@ -381,11 +381,11 @@ export function ZoneDialog() {
                     {/* panel_zone_properties.cpp's own comment: thermal gap/spoke width are never disabled by the connection choice above -- a per-pad override can still need them even when the zone itself is Full/None. */}
                     <span>Thermal relief gap</span>
                     <span>
-                      <LengthInput valueUm={settings.thermal_gap} unit={units} onChange={(v) => set("thermal_gap", v)} /> {units}
+                      <LengthInput valueNm={settings.thermal_gap} unit={units} onChange={(v) => set("thermal_gap", v)} /> {units}
                     </span>
                     <span>Thermal spoke width</span>
                     <span>
-                      <LengthInput valueUm={settings.thermal_spoke_width} unit={units} onChange={(v) => set("thermal_spoke_width", v)} /> {units}
+                      <LengthInput valueNm={settings.thermal_spoke_width} unit={units} onChange={(v) => set("thermal_spoke_width", v)} /> {units}
                       {thermalSpokeTooNarrow && <span style={{ color: "#ef5b5b", marginLeft: 8 }}>cannot be smaller than minimum width</span>}
                     </span>
                   </div>
@@ -442,7 +442,7 @@ export function ZoneDialog() {
                     {/* The non-copper dialog names it by the shape (`OnUpdateUI`: "Chamfer distance" / "Fillet radius"). */}
                     <span>{kind === "non-copper" ? (settings.smoothing === "chamfer" ? "Chamfer distance" : "Fillet radius") : "Radius"}</span>
                     <span>
-                      <LengthInput valueUm={settings.corner_radius ?? 0} unit={units} onChange={(v) => set("corner_radius", Math.max(0, v))} /> {units}
+                      <LengthInput valueNm={settings.corner_radius ?? 0} unit={units} onChange={(v) => set("corner_radius", Math.max(0, v))} /> {units}
                     </span>
                   </>
                 )}
@@ -459,11 +459,11 @@ export function ZoneDialog() {
                   <>
                     <span>Hatch width</span>
                     <span>
-                      <LengthInput valueUm={settings.hatch_thickness} unit={units} onChange={(v) => set("hatch_thickness", v)} /> {units}
+                      <LengthInput valueNm={settings.hatch_thickness} unit={units} onChange={(v) => set("hatch_thickness", v)} /> {units}
                     </span>
                     <span>Hatch gap</span>
                     <span>
-                      <LengthInput valueUm={settings.hatch_gap} unit={units} onChange={(v) => set("hatch_gap", v)} /> {units}
+                      <LengthInput valueNm={settings.hatch_gap} unit={units} onChange={(v) => set("hatch_gap", v)} /> {units}
                     </span>
                     <span>Orientation</span>
                     <span>

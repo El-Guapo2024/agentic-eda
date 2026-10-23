@@ -82,7 +82,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
         measure: measureStrokeText,
         // The label that replaces a text goes on the connection grid (`GRID_CONNECTABLE`: 50 mil unless the overrides say otherwise).
         snap: (p) => {
-          const grid = gridSizeFor("connectable", state.schGridUm, getGridSettings("schematic").grids, getGridOverrides("schematic"));
+          const grid = gridSizeFor("connectable", state.schGridNm, getGridSettings("schematic").grids, getGridOverrides("schematic"));
           const a = alignToGrid({ x: p[0], y: p[1] }, grid, { x: 0, y: 0 }, { ctrlOrCmd: false });
           return [a.x, a.y];
         },
@@ -121,8 +121,8 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   // entries (`addCornerCondition` / `removeCornerCondition`) they exist only with the pointer on the outline / on one of its corners.
   const polyId = state.selection.size === 1 ? [...state.selection][0]! : null;
   const poly = sch && polyId ? polygonOutline(sch, polyId) : null;
-  if (sch && polyId && poly && state.cursorUm) {
-    const raw: [number, number] = [state.cursorUm.x, state.cursorUm.y];
+  if (sch && polyId && poly && state.cursorNm) {
+    const raw: [number, number] = [state.cursorNm.x, state.cursorNm.y];
     const tol = 10 / (state.schematicView.scale || 1); // EDIT_POINT::POINT_SIZE
     const replace = (pts: ReadonlyArray<readonly [number, number]>) => {
       const g = (sch.graphics ?? []).find((x) => x.id === polyId);
@@ -237,7 +237,7 @@ function convertSources(sch: Schematic, ids: readonly string[]): ConvertSource[]
     }
     const t = sch.texts.find((x) => x.id === id);
     if (t) {
-      out.push({ kind: "text", id, content: t.content, at: t.at, angleDeg: t.angle, sizeUm: t.size_um });
+      out.push({ kind: "text", id, content: t.content, at: t.at, angleDeg: t.angle, sizeNm: t.size_nm });
       continue;
     }
     const g = (sch.graphics ?? []).find((x) => x.id === id);

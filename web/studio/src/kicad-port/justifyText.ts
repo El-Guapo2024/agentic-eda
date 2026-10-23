@@ -25,7 +25,7 @@ export function boardJustifyCmds(board: BoardState, ids: readonly string[], just
       continue;
     }
     if (t.justify === justify) continue;
-    cmds.push({ op: "edit_text", id: t.id, content: t.content, angle: t.angle, layer: t.layer, size_um: t.size, stroke_width: t.stroke_width, justify, mirror: t.mirror });
+    cmds.push({ op: "edit_text", id: t.id, content: t.content, angle: t.angle, layer: t.layer, size_nm: t.size, stroke_width: t.stroke_width, justify, mirror: t.mirror });
   }
   return { cmds, skippedLocked };
 }
@@ -36,7 +36,7 @@ export function footprintJustifyCmds(footprint: string, texts: readonly CmdText[
   const cmds: Cmd[] = [];
   for (const t of texts) {
     if (!t.id || !wanted.has(t.id) || t.justify === justify) continue;
-    cmds.push({ op: "edit_footprint_text", footprint, id: t.id, content: t.content, angle: t.angle, layer: t.layer, size_um: t.size_um, stroke_width: t.stroke_width, justify, mirror: t.mirror });
+    cmds.push({ op: "edit_footprint_text", footprint, id: t.id, content: t.content, angle: t.angle, layer: t.layer, size_nm: t.size_nm, stroke_width: t.stroke_width, justify, mirror: t.mirror });
   }
   return cmds;
 }

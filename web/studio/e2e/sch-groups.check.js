@@ -978,7 +978,7 @@
         }
         return "";
       };
-      t(!!pin && !pin.size_um && !pin.bold && !pin.italic, `the pin ${pin && pin.name} starts with the default text (${JSON.stringify(pin)})`);
+      t(!!pin && !pin.size_nm && !pin.bold && !pin.italic, `the pin ${pin && pin.name} starts with the default text (${JSON.stringify(pin)})`);
       await select([pin.id]);
       await __eda.run("eeschema.InteractiveEdit.properties");
       await sleep(700);
@@ -996,12 +996,12 @@
       buttonText(dialog(), "OK").click();
       await sleep(1300);
       let now = await pinOf();
-      t(now && now.size_um === 2540 && now.bold === true && now.italic === true, `the pin is set in 2.54 mm bold italic (${JSON.stringify(now)})`);
+      t(now && now.size_nm === 2540 && now.bold === true && now.italic === true, `the pin is set in 2.54 mm bold italic (${JSON.stringify(now)})`);
       const form = await fileForm();
       t(/\(font \(size 2\.54 2\.54\) \(bold yes\) \(italic yes\)\)/.test(form), `and the file says so (${form.replace(/\s+/g, " ").slice(0, 160)})`);
       await undo();
       now = await pinOf();
-      t(now && !now.size_um && !now.bold && !now.italic, "one Undo gives the pin its default text again");
+      t(now && !now.size_nm && !now.bold && !now.italic, "one Undo gives the pin its default text again");
       t(/\(font \(size 1\.27 1\.27\)\)/.test(await fileForm()), "and the file");
       await enterSheet(MCU);
     });

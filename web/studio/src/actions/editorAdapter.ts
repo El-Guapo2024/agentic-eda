@@ -62,8 +62,8 @@ export interface EditorAdapter {
   cursor: { x: number; y: number } | null;
   setCursor(at: { x: number; y: number } | null): void;
   /** The editor's own grid, in um. */
-  gridUm: number;
-  setGridUm(um: number): void;
+  gridNm: number;
+  setGridNm(um: number): void;
   selection: ReadonlySet<string>;
   /** `SELECTION_TOOL`'s `ClearSelection` + `AddItemToSel`: replace the selection. */
   setSelection(ids: string[]): void;
@@ -178,10 +178,10 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         view: studio.view,
         setView: (view) => snap.dispatch({ type: "SET_VIEW", view }),
         flipped: studio.bcx.boardFlipped,
-        cursor: studio.cursorUm,
+        cursor: studio.cursorNm,
         setCursor: (at) => snap.dispatch({ type: "SET_CURSOR", at }),
-        gridUm: studio.gridUm,
-        setGridUm: (um) => snap.dispatch({ type: "SET_GRID_UM", um }),
+        gridNm: studio.gridNm,
+        setGridNm: (um) => snap.dispatch({ type: "SET_GRID_NM", um }),
         selection: studio.selection,
         setSelection: (ids) => snap.dispatch({ type: "SET_SELECTION", refs: ids }),
         toolIdle: studio.activeTool === "select" && !studio.drawState && !studio.armed && !studio.movePreview,
@@ -192,8 +192,8 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         defaultBox: () => (board?.outline ? boxOfPoints(board.outline) : null) ?? LIBRARY_EDITOR_DEFAULT_BOX,
         candidatesAt: (x, y) => {
           if (!board) return [];
-          const toleranceUm = Math.max(150, 6 / (studio.view.scale || 1));
-          const cands = pickSelectionCandidates(board, x, y, toleranceUm, 1 / (studio.view.scale || 1), studio.selectionFilter, studio.layerVisible, studio.activeLayer, studio.highContrast, studio.selection, false, false);
+          const toleranceNm = Math.max(150_000, 6 / (studio.view.scale || 1));
+          const cands = pickSelectionCandidates(board, x, y, toleranceNm, 1 / (studio.view.scale || 1), studio.selectionFilter, studio.layerVisible, studio.activeLayer, studio.highContrast, studio.selection, false, false);
           const groups = board.drawings?.groups ?? [];
           return cands.map((c) => ({ id: promoteToGroup(c.id, groups, studio.enteredGroupId), kind: c.kind }));
         },
@@ -219,10 +219,10 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         view: studio.schematicView,
         setView: (view) => snap.dispatch({ type: "SET_SCHEMATIC_VIEW", view }),
         flipped: false,
-        cursor: studio.cursorUm,
+        cursor: studio.cursorNm,
         setCursor: (at) => snap.dispatch({ type: "SET_CURSOR", at }),
-        gridUm: studio.schGridUm,
-        setGridUm: (um) => snap.dispatch({ type: "SET_SCH_GRID_UM", um }),
+        gridNm: studio.schGridNm,
+        setGridNm: (um) => snap.dispatch({ type: "SET_SCH_GRID_NM", um }),
         selection: studio.selection,
         setSelection: (ids) => snap.dispatch({ type: "SET_SELECTION", refs: ids }),
         toolIdle: studio.activeTool === "select" && !studio.drawState && !studio.movePreview,
@@ -232,7 +232,7 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         contentBox: () => unionBoxes(itemBoxes().values()),
         defaultBox: () => {
           const page = pageOf(sch?.paper);
-          return [0, 0, page.widthUm, page.heightUm];
+          return [0, 0, page.widthNm, page.heightNm];
         },
         candidatesAt: (x, y) => {
           if (!sch) return [];
@@ -272,10 +272,10 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         view: fp.view,
         setView: (view) => snap.fpDispatch({ type: "SET_VIEW", view }),
         flipped: false,
-        cursor: fp.cursorUm,
+        cursor: fp.cursorNm,
         setCursor: (at) => snap.fpDispatch({ type: "SET_CURSOR", at }),
-        gridUm: fp.gridUm,
-        setGridUm: (um) => snap.fpDispatch({ type: "SET_GRID_UM", um }),
+        gridNm: fp.gridNm,
+        setGridNm: (um) => snap.fpDispatch({ type: "SET_GRID_NM", um }),
         selection: fp.selection,
         setSelection: (ids) => snap.fpDispatch({ type: "SET_SELECTION", refs: ids }),
         toolIdle: fp.activeTool === "select" && !fp.drawState && !fp.movePreview,
@@ -315,10 +315,10 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         view: sym.view,
         setView: (view) => snap.symDispatch({ type: "SET_VIEW", view }),
         flipped: false,
-        cursor: sym.cursorUm,
+        cursor: sym.cursorNm,
         setCursor: (at) => snap.symDispatch({ type: "SET_CURSOR", at }),
-        gridUm: sym.gridUm,
-        setGridUm: (um) => snap.symDispatch({ type: "SET_GRID_UM", um }),
+        gridNm: sym.gridNm,
+        setGridNm: (um) => snap.symDispatch({ type: "SET_GRID_NM", um }),
         selection: sym.selection,
         setSelection: (ids) => snap.symDispatch({ type: "SET_SELECTION", refs: ids }),
         toolIdle: sym.activeTool === "select" && !sym.drawState && !sym.movePreview,

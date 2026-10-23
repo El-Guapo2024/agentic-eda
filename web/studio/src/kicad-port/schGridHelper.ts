@@ -8,7 +8,7 @@
 // nearer than the diagonal of the range (about 78 mil), which a 50 or 100 mil grid always has -- so the grid decides, and the anchor wins only with the grid off (Ctrl) or on a
 // coarse one. Which grid depends on the item: connected items and wires snap to their own override (50 mil), text to its own (10 mil) -- kicad-port/gridOverrides.ts.
 //
-// Units: the studio's um (1 mil = 25.4 um).
+// Units: the studio's nm (1 mil = 25_400 nm).
 import { ANCHOR, AnchorList, type Anchor } from "./snapAnchors";
 import { GridHelper, samePos, type GridEnv } from "./gridHelperBase";
 import { dist, type Box, type Pt } from "./snapGeom";
@@ -16,7 +16,7 @@ import { schItemGrid, selectionGrid, type GridCategory, type SchItemKind } from 
 
 /** `SNAP_RANGE` (eeschema/default_values.h), mil. */
 export const SCH_SNAP_RANGE_MIL = 55;
-export const UM_PER_MIL = 25.4;
+export const NM_PER_MIL = 25_400;
 
 /** An item of the sheet as the grid helper sees it. */
 export interface SchSnapItem {
@@ -78,7 +78,7 @@ export class SchGridHelper extends GridHelper {
 
   /** `snapRange`: 55 mil. */
   snapRange(): number {
-    return SCH_SNAP_RANGE_MIL * UM_PER_MIL;
+    return SCH_SNAP_RANGE_MIL * NM_PER_MIL;
   }
 
   /** `computeAnchors( item, refPos, aFrom, aIncludeText )`. */

@@ -41,7 +41,7 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
     pcbOnly(() => {
       const cmd: ViaCommand | undefined = VIA_COMMANDS[name];
       if (!board || !cmd || draw?.kind !== "route") return;
-      const cursor = state.cursorUm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
+      const cursor = state.cursorNm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
       // the new state, then the head re-resolved at the cursor with the via armed or not (`m_router->Move( m_endSnapPoint, m_endItem )`)
       const update = (next: typeof draw) => {
         dispatch({ type: "SET_DRAW_STATE", draw: next });
@@ -90,7 +90,7 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
   m.set(
     "pcbnew.InteractiveRouter.SwitchPosture",
     pcbOnly(() => {
-      const cur = state.cursorUm;
+      const cur = state.cursorNm;
       if (!cur) return;
       if (draw?.kind === "route") {
         void routeMove(cur.x, cur.y, true).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) }));
@@ -113,13 +113,13 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
           onOk: (v) => {
             dispatch({ type: "PCBX", patch: { customTrackVia: v, useCustomTrackVia: true } });
             dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
-            dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthUm: v.trackUm });
-            dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: { diameter: v.viaDiameterUm, drill: v.viaDrillUm } });
+            dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: v.trackNm });
+            dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: { diameter: v.viaDiameterNm, drill: v.viaDrillNm } });
             const live = ctx.api.getState().drawState;
-            const at = ctx.api.getState().cursorUm;
+            const at = ctx.api.getState().cursorNm;
             if (live?.kind === "route" && at) {
-              dispatch({ type: "SET_DRAW_STATE", draw: { ...live, width: v.trackUm } });
-              void routeMove(at.x, at.y, undefined, v.trackUm).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview({ ...live, width: v.trackUm }, preview) }));
+              dispatch({ type: "SET_DRAW_STATE", draw: { ...live, width: v.trackNm } });
+              void routeMove(at.x, at.y, undefined, v.trackNm).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview({ ...live, width: v.trackNm }, preview) }));
             }
           },
         }),

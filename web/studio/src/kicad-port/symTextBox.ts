@@ -4,11 +4,11 @@
 // click-and-click makes in `SYMBOL_EDITOR_DRAWING_TOOLS::doDrawShape` (eeschema/tools/symbol_editor_drawing_tools.cpp) and of the end of
 // `DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`, which makes a box as big as its text needs.
 //
-// The graphic keeps its corners in the symbol's own mm with Y up (`LibrarySymbolGraphic`); everything here that is `Um` is the editor's internal space, micrometres with Y down.
+// The graphic keeps its corners in the symbol's own mm with Y up (`LibrarySymbolGraphic`); everything here that is `Nm` is the editor's internal space, micrometres with Y down.
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { FieldHAlign, FieldVAlign, LibraryFill, LibrarySymbolGraphic } from "../api/types";
-import { defaultPenUm } from "./schText";
-import { interlineUm } from "./schTextItem";
+import { defaultPenNm } from "./schText";
+import { interlineNm } from "./schTextItem";
 import { layoutTextBox, type Measure, type TextBoxLayout } from "./schTextBox";
 
 export type LibTextBox = Extract<LibrarySymbolGraphic, { kind: "text_box" }>;
@@ -20,14 +20,14 @@ export const DEFAULT_TEXT_BOX_SIZE_MM = 1.27;
 export const NO_BORDER_MM = -0.0001;
 
 /** A box in the editor's space. */
-export interface BoxUm {
+export interface BoxNm {
   left: number;
   top: number;
   right: number;
   bottom: number;
 }
 
-const um = (p: { x: number; y: number }): [number, number] => [p.x * 1000, -p.y * 1000];
+const um = (p: { x: number; y: number }): [number, number] => [p.x * 1e6, -p.y * 1e6];
 
 /**
  * `SCH_TEXTBOX::GetLegacyTextMargin` for a box on `LAYER_DEVICE`: four fifths of the text height, in the schematic's 0.1 um. A box that has a margin of its own keeps it. (The
@@ -39,7 +39,7 @@ export function textBoxMarginMm(g: Pick<LibTextBox, "size_mm" | "margin_mm">): n
 }
 
 /** The two corners of the box, ordered, in the editor's space. */
-export function boxOfTextBox(g: Pick<LibTextBox, "start" | "end">): BoxUm {
+export function boxOfTextBox(g: Pick<LibTextBox, "start" | "end">): BoxNm {
   const [x0, y0] = um(g.start);
   const [x1, y1] = um(g.end);
   return { left: Math.min(x0, x1), top: Math.min(y0, y1), right: Math.max(x0, x1), bottom: Math.max(y0, y1) };
@@ -58,10 +58,10 @@ export function layoutLibTextBox(g: LibTextBox, measure: Measure): TextBoxLayout
       end: um(g.end),
       text: g.text,
       angle: isVertical(g) ? 90_000 : 0,
-      sizeUm: g.size_mm * 1000,
+      sizeNm: g.size_mm * 1e6,
       hAlign: g.h_align,
       vAlign: g.v_align,
-      marginUm: Math.round(textBoxMarginMm(g) * 1000),
+      marginNm: Math.round(textBoxMarginMm(g) * 1e6),
     },
     measure
   );
@@ -72,14 +72,14 @@ export function layoutLibTextBox(g: LibTextBox, measure: Measure): TextBoxLayout
  * with no text has no minimum. The text's height is `EDA_TEXT::GetTextBox`: the line and the pen's reach, 17 % more for what hangs below the line, and an interline for each
  * line after the first of the wrapped text.
  */
-export function textBoxMinSizeUm(g: LibTextBox, measure: Measure): { w: number; h: number } {
+export function textBoxMinSizeNm(g: LibTextBox, measure: Measure): { w: number; h: number } {
   if (g.text === "") return { w: 0, h: 0 };
-  const size = g.size_mm * 1000;
-  const pen = g.bold ? Math.round(size / 5) : defaultPenUm(size);
+  const size = g.size_mm * 1e6;
+  const pen = g.bold ? Math.round(size / 5) : defaultPenNm(size);
   const ext = size + 2 * Math.round(pen * 1.5);
   const lines = layoutLibTextBox(g, measure).lines.length;
-  const textHeight = ext + Math.round(ext * 0.17) + (lines - 1) * interlineUm(size);
-  const margins = 2 * Math.round(textBoxMarginMm(g) * 1000);
+  const textHeight = ext + Math.round(ext * 0.17) + (lines - 1) * interlineNm(size);
+  const margins = 2 * Math.round(textBoxMarginMm(g) * 1e6);
   return isVertical(g) ? { w: textHeight + margins, h: 0 } : { w: 0, h: textHeight + margins };
 }
 
@@ -88,7 +88,7 @@ export function textBoxMinSizeUm(g: LibTextBox, measure: Measure): { w: number; 
  * corner moves on past the start in the direction it already was). Returns the same graphic when it is big enough.
  */
 export function grownToFit(g: LibTextBox, measure: Measure): LibTextBox {
-  const min = textBoxMinSizeUm(g, measure);
+  const min = textBoxMinSizeNm(g, measure);
   const [sx, sy] = um(g.start);
   let [ex, ey] = um(g.end);
   let grown = false;
@@ -107,7 +107,7 @@ export function grownToFit(g: LibTextBox, measure: Measure): LibTextBox {
 }
 
 /** `SCH_TEXTBOX::HitTest( point, accuracy )`: a point is on the box when it is in it, the whole of it and not its border alone, inflated by the accuracy. 0 inside, else how far outside. */
-export function textBoxDistanceUm(g: Pick<LibTextBox, "start" | "end">, x: number, y: number): number {
+export function textBoxDistanceNm(g: Pick<LibTextBox, "start" | "end">, x: number, y: number): number {
   const b = boxOfTextBox(g);
   const dx = Math.max(b.left - x, 0, x - b.right);
   const dy = Math.max(b.top - y, 0, y - b.bottom);

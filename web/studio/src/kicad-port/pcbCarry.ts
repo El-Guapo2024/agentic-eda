@@ -18,8 +18,8 @@ export type Matrix = readonly [number, number, number, number, number, number];
 /** What the painter needs of a `MovePreview` (state/store.tsx) to carry a PCB selection. */
 export interface CarryPreview {
   refs: readonly string[];
-  dxUm: number;
-  dyUm: number;
+  dxNm: number;
+  dyNm: number;
   /**
    * R presses (Shift+R takes one away); each turns the carried items counter-clockwise by `rotateStepDeg`, the rotation step of the preferences
    * (`PCBNEW_SETTINGS::m_RotationAngle`, 90 degrees by default -- hence the name: a quarter turn each).
@@ -30,8 +30,8 @@ export interface CarryPreview {
   /** Which axis a flip mirrors across (`PCBNEW_SETTINGS::m_FlipDirection`); left/right when left out. */
   flipDirection?: FlipDirection;
   /** Where the selection was picked up: the point a turn is about, and the point a flip mirrors about. */
-  pivotUm?: readonly [number, number];
-  flipPivotUm?: readonly [number, number];
+  pivotNm?: readonly [number, number];
+  flipPivotNm?: readonly [number, number];
 }
 
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
@@ -63,14 +63,14 @@ export function carryMatrix(p: CarryPreview): Matrix {
   let m: Matrix = IDENTITY;
   const turned = carryAngleDeg(p.rotateQuarterTurns ?? 0, p.rotateStepDeg ?? 90);
   if (turned !== 0) {
-    const [px, py] = p.pivotUm ?? [0, 0];
+    const [px, py] = p.pivotNm ?? [0, 0];
     m = after(turnMatrix(turned, px, py), m);
   }
   if (p.flipped) {
-    const [fx, fy] = p.flipPivotUm ?? [0, 0];
+    const [fx, fy] = p.flipPivotNm ?? [0, 0];
     m = after(flipMatrix(fx, fy, p.flipDirection ?? "left_right"), m);
   }
-  return after([1, 0, 0, 1, p.dxUm, p.dyUm], m);
+  return after([1, 0, 0, 1, p.dxNm, p.dyNm], m);
 }
 
 /** Where a point of the carried items is drawn. */

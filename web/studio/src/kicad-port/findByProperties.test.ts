@@ -218,7 +218,7 @@ test("completion after A.: the names of the properties and the fields, with _ fo
 
 test("recent queries: newest first, once each, ten", () => {
   let recent: string[] = [];
-  for (let i = 0; i < 12; i++) recent = withRecentQuery(recent, `q${i}`);
+  for (let i = 0; i < 12_000; i++) recent = withRecentQuery(recent, `q${i}`);
   assert.equal(recent.length, 10);
   assert.equal(recent[0], "q11");
   recent = withRecentQuery(recent, "q5");

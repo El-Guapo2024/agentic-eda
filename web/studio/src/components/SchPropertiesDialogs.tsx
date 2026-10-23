@@ -9,7 +9,7 @@
 import { useState, type ReactNode } from "react";
 import type { LabelShape, Schematic, SchematicLabel, SchematicText } from "../api/types";
 import type { LabelFieldEdit, SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
-import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, labelFieldDisplayName, newLabelField, ownLabelFields, mmToUm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
+import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, labelFieldDisplayName, newLabelField, ownLabelFields, mmToNm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { inferSpin } from "./schematic/labelShape";
@@ -81,7 +81,7 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   // the "Auto" check of a global or hierarchical label (`SCH_LABEL_BASE::AutoRotateOnPlacement`; a plain label does not have it)
   const supportsAuto = label.scope !== "local";
   const [auto, setAuto] = useState(supportsAuto && !!label.auto_rotate);
-  const [size, setSize] = useState(umToMm(label.size_um && label.size_um > 0 ? label.size_um : 1270));
+  const [size, setSize] = useState(nmToMm(label.size_nm && label.size_nm > 0 ? label.size_nm : 1_270_000));
   const [bold, setBold] = useState(!!label.bold);
   const [italic, setItalic] = useState(!!label.italic);
   // the grid of the label's own fields (`m_grid` over `m_fields`), a global label's Sheet References above them
@@ -90,14 +90,14 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const setField = (i: number, change: Partial<LabelFieldEdit>) => setFields((fs) => fs.map((f, k) => (k === i ? { ...f, ...change } : f)));
   const addField = () => setFields((fs) => [...fs, (() => { const f = newLabelField(fs.map((x) => ({ ...x, name: x.name === "Net Class" ? "Netclass" : x.name })), isr ? isr.visible : null); return { ...f, name: labelFieldDisplayName(f.name) }; })()]);
   const title = label.scope === "global" ? "Global Label Properties" : label.scope === "hierarchical" ? "Hierarchical Label Properties" : "Label Properties";
-  const sizeUm = mmToUm(size);
+  const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
-  const sizeOk = sizeUm !== null && sizeUm >= 10 && sizeUm <= 1_000_000;
+  const sizeOk = sizeNm !== null && sizeNm >= 10 && sizeNm <= 1_000_000;
   // "Label can not be empty." (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`)
   const canOk = text.trim().length > 0 && sizeOk;
   // while "Auto" is on the label takes the spin of what it is connected to (`AutoRotateItem`): the select shows the one it will get
   const autoSpin = auto ? labelOrientationForPoint(orientationSceneOf(sch), label.at, turn) : null;
-  const submit = () => canOk && void send(labelEditCmd(label, spin, { text, shape, spin: turn, sizeUm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields }));
+  const submit = () => canOk && void send(labelEditCmd(label, spin, { text, shape, spin: turn, sizeNm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields }));
   return (
     <SchDialogShell title={title} width={380} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
@@ -207,16 +207,16 @@ function TextForm({ text }: { text: SchematicText }) {
   const send = useSend(close);
   const lie = textLie(text);
   const [content, setContent] = useState(text.content);
-  const [size, setSize] = useState(umToMm(text.size_um));
+  const [size, setSize] = useState(nmToMm(text.size_nm));
   const [vertical, setVertical] = useState(lie.vertical);
   // how the text sits on its anchor, in its own axes (`m_hAlignLeft` ... `m_vAlignBottom`)
   const [h, setH] = useState<SchHAlign>(lie.h);
   const [v, setV] = useState<SchVAlign>(lie.v);
-  const sizeUm = mmToUm(size);
+  const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
-  const sizeOk = sizeUm !== null && sizeUm >= 10 && sizeUm <= 1_000_000;
+  const sizeOk = sizeNm !== null && sizeNm >= 10 && sizeNm <= 1_000_000;
   const canOk = content.length > 0 && sizeOk;
-  const submit = () => canOk && void send(textEditCmd(text, { content, sizeUm, vertical, h, v }));
+  const submit = () => canOk && void send(textEditCmd(text, { content, sizeNm, vertical, h, v }));
   return (
     <SchDialogShell title="Text Properties" width={420} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
@@ -304,24 +304,24 @@ function StrokeForm({ ids }: { ids: string[] }) {
   const close = useClose();
   const send = useSend(close);
   const view = strokeView(sch, ids);
-  const [width, setWidth] = useState(view.widthUm.mixed ? "" : umToMm(view.widthUm.value));
+  const [width, setWidth] = useState(view.widthNm.mixed ? "" : nmToMm(view.widthNm.value));
   const [style, setStyle] = useState<SchLineStyle | "">(view.style.mixed ? "" : view.style.value);
   const [color, setColor] = useState<SchColor>(view.color.mixed ? { r: 0, g: 0, b: 0, a: 255 } : view.color.value);
-  const [diameter, setDiameter] = useState(view.diameterUm.mixed ? "" : umToMm(view.diameterUm.value));
+  const [diameter, setDiameter] = useState(view.diameterNm.mixed ? "" : nmToMm(view.diameterNm.value));
   // What the user touched is what is sent: a field left alone keeps each item's own value (KiCad shows `INDETERMINATE_ACTION` for these).
   const [touched, setTouched] = useState<{ width?: boolean; style?: boolean; color?: boolean; diameter?: boolean }>({});
   const touch = (k: keyof typeof touched) => setTouched((t) => ({ ...t, [k]: true }));
-  const widthUm = mmToUm(width);
-  const diameterUm = mmToUm(diameter);
-  const canOk = (!touched.width || widthUm !== null) && (!touched.diameter || diameterUm !== null);
+  const widthNm = mmToNm(width);
+  const diameterNm = mmToNm(diameter);
+  const canOk = (!touched.width || widthNm !== null) && (!touched.diameter || diameterNm !== null);
   const onlyJunctions = view.hasJunction && !view.hasStroke;
   const onlyLines = ids.length > 0 && ids.every((id) => (sch.lines ?? []).some((l) => l.id === id));
   const title = onlyJunctions ? (ids.length === 1 ? "Junction Properties" : "Junctions Properties") : onlyLines ? "Line Properties" : "Wire/Bus Properties";
   const change = (): StrokeChange => ({
-    ...(touched.width && widthUm !== null && view.hasStroke ? { widthUm } : {}),
+    ...(touched.width && widthNm !== null && view.hasStroke ? { widthNm } : {}),
     ...(touched.style && style !== "" && view.hasStroke ? { style } : {}),
     ...(touched.color ? { color } : {}),
-    ...(touched.diameter && diameterUm !== null && view.hasJunction ? { diameterUm } : {}),
+    ...(touched.diameter && diameterNm !== null && view.hasJunction ? { diameterNm } : {}),
   });
   const submit = () => canOk && void send(strokeEditCmd(ids, change()));
   // The "Default" button (`resetDefaults`): width 0, the layer's colour, the default style, the default dot.
@@ -341,7 +341,7 @@ function StrokeForm({ ids }: { ids: string[] }) {
             <input
               autoFocus
               value={width}
-              placeholder={view.widthUm.mixed ? "(mixed)" : "0 = default"}
+              placeholder={view.widthNm.mixed ? "(mixed)" : "0 = default"}
               onChange={(e) => {
                 setWidth(e.target.value);
                 touch("width");
@@ -372,7 +372,7 @@ function StrokeForm({ ids }: { ids: string[] }) {
             <input
               autoFocus={!view.hasStroke}
               value={diameter}
-              placeholder={view.diameterUm.mixed ? "(mixed)" : "0 = default"}
+              placeholder={view.diameterNm.mixed ? "(mixed)" : "0 = default"}
               onChange={(e) => {
                 setDiameter(e.target.value);
                 touch("diameter");
@@ -417,17 +417,17 @@ function ShapeForm({ graphic }: { graphic: SchGraphic }) {
   const close = useClose();
   const send = useSend(close);
   const rule = graphic.shape.type === "rule_area" ? graphic.shape : null;
-  const [width, setWidth] = useState(umToMm(graphic.width_um ?? 0));
+  const [width, setWidth] = useState(nmToMm(graphic.width_nm ?? 0));
   const [style, setStyle] = useState<SchLineStyle>(graphic.line_style ?? "default");
   const [color, setColor] = useState<SchColor>(graphic.color ?? UNSPECIFIED_COLOR);
   const [fill, setFill] = useState<SchFill>(graphic.fill ?? "none");
   const [fillColor, setFillColor] = useState<SchColor>(graphic.fill_color ?? { r: 255, g: 255, b: 194, a: 255 });
   const [flags, setFlags] = useState({ sim: !!rule?.exclude_from_sim, bom: !!rule?.exclude_from_bom, board: !!rule?.exclude_from_board, dnp: !!rule?.dnp });
-  const widthUm = mmToUm(width);
-  const canOk = widthUm !== null && widthUm >= 0;
+  const widthNm = mmToNm(width);
+  const canOk = widthNm !== null && widthNm >= 0;
   const submit = () => {
     if (!canOk) return;
-    const next: SchGraphic = { ...graphic, width_um: widthUm, line_style: style, color: isUnspecified(color) ? undefined : color, fill, fill_color: fill === "color" ? fillColor : undefined };
+    const next: SchGraphic = { ...graphic, width_nm: widthNm, line_style: style, color: isUnspecified(color) ? undefined : color, fill, fill_color: fill === "color" ? fillColor : undefined };
     if (rule && next.shape.type === "rule_area") next.shape = { ...next.shape, exclude_from_sim: flags.sim, exclude_from_bom: flags.bom, exclude_from_board: flags.board, dnp: flags.dnp };
     void send(graphicsEqual(next, graphic) ? null : { op: "sch_edit", verb: "edit_graphic", id: graphic.id, graphic: next });
   };

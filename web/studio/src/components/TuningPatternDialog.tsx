@@ -11,7 +11,7 @@
 // Design Rules > Tuning Profiles); a net whose class names a profile with the time domain on starts that way.
 import { useEffect, useState } from "react";
 import { tunePattern, tuneSettings, tuneUpdate } from "../api/tuneClient";
-import { DELAY_UNCONSTRAINED_AS, LENGTH_UNCONSTRAINED_UM, type PatternSide, type TuneKind, type TuneSettings, type TuningPattern } from "../api/tuneTypes";
+import { DELAY_UNCONSTRAINED_AS, LENGTH_UNCONSTRAINED_NM, type PatternSide, type TuneKind, type TuneSettings, type TuningPattern } from "../api/tuneTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { DialogShell, lengthText, parseLength } from "./pcbDialogKit";
 import { fmtPs, kindOfMode, pageSettings, settingsOfPattern, tuneStateFromReply } from "../kicad-port/tuneTool";
@@ -43,7 +43,7 @@ function draftOf(s: Required<Pick<TuneSettings, "min_amplitude" | "max_amplitude
   const dt = kind === "skew" ? s.target_skew_delay : s.target_delay;
   const dopt = typeof dt === "number" ? dt : dt && typeof dt === "object" ? dt.opt : undefined;
   return {
-    target: opt == null || (kind !== "skew" && opt >= LENGTH_UNCONSTRAINED_UM) ? "" : lengthText(opt, units),
+    target: opt == null || (kind !== "skew" && opt >= LENGTH_UNCONSTRAINED_NM) ? "" : lengthText(opt, units),
     timeDomain: !!s.time_domain,
     targetDelay: dopt == null || (kind !== "skew" && dopt * 1_000_000 >= DELAY_UNCONSTRAINED_AS) ? "" : fmtPs(dopt).replace(" ps", ""),
     override: !!s.override_custom_rules,

@@ -1567,9 +1567,9 @@ mod tests {
                 p("1", "A1", "input", -2.54, 0.0, 1),
                 p("2", "A2", "input", -2.54, 0.0, 1),
                 p("3", "Y1", "output", 2.54, 180.0, 1),
-                p("4", "A3", "input", -2.54, 0.0, 2),
-                p("5", "A4", "input", -2.54, 0.0, 2),
-                p("6", "Y2", "output", 2.54, 180.0, 2),
+                p("4", "A3", "input", -2.54, 0.0, 2000),
+                p("5", "A4", "input", -2.54, 0.0, 2000),
+                p("6", "Y2", "output", 2.54, 180.0, 2000),
             ],
             power: false,
             in_bom: true,
@@ -1598,7 +1598,7 @@ mod tests {
 
         let sym = |unit: u32, x: i64| SymbolInstance { id: "U1".into(), at: Point { x, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "DUAL".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         let sch = SchematicSection {
-            symbols: vec![sym(1, 0), sym(2, 50_000)],
+            symbols: vec![sym(1, 0), sym(2000, 50_000_000)],
             wires: vec![],
             labels: vec![],
             texts: vec![],
@@ -1621,7 +1621,7 @@ mod tests {
         assert_eq!(back_sch.symbols.len(), 2, "both placed units survive the round trip");
         assert!(back_sch.symbols.iter().all(|s| s.id == "U1"));
         let units: std::collections::BTreeSet<u32> = back_sch.symbols.iter().map(|s| s.unit).collect();
-        assert_eq!(units, std::collections::BTreeSet::from([1, 2]));
+        assert_eq!(units, std::collections::BTreeSet::from([1, 2000]));
 
         // One Part, every one of the real symbol's 6 pins -- not split per
         // unit, not duplicated (this task's own "one part, one footprint,
@@ -1636,7 +1636,7 @@ mod tests {
         let unit1 = back_sch.symbols.iter().find(|s| s.unit == 1).unwrap();
         let unit2 = back_sch.symbols.iter().find(|s| s.unit == 2).unwrap();
         assert_eq!(unit1.at.x, 0);
-        assert_eq!(unit2.at.x, 50_000);
+        assert_eq!(unit2.at.x, 50_000_000);
     }
 
     /// A symbol placed in the alternate ("De Morgan") body style of its library symbol: the file carries both bodies (`Name_<unit>_1`, `Name_<unit>_2`) and
@@ -1677,7 +1677,7 @@ mod tests {
         };
         let u1 = part("U1", vec![pin("1", "A", PinKind::Signal), pin("2", "B", PinKind::Signal), pin("3", "Y", PinKind::Signal)]);
         let model = ConstraintModel { parts: vec![u1], symbols: vec![lib], ..Default::default() };
-        let instance = SymbolInstance { id: "U1".into(), at: Point { x: 25_400, y: 25_400 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let instance = SymbolInstance { id: "U1".into(), at: Point { x: 25_400_000, y: 25_400_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         let mut sch = SchematicSection { symbols: vec![instance], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false };
         let design_with = |sch: SchematicSection| Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None };
         let meta = ExportMeta { date: "2026-01-01", title: "alt" };
@@ -1691,17 +1691,17 @@ mod tests {
         assert!(back_model.symbols[0].alternate.is_some(), "the alternate body comes back");
 
         // in the alternate one
-        sch.extras.body_styles.insert("U1".into(), 2);
+        sch.extras.body_styles.insert("U1".into(), 2000);
         let alt = export_kicad_sch(&design_with(sch), &model, &meta).unwrap();
         assert!(alt.contains("(unit 1) (convert 2)"), "{alt}");
         let (back, back_model, notes) = import_kicad_sch(&alt).expect("round trips");
         assert_eq!(notes.unresolved_symbols, 0);
         let back_sch = back.schematic.unwrap();
-        assert_eq!(back_sch.extras.body_styles.get("U1"), Some(&2), "the instance keeps its body style");
-        assert_eq!(back_sch.body_style_of(&back_sch.symbols[0]), 2);
+        assert_eq!(back_sch.extras.body_styles.get("U1"), Some(&2000), "the instance keeps its body style");
+        assert_eq!(back_sch.body_style_of(&back_sch.symbols[0]), 2000);
         let lib = &back_model.symbols[0];
         let alternate = lib.alternate.as_ref().expect("both bodies are read");
-        assert_eq!((lib.pins.len(), alternate.pins.len()), (3, 3), "each body has its own pins");
+        assert_eq!((lib.pins.len(), alternate.pins.len()), (3000, 3000), "each body has its own pins");
         assert_eq!((lib.graphics.len(), alternate.graphics.len()), (1, 1), "and its own graphics, not both drawn at once");
         let width = |g: &SymbolGraphic| match g {
             SymbolGraphic::Rectangle { start, end, .. } => (end.x - start.x).abs(),
@@ -1857,11 +1857,11 @@ mod tests {
     /// ...)`/`(bus_alias ...)` readers above) agreeing with each other.
     #[test]
     fn bus_wire_entry_and_alias_round_trip_through_export_and_import() {
-        let bus_pt = Point { x: 10_000, y: 10_000 };
-        let net_pt = Point { x: 12_540, y: 12_540 };
+        let bus_pt = Point { x: 10_000_000, y: 10_000_000 };
+        let net_pt = Point { x: 12_540_000, y: 12_540_000 };
         let sch = SchematicSection {
-            wires: vec![Wire { id: String::new(), net: "DATA[0..3]".into(), pins: vec![], pts: vec![Point { x: 0, y: 10_000 }, bus_pt], bus: true }],
-            bus_entries: vec![eda_model::ir::BusEntry { id: String::new(), at: bus_pt, size: Point { x: 2_540, y: 2_540 } }],
+            wires: vec![Wire { id: String::new(), net: "DATA[0..3]".into(), pins: vec![], pts: vec![Point { x: 0, y: 10_000_000 }, bus_pt], bus: true }],
+            bus_entries: vec![eda_model::ir::BusEntry { id: String::new(), at: bus_pt, size: Point { x: 2_540_000, y: 2_540_000 } }],
             labels: vec![eda_model::ir::NetLabel { id: String::new(), net: "DATA2".into(), at: net_pt, kind: LabelKind::Local }],
             ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
         };
@@ -1885,10 +1885,10 @@ mod tests {
         let sch = reimported.schematic.expect("schematic present");
         assert_eq!(sch.wires.len(), 1);
         assert!(sch.wires[0].bus, "the bus wire's own layer flag must survive the round trip");
-        assert_eq!(sch.wires[0].pts, vec![Point { x: 0, y: 10_000 }, bus_pt]);
+        assert_eq!(sch.wires[0].pts, vec![Point { x: 0, y: 10_000_000 }, bus_pt]);
         assert_eq!(sch.bus_entries.len(), 1);
         assert_eq!(sch.bus_entries[0].at, bus_pt);
-        assert_eq!(sch.bus_entries[0].size, Point { x: 2_540, y: 2_540 });
+        assert_eq!(sch.bus_entries[0].size, Point { x: 2_540_000, y: 2_540_000 });
         assert_eq!(reimported.bus_aliases.len(), 1);
         assert_eq!(reimported.bus_aliases[0].name, "USB");
         assert_eq!(reimported.bus_aliases[0].members, vec!["D+".to_string(), "D-".to_string()]);
@@ -1898,19 +1898,19 @@ mod tests {
     /// `SCH_JUNCTION`) sits at the crossing. The junction and a notes-layer line survive the file round trip.
     #[test]
     fn an_explicit_junction_joins_crossing_wires_and_junctions_and_graphic_lines_round_trip() {
-        let cross = Point { x: 10_000, y: 10_000 };
+        let cross = Point { x: 10_000_000, y: 10_000_000 };
         let build = |junctions: Vec<eda_model::ir::Junction>| {
             let sch = SchematicSection {
                 wires: vec![
-                    Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 0, y: 10_000 }, Point { x: 20_000, y: 10_000 }], bus: false },
-                    Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 20_000 }], bus: false },
+                    Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 0, y: 10_000_000 }, Point { x: 20_000_000, y: 10_000_000 }], bus: false },
+                    Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 10_000_000, y: 0 }, Point { x: 10_000_000, y: 20_000_000 }], bus: false },
                 ],
                 labels: vec![
-                    eda_model::ir::NetLabel { id: String::new(), net: "H".into(), at: Point { x: 0, y: 10_000 }, kind: LabelKind::Local },
-                    eda_model::ir::NetLabel { id: String::new(), net: "V".into(), at: Point { x: 10_000, y: 0 }, kind: LabelKind::Local },
+                    eda_model::ir::NetLabel { id: String::new(), net: "H".into(), at: Point { x: 0, y: 10_000_000 }, kind: LabelKind::Local },
+                    eda_model::ir::NetLabel { id: String::new(), net: "V".into(), at: Point { x: 10_000_000, y: 0 }, kind: LabelKind::Local },
                 ],
                 junctions,
-                lines: vec![eda_model::ir::SchLine { id: String::new(), pts: vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }], width_nm: 254 }],
+                lines: vec![eda_model::ir::SchLine { id: String::new(), pts: vec![Point { x: 0, y: 30_000_000 }, Point { x: 5_000_000, y: 30_000_000 }, Point { x: 5_000_000, y: 35_000_000 }], width_nm: 254_000 }],
                 ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
             };
             let design = Design {
@@ -1933,11 +1933,11 @@ mod tests {
 
         let (_, apart) = build(vec![]);
         let net_of = |sch: &SchematicSection, first: Point| sch.wires.iter().find(|w| w.pts[0] == first).unwrap().net.clone();
-        assert_ne!(net_of(&apart, Point { x: 0, y: 10_000 }), net_of(&apart, Point { x: 10_000, y: 0 }), "crossing wires with no junction stay two nets");
+        assert_ne!(net_of(&apart, Point { x: 0, y: 10_000_000 }), net_of(&apart, Point { x: 10_000_000, y: 0 }), "crossing wires with no junction stay two nets");
         assert!(apart.junctions.is_empty(), "no junction written or read back");
 
         let (text, joined) = build(vec![eda_model::ir::Junction { id: String::new(), at: cross }]);
-        assert_eq!(net_of(&joined, Point { x: 0, y: 10_000 }), net_of(&joined, Point { x: 10_000, y: 0 }), "the junction joins them");
+        assert_eq!(net_of(&joined, Point { x: 0, y: 10_000_000 }), net_of(&joined, Point { x: 10_000_000, y: 0 }), "the junction joins them");
         assert!(text.contains("(junction (at 10 10)"), "{text}");
         assert_eq!(joined.junctions.len(), 1);
         assert_eq!(joined.junctions[0].at, cross);
@@ -1948,7 +1948,7 @@ mod tests {
         assert_eq!(joined.lines.len(), 2);
         let mut segs: Vec<Vec<Point>> = joined.lines.iter().map(|l| l.pts.clone()).collect();
         segs.sort();
-        assert_eq!(segs, vec![vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }], vec![Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }]]);
+        assert_eq!(segs, vec![vec![Point { x: 0, y: 30_000_000 }, Point { x: 5_000_000, y: 30_000_000 }], vec![Point { x: 5_000_000, y: 30_000_000 }, Point { x: 5_000_000, y: 35_000_000 }]]);
         assert!(joined.lines.iter().all(|l| l.width_nm == 254));
         assert_eq!(joined.wires.len(), 2, "a graphic line is never read back as a wire");
     }
@@ -1961,24 +1961,24 @@ mod tests {
         let p = |x: i64, y: i64| Point { x, y };
         let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
         let mut sch = SchematicSection::default();
-        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 0), p(20_000, 0)], bus: false });
-        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 10_000), p(20_000, 10_000)], bus: true });
-        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 20_000), p(20_000, 20_000)], bus: false });
-        sch.bus_entries.push(eda_model::ir::BusEntry { id: String::new(), at: p(5_000, 10_000), size: p(2_540, 2_540) });
-        sch.lines.push(eda_model::ir::SchLine { id: String::new(), pts: vec![p(0, 30_000), p(5_000, 30_000)], width_nm: 254 });
-        sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(10_000, 0) });
-        sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(10_000, 20_000) });
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 0), p(20_000_000, 0)], bus: false });
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 10_000_000), p(20_000_000, 10_000_000)], bus: true });
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 20_000_000), p(20_000_000, 20_000_000)], bus: false });
+        sch.bus_entries.push(eda_model::ir::BusEntry { id: String::new(), at: p(5_000_000, 10_000_000), size: p(2_540_000, 2_540_000) });
+        sch.lines.push(eda_model::ir::SchLine { id: String::new(), pts: vec![p(0, 30_000_000), p(5_000_000, 30_000_000)], width_nm: 254_000 });
+        sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(10_000_000, 0) });
+        sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(10_000_000, 20_000_000) });
         sch.assign_missing_ids();
         let id_at = |sch: &SchematicSection, first: Point| sch.wires.iter().find(|w| w.pts[0] == first).unwrap().id.clone();
-        let (plain_id, bus_id) = (id_at(&sch, p(0, 0)), id_at(&sch, p(0, 10_000)));
+        let (plain_id, bus_id) = (id_at(&sch, p(0, 0)), id_at(&sch, p(0, 10_000_000)));
         let (bent_id, line_id) = (sch.bus_entries[0].id.clone(), sch.lines[0].id.clone());
         let jct_id = sch.junctions[0].id.clone();
-        let plain = SchStroke { width_nm: 300, style: SchLineStyle::Dash, color: Some(red) };
+        let plain = SchStroke { width_nm: 300_000, style: SchLineStyle::Dash, color: Some(red) };
         let bus = SchStroke { width_nm: 0, style: SchLineStyle::Dot, color: None };
-        let bent = SchStroke { width_nm: 200, style: SchLineStyle::Default, color: Some(SchColor { r: 0, g: 0, b: 255, a: 255 }) };
+        let bent = SchStroke { width_nm: 200_000, style: SchLineStyle::Default, color: Some(SchColor { r: 0, g: 0, b: 255, a: 255 }) };
         let line = SchStroke { width_nm: 0, style: SchLineStyle::DashDot, color: Some(SchColor { r: 0, g: 128, b: 0, a: 255 }) };
         sch.extras.strokes.extend([(plain_id, plain), (bus_id, bus), (bent_id, bent), (line_id, line)]);
-        sch.extras.junction_looks.insert(jct_id, JunctionLook { diameter_nm: 900, color: Some(red) });
+        sch.extras.junction_looks.insert(jct_id, JunctionLook { diameter_nm: 900_000, color: Some(red) });
         let design = Design {
             schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
@@ -2000,15 +2000,15 @@ mod tests {
         let back = back.schematic.expect("schematic");
         let stroke_of_wire = |first: Point| back.extras.strokes.get(&id_at(&back, first)).copied();
         assert_eq!(stroke_of_wire(p(0, 0)), Some(plain));
-        assert_eq!(stroke_of_wire(p(0, 10_000)), Some(bus));
-        assert_eq!(stroke_of_wire(p(0, 20_000)), None, "the default stroke is not an annotation");
+        assert_eq!(stroke_of_wire(p(0, 10_000_000)), Some(bus));
+        assert_eq!(stroke_of_wire(p(0, 20_000_000)), None, "the default stroke is not an annotation");
         assert_eq!(back.extras.strokes.get(&back.bus_entries[0].id), Some(&bent));
         assert_eq!(back.extras.strokes.get(&back.lines[0].id), Some(&line));
-        assert_eq!(back.lines[0].width_nm, 254, "a graphic line's width stays its own");
+        assert_eq!(back.lines[0].width_nm, 254_000, "a graphic line's width stays its own");
         assert_eq!(back.extras.strokes.len(), 4);
         let look_at = |at: Point| back.junctions.iter().find(|j| j.at == at).and_then(|j| back.extras.junction_looks.get(&j.id)).copied();
-        assert_eq!(look_at(p(10_000, 0)), Some(JunctionLook { diameter_nm: 900, color: Some(red) }));
-        assert_eq!(look_at(p(10_000, 20_000)), None);
+        assert_eq!(look_at(p(10_000_000, 0)), Some(JunctionLook { diameter_nm: 900_000, color: Some(red) }));
+        assert_eq!(look_at(p(10_000_000, 20_000_000)), None);
     }
 
     /// Shapes, text boxes, rule areas, directive labels and every item's lock survive the `.kicad_sch` round trip.
@@ -2017,15 +2017,15 @@ mod tests {
         use eda_model::sch_extras::{DirectiveShape, SchFill, SchGraphic, SchGraphicKind, SchHAlign, SchVAlign};
         let p = |x: i64, y: i64| Point { x, y };
         let mut sch = SchematicSection::default();
-        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 0), p(20_000, 0)], bus: false });
-        sch.texts.push(SchematicText { id: String::new(), content: "note".into(), at: p(5_000, 5_000), angle: 0, size_nm: 1_270 });
-        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: p(0, 10_000), end: p(20_000, 30_000), corner_radius_nm: 0 });
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 0), p(20_000_000, 0)], bus: false });
+        sch.texts.push(SchematicText { id: String::new(), content: "note".into(), at: p(5_000_000, 5_000_000), angle: 0, size_nm: 1_270_000 });
+        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: p(0, 10_000_000), end: p(20_000_000, 30_000_000), corner_radius_nm: 0 });
         rect.fill = SchFill::Background;
         sch.extras.graphics = vec![
             rect,
-            SchGraphic::new(SchGraphicKind::TextBox { start: p(0, 40_000), end: p(30_000, 50_000), text: "boxed".into(), angle: 0, size_nm: 1_270, bold: false, italic: true, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: 0 }),
-            SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 60_000), p(10_000, 60_000), p(10_000, 70_000)], exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: true }),
-            SchGraphic::new(SchGraphicKind::Directive { at: p(20_000, 0), orientation: 0, shape: DirectiveShape::Round, pin_length_nm: 2_540, netclass: "Power".into(), component_class: String::new() }),
+            SchGraphic::new(SchGraphicKind::TextBox { start: p(0, 40_000_000), end: p(30_000_000, 50_000_000), text: "boxed".into(), angle: 0, size_nm: 1_270_000, bold: false, italic: true, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: 0 }),
+            SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 60_000_000), p(10_000_000, 60_000_000), p(10_000_000, 70_000_000)], exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: true }),
+            SchGraphic::new(SchGraphicKind::Directive { at: p(20_000_000, 0), orientation: 0, shape: DirectiveShape::Round, pin_length_nm: 2_540_000, netclass: "Power".into(), component_class: String::new() }),
         ];
         sch.assign_missing_ids();
         let wire_id = sch.wires[0].id.clone();

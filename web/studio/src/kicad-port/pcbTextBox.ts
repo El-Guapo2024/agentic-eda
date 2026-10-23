@@ -8,32 +8,32 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { BoardTextBox, CmdTextBox, TextBoxHAlign, TextBoxVAlign } from "../api/pcbItemTypes";
-import type { BoardState, PointXY, Um } from "../api/types";
-import { isBackLayer, lineThicknessUm, textStyleOf } from "./layerDefaults";
+import type { BoardState, PointXY, Nm } from "../api/types";
+import { isBackLayer, lineThicknessNm, textStyleOf } from "./layerDefaults";
 
 export type P = [number, number];
 /** How wide a line of text is, micrometres. */
-export type Measure = (text: string, sizeUm: number) => number;
+export type Measure = (text: string, sizeNm: number) => number;
 
 /** `METRICS::m_InterlinePitch` and `STROKE_FONT::GetInterline`'s `LEGACY_FACTOR`: a line is 1.68 * 0.9583 glyph heights below the one before. */
 export const INTERLINE = 1.68 * 0.9583;
 /** `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM`. */
-export const TEXT_MIN_SIZE_UM = 1;
-export const TEXT_MAX_SIZE_UM = 250_000;
+export const TEXT_MIN_SIZE_NM = 1000;
+export const TEXT_MAX_SIZE_NM = 250_000_000;
 
 /** `GetPenSizeForNormal` / `GetPenSizeForBold`: an eighth and a fifth of the glyph. */
-export function autoPenUm(sizeUm: number, bold: boolean): number {
-  return Math.round(sizeUm / (bold ? 5 : 8));
+export function autoPenNm(sizeNm: number, bold: boolean): number {
+  return Math.round(sizeNm / (bold ? 5 : 8));
 }
 
 /** `ClampTextPenSize( aPenSize, aSize )`: the pen may not be wider than a sixth of the smaller glyph side (`aStrict` false). */
-export function clampPenUm(penUm: number, sizeUm: number): number {
-  return Math.min(penUm, Math.round(sizeUm / 6));
+export function clampPenNm(penNm: number, sizeNm: number): number {
+  return Math.min(penNm, Math.round(sizeNm / 6));
 }
 
 /** `PCB_TEXTBOX::GetLegacyTextMargin`: half the border and three quarters of the text height. */
-export function legacyMarginUm(strokeWidthUm: number, sizeUm: number): number {
-  return Math.round(strokeWidthUm / 2) + Math.round(sizeUm * 0.75);
+export function legacyMarginNm(strokeWidthNm: number, sizeNm: number): number {
+  return Math.round(strokeWidthNm / 2) + Math.round(sizeNm * 0.75);
 }
 
 const isCardinal = (angleMilli: number): boolean => angleMilli % 90_000 === 0;
@@ -107,20 +107,20 @@ export function shownTextOf(b: Pick<BoardTextBox, "text" | "shown">): string {
 }
 
 /**
- * `FONT::LinebreakText`: each paragraph (split at a line feed) broken at spaces so that a line fits `columnUm - thicknessUm`; the space a line is broken at goes, a word wider than
+ * `FONT::LinebreakText`: each paragraph (split at a line feed) broken at spaces so that a line fits `columnNm - thicknessNm`; the space a line is broken at goes, a word wider than
  * the column stays whole on a line of its own.
  */
-export function linebreakText(text: string, columnUm: number, sizeUm: number, thicknessUm: number, measure: Measure): string[] {
+export function linebreakText(text: string, columnNm: number, sizeNm: number, thicknessNm: number, measure: Measure): string[] {
   const out: string[] = [];
-  const space = measure(" ", sizeUm);
-  const limit = columnUm - thicknessUm;
+  const space = measure(" ", sizeNm);
+  const limit = columnNm - thicknessNm;
   for (const paragraph of text.split("\n")) {
     const words = paragraph.split(" ");
     let line = "";
     let lineWidth = 0;
     let first = true;
     for (const word of words) {
-      const wordWidth = measure(word, sizeUm);
+      const wordWidth = measure(word, sizeNm);
       if (first) {
         line = word;
         lineWidth = wordWidth;
@@ -188,7 +188,7 @@ export function drawPos(b: BoardTextBox): P {
 }
 
 /** The width the text wraps to (`GetShownText`): the first side of the text's frame less the margins ("top and bottom" for a box that is not horizontal, as in source). */
-export function columnWidthUm(b: BoardTextBox): number {
+export function columnWidthNm(b: BoardTextBox): number {
   const c = cornersInSequence(b, b.angle);
   const col = Math.hypot(c[1][0] - c[0][0], c[1][1] - c[0][1]);
   const horizontal = b.angle % 180_000 === 0;
@@ -203,7 +203,7 @@ export function columnWidthUm(b: BoardTextBox): number {
 export function layoutBoxText(b: BoardTextBox, measure: Measure): BoxTextLayout {
   const size = b.size;
   const pen = b.thickness;
-  const lines = linebreakText(shownTextOf(b), columnWidthUm(b), size, b.thickness_auto ? 0 : b.thickness, measure);
+  const lines = linebreakText(shownTextOf(b), columnWidthNm(b), size, b.thickness_auto ? 0 : b.thickness, measure);
   const interline = Math.trunc(size * INTERLINE * (b.line_spacing_permille / 1000));
   const height = Math.trunc(size * 1.17) + (lines.length - 1) * interline;
   const offX = Math.trunc(pen / 1.52);
@@ -225,7 +225,7 @@ export function layoutBoxText(b: BoardTextBox, measure: Measure): BoxTextLayout 
  * `PCB_TEXTBOX::GetMinSize`: the box must be as high as its text and the margins across the text's lines (as wide, for text that runs up the box); a box with no text has no minimum. The
  * text's height is `EDA_TEXT::GetTextBox`: the line and the pen's reach, 17 % more for what hangs below the line, and an interline for each line after the first.
  */
-export function minSizeUm(b: BoardTextBox, measure: Measure): { w: number; h: number } {
+export function minSizeNm(b: BoardTextBox, measure: Measure): { w: number; h: number } {
   if (shownTextOf(b) === "") return { w: 0, h: 0 };
   const lines = layoutBoxText(b, measure).lines.length;
   const ext = b.size + 2 * Math.round(b.thickness * 1.5);
@@ -241,7 +241,7 @@ export function minSizeUm(b: BoardTextBox, measure: Measure): { w: number; h: nu
 /** The box grown to its minimum size (`DIALOG_TEXTBOX_PROPERTIES::TransferDataFromWindow`: the end moves away from the start until the box holds its text). */
 export function grownToFit(b: BoardTextBox, measure: Measure): BoardTextBox {
   if (b.pts.length > 0) return b;
-  const min = minSizeUm(b, measure);
+  const min = minSizeNm(b, measure);
   let [ex, ey] = b.end;
   if (min.w > 0 && Math.abs(b.end[0] - b.start[0]) < min.w) ex = b.end[0] >= b.start[0] ? b.start[0] + min.w : b.start[0] - min.w;
   if (min.h > 0 && Math.abs(b.end[1] - b.start[1]) < min.h) ey = b.end[1] >= b.start[1] ? b.start[1] + min.h : b.start[1] - min.h;
@@ -319,18 +319,18 @@ export function textBoxToCmd(b: BoardTextBox): CmdTextBox {
     end: pt(b.end),
     pts: b.pts.map(pt),
     angle: b.angle,
-    margin_left_um: b.margins[0],
-    margin_top_um: b.margins[1],
-    margin_right_um: b.margins[2],
-    margin_bottom_um: b.margins[3],
+    margin_left_nm: b.margins[0],
+    margin_top_nm: b.margins[1],
+    margin_right_nm: b.margins[2],
+    margin_bottom_nm: b.margins[3],
     border: b.border,
-    stroke_width_um: b.stroke_width,
+    stroke_width_nm: b.stroke_width,
     line_style: b.line_style,
     stroke_color: b.stroke_color,
     knockout: b.knockout,
-    size_um: b.size,
-    width_um: b.width !== b.size ? b.width : null,
-    thickness_um: b.thickness_auto ? 0 : b.thickness,
+    size_nm: b.size,
+    width_nm: b.width !== b.size ? b.width : null,
+    thickness_nm: b.thickness_auto ? 0 : b.thickness,
     halign: b.halign,
     valign: b.valign,
     mirror: b.mirror,
@@ -344,8 +344,8 @@ export function textBoxToCmd(b: BoardTextBox): CmdTextBox {
 /** The state shape of a cmd text box (what the dialog works on), for a box that is not on the board yet. */
 export function boardTextBoxOf(c: CmdTextBox): BoardTextBox {
   const pt = (p: PointXY): [number, number] => [p.x, p.y];
-  const size = c.size_um;
-  const auto = !c.thickness_um;
+  const size = c.size_nm;
+  const auto = !c.thickness_nm;
   return {
     id: c.id ?? "",
     layer: c.layer,
@@ -354,15 +354,15 @@ export function boardTextBoxOf(c: CmdTextBox): BoardTextBox {
     end: pt(c.end),
     pts: (c.pts ?? []).map(pt),
     angle: c.angle ?? 0,
-    margins: [c.margin_left_um, c.margin_top_um, c.margin_right_um, c.margin_bottom_um],
+    margins: [c.margin_left_nm, c.margin_top_nm, c.margin_right_nm, c.margin_bottom_nm],
     border: c.border ?? true,
-    stroke_width: c.stroke_width_um,
+    stroke_width: c.stroke_width_nm,
     line_style: c.line_style ?? "default",
     stroke_color: c.stroke_color ?? null,
     knockout: c.knockout ?? false,
     size,
-    width: c.width_um ?? size,
-    thickness: auto ? autoPenUm(Math.min(c.width_um ?? size, size), c.bold ?? false) : c.thickness_um!,
+    width: c.width_nm ?? size,
+    thickness: auto ? autoPenNm(Math.min(c.width_nm ?? size, size), c.bold ?? false) : c.thickness_nm!,
     thickness_auto: auto,
     halign: c.halign ?? "left",
     valign: c.valign ?? "center",
@@ -381,21 +381,21 @@ export function boardTextBoxOf(c: CmdTextBox): BoardTextBox {
 export function newTextBox(board: Pick<BoardState, "board_rules">, layer: string, start: P, end: P): BoardTextBox {
   const defaults = board.board_rules?.text_graphics;
   const style = textStyleOf(defaults, layer);
-  const width = lineThicknessUm(defaults, layer);
-  const margin = legacyMarginUm(width, style.heightUm);
+  const width = lineThicknessNm(defaults, layer);
+  const margin = legacyMarginNm(width, style.heightNm);
   return boardTextBoxOf({
     layer,
     text: "",
     start: { x: start[0], y: start[1] },
     end: { x: end[0], y: end[1] },
-    margin_left_um: margin,
-    margin_top_um: margin,
-    margin_right_um: margin,
-    margin_bottom_um: margin,
-    stroke_width_um: width,
-    size_um: style.heightUm,
-    width_um: style.widthUm !== style.heightUm ? style.widthUm : null,
-    thickness_um: style.thicknessUm,
+    margin_left_nm: margin,
+    margin_top_nm: margin,
+    margin_right_nm: margin,
+    margin_bottom_nm: margin,
+    stroke_width_nm: width,
+    size_nm: style.heightNm,
+    width_nm: style.widthNm !== style.heightNm ? style.widthNm : null,
+    thickness_nm: style.thicknessNm,
     halign: "left",
     valign: "top",
     mirror: isBackLayer(layer),
@@ -403,4 +403,4 @@ export function newTextBox(board: Pick<BoardState, "board_rules">, layer: string
   });
 }
 
-export type { Um };
+export type { Nm };

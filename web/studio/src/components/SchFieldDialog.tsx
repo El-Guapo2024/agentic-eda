@@ -6,8 +6,8 @@
 // angle it stores, which a turned symbol's own transform turns again; the position is the sheet's, as KiCad's `m_field->GetPosition()` is). No font face and no colour:
 // the drawing model has no place for either. The text of a sheet's file is edited from Sheet Properties, as KiCad's dialog disables it too.
 import { useState } from "react";
-import { fieldDialogCaption, fieldSizeUm, fieldEditCmd, findField, isStandardSymbolField, FIELD_SIZE_MAX_UM, FIELD_SIZE_MIN_UM, type FieldChanges } from "../kicad-port/schFieldEdit";
-import { mmToUm, umToMm } from "../kicad-port/schProperties";
+import { fieldDialogCaption, fieldSizeNm, fieldEditCmd, findField, isStandardSymbolField, FIELD_SIZE_MAX_NM, FIELD_SIZE_MIN_NM, type FieldChanges } from "../kicad-port/schFieldEdit";
+import { mmToNm, nmToMm } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import type { SchField } from "../api/types";
@@ -34,9 +34,9 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
   const dispatch = useStudioDispatch();
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
   const [text, setText] = useState(field.text);
-  const [x, setX] = useState(umToMm(field.at[0]));
-  const [y, setY] = useState(umToMm(field.at[1]));
-  const [size, setSize] = useState(umToMm(fieldSizeUm(field)));
+  const [x, setX] = useState(nmToMm(field.at[0]));
+  const [y, setY] = useState(nmToMm(field.at[1]));
+  const [size, setSize] = useState(nmToMm(fieldSizeNm(field)));
   const [vertical, setVertical] = useState(field.vertical);
   const [bold, setBold] = useState(!!field.bold);
   const [italic, setItalic] = useState(!!field.italic);
@@ -45,25 +45,25 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
   const [visible, setVisible] = useState(field.visible);
   const [nameShown, setNameShown] = useState(!!field.name_shown);
   const [allowAutoplace, setAllowAutoplace] = useState(field.allow_autoplace ?? true);
-  const xUm = mmToUm(x);
-  const yUm = mmToUm(y);
-  const sizeUm = mmToUm(size);
+  const xNm = mmToNm(x);
+  const yNm = mmToNm(y);
+  const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
-  const sizeOk = sizeUm !== null && sizeUm >= FIELD_SIZE_MIN_UM && sizeUm <= FIELD_SIZE_MAX_UM;
+  const sizeOk = sizeNm !== null && sizeNm >= FIELD_SIZE_MIN_NM && sizeNm <= FIELD_SIZE_MAX_NM;
   const textFixed = field.name === "Sheetfile" || (owner === "power" && field.name === "Reference");
   // A reference, a value, a sheet's name cannot be emptied (`FIELD_VALIDATOR`); a footprint, a datasheet and a user-defined field of a symbol can
   // a symbol's Value has no validator in `DIALOG_FIELD_PROPERTIES::init`, like its Footprint, Datasheet and user fields: only the Reference must not be empty
   const textOk = textFixed || field.name === "Footprint" || field.name === "Datasheet" || (owner === "symbol" && (field.name === "Value" || !isStandardSymbolField(field.name))) || text.trim().length > 0;
-  const canOk = sizeOk && xUm !== null && yUm !== null && textOk;
+  const canOk = sizeOk && xNm !== null && yNm !== null && textOk;
   const submit = () => {
     if (!canOk) return;
     const changes: FieldChanges = {
       ...(textFixed ? {} : { text }),
-      at: [xUm!, yUm!],
+      at: [xNm!, yNm!],
       vertical,
       h,
       v,
-      sizeUm: sizeUm!,
+      sizeNm: sizeNm!,
       bold,
       italic,
       visible,
@@ -80,9 +80,9 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
         <span>{field.name}:</span>
         <input autoFocus disabled={textFixed} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} title={textFixed ? "Edited from the properties of the item" : undefined} />
         <span>Position X (mm)</span>
-        <input value={x} onChange={(e) => setX(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={xUm === null ? { outline: "1px solid var(--error, #d33)" } : undefined} />
+        <input value={x} onChange={(e) => setX(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={xNm === null ? { outline: "1px solid var(--error, #d33)" } : undefined} />
         <span>Position Y (mm)</span>
-        <input value={y} onChange={(e) => setY(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={yUm === null ? { outline: "1px solid var(--error, #d33)" } : undefined} />
+        <input value={y} onChange={(e) => setY(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={yNm === null ? { outline: "1px solid var(--error, #d33)" } : undefined} />
         <span>Text size (mm)</span>
         <input value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
         <span>Orientation</span>

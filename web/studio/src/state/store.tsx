@@ -9,7 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
-import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
@@ -232,31 +232,31 @@ export type DrawState =
   /** `7` / `8` / `9`: a tuning pattern on its way to the board, or one of the board being edited through its edit points -- kicad-port/tuneTool.ts. */
   | TuneDrawState
   /** `S` (`SCH_DRAWING_TOOLS::DrawSheet`): the first corner of the sheet being sized; the second click ends it (`sizeSheet`). */
-  | { kind: "sheet"; start: [Um, Um] }
+  | { kind: "sheet"; start: [Nm, Nm] }
   /** The schematic shape being drawn (`DrawShape` / `DrawRuleArea`): `shape` for a rectangle, circle, arc, Bezier curve or text box, `poly` for a rule area; `brk` is a Break / Slice waiting for its drop. */
   | { kind: "sch_shape"; shape?: ShapeEdit; poly?: PolyGeom; brk?: BreakState; pin?: PinPlacement }
   | {
       kind: "route";
       net: string;
       layer: string;
-      width: Um;
+      width: Nm;
       /** The live head preview the backend's `eda_pns::Router` resolved
        * (walkaround/shove/mark-obstacles already applied) -- draw this
        * directly, same convention `drawInProgress` already used for the
        * old client-only posture45 rubber-band. */
-      pts: [Um, Um][];
+      pts: [Nm, Nm][];
       /** Whether `pts` (or `via`) currently collides -- only meaningful in
        * `mark_obstacles` mode, where a violation is shown, not resolved. */
       colliding?: boolean;
       /** Already-fixed runs from earlier in this session (before a via/
        * layer switch put the head on a different layer). */
-      runs?: { layer: string; pts: [Um, Um][] }[];
-      via?: { x: Um; y: Um; diameter: Um; drill: Um } | null;
-      snappedEnd?: [Um, Um] | null;
+      runs?: { layer: string; pts: [Nm, Nm][] }[];
+      via?: { x: Nm; y: Nm; diameter: Nm; drill: Nm } | null;
+      snappedEnd?: [Nm, Nm] | null;
       /** `shove` mode only: other tracks the live head would push aside. */
-      displaced?: { layer: string; pts: [Um, Um][] }[];
+      displaced?: { layer: string; pts: [Nm, Nm][] }[];
       /** `shove` mode only: other vias the live head would push aside. */
-      displacedVias?: { source_via: string; x: Um; y: Um }[];
+      displacedVias?: { source_via: string; x: Nm; y: Nm }[];
       /** Armed by the `V` hotkey: the next fix drops a via here and
        * continues on `pendingViaLayer`. */
       placingVia?: boolean;
@@ -276,14 +276,14 @@ export type DrawState =
       dragKind: "corner" | "segment" | "via" | "arc";
       net: string | null;
       layer: string;
-      width: Um;
-      viaDiameter?: Um;
+      width: Nm;
+      viaDiameter?: Nm;
       /** A via drag of a virtual via (a junction of tracks): no via is drawn. */
       virtualVia?: boolean;
       /** The dragged item's live shape: the stretched line (corner) or
        * just the via's own new position, one point (via) -- see
        * `DragPreview`'s own doc comment. */
-      pts: [Um, Um][];
+      pts: [Nm, Nm][];
       colliding?: boolean;
       /** The tracks of the line being dragged: the cursor does not snap onto them (`checkSnap`; see kicad-port/dragTool.ts). */
       lineTracks?: string[];
@@ -292,11 +292,11 @@ export type DrawState =
       /** The first position failed, so the drag only marks obstacles; Ctrl+click commits a violation. */
       forcedMark?: boolean;
       /** `shove` mode only: other tracks/vias this drag would push aside. */
-      displaced?: { layer: string; pts: [Um, Um][] }[];
-      displacedVias?: { source_via: string; x: Um; y: Um }[];
+      displaced?: { layer: string; pts: [Nm, Nm][] }[];
+      displacedVias?: { source_via: string; x: Nm; y: Nm }[];
       /** Via drag only: its own directly-attached tracks, already
        * stretched to follow it live, each with its own real width. */
-      fanout?: { layer: string; width: Um; pts: [Um, Um][] }[];
+      fanout?: { layer: string; width: Nm; pts: [Nm, Nm][] }[];
     }
   /** `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair ->
    * `eda_pns::diff_pair::DiffPairPlacer`): an in-progress differential-
@@ -309,29 +309,29 @@ export type DrawState =
       netA: string | null;
       netB: string | null;
       layer: string;
-      width: Um;
-      ptsA: [Um, Um][];
-      ptsB: [Um, Um][];
+      width: Nm;
+      ptsA: [Nm, Nm][];
+      ptsB: [Nm, Nm][];
       colliding?: boolean;
-      runsA?: { layer: string; pts: [Um, Um][] }[];
-      runsB?: { layer: string; pts: [Um, Um][] }[];
+      runsA?: { layer: string; pts: [Nm, Nm][] }[];
+      runsB?: { layer: string; pts: [Nm, Nm][] }[];
       snappedEnd?: boolean;
       /** The edge-to-edge gap the pair is routed at. */
-      gap?: Um;
+      gap?: Nm;
       /** `V` is on: the head ends in `vias` (one per net), and `pendingViaLayer` is where the route goes on after them. */
       placingVia?: boolean;
       pendingViaLayer?: string;
-      vias?: { net: string | null; x: Um; y: Um; diameter: Um; fromLayer: string; toLayer: string }[];
-      fixedVias?: { net: string | null; x: Um; y: Um; diameter: Um; fromLayer: string; toLayer: string }[];
+      vias?: { net: string | null; x: Nm; y: Nm; diameter: Nm; fromLayer: string; toLayer: string }[];
+      fixedVias?: { net: string | null; x: Nm; y: Nm; diameter: Nm; fromLayer: string; toLayer: string }[];
       /** Shove mode: other tracks/vias the pair would push aside. */
-      displaced?: { layer: string; pts: [Um, Um][] }[];
-      displacedVias?: { source_via: string; x: Um; y: Um }[];
+      displaced?: { layer: string; pts: [Nm, Nm][] }[];
+      displacedVias?: { source_via: string; x: Nm; y: Nm }[];
     }
-  | { kind: "zone"; pts: [Um, Um][] }
+  | { kind: "zone"; pts: [Nm, Nm][] }
   | {
       kind: "shape";
       shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
-      pts: [Um, Um][];
+      pts: [Nm, Nm][];
       /** `shapeKind === "arc"` only: KIGFX::PREVIEW::ARC_GEOM_MANAGER's state (kicad-port/arcGeom.ts) -- centre, start, end angle, and the `/` posture (clockwise + lock). `pts` then holds just the clicks locked in so far. */
       arc?: ArcGeom;
       /** `shapeKind === "bezier"` only: KIGFX::PREVIEW::BEZIER_GEOM_MANAGER's state (kicad-port/bezierGeom.ts). */
@@ -341,13 +341,13 @@ export type DrawState =
    * kinds -- which one is read from `state.nextDimensionKind` when the
    * second click commits it (same one-shot-flag convention as zones' own
    * `nextZoneIsRuleArea`), not stored per-draw here. */
-  | { kind: "dimension"; pts: [Um, Um][] }
+  | { kind: "dimension"; pts: [Nm, Nm][] }
   /** Draw Table (`DRAWING_TOOL::DrawTable`): the first corner, once it is clicked; the grid follows the cursor (kicad-port/tables.ts `drawTableGrid`). */
-  | { kind: "table"; origin: [Um, Um] }
+  | { kind: "table"; origin: [Nm, Nm] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
-  | { kind: "wire"; pts: [Um, Um][] }
+  | { kind: "wire"; pts: [Nm, Nm][] }
   /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */
-  | { kind: "measure"; pts: [Um, Um][] };
+  | { kind: "measure"; pts: [Nm, Nm][] };
 
 export interface ViewTransform {
   /** Screen pixels per board µm. */
@@ -367,17 +367,17 @@ export interface MovePreview {
   /** `sch_move` / `sch_drag`: R, Shift+R, X and Y pressed while the items are held, in order -- committed with the move as one step. */
   turns?: SchTurn[];
   /** `sch_move` / `sch_drag`: where the held items are held now -- the reference point they were picked up by (`BestDragOrigin`) plus how far they have gone, i.e. the snapped cursor; what R, Shift+R, X and Y turn them about. Absent: where the cursor went down plus the move. */
-  holdUm?: [number, number];
-  dxUm: number;
-  dyUm: number;
+  holdNm?: [number, number];
+  dxNm: number;
+  dyNm: number;
   /**
    * `"pcb"`: any mix of footprints, tracks, vias, zones, graphics, text, dimensions and groups (the Move tool's own selection, locked items already
-   * taken out). R and F turn and flip the whole selection about the point it was picked up at (`pivotUm` for a turn, `flipPivotUm` for a flip --
+   * taken out). R and F turn and flip the whole selection about the point it was picked up at (`pivotNm` for a turn, `flipPivotNm` for a flip --
    * `EDIT_TOOL::Rotate` / `::Flip` act about the selection's reference point, which travels with the cursor), and the drop commits one batch
    * (kicad-port/pcbTransform.ts `planCarry`). The older kinds below move one kind each.
    */
-  pivotUm?: [number, number];
-  flipPivotUm?: [number, number];
+  pivotNm?: [number, number];
+  flipPivotNm?: [number, number];
   /**
    * edit_tool.cpp Rotate/Flip during an active Move: both act on the
    * live preview instead of committing immediately (updateModificationPoint's
@@ -397,10 +397,10 @@ export interface MovePreview {
   /**
    * `P` (`EDIT_TOOL::PackAndMoveFootprints`): SpreadFootprints has already moved every selected footprint
    * to its packed place *before* the move tool picks the group up, so each ref carries its own extra shift
-   * (um, from where it is on the board to its packed place) on top of the shared `dxUm`/`dyUm`. Only
+   * (um, from where it is on the board to its packed place) on top of the shared `dxNm`/`dyNm`. Only
    * meaningful for `kind === "part"`; absent for every ordinary move.
    */
-  perRefOffsetUm?: Record<string, [number, number]>;
+  perRefOffsetNm?: Record<string, [number, number]>;
 }
 
 /**
@@ -524,17 +524,17 @@ export const DEFAULT_RULE_AREA_SETTINGS: RuleAreaFields = {
 };
 
 export const DEFAULT_ZONE_SETTINGS: ZoneSettingsFields = {
-  clearance: 500,
-  min_thickness: 250,
-  thermal_gap: 500,
-  thermal_spoke_width: 500,
+  clearance: 500_000,
+  min_thickness: 250_000,
+  thermal_gap: 500_000,
+  thermal_spoke_width: 500_000,
   pad_connection: "Thermal",
   priority: 0,
   island_removal_mode: "Always",
-  min_island_area: 10_000_000,
+  min_island_area: 10_000_000_000_000,
   fill_mode: "Polygons",
-  hatch_thickness: 1000,
-  hatch_gap: 1500,
+  hatch_thickness: 1_000_000,
+  hatch_gap: 1_500_000,
   hatch_orientation_mdeg: 0,
   hatch_smoothing_level: 0,
   hatch_smoothing_value: 0.1,
@@ -583,7 +583,7 @@ export interface StudioState {
   activeTool: ToolId;
   drawState: DrawState | null;
   /** A just-drawn zone outline waiting for its settings to be confirmed in ZoneDialog before `add_zone` commits it. */
-  zonePending: [Um, Um][] | null;
+  zonePending: [Nm, Nm][] | null;
   /** A selected zone's id ("E", or double-click) -- opens ZoneDialog in edit mode (`edit_zone`) instead of add mode. Independent of `zonePending` (one or the other is ever set, never both). */
   zoneEditId: string | null;
   /** Task item 7: which of the five dimension kinds the next two-click
@@ -641,27 +641,27 @@ export interface StudioState {
    * (every route/new-track client falls back to `board_rules.track_width`
    * until then, same value this would resolve to anyway).
    */
-  currentTrackWidthUm: Um | null;
-  /** Same idea as `currentTrackWidthUm`, for `pcbnew.EditorControl.viaSizeInc`/`viaSizeDec` cycling `board_rules.via_diameter`/`via_drill` plus `routing.via_presets`. */
+  currentTrackWidthNm: Nm | null;
+  /** Same idea as `currentTrackWidthNm`, for `pcbnew.EditorControl.viaSizeInc`/`viaSizeDec` cycling `board_rules.via_diameter`/`via_drill` plus `routing.via_presets`. */
   currentViaPreset: ViaPreset | null;
   /** The text tool/E-to-edit dialog: "add" (fresh, at a clicked point) or "edit" (an existing text's id). */
-  textDialog: { mode: "add"; at: [Um, Um] } | { mode: "edit"; id: string } | null;
+  textDialog: { mode: "add"; at: [Nm, Nm] } | { mode: "edit"; id: string } | null;
   /** `L`/Ctrl+`L`/`H`: a just-clicked point waiting for LabelDialog to confirm its text (and, for global/hierarchical, its shape) before `add_label` commits -- same "draw/click first, dialog last" shape as `zonePending`. */
-  schLabelPending: { at: [Um, Um]; scope: LabelScope } | null;
+  schLabelPending: { at: [Nm, Nm]; scope: LabelScope } | null;
   /** `S`: a sheet's two corners, waiting for SheetDialog to name it before `add_sheet` commits (or, with `source`, before `import_sheet` does). */
-  schSheetPending: { at: [Um, Um]; size: [Um, Um]; source?: SheetImportPlan } | null;
+  schSheetPending: { at: [Nm, Nm]; size: [Nm, Nm]; source?: SheetImportPlan } | null;
   /** Import Sheet... / Draw Sheet from File: the schematic file the `sch_import_sheet` tool places and the options it was chosen with (kicad-port/schImportSheet.ts). */
   schSheetImport: SheetImportPlan | null;
   /** `C` (`SCH_LINE_WIRE_BUS_TOOL::UnfoldBus`): the bus member chosen to break out of a bus -- the bus entry sits at `entryAt` and the wire being drawn from its far end takes a label of `net` when it finishes. */
-  busUnfold: { net: string; entryAt: [Um, Um]; size: [Um, Um] } | null;
+  busUnfold: { net: string; entryAt: [Nm, Nm]; size: [Nm, Nm] } | null;
   /** `C`: the member nets of the bus under the cursor, waiting for BusUnfoldDialog to pick one (`BUS_UNFOLD_MENU`); `entryAt` is where the bus entry will root on the bus. */
-  busUnfoldPicker: { bus: string; entryAt: [Um, Um]; members: string[] } | null;
+  busUnfoldPicker: { bus: string; entryAt: [Nm, Nm]; members: string[] } | null;
   /** `F1`/Insert (`SCH_FRAME::m_items_to_repeat`): the Cmd(s) of the last thing placed, so "Repeat Last Item" can place a copy. */
   schRepeat: Cmd[];
   /** `P`: a just-clicked point (already pin-snapped, see SchematicView.tsx's `pinSnapPoints`) waiting for PowerSymbolDialog to confirm which rail. */
-  schPowerPending: { at: [Um, Um] } | null;
+  schPowerPending: { at: [Nm, Nm] } | null;
   /** `T`: a just-clicked point waiting for SchTextDialog to confirm the content. */
-  schTextPending: { at: [Um, Um] } | null;
+  schTextPending: { at: [Nm, Nm] } | null;
   /** The dialog one of the schematic edit/drawing tools has open (text box text, directive label fields, ...): components/SchToolDialogs.tsx. */
   schToolDialog: SchToolDialog | null;
   /** `A`: SymbolChooserDialog's own open/closed flag. */
@@ -693,9 +693,9 @@ export interface StudioState {
   /** `COMMON_TOOLS::m_imperialUnit` (`system.last_imperial_units`): the imperial unit Toggle Units returns to -- inches until mils were chosen, mils after. */
   lastImperialUnit: "in" | "mil";
   polar: boolean;
-  gridUm: number;
+  gridNm: number;
   /** The Schematic Editor's current grid (`GRID_SETTINGS::last_size_idx` of eeschema), um: one of its grid list (state/gridSettings.ts), 50 mil to start. */
-  schGridUm: number;
+  schGridNm: number;
   gridVisible: boolean;
   /** `MAGNETIC_SETTINGS::allLayers` (pcbnew_settings.cpp, default false): snap to items on every layer instead of the active layer only. Toggled by `common.Control.magneticSnapToggle` (Shift+S). UI state, not design data. */
   magneticAllLayers: boolean;
@@ -743,8 +743,8 @@ export interface StudioState {
   toast: { message: string; kind: "error" | "info" } | null;
 
   /** Cursor position in board µm, for the status bar's X/Y/dx/dy/dist. */
-  cursorUm: { x: number; y: number } | null;
-  moveOriginUm: { x: number; y: number } | null;
+  cursorNm: { x: number; y: number } | null;
+  moveOriginNm: { x: number; y: number } | null;
   /**
    * Which points of a wire a click picked (`SCH_SELECTION_TOOL::selectPoint`: a click near a wire's end picks that end only, so `G` or a drag
    * stretches it; anywhere else the segment's two ends). Only meaningful while the selection is exactly that wire (`pickedVertices`).
@@ -759,10 +759,10 @@ export interface StudioState {
    * base_screen.cpp's `m_LocalOrigin` (default (0,0), same as source) --
    * the status bar's dx/dy/dist is always relative to THIS point, set by
    * Space (common.Control.resetLocalCoords, pcb_base_frame.cpp's
-   * UpdateStatusBar). Independent of moveOriginUm (the move tool's own
+   * UpdateStatusBar). Independent of moveOriginNm (the move tool's own
    * drag-grab anchor): KiCad's move tool never touches m_LocalOrigin.
    */
-  localOriginUm: { x: number; y: number };
+  localOriginNm: { x: number; y: number };
   /**
    * Preferences > Mouse and Touchpad (`common.SuiteControl.openPreferences`, kicad-port/preferences.ts): the wheel
    * gestures, the zoom speed/acceleration and `prefs.autoPan` -- view_controls.cpp VC_SETTINGS::m_autoPanSettingEnabled,
@@ -934,7 +934,7 @@ const initialState: StudioState = {
   plotDialogOpen: false,
   generateDrillDialogOpen: false,
   footprintPositionDialogOpen: false,
-  currentTrackWidthUm: null,
+  currentTrackWidthNm: null,
   currentViaPreset: null,
   textDialog: null,
   schLabelPending: null,
@@ -962,8 +962,8 @@ const initialState: StudioState = {
   units: "mm",
   lastImperialUnit: "in",
   polar: false,
-  gridUm: 1000, // 1.0 mm; a placeholder until src/kicad/layers.json-adjacent grid defaults are extracted (KiCad's own default grid list is source-derived, see report)
-  schGridUm: 1270, // eeschema's default grid: 50 mil
+  gridNm: 1_000_000, // 1.0 mm; a placeholder until src/kicad/layers.json-adjacent grid defaults are extracted (KiCad's own default grid list is source-derived, see report)
+  schGridNm: 1_270_000, // eeschema's default grid: 50 mil
   gridVisible: true,
   magneticAllLayers: false,
   fullscreenCrosshair: false,
@@ -989,11 +989,11 @@ const initialState: StudioState = {
   boardPadPropertiesId: null,
   netInspectorOpen: false,
   toast: null,
-  cursorUm: null,
-  moveOriginUm: null,
+  cursorNm: null,
+  moveOriginNm: null,
   schWirePick: null,
   schPickedEnds: null,
-  localOriginUm: { x: 0, y: 0 },
+  localOriginNm: { x: 0, y: 0 },
   prefs: loadPreferences(browserStorage()),
   preferencesDialogOpen: false,
   schematic: null,
@@ -1071,8 +1071,8 @@ export type Action =
   | { type: "MARK_VIEW_INITIALIZED" }
   | { type: "SET_UNITS"; units: LengthUnit }
   | { type: "TOGGLE_POLAR" }
-  | { type: "SET_GRID_UM"; um: number }
-  | { type: "SET_SCH_GRID_UM"; um: number }
+  | { type: "SET_GRID_NM"; um: number }
+  | { type: "SET_SCH_GRID_NM"; um: number }
   | { type: "TOGGLE_GRID_VISIBLE" }
   | { type: "SET_MAGNETIC_ALL_LAYERS"; value: boolean }
   | { type: "TOGGLE_CROSSHAIR" }
@@ -1138,7 +1138,7 @@ export type Action =
   | { type: "SET_ERC_LINT_SELECTED"; index: number | null }
   | { type: "LINT_OK"; lint: LintReport }
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
-  | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
+  | { type: "SET_ZONE_PENDING"; outline: [Nm, Nm][] | null }
   | { type: "SET_ZONE_EDIT_ID"; id: string | null }
   | { type: "SET_NEXT_DIMENSION_KIND"; kind: CmdDimensionKind["kind"] }
   | { type: "SET_DIMENSION_EDIT_ID"; id: string | null }
@@ -1150,7 +1150,7 @@ export type Action =
   | { type: "SET_PLOT_DIALOG_OPEN"; open: boolean }
   | { type: "SET_GENERATE_DRILL_DIALOG_OPEN"; open: boolean }
   | { type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN"; open: boolean }
-  | { type: "SET_CURRENT_TRACK_WIDTH"; widthUm: Um }
+  | { type: "SET_CURRENT_TRACK_WIDTH"; widthNm: Nm }
   | { type: "SET_CURRENT_VIA_PRESET"; preset: ViaPreset }
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] }
   | { type: "SET_SCH_LABEL_PENDING"; pending: StudioState["schLabelPending"] }
@@ -1444,10 +1444,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, units: action.units, lastImperialUnit: rememberedImperial(state.lastImperialUnit, action.units) };
     case "TOGGLE_POLAR":
       return { ...state, polar: !state.polar };
-    case "SET_GRID_UM":
-      return { ...state, gridUm: action.um };
-    case "SET_SCH_GRID_UM":
-      return { ...state, schGridUm: action.um };
+    case "SET_GRID_NM":
+      return { ...state, gridNm: action.um };
+    case "SET_SCH_GRID_NM":
+      return { ...state, schGridNm: action.um };
     case "TOGGLE_GRID_VISIBLE":
       return { ...state, gridVisible: !state.gridVisible };
     case "SET_MAGNETIC_ALL_LAYERS":
@@ -1499,15 +1499,15 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "TOAST_CLEAR":
       return { ...state, toast: null };
     case "SET_CURSOR":
-      return { ...state, cursorUm: action.at };
+      return { ...state, cursorNm: action.at };
     case "SET_MOVE_ORIGIN":
-      return { ...state, moveOriginUm: action.at };
+      return { ...state, moveOriginNm: action.at };
     case "SET_SCH_WIRE_PICK":
       return { ...state, schWirePick: action.pick };
     case "SET_SCH_PICKED_ENDS":
       return { ...state, schPickedEnds: action.ends };
     case "SET_LOCAL_ORIGIN":
-      return { ...state, localOriginUm: action.at };
+      return { ...state, localOriginNm: action.at };
     case "TOGGLE_AUTO_PAN":
       return { ...state, prefs: { ...state.prefs, autoPan: !state.prefs.autoPan } };
     case "SET_PREFERENCES":
@@ -1606,7 +1606,7 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_FOOTPRINT_POSITION_DIALOG_OPEN":
       return { ...state, footprintPositionDialogOpen: action.open };
     case "SET_CURRENT_TRACK_WIDTH":
-      return { ...state, currentTrackWidthUm: action.widthUm };
+      return { ...state, currentTrackWidthNm: action.widthNm };
     case "SET_CURRENT_VIA_PRESET":
       return { ...state, currentViaPreset: action.preset };
     case "SET_TEXT_DIALOG":
@@ -1713,11 +1713,11 @@ export interface StudioApi {
   alignSelection: (edge: AlignEdge) => Promise<void>;
   /** pcbnew.AlignAndDistribute.distribute* -- same placed-footprints-only scope. A no-op under 3 placed parts. */
   distributeSelection: (axis: "x" | "y", mode: "gaps" | "centers") => Promise<void>;
-  /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
-  commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetUm?: MovePreview["perRefOffsetUm"]) => Promise<void>;
-  placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
+  /** Commit a completed drag: each ref moves by (dxNm, dyNm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
+  commitMove: (refs: string[], dxNm: number, dyNm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetNm?: MovePreview["perRefOffsetNm"]) => Promise<void>;
+  placeArmedAt: (xNm: number, yNm: number) => Promise<void>;
   /** Place Footprint's click: the footprint of a library armed in the Footprint Chooser becomes a part of its own at this point (`place_footprint`, one undo step). */
-  placeLibraryFootprintAt: (xUm: number, yUm: number) => Promise<void>;
+  placeLibraryFootprintAt: (xNm: number, yNm: number) => Promise<void>;
   /** GAPS.md #6: the Hierarchy panel's own "enter sheet"/"leave sheet"/jump-to-breadcrumb -- sets `state.currentSheetPath` and immediately refetches the schematic for it (the version-gated poll loop alone wouldn't notice a pure navigation with no backend mutation behind it). `[]` is the root. */
   navigateToSheet: (path: string[], record?: boolean) => Promise<void>;
   route: () => Promise<void>;
@@ -1809,7 +1809,7 @@ export interface StudioApi {
    * `Cmd::AddZone` with inline settings, so every existing caller of that
    * Cmd (the CLI, this app's own tests) keeps its exact three-field shape.
    */
-  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields & RuleAreaFields, extra?: { layers?: string[]; name?: string; locked?: boolean }) => Promise<void>;
+  addZone: (net: string, layer: string, outline: [Nm, Nm][], settings: ZoneSettingsFields & RuleAreaFields, extra?: { layers?: string[]; name?: string; locked?: boolean }) => Promise<void>;
   /**
    * B ("Fill All Zones"), or Fill Selected Zones with `ids`: kicad-cli's filler runs (seconds; `state.zoneFillRunning` meanwhile, the board stays editable) and its fills
    * are kept beside the design; then they are read (`state.zoneFill`). A run already in flight is not doubled.
@@ -2138,8 +2138,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   /** Where a Paste lands the clipboard's origin: the cursor's grid point, else the middle of the board. */
   const pasteAt = (): { x: number; y: number } => {
     const st = stateRef.current;
-    if (st.cursorUm) {
-      const [x, y] = snapPoint(st.cursorUm.x, st.cursorUm.y, st.gridUm);
+    if (st.cursorNm) {
+      const [x, y] = snapPoint(st.cursorNm.x, st.cursorNm.y, st.gridNm);
       return { x, y };
     }
     const o = st.board?.outline;
@@ -2226,15 +2226,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     commitSchHeld: async (preview) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
-      const origin = stateRef.current.moveOriginUm;
+      const origin = stateRef.current.moveOriginNm;
       const cmd = heldCmd({
         mode: preview.kind === "sch_drag" ? "drag" : "move",
         ids: preview.refs,
         vertices: preview.vertices,
-        dxUm: preview.dxUm,
-        dyUm: preview.dyUm,
+        dxNm: preview.dxNm,
+        dyNm: preview.dyNm,
         turns: preview.turns,
-        holdUm: preview.holdUm ?? holdPoint(origin, preview.dxUm, preview.dyUm),
+        holdNm: preview.holdNm ?? holdPoint(origin, preview.dxNm, preview.dyNm),
       });
       // The drop of items an Import Graphics carried joins the step that made them (`carry: "commit"`, as the board's drop does in `commitMove`); a drop that sends nothing, or one the
       // backend refuses, leaves the import standing as a step of its own.
@@ -2275,7 +2275,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     alignSelection: async (edge) => {
       const st = stateRef.current;
       if (!st.board) return;
-      const cursor: [number, number] | null = st.cursorUm ? [st.cursorUm.x, st.cursorUm.y] : null;
+      const cursor: [number, number] | null = st.cursorNm ? [st.cursorNm.x, st.cursorNm.y] : null;
       const cmds = planAlignSelection(st.board, [...st.selection], edge, cursor);
       if (cmds.length > 0) await runBatch(cmds);
     },
@@ -2285,7 +2285,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const cmds = planDistributeSelection(st.board, [...st.selection], axis, mode);
       if (cmds.length > 0) await runBatch(cmds);
     },
-    commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetUm) => {
+    commitMove: async (refs, dxNm, dyNm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetNm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       // The drop ends a carried Duplicate or Paste: it joins the step the duplicate or the paste began (`carry: "commit"`), so both are one undo step. A drop that
       // sends nothing, or one the backend refuses, leaves the duplicate or the paste standing as a step of its own.
@@ -2299,7 +2299,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (kind === "pcb") {
         const board = stateRef.current.board;
         const prefs = stateRef.current.prefs;
-        const plan = board ? planCarry(board, refs, dxUm, dyUm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap(), prefs.rotationStepDeg, prefs.flipDirection) : null;
+        const plan = board ? planCarry(board, refs, dxNm, dyNm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap(), prefs.rotationStepDeg, prefs.flipDirection) : null;
         const ok = plan ? await runPlan(plan, carry) : false;
         await settle(plan !== null && plan.cmds.length > 0, ok);
         advanceMoveQueue();
@@ -2314,8 +2314,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (kind === "part") {
           const p = api.partByRef(ref);
           // Pack and Move: this ref's own SpreadFootprints shift rides along with the shared drag delta.
-          const own = perRefOffsetUm?.[ref];
-          const to = p?.placed && p.at ? { x: Math.round(p.at[0] + dxUm + (own?.[0] ?? 0)), y: Math.round(p.at[1] + dyUm + (own?.[1] ?? 0)) } : null;
+          const own = perRefOffsetNm?.[ref];
+          const to = p?.placed && p.at ? { x: Math.round(p.at[0] + dxNm + (own?.[0] ?? 0)), y: Math.round(p.at[1] + dyNm + (own?.[1] ?? 0)) } : null;
           if (to) cmds.push({ op: "move_to", part: ref, x: to.x, y: to.y });
           // Rotating/flipping about the part's own (already-moved) anchor is the same final pose as KiCad's live in-place spin during a single-item
           // drag -- see MovePreview's own doc comment. R presses count counter-clockwise by the preferences' rotation step, and the item verbs turn
@@ -2328,14 +2328,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           }
         } else if (kind === "via") {
           const v = api.viaById(ref);
-          if (v) cmds.push({ op: "move_via", id: ref, x: v.x + dxUm, y: v.y + dyUm });
+          if (v) cmds.push({ op: "move_via", id: ref, x: v.x + dxNm, y: v.y + dyNm });
         } else if (kind === "shape") {
-          cmds.push({ op: "move_shape", id: ref, dx: dxUm, dy: dyUm });
+          cmds.push({ op: "move_shape", id: ref, dx: dxNm, dy: dyNm });
         } else if (kind === "text") {
           const t = api.textById(ref);
-          if (t) cmds.push({ op: "move_text", id: ref, x: t.x + dxUm, y: t.y + dyUm });
+          if (t) cmds.push({ op: "move_text", id: ref, x: t.x + dxNm, y: t.y + dyNm });
         } else if (kind === "dimension") {
-          cmds.push({ op: "move_dimension", id: ref, dx: dxUm, dy: dyUm });
+          cmds.push({ op: "move_dimension", id: ref, dx: dxNm, dy: dyNm });
         }
       }
       // One undo step for the whole drop (BOARD_COMMIT::Push once).
@@ -2343,18 +2343,18 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       await settle(cmds.length > 0, ok);
       advanceMoveQueue();
     },
-    placeLibraryFootprintAt: async (xUm, yUm) => {
+    placeLibraryFootprintAt: async (xNm, yNm) => {
       const name = stateRef.current.armedFootprint;
       if (!name) return;
       // `BOARD_EDITOR_CONTROL::PlaceFootprint` commits on the click and goes back to asking for the next footprint; here the tool is done after one.
       dispatch({ type: "SET_ARMED_FOOTPRINT", name: null });
-      await runCmd({ op: "place_footprint", footprint: name, at: { x: xUm, y: yUm } });
+      await runCmd({ op: "place_footprint", footprint: name, at: { x: xNm, y: yNm } });
     },
-    placeArmedAt: async (xUm, yUm) => {
+    placeArmedAt: async (xNm, yNm) => {
       const ref = stateRef.current.armed;
       if (!ref) return;
       dispatch({ type: "SET_ARMED", ref: null });
-      const ok = await runCmd({ op: "place_at", part: ref, x: xUm, y: yUm });
+      const ok = await runCmd({ op: "place_at", part: ref, x: xNm, y: yNm });
       if (ok) dispatch({ type: "SET_SELECTION", refs: [ref] });
     },
     navigateToSheet: async (path, record = true) => {
@@ -2428,7 +2428,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       carriedPlacementRef.current = true;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-      dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
+      dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorNm });
     },
     // `common.Interactive.group`/`ungroup` (task item 5). `state.selection`
     // already holds whatever `withGroupSubstitution` resolved a click to
@@ -2491,7 +2491,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!st.board) return;
       const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false });
       if (ids.length === 0) return;
-      const at = reference ?? (st.cursorUm ? (([x, y]) => ({ x, y }))(snapPoint(st.cursorUm.x, st.cursorUm.y, st.gridUm)) : null);
+      const at = reference ?? (st.cursorNm ? (([x, y]) => ({ x, y }))(snapPoint(st.cursorNm.x, st.cursorNm.y, st.gridNm)) : null);
       const reply = await postClipboardCopy(ids, at);
       if (!reply.ok) {
         dispatch({ type: "TOAST", message: reply.message, kind: "error" });
@@ -2515,7 +2515,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (system != null && isKicadPcbText(system)) {
         cmd = paste(system);
       } else if (system != null && system.trim() !== "") {
-        cmd = { op: "add_text", text: { content: system.trim(), at, angle: 0, layer: activeLayerName(st.activeLayer, "F.SilkS"), size_um: 1000, stroke_width: 150, justify: "center", mirror: false } };
+        cmd = { op: "add_text", text: { content: system.trim(), at, angle: 0, layer: activeLayerName(st.activeLayer, "F.SilkS"), size_nm: 1_000_000, stroke_width: 150_000, justify: "center", mirror: false } };
       } else if (st.clipboard) {
         cmd = paste(st.clipboard.text);
       } else {
@@ -2565,8 +2565,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const sheet = st.currentSheetPath;
       const before = st.schematic;
       if (!before) return false;
-      const c = st.cursorUm;
-      const at = c && Number.isFinite(c.x) && Number.isFinite(c.y) ? { x: Math.round(c.x / 1270) * 1270, y: Math.round(c.y / 1270) * 1270 } : { x: 0, y: 0 };
+      const c = st.cursorNm;
+      const at = c && Number.isFinite(c.x) && Number.isFinite(c.y) ? { x: Math.round(c.x / 1_270_000) * 1_270_000, y: Math.round(c.y / 1_270_000) * 1_270_000 } : { x: 0, y: 0 };
       const ok = await runCmd(build(at), carry ? "begin" : undefined);
       if (!ok) return false;
       const after = await fetchSchematic(sheet).catch(() => null);

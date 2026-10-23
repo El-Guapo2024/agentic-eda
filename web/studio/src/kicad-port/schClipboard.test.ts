@@ -28,11 +28,11 @@ function preview(): SchPastePreview {
     power_symbols: [{ id: "#PWR02", lib_id: "power:GND", at: [300, 400], rot: 0, net: "GND", pin: { number: "1", name: null, kind: "ground" } }],
     wires: [{ id: "wire_b", net: "", pins: [], pts: [[10, 20], [30, 20], [30, 50]], bus: false }],
     labels: [{ id: "lbl_b", net: "SDA", at: [5, 6], scope: "local", shape: null }],
-    texts: [{ id: "txt_b", content: "n", at: [7, 8], angle: 0, size_um: 1270 }],
+    texts: [{ id: "txt_b", content: "n", at: [7, 8], angle: 0, size_nm: 1270 }],
     no_connects: [{ id: "nc_b", at: [9, 9] }],
     bus_entries: [{ id: "bent_b", at: [1, 1], size: [2540, 2540] }],
     junctions: [{ id: "jct_b", at: [2, 2] }],
-    lines: [{ id: "sln_b", pts: [[0, 0], [5, 5]], width_um: 0 }],
+    lines: [{ id: "sln_b", pts: [[0, 0], [5, 5]], width_nm: 0 }],
     graphics: [{ id: "shp_b", shape: { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 10, y: 10 } } }],
     lib_symbols: { "Device:R": { graphics: [], pins: [] }, "Device:C": { graphics: [{ kind: "text", content: "other", at: [0, 0], angle_deg: 0, size_mm: 1, unit: 0, body_style: 0 }], pins: [] } },
   };
@@ -61,13 +61,13 @@ test("shiftPreview moves every kind of item and nothing else", () => {
 
 test("shiftShape knows every shape's points", () => {
   const at = { x: 1, y: 2 };
-  assert.deepEqual(shiftShape({ type: "circle", center: at, radius_um: 5 }, 10, 10), { type: "circle", center: { x: 11, y: 12 }, radius_um: 5 });
+  assert.deepEqual(shiftShape({ type: "circle", center: at, radius_nm: 5 }, 10, 10), { type: "circle", center: { x: 11, y: 12 }, radius_nm: 5 });
   assert.deepEqual(shiftShape({ type: "arc", start: at, mid: at, end: at }, 1, 1), { type: "arc", start: { x: 2, y: 3 }, mid: { x: 2, y: 3 }, end: { x: 2, y: 3 } });
   assert.deepEqual(shiftShape({ type: "bezier", start: at, c1: at, c2: at, end: at }, 1, 1), { type: "bezier", start: { x: 2, y: 3 }, c1: { x: 2, y: 3 }, c2: { x: 2, y: 3 }, end: { x: 2, y: 3 } });
   assert.deepEqual(shiftShape({ type: "polygon", pts: [at, at] }, 1, 1), { type: "polygon", pts: [{ x: 2, y: 3 }, { x: 2, y: 3 }] });
   assert.deepEqual(shiftShape({ type: "rule_area", pts: [at], dnp: true }, 1, 1), { type: "rule_area", pts: [{ x: 2, y: 3 }], dnp: true });
-  assert.deepEqual(shiftShape({ type: "directive", at, pin_length_um: 2540, netclass: "HV" }, 1, 1), { type: "directive", at: { x: 2, y: 3 }, pin_length_um: 2540, netclass: "HV" });
-  assert.deepEqual(shiftShape({ type: "text_box", start: at, end: at, text: "t", size_um: 1270 }, 1, 1), { type: "text_box", start: { x: 2, y: 3 }, end: { x: 2, y: 3 }, text: "t", size_um: 1270 });
+  assert.deepEqual(shiftShape({ type: "directive", at, pin_length_nm: 2540, netclass: "HV" }, 1, 1), { type: "directive", at: { x: 2, y: 3 }, pin_length_nm: 2540, netclass: "HV" });
+  assert.deepEqual(shiftShape({ type: "text_box", start: at, end: at, text: "t", size_nm: 1270 }, 1, 1), { type: "text_box", start: { x: 2, y: 3 }, end: { x: 2, y: 3 }, text: "t", size_nm: 1270 });
 });
 
 test("withPaste draws the paste on the sheet: new items after the old, library symbols the sheet has stay as they are", () => {

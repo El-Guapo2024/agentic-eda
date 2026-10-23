@@ -6,7 +6,7 @@ import type { Pt } from "./snapGeom";
 import type { CmdShape, LibraryFootprint, LibraryPad } from "../api/types";
 
 // View: 0.1 px per um, a 1 mm grid, so the snap range is 250 um: an anchor is taken within 200 um.
-const env = (over: Partial<GridEnv> = {}): GridEnv => ({ scale: 0.1, gridUm: 1000, visibleGridUm: 1000, origin: [0, 0], gridSizeOf: () => 1000, ...over });
+const env = (over: Partial<GridEnv> = {}): GridEnv => ({ scale: 0.1, gridNm: 1000, visibleGridNm: 1000, origin: [0, 0], gridSizeOf: () => 1000, ...over });
 const visible: Visibility = { layerVisible: () => true, highContrastLayers: null };
 
 const pad = (id: string, number: string, x: number, y: number, over: Partial<LibraryPad> = {}): LibraryPad =>
@@ -32,7 +32,7 @@ test("pad layers: a wildcard is both sides, a through-hole pad is on every coppe
 });
 
 test("the scene has each pad, graphic and text under the editor's own ids -- and not the footprint itself", () => {
-  const scene = footprintScene(fp({ pads: [pad("p1", "1", 0, 0), pad("p2", "2", 3000, 0)], graphics: [seg("g1", -2000, -2000, 2000, -2000)], texts: [{ id: "t1", content: "REF", at: { x: 0, y: 4000 }, angle: 0, layer: "F.SilkS", size_um: 1000, stroke_width: 150, justify: "center", mirror: false }] }));
+  const scene = footprintScene(fp({ pads: [pad("p1", "1", 0, 0), pad("p2", "2", 3000, 0)], graphics: [seg("g1", -2000, -2000, 2000, -2000)], texts: [{ id: "t1", content: "REF", at: { x: 0, y: 4000 }, angle: 0, layer: "F.SilkS", size_nm: 1000, stroke_width: 150, justify: "center", mirror: false }] }));
   assert.deepEqual(scene.items.map((i) => [i.type, i.id]), [["pad", "p1"], ["pad", "p2"], ["shape", "g1"], ["text", "t1"]]);
   assert.ok(scene.items.every((i) => i.type !== "pad" || i.footprint === FOOTPRINT_ITEM_ID));
   assert.deepEqual(footprintScene(null).items, []);

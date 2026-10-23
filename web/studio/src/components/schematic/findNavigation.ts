@@ -39,8 +39,8 @@ export async function visitMatch(api: StudioApi, dispatch: Dispatch<Action>, mat
     if (view.scale > 0) {
       dispatch({ type: "SET_SCHEMATIC_VIEW", view: { scale: view.scale, x: rect.width / 2 - x * view.scale, y: rect.height / 2 - y * view.scale } });
     } else {
-      const padUm = 2_000;
-      dispatch({ type: "SET_SCHEMATIC_VIEW", view: fitTransform({ minX: x - padUm, minY: y - padUm, maxX: x + padUm, maxY: y + padUm }, rect.width, rect.height, 60) });
+      const padNm = 2_000_000;
+      dispatch({ type: "SET_SCHEMATIC_VIEW", view: fitTransform({ minX: x - padNm, minY: y - padNm, maxX: x + padNm, maxY: y + padNm }, rect.width, rect.height, 60) });
     }
   }
 }

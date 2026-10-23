@@ -112,13 +112,13 @@ export interface RouteAnchor {
   from: string;
 }
 
-/** Nearest anchor (a pad, a via, or a track endpoint) within `thresholdUm`, or null. Ties broken by distance, then by this search order (pads first, matching pcbnew: a pad "wins" a track landing exactly on it). Used by the standalone via tool (which has no multi-step session of its own) and as `startInteractiveRoute`'s own pre-flight hint for the "nothing routable here" toast. */
-export function findRouteAnchor(board: BoardState, xUm: number, yUm: number, thresholdUm: number): RouteAnchor | null {
+/** Nearest anchor (a pad, a via, or a track endpoint) within `thresholdNm`, or null. Ties broken by distance, then by this search order (pads first, matching pcbnew: a pad "wins" a track landing exactly on it). Used by the standalone via tool (which has no multi-step session of its own) and as `startInteractiveRoute`'s own pre-flight hint for the "nothing routable here" toast. */
+export function findRouteAnchor(board: BoardState, xNm: number, yNm: number, thresholdNm: number): RouteAnchor | null {
   let best: RouteAnchor | null = null;
-  let bestD = thresholdUm;
+  let bestD = thresholdNm;
   const consider = (net: string | null, layer: string | null, ax: number, ay: number, from: string) => {
     if (!net) return;
-    const d = Math.hypot(ax - xUm, ay - yUm);
+    const d = Math.hypot(ax - xNm, ay - yNm);
     if (d <= bestD) {
       bestD = d;
       best = { net, layer, at: [ax, ay], from };

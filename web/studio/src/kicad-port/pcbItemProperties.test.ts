@@ -8,15 +8,15 @@ const textBox = boardTextBoxOf({
   id: "tbx_a",
   layer: "F.SilkS",
   text: "hello",
-  start: { x: 10_000, y: 10_000 },
-  end: { x: 30_000, y: 20_000 },
-  margin_left_um: 500,
-  margin_top_um: 600,
-  margin_right_um: 700,
-  margin_bottom_um: 800,
-  stroke_width_um: 100,
-  size_um: 1_000,
-  thickness_um: 150,
+  start: { x: 10_000_000, y: 10_000_000 },
+  end: { x: 30_000_000, y: 20_000_000 },
+  margin_left_nm: 500_000,
+  margin_top_nm: 600_000,
+  margin_right_nm: 700_000,
+  margin_bottom_nm: 800_000,
+  stroke_width_nm: 100_000,
+  size_nm: 1_000_000,
+  thickness_nm: 150_000,
   halign: "left",
   valign: "top",
 });
@@ -27,7 +27,7 @@ const board = (): BoardState =>
     dir: "/t",
     outline: null,
     layers: ["F.Cu", "B.Cu"],
-    snap: 100,
+    snap: 100_000,
     parts: [],
     rules: [],
     routing: null,
@@ -74,9 +74,9 @@ test("every edit of a text box is one edit_text_box of the whole box", () => {
   assert.equal(sent(edit(b, ["tbx_a"], "Knockout", true)).knockout, true);
   assert.equal(sent(edit(b, ["tbx_a"], "Border", false)).border, false);
   assert.equal(sent(edit(b, ["tbx_a"], "Border Style", "dash")).line_style, "dash");
-  assert.equal(sent(edit(b, ["tbx_a"], "Border Width", 250)).stroke_width_um, 250);
-  assert.equal(sent(edit(b, ["tbx_a"], "Margin Right", 1_200)).margin_right_um, 1_200);
-  assert.equal(sent(edit(b, ["tbx_a"], "Margin Left", 1_200)).margin_left_um, 1_200);
+  assert.equal(sent(edit(b, ["tbx_a"], "Border Width", 250_000)).stroke_width_nm, 250_000);
+  assert.equal(sent(edit(b, ["tbx_a"], "Margin Right", 1_200_000)).margin_right_nm, 1_200_000);
+  assert.equal(sent(edit(b, ["tbx_a"], "Margin Left", 1_200_000)).margin_left_nm, 1_200_000);
   assert.equal(sent(edit(b, ["tbx_a"], "Horizontal Justification", "right")).halign, "right");
   assert.equal(sent(edit(b, ["tbx_a"], "Vertical Justification", "bottom")).valign, "bottom");
   assert.equal(sent(edit(b, ["tbx_a"], "Italic", true)).italic, true);
@@ -86,25 +86,25 @@ test("every edit of a text box is one edit_text_box of the whole box", () => {
 
 test("the pen: a thickness is the user's, one wider than a sixth of the glyph is clamped, 0 is the automatic one, and bold moves the automatic one", () => {
   const b = board();
-  const own = sent(edit(b, ["tbx_a"], "Thickness", 120));
-  assert.deepEqual([own.thickness_um], [120]);
-  assert.equal(sent(edit(b, ["tbx_a"], "Thickness", 600)).thickness_um, 167, "a sixth of 1 mm");
-  assert.equal(sent(edit(b, ["tbx_a"], "Thickness", 0)).thickness_um, 0);
+  const own = sent(edit(b, ["tbx_a"], "Thickness", 120_000));
+  assert.deepEqual([own.thickness_nm], [120]);
+  assert.equal(sent(edit(b, ["tbx_a"], "Thickness", 600_000)).thickness_nm, 167_000, "a sixth of 1 mm");
+  assert.equal(sent(edit(b, ["tbx_a"], "Thickness", 0)).thickness_nm, 0);
   const auto = board();
-  auto.drawings!.text_boxes = [{ ...textBox, thickness_auto: true, thickness: 125 }];
-  assert.equal(sent(edit(auto, ["tbx_a"], "Bold", true)).thickness_um, 0, "an automatic pen stays automatic");
+  auto.drawings!.text_boxes = [{ ...textBox, thickness_auto: true, thickness: 125_000 }];
+  assert.equal(sent(edit(auto, ["tbx_a"], "Bold", true)).thickness_nm, 0, "an automatic pen stays automatic");
 });
 
 test("a size sets the glyph, the orientation turns the box about its position and a position moves it", () => {
   const b = board();
-  assert.equal(sent(edit(b, ["tbx_a"], "Height", 1_500)).size_um, 1_500);
-  const w = sent(edit(b, ["tbx_a"], "Width", 800));
-  assert.equal(w.width_um, 800);
+  assert.equal(sent(edit(b, ["tbx_a"], "Height", 1_500_000)).size_nm, 1_500_000);
+  const w = sent(edit(b, ["tbx_a"], "Width", 800_000));
+  assert.equal(w.width_nm, 800_000);
   const turned = sent(edit(b, ["tbx_a"], "Orientation", 90));
   assert.equal(turned.angle, 90_000);
-  assert.deepEqual(turned.start, { x: 10_000, y: 10_000 });
-  assert.deepEqual(turned.end, { x: 20_000, y: -10_000 });
-  assert.deepEqual(edit(b, ["tbx_a"], "Position X", 11_000), [{ op: "move_items", ids: ["tbx_a"], dx: 1_000, dy: 0 }]);
+  assert.deepEqual(turned.start, { x: 10_000_000, y: 10_000_000 });
+  assert.deepEqual(turned.end, { x: 20_000_000, y: -10_000_000 });
+  assert.deepEqual(edit(b, ["tbx_a"], "Position X", 11_000_000), [{ op: "move_items", ids: ["tbx_a"], dx: 1_000_000, dy: 0 }]);
   assert.deepEqual(edit(b, ["tbx_a"], "Locked", true), [{ op: "set_locked", ids: ["tbx_a"], locked: true }]);
 });
 
@@ -136,13 +136,13 @@ test("a reference image is a PCB_REFERENCE_IMAGE with the rows of PCB_REFERENCE_
 test("the scale, the size and the layer of an image are one edit_ref_image that keeps its centre; a size is a scale about the centre", () => {
   const b = withImage();
   const half = sentImage(edit(b, ["img_a"], "Scale", 0.5));
-  assert.deepEqual([half.id, half.layer, half.at, half.scale_ppm], ["img_a", "Cmts.User", { x: 50_000, y: 40_000 }, 500_000]);
+  assert.deepEqual([half.id, half.layer, half.at, half.scale_ppm], ["img_a", "Cmts.User", { x: 50_000_000, y: 40_000_000 }, 500_000_000]);
   // 120 px at 254 ppi are 12 mm: 6 mm wide is half the scale, 16 mm high (80 px are 8 mm) is twice
-  assert.equal(sentImage(edit(b, ["img_a"], "Width", 6_000)).scale_ppm, 500_000);
-  assert.equal(sentImage(edit(b, ["img_a"], "Height", 16_000)).scale_ppm, 2_000_000);
+  assert.equal(sentImage(edit(b, ["img_a"], "Width", 6_000_000)).scale_ppm, 500_000_000);
+  assert.equal(sentImage(edit(b, ["img_a"], "Height", 16_000_000)).scale_ppm, 2_000_000_000);
   assert.equal(sentImage(edit(b, ["img_a"], "Associated Layer", "Dwgs.User")).layer, "Dwgs.User");
   assert.deepEqual(edit(b, ["img_a"], "Scale", 1), [], "the same scale sends nothing");
-  assert.deepEqual(edit(b, ["img_a"], "Position X", 51_000), [{ op: "move_items", ids: ["img_a"], dx: 1_000, dy: 0 }]);
+  assert.deepEqual(edit(b, ["img_a"], "Position X", 51_000_000), [{ op: "move_items", ids: ["img_a"], dx: 1_000_000, dy: 0 }]);
   // a scale that is not a number above zero is refused
   const refused = pcbEdit(b, ["img_a"], "Scale", 0, "mm");
   assert.equal(refused.ok, false);
@@ -152,7 +152,7 @@ test("the scale, the size and the layer of an image are one edit_ref_image that 
 
 test("a point is a PCB_POINT with the rows of PCB_POINT_DESC: position, lock, layer and a Size; its lock is not writeable", () => {
   const b = board();
-  b.drawings!.points = [{ id: "pnt_a", layer: "F.SilkS", x: 10_000, y: 20_000, size: 1_000 }];
+  b.drawings!.points = [{ id: "pnt_a", layer: "F.SilkS", x: 10_000_000, y: 20_000_000, size: 1_000_000 }];
   const item = pcbItemOf(b, "pnt_a")!;
   assert.equal(item.type, "PCB_POINT");
   assert.equal(pcbFriendlyName(item), "Point");
@@ -166,11 +166,11 @@ test("a point is a PCB_POINT with the rows of PCB_POINT_DESC: position, lock, la
     assert.equal(c.verb, "edit_point");
     return c as Extract<typeof c, { verb: "edit_point" }>;
   };
-  const size = sentPoint(edit(b, ["pnt_a"], "Size", 2_500));
-  assert.deepEqual([size.id, size.layer, size.at, size.size_um], ["pnt_a", "F.SilkS", { x: 10_000, y: 20_000 }, 2_500]);
+  const size = sentPoint(edit(b, ["pnt_a"], "Size", 2_500_000));
+  assert.deepEqual([size.id, size.layer, size.at, size.size_nm], ["pnt_a", "F.SilkS", { x: 10_000_000, y: 20_000_000 }, 2_500_000]);
   assert.equal(sentPoint(edit(b, ["pnt_a"], "Layer", "F.Fab")).layer, "F.Fab");
-  assert.deepEqual(edit(b, ["pnt_a"], "Size", 1_000), [], "the same size sends nothing");
-  assert.deepEqual(edit(b, ["pnt_a"], "Position Y", 21_000), [{ op: "move_items", ids: ["pnt_a"], dx: 0, dy: 1_000 }]);
+  assert.deepEqual(edit(b, ["pnt_a"], "Size", 1_000_000), [], "the same size sends nothing");
+  assert.deepEqual(edit(b, ["pnt_a"], "Position Y", 21_000_000), [{ op: "move_items", ids: ["pnt_a"], dx: 0, dy: 1_000_000 }]);
   assert.equal(pcbEdit(b, ["pnt_a"], "Size", 0, "mm").ok, false, "a mark of no size is refused");
 });
 
@@ -178,7 +178,7 @@ test("a point is a PCB_POINT with the rows of PCB_POINT_DESC: position, lock, la
 
 test("a barcode is a PCB_BARCODE with the rows of PCB_BARCODE_DESC; Error Correction is for the QR kinds (Micro QR has no High) and the margins for a knockout; every row is one edit_barcode", () => {
   const b = board();
-  b.drawings!.barcodes = [{ id: "bar_a", layer: "F.SilkS", x: 10_000, y: 20_000, angle: 0, w: 10_000, h: 10_000, text: "HELLO", text_height: 1_500, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x: 0, margin_y: 0 }];
+  b.drawings!.barcodes = [{ id: "bar_a", layer: "F.SilkS", x: 10_000_000, y: 20_000_000, angle: 0, w: 10_000_000, h: 10_000_000, text: "HELLO", text_height: 1_500_000, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x: 0, margin_y: 0 }];
   const item = pcbItemOf(b, "bar_a")!;
   assert.equal(item.type, "PCB_BARCODE");
   assert.equal(pcbFriendlyName(item), "Barcode");
@@ -191,14 +191,14 @@ test("a barcode is a PCB_BARCODE with the rows of PCB_BARCODE_DESC; Error Correc
     return c as Extract<typeof c, { verb: "edit_barcode" }>;
   };
   const text = sentBarcode(edit(b, ["bar_a"], "Text", "WORLD"));
-  assert.deepEqual([text.id, text.barcode.text, text.barcode.kind, text.barcode.width_um, text.barcode.at], ["bar_a", "WORLD", "qr", 10_000, { x: 10_000, y: 20_000 }]);
-  assert.equal(sentBarcode(edit(b, ["bar_a"], "Width", 12_000)).barcode.width_um, 12_000);
+  assert.deepEqual([text.id, text.barcode.text, text.barcode.kind, text.barcode.width_nm, text.barcode.at], ["bar_a", "WORLD", "qr", 10_000_000, { x: 10_000_000, y: 20_000_000 }]);
+  assert.equal(sentBarcode(edit(b, ["bar_a"], "Width", 12_000_000)).barcode.width_nm, 12_000_000);
   assert.equal(sentBarcode(edit(b, ["bar_a"], "Orientation", 90)).barcode.angle, 90_000);
   assert.equal(sentBarcode(edit(b, ["bar_a"], "Orientation", -90)).barcode.angle, 270_000, "a turn is 0 to 360");
   assert.equal(sentBarcode(edit(b, ["bar_a"], "Show Text", false)).barcode.show_text, false);
   assert.equal(sentBarcode(edit(b, ["bar_a"], "Layer", "F.Fab")).barcode.layer, "F.Fab");
   assert.deepEqual(edit(b, ["bar_a"], "Text", "HELLO"), [], "the same text sends nothing");
-  assert.deepEqual(edit(b, ["bar_a"], "Position X", 11_000), [{ op: "move_items", ids: ["bar_a"], dx: 1_000, dy: 0 }]);
+  assert.deepEqual(edit(b, ["bar_a"], "Position X", 11_000_000), [{ op: "move_items", ids: ["bar_a"], dx: 1_000_000, dy: 0 }]);
   assert.equal(pcbEdit(b, ["bar_a"], "Width", 0, "mm").ok, false, "a symbol of no size is refused");
   // the kinds: Micro QR has no High, so a High level goes to Q with the kind; Code 128 has no level at all
   b.drawings!.barcodes![0]!.ecc = "H";
@@ -214,5 +214,5 @@ test("a barcode is a PCB_BARCODE with the rows of PCB_BARCODE_DESC; Error Correc
   assert.ok(!rows().includes("Margin X"));
   b.drawings!.barcodes![0]!.knockout = true;
   assert.deepEqual(rows().slice(-3), ["Knockout", "Margin X", "Margin Y"]);
-  assert.equal(sentBarcode(edit(b, ["bar_a"], "Margin X", 800)).barcode.margin_x_um, 800);
+  assert.equal(sentBarcode(edit(b, ["bar_a"], "Margin X", 800_000)).barcode.margin_x_nm, 800_000);
 });

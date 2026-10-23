@@ -7,9 +7,9 @@ import { messageTextFromValue } from "./messageText";
 // backend report agree.
 
 test("messageTextFromValue: long-form distances per unit", () => {
-  assert.equal(messageTextFromValue(1600, "mm"), "1.6000 mm");
-  assert.equal(messageTextFromValue(254, "mil"), "10.00 mils");
-  assert.equal(messageTextFromValue(25_400, "in"), "1.0000 in");
+  assert.equal(messageTextFromValue(1_600_000, "mm"), "1.6000 mm");
+  assert.equal(messageTextFromValue(254_000, "mil"), "10.00 mils");
+  assert.equal(messageTextFromValue(25_400_000, "in"), "1.0000 in");
 });
 
 test("messageTextFromValue: short-form areas trim one trailing zero in mm", () => {

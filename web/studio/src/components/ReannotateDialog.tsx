@@ -32,7 +32,7 @@ export function ReannotateDialog({ selection }: { selection: readonly string[] }
   const units = state.units;
   const fmt = (um: number) => formatLength(um, units);
   // `m_GridChoice`: the editor's grid when it is on the list, else the first
-  const [form, setForm] = useState<ReannotateForm>(() => defaultForm(grids.includes(state.gridUm) ? state.gridUm : (grids[0] ?? 1000), selection.length > 0));
+  const [form, setForm] = useState<ReannotateForm>(() => defaultForm(grids.includes(state.gridNm) ? state.gridNm : (grids[0] ?? 1_000_000), selection.length > 0));
   const [lines, setLines] = useState<ReportLine[]>([]);
   const [busy, setBusy] = useState(false);
   /** `IsOK( ... "Reannotate anyway?" )`: the question while it waits for the answer, with the plan and the window's lines it is about. */
@@ -131,8 +131,8 @@ export function ReannotateDialog({ selection }: { selection: readonly string[] }
               <span style={{ marginLeft: 16 }} title="Component position will be rounded to this grid before sorting. This helps with misaligned parts.">
                 Round locations to:
               </span>
-              <select value={form.gridUm} title="Component position will be rounded to this grid before sorting. This helps with misaligned parts." onChange={(e) => set("gridUm", Number(e.target.value))} data-testid="reannotate-grid">
-                {(grids.includes(form.gridUm) ? grids : [...grids, form.gridUm]).map((um) => (
+              <select value={form.gridNm} title="Component position will be rounded to this grid before sorting. This helps with misaligned parts." onChange={(e) => set("gridNm", Number(e.target.value))} data-testid="reannotate-grid">
+                {(grids.includes(form.gridNm) ? grids : [...grids, form.gridNm]).map((um) => (
                   <option key={um} value={um}>
                     {formatLength(um, units)}
                   </option>
