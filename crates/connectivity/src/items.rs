@@ -34,6 +34,7 @@
 use std::collections::HashMap;
 
 use eda_model::footprint::{placed_pads, PadKind, PlacedPad};
+use eda_model::padstack::UnconnectedLayers;
 use eda_model::ir::{Design, Point, Um};
 use eda_model::{ConstraintModel, Part};
 
@@ -94,6 +95,60 @@ pub struct CnItem {
     /// A pad whose copper differs from layer to layer ([`eda_model::padstack`]) is one item for each group of layers that shares a shape (a `CN_ITEM` per layer
     /// range, as `PADSTACK::ForEachUniqueLayer` has them); the pieces of one pad carry the same number here and [`crate::algo::build_graph`] joins them.
     pub pad_piece_of: Option<usize>,
+    /// A plated through-hole pad or a via that removes its unused copper: the layers it is `ConditionallyFlashed` on (every layer it spans but the
+    /// ends of its drill that it keeps), and the shape it has there to another item -- its hole (`GetEffectiveShape( layer, NEVER_FLASHED )`), as
+    /// `CN_VISITOR::operator()` collides it. `None` for an item that has its copper on every layer it spans.
+    pub never_flashed: Option<(Vec<i32>, ItemShape)>,
+}
+
+impl CnItem {
+    /// The shape of the item on copper layer `layer` to another item that is not a zone (`CN_VISITOR::operator()`'s `FLASHING`).
+    pub fn shape_on(&self, layer: i32) -> &ItemShape {
+        match &self.never_flashed {
+            Some((layers, hole)) if layers.contains(&layer) => hole,
+            _ => &self.shape,
+        }
+    }
+
+    /// Whether the item is its hole on `layer` ([`CnItem::shape_on`]).
+    pub fn is_hole_on(&self, layer: i32) -> bool {
+        self.never_flashed.as_ref().is_some_and(|(layers, _)| layers.contains(&layer))
+    }
+}
+
+/// `PAD::ConditionallyFlashed` / `PCB_VIA::ConditionallyFlashed` over the layers `lo..=hi` an item spans, whose drill starts at `lo` and ends at `hi`:
+/// none for `KEEP_ALL`, every one for `REMOVE_ALL`, every one but the drill's two ends for `REMOVE_EXCEPT_START_AND_END` and `START_END_ONLY`.
+fn conditionally_flashed(mode: UnconnectedLayers, lo: i32, hi: i32) -> Vec<i32> {
+    match mode {
+        UnconnectedLayers::KeepAll => Vec::new(),
+        UnconnectedLayers::RemoveAll => (lo..=hi).collect(),
+        UnconnectedLayers::RemoveExceptStartAndEnd | UnconnectedLayers::StartEndOnly => (lo..=hi).filter(|l| *l != lo && *l != hi).collect(),
+    }
+}
+
+/// A plated through-hole pad's hole on the board (`PAD::GetEffectiveHoleShape`): the drill's circle, or its slot as a stadium.
+fn pad_hole(fp: &eda_model::ir::FootprintInstance, source: &eda_model::footprint::Pad, center: Point) -> Option<ItemShape> {
+    if let Some((w, h)) = source.drill_slot {
+        let frame = eda_model::pad_geom::PadFrame::of(fp, source, center);
+        let half = (w.max(h) - w.min(h)) as f64 / 2.0;
+        let (a, b) = if w >= h { ((-half, 0.0), (half, 0.0)) } else { ((0.0, -half), (0.0, half)) };
+        let (a, b) = (frame.to_board(a), frame.to_board(b));
+        let pt = |q: (f64, f64)| Point { x: q.0.round() as Um, y: q.1.round() as Um };
+        return Some(ItemShape::Segment { a: pt(a), b: pt(b), half_width: w.min(h) as f64 / 2.0 });
+    }
+    source.drill.map(|d| ItemShape::Via { center, radius: d as f64 / 2.0 })
+}
+
+/// [`CnItem::never_flashed`] of a plated through-hole pad (its drill from the first copper layer to the last).
+fn pad_never_flashed(fp: &eda_model::ir::FootprintInstance, source: &eda_model::footprint::Pad, center: Point, last: i32, lo: i32, hi: i32) -> Option<(Vec<i32>, ItemShape)> {
+    if source.kind != PadKind::ThroughHole {
+        return None;
+    }
+    let layers: Vec<i32> = conditionally_flashed(source.ext.stack.unconnected, 0, last).into_iter().filter(|l| (lo..=hi).contains(l)).collect();
+    if layers.is_empty() {
+        return None;
+    }
+    pad_hole(fp, source, center).map(|hole| (layers, hole))
 }
 
 /// Do two items' layer spans share at least one copper layer? KiCad's
@@ -176,6 +231,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                                 end += 1;
                             }
                             let geom = eda_model::footprint::placed_pad_of(fp, &view);
+                            let never_flashed = pad_never_flashed(fp, &source, geom.center, last_idx, idx[k], idx[end]);
                             let (hw, hh) = (geom.size.0 / 2, geom.size.1 / 2);
                             let bbox = (geom.center.x - hw, geom.center.y - hh, geom.center.x + hw, geom.center.y + hh);
                             items.push(CnItem {
@@ -189,6 +245,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                                 bbox,
                                 connected: Vec::new(),
                                 pad_piece_of: piece_of,
+                                never_flashed,
                             });
                             k = end + 1;
                         }
@@ -203,13 +260,15 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                     (b_cu, b_cu)
                 };
                 let mut pad = pad;
+                let mut never_flashed = None;
                 if let Some(source) = sources.get(i) {
                     exact_turned_copper(fp, source, &mut pad);
+                    never_flashed = pad_never_flashed(fp, source, pad.center, last_idx, layer_lo, layer_hi);
                 }
                 let (hw, hh) = (pad.size.0 / 2, pad.size.1 / 2);
                 let bbox = (pad.center.x - hw, pad.center.y - hh, pad.center.x + hw, pad.center.y + hh);
                 let anchors = vec![pad.center];
-                items.push(CnItem { item: ItemRef::Pad { reference: fp.id.clone(), number: pad.number.clone() }, net, can_change_net: false, layer_lo, layer_hi, anchors, shape: ItemShape::Pad(pad), bbox, connected: Vec::new(), pad_piece_of: None });
+                items.push(CnItem { item: ItemRef::Pad { reference: fp.id.clone(), number: pad.number.clone() }, net, can_change_net: false, layer_lo, layer_hi, anchors, shape: ItemShape::Pad(pad), bbox, connected: Vec::new(), pad_piece_of: None, never_flashed });
             }
         }
     }
@@ -235,6 +294,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                     bbox: (x0 - margin, y0 - margin, x1 + margin, y1 + margin),
                     connected: Vec::new(),
                     pad_piece_of: None,
+                    never_flashed: None,
                 });
                 continue;
             }
@@ -252,6 +312,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                     bbox,
                     connected: Vec::new(),
                     pad_piece_of: None,
+                    never_flashed: None,
                 });
             }
         }
@@ -264,7 +325,10 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
             let radius = v.diameter as f64 / 2.0;
             let margin = (v.diameter / 2).max(0);
             let bbox = (v.at.x - margin, v.at.y - margin, v.at.x + margin, v.at.y + margin);
-            items.push(CnItem { item: ItemRef::Via { via_id: v.id.clone() }, net: v.net.clone(), can_change_net: true, layer_lo: lo, layer_hi: hi, anchors: vec![v.at], shape: ItemShape::Via { center: v.at, radius }, bbox, connected: Vec::new(), pad_piece_of: None });
+            let mode = design.drawings.as_ref().and_then(|d| d.via_extras.iter().find(|x| x.id == v.id)).map(|x| x.unconnected_layers()).unwrap_or_default();
+            let flashed_off = conditionally_flashed(mode, lo, hi);
+            let never_flashed = (!flashed_off.is_empty()).then(|| (flashed_off, ItemShape::Via { center: v.at, radius: v.drill as f64 / 2.0 }));
+            items.push(CnItem { item: ItemRef::Via { via_id: v.id.clone() }, net: v.net.clone(), can_change_net: true, layer_lo: lo, layer_hi: hi, anchors: vec![v.at], shape: ItemShape::Via { center: v.at, radius }, bbox, connected: Vec::new(), pad_piece_of: None, never_flashed });
         }
 
         if !rt.zones.is_empty() {
@@ -294,6 +358,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                             bbox,
                             connected: Vec::new(),
                             pad_piece_of: None,
+                            never_flashed: None,
                         });
                     }
                 }
