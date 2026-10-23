@@ -122,3 +122,40 @@ fn the_imported_session_makes_no_new_drc_violation() {
     assert!(after["unconnected_items"].as_array().map_or(0, Vec::len) <= before["unconnected_items"].as_array().map_or(0, Vec::len));
     let _ = std::fs::remove_dir_all(b.parent().unwrap());
 }
+
+/// kicad-cli's own exporter (`kicad-cli pcb export specctra`, which the 10.99 nightly has) on the board file the studio derives, against `eda board export
+/// specctra`: the same text from `(structure` down to `(wiring` -- the layers, the boundary, the rules, the placement, every image and padstack, the nets and their
+/// classes. The wiring is left out: the nightly writes a wire per track `(type protect)`, later KiCad than the source this port follows (8303b2ad), which joins the
+/// tracks of a net into paths `(type route)`.
+#[test]
+fn the_dsn_is_kicad_clis_down_to_the_wiring() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let cli = ["/usr/local/bin/kicad-cli", "/usr/bin/kicad-cli", "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"].into_iter().find(|c| Path::new(c).is_file());
+    let Some(cli) = cli else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let b = routed_board("kicad");
+    // The derived board file kicad-cli is run on.
+    ok(&["board", "export", "--kicad", "pos", "-C", b.to_str().unwrap()]);
+    let pcb = std::fs::read_dir(b.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).expect("the derived board");
+    let (theirs, ours) = (b.parent().unwrap().join("kicad"), b.parent().unwrap().join("eda"));
+    std::fs::create_dir_all(&theirs).unwrap();
+    std::fs::create_dir_all(&ours).unwrap();
+    let out = Command::new(cli).args(["pcb", "export", "specctra", "-o", theirs.join("b.dsn").to_str().unwrap(), pcb.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    ok(&["board", "export", "specctra", "-o", ours.join("b.dsn").to_str().unwrap(), "-C", b.to_str().unwrap()]);
+    let body = |f: &Path| -> String {
+        let t = std::fs::read_to_string(f).unwrap();
+        let (a, z) = (t.find("  (structure").expect("a structure"), t.find("  (wiring").expect("a wiring"));
+        t[a..z].to_string()
+    };
+    let (want, got) = (body(&theirs.join("b.dsn")), body(&ours.join("b.dsn")));
+    let first = want.lines().zip(got.lines()).enumerate().find(|(_, (a, b))| a != b).map(|(i, (a, b))| format!("line {}:\n  kicad-cli {a:?}\n  eda       {b:?}", i + 1));
+    assert!(want == got, "{}", first.unwrap_or_else(|| format!("{} lines against {}", want.lines().count(), got.lines().count())));
+    assert!(want.contains("(image ") && want.contains("(padstack ") && want.contains("(net "), "a board with parts and nets");
+    let _ = std::fs::remove_dir_all(b.parent().unwrap());
+}
