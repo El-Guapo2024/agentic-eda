@@ -115,6 +115,7 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
     }
 
     add_board_outline(&mut node, &drc_board, &layers);
+    add_copper_texts(&mut node, design, &layers);
     // `ROUTER::SyncWorld`: `m_world->FixupVirtualVias()`
     node.fixup_virtual_vias();
 
@@ -160,6 +161,66 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
             }
         }
     }
+}
+
+/// `GetMaxError()` of a board this IR does not say otherwise of: `ARC_HIGH_DEF`, 0.005 mm.
+const TEXT_MAX_ERROR_UM: eda_model::ir::Um = 5;
+
+/// The board's copper text as router obstacles: `PNS_KICAD_IFACE_BASE::syncTextItem` for each `PCB_TEXT` on a copper layer
+/// (`syncGraphicalItem`'s `PCB_TEXT_T` case) -- a `SOLID` on that one layer, with no net, not routable ([`Solid::is_text`]), whose shape is
+/// `TransformShapeToPolygon( .., 0, GetMaxError(), ERROR_OUTSIDE )`: the text's bounding hull (`buildBoundingHull`), the box of its glyphs
+/// as drawn (each stroke and its pen, and `aMaxError` more for `ERROR_OUTSIDE`) in the text's own frame, turned by its draw rotation about its
+/// position. A track keeps the ordinary copper clearance from it, as from a pad of no net. The texts: the board's imported copper texts
+/// (`DrawingsSection::copper_texts`, with their layout) and a plain [`eda_model::ir::Text`] put on a copper layer in the studio. A hidden text
+/// is not imported as copper (`IsVisible()`). Not here: a footprint's own copper texts (KiCad syncs its reference, value, fields and texts on
+/// copper too), a table (`PCB_TABLE`), a knockout text's margin, and a text box (`gr_text_box` is not read by the importer).
+fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap) {
+    let Some(d) = design.drawings.as_ref() else { return };
+    let mut add = |id: &str, layer: &str, at: Point, rot_deg: f64, segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Um| {
+        let (Some(layer), false) = (layers.index_of(layer), segs.is_empty()) else { return };
+        let hull = text_bounding_hull(segs, r + TEXT_MAX_ERROR_UM, at, rot_deg);
+        node.add(Item::Solid(Solid { net: None, layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source: format!("{}{id}", Solid::TEXT_SOURCE), edge: false }));
+    };
+    for (i, t) in d.copper_texts.iter().enumerate() {
+        if let Some(Shape::Strokes { segs, r }) = eda_drc::board::footprint_text_shape(t) {
+            add(&format!("copper{i}"), &t.layer, t.at, eda_drc::board::footprint_text_draw_rotation(t), &segs, r);
+        }
+    }
+    for t in d.texts.iter().filter(|t| t.layer.ends_with(".Cu")) {
+        // laid out as the silkscreen check lays out a plain text (`eda_drc::board::build`): square glyphs, vertically centred
+        let size = (t.size_um, t.size_um);
+        let pen = eda_drc::stroke_font::effective_pen_width(t.stroke_width, size, false);
+        let halign = match t.justify {
+            eda_model::ir::TextJustify::Left => -1,
+            eda_model::ir::TextJustify::Center => 0,
+            eda_model::ir::TextJustify::Right => 1,
+        };
+        let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
+        let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness: t.stroke_width, angle_deg: rot, mirror: t.mirror, halign, valign: 0 });
+        add(&t.id, &t.layer, t.at, rot, &segs, pen / 2);
+    }
+}
+
+/// `PCB_TEXT::buildBoundingHull`: the glyph strokes turned back by the draw rotation about `at` (`poly.Rotate( -GetDrawRotation(), GetDrawPos() )`),
+/// their box grown by `r` (half the pen, and the error), its four corners turned forward again (`RotatePoint( corner, GetDrawPos(), GetDrawRotation() )`).
+/// KiCad's rotation is counter-clockwise on screen, y down.
+fn text_bounding_hull(segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Um, at: Point, rot_deg: f64) -> Vec<Point> {
+    let (sin, cos) = rot_deg.to_radians().sin_cos();
+    // `RotatePoint( p, centre, angle )` with y down: x' = x cos + y sin, y' = -x sin + y cos (relative to the centre)
+    let turn = |p: (f64, f64), s: f64| (p.0 * cos + p.1 * s, -p.0 * s + p.1 * cos);
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for p in segs.iter().flat_map(|s| [s.a, s.b]) {
+        let q = turn(((p.x - at.x) as f64, (p.y - at.y) as f64), -sin);
+        (x0, y0, x1, y1) = (x0.min(q.0), y0.min(q.1), x1.max(q.0), y1.max(q.1));
+    }
+    let r = r as f64;
+    [(x0 - r, y0 - r), (x1 + r, y0 - r), (x1 + r, y1 + r), (x0 - r, y1 + r)]
+        .into_iter()
+        .map(|c| {
+            let q = turn(c, sin);
+            Point { x: at.x + q.0.round() as eda_model::ir::Um, y: at.y + q.1.round() as eda_model::ir::Um }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -226,6 +287,35 @@ mod tests {
         let (design, model) = padstack_board(Side::Bottom);
         let (node, _) = build_node(&design, &model);
         assert_eq!(pad_solids(&node), vec![(0, 0, (8_800, 9_500, 11_200, 10_500)), (1, 2, (9_400, 9_400, 10_600, 10_600)), (3, 3, (9_200, 9_200, 10_800, 10_800))]);
+    }
+
+    /// `syncTextItem`: a board text on copper is a solid of no net on its layer, the box of its glyphs turned with the text; nothing joins to
+    /// it, and a route keeps the copper clearance from it.
+    #[test]
+    fn a_copper_text_is_an_obstacle_on_its_layer() {
+        use eda_model::ir::{DrawingsSection, FootprintText};
+        let (mut design, model) = two_pad_board();
+        let text = |angle: i64, layer: &str| FootprintText { text: "AB".into(), layer: layer.into(), at: Point { x: 20_000, y: 20_000 }, angle_file_mdeg: angle, size: (1000, 1000), thickness: 150, halign: 0, valign: 0, mirror: false, keep_upright: false, bold: false };
+        design.drawings = Some(DrawingsSection { copper_texts: vec![text(0, "F.Cu"), text(90_000, "B.Cu"), text(0, "F.SilkS")], ..Default::default() });
+        let (node, layers) = build_node(&design, &model);
+        let texts: Vec<&Solid> = node.iter().filter_map(|(_, it)| match it { Item::Solid(s) if s.is_text() => Some(s), _ => None }).collect();
+        assert_eq!(texts.len(), 2, "the two on copper, not the one on silk");
+        let (front, back) = (texts.iter().find(|s| s.layers == crate::layer::LayerRange::single(layers.index_of("F.Cu").unwrap())).unwrap(), texts.iter().find(|s| s.layers == crate::layer::LayerRange::single(layers.index_of("B.Cu").unwrap())).unwrap());
+        assert!(front.net.is_none() && !front.routable() && node.get(node.iter().find(|(_, it)| matches!(it, Item::Solid(s) if s.is_text())).unwrap().0).unwrap().anchors().is_empty());
+        let Shape::Polygon { pts } = &front.shape else { panic!("a polygon: {:?}", front.shape) };
+        assert_eq!(pts.len(), 4);
+        let (x0, y0, x1, y1) = front.shape.bbox(0);
+        // two glyphs 1 mm high, centred on (20, 20) mm: wider than high, round the anchor, the pen and the error outside the glyphs
+        assert!(x1 - x0 > y1 - y0 && x0 < 20_000 && x1 > 20_000 && y0 < 19_500 && y1 > 20_500, "{:?}", (x0, y0, x1, y1));
+        // the text turned by 90 degrees: its box is turned too
+        let (bx0, by0, bx1, by1) = back.shape.bbox(0);
+        assert!((bx1 - bx0 - (y1 - y0)).abs() <= 2 && (by1 - by0 - (x1 - x0)).abs() <= 2, "{:?} vs {:?}", (bx0, by0, bx1, by1), (x0, y0, x1, y1));
+        // a track through it collides; one that keeps the clearance does not
+        let rules = model.board.clone();
+        let through = Shape::Stadium { a: Point { x: 15_000, y: 20_000 }, b: Point { x: 25_000, y: 20_000 }, r: 100 };
+        assert!(node.first_colliding(&through, &net_of("N1"), front.layers, &rules, &[]).is_some());
+        let clear = Shape::Stadium { a: Point { x: 15_000, y: y1 + 100 + rules.clearance }, b: Point { x: 25_000, y: y1 + 100 + rules.clearance }, r: 100 };
+        assert!(node.first_colliding(&clear, &net_of("N1"), front.layers, &rules, &[]).is_none());
     }
 
     #[test]

@@ -856,7 +856,7 @@ impl Node {
             }
         }
         let mut best: Option<(i64, ItemId, Point)> = None;
-        let mut ids: Vec<ItemId> = self.items.iter().filter(|(id, it)| same_net_exact(it.net(), net) && !connected.contains(id) && !it.is_virtual() && !matches!(it, Item::Solid(s) if s.edge)).map(|(&id, _)| id).collect();
+        let mut ids: Vec<ItemId> = self.items.iter().filter(|(id, it)| same_net_exact(it.net(), net) && !connected.contains(id) && !it.is_virtual() && !matches!(it, Item::Solid(s) if !s.routable())).map(|(&id, _)| id).collect();
         ids.sort_unstable();
         for id in ids {
             for a in self.items[&id].anchors() {
@@ -1163,8 +1163,8 @@ impl Node {
         let mut best: Option<(ItemId, Um)> = None;
         for id in self.index.query(bbox) {
             let Some(item) = self.items.get(&id) else { continue };
-            if !item.layers().overlaps(&layers) || matches!(item, Item::Solid(s) if s.edge) {
-                continue; // the board outline is an obstacle, never something to pick up
+            if !item.layers().overlaps(&layers) || matches!(item, Item::Solid(s) if !s.routable()) {
+                continue; // the board outline and a copper text are obstacles, never something to pick up
             }
             let (actual, _) = probe.clearance_to(&item.shape(item.layers().start()));
             if actual <= max_dist && best.as_ref().map(|(_, d)| actual < *d).unwrap_or(true) {
