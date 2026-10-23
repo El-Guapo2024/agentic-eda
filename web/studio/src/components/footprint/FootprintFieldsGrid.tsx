@@ -1,7 +1,7 @@
-// The fields grid of the Footprint Editor's Footprint Properties (`PCB_FIELDS_GRID_TABLE` in `DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR`): the Reference and the Value (their texts and
-// places are the footprint's own), then the user fields, each with KiCad's columns -- Name, Value, Show, Width, Height, Thickness, Layer, and behind "More columns" Italic, Bold,
+// The fields grid of the Footprint Editor's Footprint Properties (`PCB_FIELDS_GRID_TABLE` in `DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR`): the Reference, the Value, the Datasheet and
+// the Description (their texts and places are the footprint's own), then the user fields, each with KiCad's columns -- Name, Value, Show, Width, Height, Thickness, Layer, and behind "More columns" Italic, Bold,
 // Orientation, Keep Upright, X Offset, Y Offset, Knockout, Mirrored and the justification. The buttons are the dialog's: add a field (`OnAddField`: hidden, at the origin, on the
-// fabrication layer, named `Field<n>`), delete (`OnDeleteField`: "The first 2 fields are mandatory."), move up and down (`OnMoveUp` / `OnMoveDown`, never into the mandatory rows).
+// fabrication layer, named `Field<n>`), delete (`OnDeleteField`: "The first 4 fields are mandatory."), move up and down (`OnMoveUp` / `OnMoveDown`, never into the mandatory rows).
 // The rows' rules live in kicad-port/fpLibFields.ts.
 import { useState } from "react";
 import type { FieldLayoutCmd } from "../../api/types";

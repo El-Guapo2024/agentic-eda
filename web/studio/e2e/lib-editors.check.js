@@ -716,7 +716,7 @@
   });
 
   // ================================================================================================ 4. the Footprint Editor's fields grid
-  await scenario("Footprint Properties has a fields grid: Reference and Value, user fields with their layer, place and visibility; OK is one undo step and the exported .kicad_mod has them", async (t) => {
+  await scenario("Footprint Properties has a fields grid: Reference, Value, Datasheet and Description, user fields with their layer, place and visibility; OK is one undo step and the exported .kicad_mod has them", async (t) => {
     await clickTab("Footprint");
     await __eda.run("pcbnew.ModuleEditor.newFootprint");
     await sleep(800);
@@ -730,31 +730,34 @@
     const row = (i) => document.querySelector(`[data-testid="lib-field-row-${i}"]`);
     t(row(0)?.getAttribute("data-field") === "Reference" && tid("lib-field-text-0").value === "REF**", `the Reference starts as REF**: ${tid("lib-field-text-0")?.value}`);
     t(row(1)?.getAttribute("data-field") === "Value" && tid("lib-field-text-1").value === name, `the Value as the footprint's name: ${tid("lib-field-text-1")?.value}`);
-    t(off("lib-field-name-0") && off("lib-field-name-1"), "the names of the two mandatory fields are fixed");
-    t(tid("lib-field-show-0").checked && tid("lib-field-show-1").checked, "both are shown");
+    // `GetMandatoryRowCount`: a footprint's four mandatory fields, the Datasheet and the Description empty and hidden
+    t(row(2)?.getAttribute("data-field") === "Datasheet" && row(3)?.getAttribute("data-field") === "Description", `then the Datasheet and the Description: ${row(2)?.getAttribute("data-field")}, ${row(3)?.getAttribute("data-field")}`);
+    t(off("lib-field-name-0") && off("lib-field-name-1") && off("lib-field-name-2") && off("lib-field-name-3"), "the names of the four mandatory fields are fixed");
+    t(tid("lib-field-show-0").checked && tid("lib-field-show-1").checked && !tid("lib-field-show-2").checked && !tid("lib-field-show-3").checked, "the Reference and the Value are shown, the Datasheet and the Description hidden");
     // delete a mandatory row: refused in KiCad's words
     row(0).click(); await sleep(60);
     tid("lib-field-delete").click(); await sleep(120);
-    t(/The first 2 fields are mandatory\./.test(tid("fp-lib-properties-error")?.textContent ?? ""), `${tid("fp-lib-properties-error")?.textContent}`);
+    t(/The first 4 fields are mandatory\./.test(tid("fp-lib-properties-error")?.textContent ?? ""), `${tid("fp-lib-properties-error")?.textContent}`);
     // add a field: Field<rows>, hidden
     tid("lib-field-add").click(); await sleep(150);
-    t(row(2)?.getAttribute("data-field") === "Field2" && !tid("lib-field-show-2").checked, `a new field is Field2 and hidden: ${row(2)?.getAttribute("data-field")}`);
+    t(row(4)?.getAttribute("data-field") === "Field4" && !tid("lib-field-show-4").checked, `a new field is Field4 and hidden: ${row(4)?.getAttribute("data-field")}`);
     // a name that is a mandatory field's is refused, with the grid's message
-    await type(tid("lib-field-name-2"), "Datasheet");
+    await type(tid("lib-field-name-4"), "Datasheet");
     await click(tid("fp-lib-properties-ok"), 300);
     t(/is the name of a mandatory field/.test(tid("fp-lib-properties-error")?.textContent ?? "") && !!tid("fp-library-properties"), `refused: ${tid("fp-lib-properties-error")?.textContent}`);
-    await type(tid("lib-field-name-2"), "MPN");
-    await type(tid("lib-field-text-2"), "ABC-1");
-    tid("lib-field-show-2").click(); await sleep(80);
-    await choose(tid("lib-field-layer-2"), "F.SilkS");
+    await type(tid("lib-field-name-4"), "MPN");
+    await type(tid("lib-field-text-4"), "ABC-1");
+    tid("lib-field-show-4").click(); await sleep(80);
+    await choose(tid("lib-field-layer-4"), "F.SilkS");
     tid("lib-fields-more").click(); await sleep(150);
     const unitsMm = __eda.state().units === "mm";
-    const num = (label) => document.querySelector(`[data-testid="lib-field-row-2"] input[aria-label="${label}"]`);
+    const num = (label) => document.querySelector(`[data-testid="lib-field-row-4"] input[aria-label="${label}"]`);
     await type(num("X offset of MPN"), unitsMm ? "1.5" : "59.055"); // 1.5 mm
     await type(num("Y offset of MPN"), unitsMm ? "3" : "118.11");
-    tid("lib-field-bold-2").click(); await sleep(60);
-    // the Reference's text and the Value hidden
+    tid("lib-field-bold-4").click(); await sleep(60);
+    // the Reference's text and the Value hidden, a datasheet
     await type(tid("lib-field-text-0"), "J**");
+    await type(tid("lib-field-text-2"), "https://example.com/p17.pdf");
     tid("lib-field-show-1").click(); await sleep(80);
     await click(tid("fp-lib-properties-ok"), 1200);
     t(!tid("fp-library-properties"), "OK closes the dialog");
@@ -763,17 +766,18 @@
     t(!!mpn && mpn.value === "ABC-1" && mpn.visible === true, `the user field is stored: ${JSON.stringify(mpn)}`);
     t(!!mpn?.layout && mpn.layout.layer === "F.SilkS" && mpn.layout.at.x === 1500 && mpn.layout.at.y === 3000 && mpn.layout.bold === true, `with its layout: ${JSON.stringify(mpn?.layout)}`);
     t(fp.reference?.text === "J**" && fp.value_visible === false, `the Reference reads J** and the Value is hidden: ${JSON.stringify([fp.reference?.text, fp.value_visible])}`);
+    t(fp.datasheet?.text === "https://example.com/p17.pdf" && fp.datasheet?.visible === false, `the Datasheet field is stored: ${JSON.stringify(fp.datasheet)}`);
     const mod = await (await fetch(`/api/footprint/export?name=${encodeURIComponent(name)}`)).text();
-    t(/\(property "MPN" "ABC-1" \(at 1\.5 3 0\)/.test(mod) && /\(property "Reference" "J\*\*"/.test(mod) && /\(property "Value" "[^"]*" \(at [^)]*\) \(layer "F\.Fab"\) \(hide yes\)/.test(mod), "the exported .kicad_mod has the fields with their places");
+    t(/\(property "MPN" "ABC-1" \(at 1\.5 3 0\)/.test(mod) && /\(property "Reference" "J\*\*"/.test(mod) && /\(property "Value" "[^"]*" \(at [^)]*\) \(layer "F\.Fab"\) \(hide yes\)/.test(mod) && /\(property "Datasheet" "https:\/\/example\.com\/p17\.pdf"/.test(mod), "the exported .kicad_mod has the fields with their places");
     // reopened, the grid shows what was stored
     await __eda.run("pcbnew.ModuleEditor.footprintProperties");
     await sleep(600);
-    t(tid("lib-field-name-2")?.value === "MPN" && tid("lib-field-text-2")?.value === "ABC-1" && tid("lib-field-text-0")?.value === "J**" && !tid("lib-field-show-1").checked, "reopened, the grid is what was stored");
+    t(tid("lib-field-name-4")?.value === "MPN" && tid("lib-field-text-4")?.value === "ABC-1" && tid("lib-field-text-0")?.value === "J**" && !tid("lib-field-show-1").checked, "reopened, the grid is what was stored");
     await closeDialogs();
     // one undo takes the whole panel away
     await undoFp();
     const back = await footprint(name);
-    t((back.fields ?? []).length === 0 && back.value_visible !== false && !back.reference, "one undo of the Footprint Editor takes the whole panel back");
+    t((back.fields ?? []).length === 0 && back.value_visible !== false && !back.reference && !back.datasheet, "one undo of the Footprint Editor takes the whole panel back");
   });
 
   // ================================================================================================ 5. symbol fields on the canvas
@@ -837,6 +841,58 @@
     t(!!tid("symbol-properties"), "a double click on a field opens Symbol Properties");
     t(document.querySelector('[data-testid="field-row-1"]')?.getAttribute("aria-selected") === "true", "on the Value's row");
     await closeDialogs();
+  });
+
+  // ================================================================================================ 5b. Symbol Properties' units and attributes (P17 review)
+  await scenario("Symbol Properties: All units are interchangeable (LockUnits, ki_locked), Define as local power symbol, the four Exclude from boxes (checked and disabled for a power symbol) and Place pin names inside, written as KiCad writes them", async (t) => {
+    await clickTab("Symbol");
+    await sleep(500);
+    const id = "eda:P17Units";
+    madeSyms.push(id);
+    let r = await cmd({ op: "new_symbol", lib_id: id });
+    t(r.ok, `new_symbol: ${r.message ?? "ok"}`);
+    await selectRow(id);
+    await __eda.run("eeschema.SymbolLibraryControl.editSymbol");
+    await sleep(900);
+    await __eda.run("eeschema.InteractiveEdit.symbolProperties");
+    await sleep(500);
+    t(off("props-interchangeable") && tid("props-interchangeable").checked, "one unit: All units are interchangeable is checked and off");
+    t(off("props-power-local"), "Define as local power symbol is off until the symbol is a power symbol");
+    await type(tid("props-unit-count"), "2");
+    await sleep(100);
+    t(!off("props-interchangeable"), "two units: the box is on");
+    tid("props-interchangeable").click(); await sleep(60);
+    tid("props-exclude_from_sim").click(); await sleep(60);
+    tid("props-exclude_from_pos_files").click(); await sleep(60);
+    await click(tid("props-ok"), 1200);
+    t(!tid("symbol-properties"), "OK closes the dialog");
+    let sym = await symbol(id);
+    t(sym.unit_count === 2 && sym.units_locked === true && sym.exclude_from_sim === true && sym.exclude_from_pos_files === true, `stored: ${JSON.stringify([sym.unit_count, sym.units_locked, sym.exclude_from_sim, sym.exclude_from_pos_files])}`);
+    let text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
+    t(/\(property "ki_locked" ""/.test(text) && /\(exclude_from_sim yes\)/.test(text) && /\(in_pos_files no\)/.test(text), "the .kicad_sym has ki_locked and the exclusions");
+    // a power symbol: the exclusions are checked and off, the local power box is on
+    await __eda.run("eeschema.InteractiveEdit.symbolProperties");
+    await sleep(500);
+    t(!tid("props-interchangeable").checked, "reopened, the units are not interchangeable");
+    tid("props-power").click(); await sleep(80);
+    t(off("props-in_bom") && tid("props-in_bom").checked && off("props-exclude_from_sim") && tid("props-exclude_from_sim").checked, "onPowerCheckBox: the Exclude from boxes are checked and disabled");
+    t(!off("props-power-local"), "and Define as local power symbol is on");
+    tid("props-power-local").click(); await sleep(60);
+    await click(tid("props-ok"), 1200);
+    sym = await symbol(id);
+    t(sym.power === true && sym.power_local === true && sym.in_bom === false && sym.on_board === false, `a local power symbol: ${JSON.stringify([sym.power, sym.power_local, sym.in_bom, sym.on_board])}`);
+    text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
+    t(/\(power local\)/.test(text), "written (power local), not (power), which is a global one");
+    // Place pin names inside off: the offset is 0 (outside)
+    await __eda.run("eeschema.InteractiveEdit.symbolProperties");
+    await sleep(500);
+    t(tid("props-names-inside").checked && !off("props-pin-name-offset"), "the names are inside, with an offset to edit");
+    tid("props-names-inside").click(); await sleep(60);
+    t(off("props-pin-name-offset"), "outside: no offset");
+    await click(tid("props-ok"), 1200);
+    t((await symbol(id)).pin_name_offset_mm === 0, "the offset is 0");
+    await undoFp();
+    t((await symbol(id)).pin_name_offset_mm !== 0, "one undo of the Symbol Editor takes it back");
   });
 
   // ================================================================================================ 6. alternate pin functions

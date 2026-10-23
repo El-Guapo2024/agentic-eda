@@ -1654,6 +1654,12 @@ pub enum Cmd {
         value: Option<eda_model::fp_edit::FieldLayout>,
         #[serde(default)]
         fields: Option<Vec<eda_model::ir::FootprintField>>,
+        /// The grid's third and fourth mandatory rows, the Datasheet and the Description fields, each with its text in the layout's `text`. Left out, the footprint keeps
+        /// what it has.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        datasheet: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description_field: Option<eda_model::fp_edit::FieldLayout>,
     },
     /// `PCB_ACTIONS::setAnchor` ("Place Footprint Anchor"): `at` (in the
     /// footprint's current local frame) becomes the new origin -- every
@@ -1821,6 +1827,17 @@ pub enum Cmd {
         unit_count: u32,
         has_alternate_body_style: bool,
         footprint_filters: Vec<String>,
+        /// The rest of the panel (`TransferDataFromWindow`), each left as the symbol has it when absent: "All units are interchangeable" unchecked
+        /// (`LockUnits( GetUnitCount() > 1 && !interchangeable )`), "Define as local power symbol" (with "Define as power symbol"), "Exclude from simulation",
+        /// "Exclude from position files".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        units_locked: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        power_local: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exclude_from_sim: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exclude_from_pos_files: Option<bool>,
     },
     /// KiCad's "Update Symbol from Library": every schematic symbol/
     /// power-symbol instance naming `lib_id` starts resolving its
@@ -2968,11 +2985,13 @@ impl<'a> Board<'a> {
             Cmd::PutLibraryFootprint { footprint, overwrite } => self.put_library_footprint(footprint, *overwrite),
             Cmd::RenameLibraryFootprint { name, new_name, overwrite } => self.rename_library_footprint(name, new_name, *overwrite),
             Cmd::RepairFootprint { name } => self.repair_footprint(name),
-            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, models3d, zone_connection, reference, value, fields } => {
+            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, models3d, zone_connection, reference, value, fields, datasheet, description_field } => {
                 // the grid is judged first: a row that is wrong refuses the panel before anything of it is taken
                 self.check_library_fields(name, reference.as_ref(), value.as_ref(), fields.as_deref())?;
+                self.check_library_info_fields(name, datasheet.as_ref(), description_field.as_ref())?;
                 self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), models3d.as_deref(), *zone_connection)?;
-                self.apply_library_fields(name, reference.as_ref(), value.as_ref(), fields.as_deref())
+                self.apply_library_fields(name, reference.as_ref(), value.as_ref(), fields.as_deref())?;
+                self.apply_library_info_fields(name, datasheet.as_ref(), description_field.as_ref())
             }
             Cmd::SetFootprintAnchor { name, at } => self.set_footprint_anchor(name, *at),
             Cmd::UpdateFootprintOnBoard { name } => self.update_footprint_on_board(name),
@@ -3025,8 +3044,9 @@ impl<'a> Board<'a> {
             Cmd::PutLibrarySymbol { symbol, overwrite } => self.put_library_symbol(symbol, *overwrite),
             Cmd::RenameLibrarySymbol { lib_id, new_lib_id, overwrite } => self.rename_library_symbol(lib_id, new_lib_id, *overwrite),
             Cmd::SetSymbolAnchor { lib_id, at } => self.set_symbol_anchor(lib_id, *at),
-            Cmd::EditSymbolProperties { lib_id, reference_prefix, description, keywords, datasheet, power, in_bom, on_board, pin_numbers_hidden, pin_names_hidden, pin_name_offset_mm, unit_count, has_alternate_body_style, footprint_filters } => self.edit_symbol_properties(
+            Cmd::EditSymbolProperties { lib_id, reference_prefix, description, keywords, datasheet, power, in_bom, on_board, pin_numbers_hidden, pin_names_hidden, pin_name_offset_mm, unit_count, has_alternate_body_style, footprint_filters, units_locked, power_local, exclude_from_sim, exclude_from_pos_files } => self.edit_symbol_properties(
                 lib_id,
+                library_editors::SymbolAttributes { units_locked: *units_locked, power_local: *power_local, exclude_from_sim: *exclude_from_sim, exclude_from_pos_files: *exclude_from_pos_files },
                 reference_prefix.clone(),
                 description.clone(),
                 keywords.clone(),
@@ -5674,6 +5694,7 @@ impl<'a> Board<'a> {
     fn edit_symbol_properties(
         &mut self,
         lib_id: &str,
+        attributes: library_editors::SymbolAttributes,
         reference_prefix: String,
         description: String,
         keywords: String,
@@ -5705,6 +5726,7 @@ impl<'a> Board<'a> {
         sym.unit_count = unit_count;
         sym.has_alternate_body_style = has_alternate_body_style;
         sym.footprint_filters = footprint_filters;
+        attributes.apply(sym);
         Ok(())
     }
 
@@ -6003,6 +6025,8 @@ mod pad_nets_tests;
 mod sym_derive_tests;
 #[cfg(test)]
 mod fp_lib_fields_tests;
+#[cfg(test)]
+mod lib_keep_tests;
 #[cfg(test)]
 mod pin_alternates_tests;
 #[cfg(test)]

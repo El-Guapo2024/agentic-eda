@@ -55,6 +55,10 @@ fn properties(has_alternate_body_style: bool, unit_count: u32) -> Cmd {
         unit_count,
         has_alternate_body_style,
         footprint_filters: vec![],
+        units_locked: None,
+        power_local: None,
+        exclude_from_sim: None,
+        exclude_from_pos_files: None,
     }
 }
 

@@ -111,6 +111,9 @@ pub struct LibrarySymbolField {
     /// `(justify ... top|bottom)`.
     #[serde(default, skip_serializing_if = "is_center_v")]
     pub v_align: FieldVAlign,
+    /// `(property private "Name" ..)` (`SCH_FIELD::IsPrivate`): a field of the library symbol only, which a placed symbol does not get.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub private: bool,
 }
 
 impl Default for LibrarySymbolField {
@@ -128,6 +131,7 @@ impl Default for LibrarySymbolField {
             italic: false,
             h_align: FieldHAlign::Center,
             v_align: FieldVAlign::Center,
+            private: false,
         }
     }
 }
@@ -310,8 +314,8 @@ impl SymbolLibrarySection {
 
     /// `LIB_SYMBOL::Flatten`: the symbol with everything it inherits put into it. A symbol that is not derived is copied as it is. A derived one starts as a copy of its
     /// root, takes each derived symbol's overrides from the root down -- a mandatory field with a text of its own replaces the one it had, text and layout; a user field
-    /// replaces the one of its name or is added; keywords and footprint filters when it has some -- and last its own; it keeps its own name, and the excluded-from-BOM and
-    /// -board flags of its nearest parent. The result is nobody's child.
+    /// replaces the one of its name or is added; keywords and footprint filters when it has some -- and last its own; it keeps its own name, and the excluded-from-simulation,
+    /// -BOM, -board and -position-files flags of its nearest parent. The result is nobody's child.
     ///
     /// Errors: the symbol is not in the library, or a parent it names is not.
     pub fn flatten(&self, lib_id: &str) -> Result<LibrarySymbol, String> {
@@ -354,6 +358,8 @@ impl SymbolLibrarySection {
         let nearest = ancestors[0];
         out.in_bom = nearest.in_bom;
         out.on_board = nearest.on_board;
+        out.exclude_from_sim = nearest.exclude_from_sim;
+        out.exclude_from_pos_files = nearest.exclude_from_pos_files;
         out.set_fields(fields);
         Ok(out)
     }

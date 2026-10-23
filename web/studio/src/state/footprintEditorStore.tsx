@@ -13,7 +13,7 @@ import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprin
 import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCmd, postRedo, postUndo } from "../api/client";
 import { ensureFootprintInProject } from "../api/libraryClient";
 import { duplicatePads, uniqueFootprintName } from "../kicad-port/fpEditActions";
-import { highestPadNumber } from "../kicad-port/padNumbering";
+import { FIRST_LAST_PAD_NUMBER } from "../kicad-port/padNumbering";
 import { DEFAULT_PAD_MASTER, importPadSettings, settingsOf, type PadSettings } from "../kicad-port/padSettings";
 import { DEFAULT_ENUMERATE_PARAMS, enumerateCommit, type EnumerateParams, type EnumerateState } from "../kicad-port/padEnumeration";
 import { editPadCommand, enterContrast, exitContrast, padEditLayer } from "../kicad-port/padEditMode";
@@ -100,7 +100,8 @@ export interface FootprintEditorState {
   createArrayOpen: boolean;
   /** The board part this footprint was loaded from (`LoadFootprintFromBoard`), so "Insert footprint into PCB" knows what to update. */
   linkedPart: string | null;
-  /** `PAD_TOOL::m_lastPadNumber`: the number the last placed (or duplicated-with-increment) pad took, which `Duplicate and Increment` continues from. `null` until one is set -- then the highest-numbered pad stands in (padNumbering.ts's `nextPadNumber`). */
+  /** `PAD_TOOL::m_lastPadNumber`: the number the last placed (or duplicated-with-increment) pad took, which the pad tool and `Duplicate and Increment` continue from. `null`
+   * until one is set -- "1", as `PAD_TOOL::Reset( MODEL_RELOAD )` sets it for each footprint loaded (padNumbering.ts). */
   lastPadNumber: string | null;
   /** `EDIT_TOOL::Duplicate` hands the copies straight to `doMoveSelection` and, if that is cancelled, `commit.Revert()`s them: true while the freshly duplicated items are glued to the cursor, so Escape undoes the duplicate and a drop keeps it. */
   duplicatePending: boolean;
@@ -441,7 +442,7 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const graphics = fp.graphics.filter((g) => g.id && ids.has(g.id));
       const texts = fp.texts.filter((t) => t.id && ids.has(t.id));
       if (pads.length + graphics.length + texts.length === 0) return;
-      const { pads: newPads, lastPadNumber } = duplicatePads(fp.pads, pads, increment, st.lastPadNumber ?? highestPadNumber(fp.pads));
+      const { pads: newPads, lastPadNumber } = duplicatePads(fp.pads, pads, increment, st.lastPadNumber ?? FIRST_LAST_PAD_NUMBER);
       const before = new Set([...fp.pads.map((p) => p.id), ...fp.graphics.map((g) => g.id), ...fp.texts.map((t) => t.id)]);
       const cmds: Cmd[] = [
         ...newPads.map((pad): Cmd => ({ op: "add_pad", footprint: name, pad })),

@@ -120,6 +120,12 @@ export interface SymbolEditorState {
   showPinAltIcons: boolean;
   /** `SYMBOL_EDIT_FRAME::m_SyncPinEdit`: Synchronized Pins Mode. On by default for a multi-unit symbol. */
   syncPins: boolean;
+  /** `SYMBOL_EDITOR_DRAWING_TOOLS::m_drawSpecificUnit`: a new graphic or text is on the unit being edited (else on unit 0, common to all units). Set to `UnitsLocked()` when a
+   * symbol is loaded and when Symbol Properties is closed with OK ("if units are locked, graphic items are specific to each unit"), and to "not Common to all units" by Shape
+   * Properties' OK. */
+  drawSpecificUnit: boolean;
+  /** `m_drawSpecificBodyStyle`: a new item is on the body style being edited (else common to both); on to begin with, set by Shape Properties' OK. */
+  drawSpecificBodyStyle: boolean;
   /** The symbols Copy / Cut put on the clipboard: kept beside the clipboard text so Paste of our own copy loses nothing (and works where the browser denies clipboard access). */
   copied: { text: string; symbols: LibrarySymbol[] } | null;
   saveAs: SaveAsRequest | null;
@@ -144,6 +150,11 @@ export interface SymbolEditorState {
   /** `m_lastTextAngle`: the text angle the next Text dialog starts with. */
   lastTextAngle: number;
   toast: { message: string; kind: "error" | "info" } | null;
+}
+
+/** The unit and body style a new graphic or text goes on (`SYMBOL_EDITOR_DRAWING_TOOLS`: `if( m_drawSpecificUnit ) item->SetUnit( m_frame->GetUnit() )`, else it stays on 0, common to all). */
+export function drawTarget(state: Pick<SymbolEditorState, "drawSpecificUnit" | "drawSpecificBodyStyle" | "activeUnit" | "activeBodyStyle">): { unit: number; bodyStyle: number } {
+  return { unit: state.drawSpecificUnit ? state.activeUnit : 0, bodyStyle: state.drawSpecificBodyStyle ? state.activeBodyStyle : 0 };
 }
 
 const initialState: SymbolEditorState = {
@@ -175,6 +186,8 @@ const initialState: SymbolEditorState = {
   showHiddenFields: true,
   showPinAltIcons: true,
   syncPins: false,
+  drawSpecificUnit: false,
+  drawSpecificBodyStyle: true,
   copied: null,
   saveAs: null,
   importRequest: null,
@@ -220,6 +233,7 @@ export type SymAction =
   | { type: "TOGGLE_HIDDEN_FIELDS" }
   | { type: "TOGGLE_PIN_ALT_ICONS" }
   | { type: "SET_SYNC_PINS"; on: boolean }
+  | { type: "SET_DRAW_SPECIFIC"; unit?: boolean; bodyStyle?: boolean }
   | { type: "SET_COPIED"; copied: { text: string; symbols: LibrarySymbol[] } | null }
   | { type: "SET_SAVE_AS"; request: SaveAsRequest | null }
   | { type: "SET_IMPORT_REQUEST"; request: ImportRequest | null }
@@ -257,8 +271,16 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
         lastTextBox: state.lastTextBox,
       };
     case "SYMBOL_OK":
-      // `m_SyncPinEdit = IsMultiUnit() && !UnitsLocked()` each time a symbol is loaded: on for a multi-unit symbol.
-      return { ...state, symbol: action.symbol, derivedOwn: action.own ?? null, error: null, syncPins: state.symbol ? state.syncPins : defaultSyncMode(action.symbol.unit_count) };
+      // `m_SyncPinEdit = IsMultiUnit() && !UnitsLocked()` each time a symbol is loaded: on for a multi-unit symbol whose units are interchangeable.
+      return {
+        ...state,
+        symbol: action.symbol,
+        derivedOwn: action.own ?? null,
+        error: null,
+        syncPins: state.symbol ? state.syncPins : defaultSyncMode(action.symbol.unit_count, !!action.symbol.units_locked),
+        // `SetDrawSpecificUnit( symbol->UnitsLocked() )` when a symbol is loaded
+        drawSpecificUnit: state.symbol ? state.drawSpecificUnit : !!action.symbol.units_locked,
+      };
     case "SYMBOL_ERR":
       return { ...state, error: action.message };
     case "SET_VIEW":
@@ -317,6 +339,8 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, showPinAltIcons: !state.showPinAltIcons };
     case "SET_SYNC_PINS":
       return { ...state, syncPins: action.on };
+    case "SET_DRAW_SPECIFIC":
+      return { ...state, drawSpecificUnit: action.unit ?? state.drawSpecificUnit, drawSpecificBodyStyle: action.bodyStyle ?? state.drawSpecificBodyStyle };
     case "SET_COPIED":
       return { ...state, copied: action.copied };
     case "SET_SAVE_AS":
@@ -482,7 +506,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const libId = st.libId;
       if (!libId) return;
       // `PlacePin` -> `CreateImagePins`: in Synchronized Pins Mode a pin placed on one unit gets its image in every other unit.
-      const images = st.symbol && synchronizePins(st.syncPins, st.symbol.unit_count) ? imagePinsFor(pin, st.symbol.unit_count) : [];
+      const images = st.symbol && synchronizePins(st.syncPins, st.symbol.unit_count, !!st.symbol.units_locked) ? imagePinsFor(pin, st.symbol.unit_count) : [];
       const cmds: Cmd[] = [pin, ...images].map((p): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin: p }));
       await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
@@ -497,7 +521,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const sym = st.symbol;
       if (!libId || !sym || moves.length === 0) return;
       // `SYMBOL_EDITOR_MOVE_TOOL::Main`: "Pick up any synchronized pins" -- the matching pin of every other unit moves with the pin.
-      const sync = synchronizePins(st.syncPins, sym.unit_count);
+      const sync = synchronizePins(st.syncPins, sym.unit_count, !!sym.units_locked);
       const target = new Map<string, { x: number; y: number }>(moves.map((m) => [m.id, { x: m.x, y: m.y }]));
       if (sync) {
         for (const m of moves) {
@@ -524,7 +548,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const cmds: Cmd[] = [{ op: "edit_symbol_pin", lib_id: libId, id, pin }];
       // `EditPinProperties`: with synchronized pins the matching pin of every other unit follows the edit (and a pin made common to all units
       // makes its twins redundant).
-      if (sym && original && synchronizePins(st.syncPins, sym.unit_count)) {
+      if (sym && original && synchronizePins(st.syncPins, sym.unit_count, !!sym.units_locked)) {
         const plan = planSyncedEdit(original, { ...pin, id }, sym.pins, sym.unit_count);
         for (const other of plan.updates) if (other.id) cmds.push({ op: "edit_symbol_pin", lib_id: libId, id: other.id, pin: other });
         for (const rid of plan.removeIds) cmds.push({ op: "delete_symbol_pin", lib_id: libId, id: rid });

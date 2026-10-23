@@ -1611,6 +1611,7 @@ fn fp_pad(number: &str, x: Um, y: Um) -> LibraryPad {
         zone_connection: None,
         thermal_spoke_angle_mdeg: None,
         stack: Default::default(),
+        kicad: Default::default(),
     }
 }
 
@@ -1874,6 +1875,8 @@ fn edit_footprint_properties_replaces_the_whole_panel() {
         reference: None,
         value: None,
         fields: None,
+        datasheet: None,
+        description_field: None,
     })
     .unwrap();
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
@@ -1905,6 +1908,8 @@ fn edit_footprint_properties_takes_the_whole_list_of_3d_models() {
         reference: None,
         value: None,
         fields: None,
+        datasheet: None,
+        description_field: None,
     };
     let two = vec![Model3d { offset: [1.0, 2.0, 0.5], rotate: [90.0, 0.0, 0.0], opacity: 0.5, ..Model3d::identity("a.step") }, Model3d { show: false, scale: [2.0, 2.0, 2.0], ..Model3d::identity("b.step") }];
     b.apply(&props(None, Some(two.clone()))).unwrap();
@@ -2674,6 +2679,10 @@ fn edit_symbol_properties_replaces_the_whole_panel() {
         unit_count: 2,
         has_alternate_body_style: true,
         footprint_filters: vec!["SOIC*".into()],
+        units_locked: None,
+        power_local: None,
+        exclude_from_sim: None,
+        exclude_from_pos_files: None,
     })
     .unwrap();
     let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
@@ -2705,6 +2714,10 @@ fn edit_symbol_properties_rejects_zero_units() {
             unit_count: 0,
             has_alternate_body_style: false,
             footprint_filters: vec![],
+            units_locked: None,
+            power_local: None,
+            exclude_from_sim: None,
+            exclude_from_pos_files: None,
         })
         .unwrap_err();
     assert_eq!(e[0].check, "ops_bad_symbol");

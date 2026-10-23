@@ -56,6 +56,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-p17-review` | P17/P3 review: the library editors' readers and writers against KiCad's installed libraries (`crates/kicad/tests/library_roundtrip.rs`: 164 footprints, 243 symbols, all as KiCad writes them to the micrometre), `eda_model::lib_keep` (what the editors keep and do not edit), units locked, local power, the exclusions, Footprint Properties' four mandatory rows, KiCad's pad numbering, Symbol Properties in KiCad's words | done, gated | the micrometre grid; the board's Footprint Properties' two mandatory rows; `PARITY-fpedit.md` 16, `PARITY-symedit.md` "P17 review" |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

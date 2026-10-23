@@ -95,9 +95,12 @@ fn parents_first(symbols: Vec<LibrarySymbol>) -> Vec<LibrarySymbol> {
 /// after the colon). The reader behind both the Symbol Editor's import and the schematic clipboard.
 pub(crate) fn symbols_of(list: &[Sexpr]) -> ParsedSymbols {
     let items: Vec<(&str, &[Sexpr])> = sexpr::find_all(list, "symbol").filter_map(|it| Some((sexpr::txt(it, 1)?, it))).collect();
+    // Before 20250318 a text of `~` was an empty one (`m_requiredVersion < 20250318 && CurStr() == "~"`, for a property's value and a pin's name and number); a
+    // form with no version of its own (the clipboard's, a schematic's cache) is read as the current format.
+    let tilde_is_empty = sexpr::find(list, "version").and_then(|v| sexpr::num(v, 1)).is_some_and(|v| (v as i64) < TILDE_IS_TEXT_VERSION);
 
     let mut warnings = Vec::new();
-    let symbols: Vec<LibrarySymbol> = items.iter().map(|(name, item)| build(name, item, &mut warnings)).collect();
+    let symbols: Vec<LibrarySymbol> = items.iter().map(|(name, item)| build(name, item, tilde_is_empty, &mut warnings)).collect();
     let mut embedded = std::collections::BTreeMap::new();
     for ((_, item), sym) in items.iter().zip(&symbols) {
         let list = crate::embedded::read_owner(item, &mut warnings);
@@ -108,6 +111,18 @@ pub(crate) fn symbols_of(list: &[Sexpr]) -> ParsedSymbols {
     warnings.sort();
     warnings.dedup();
     ParsedSymbols { symbols, warnings, embedded }
+}
+
+/// `SEXPR_SYMBOL_LIB_FILE_VERSION` 20250318, "~ no longer means empty text".
+pub(crate) const TILDE_IS_TEXT_VERSION: i64 = 20250318;
+
+/// A text of the file as KiCad reads it: `~` is empty in a file before [`TILDE_IS_TEXT_VERSION`].
+fn file_text(text: &str, tilde_is_empty: bool) -> &str {
+    if tilde_is_empty && text == "~" {
+        ""
+    } else {
+        text
+    }
 }
 
 /// `(hide yes)` or a bare `hide` among `list`'s own children.
@@ -132,6 +147,8 @@ pub(crate) struct Properties {
     pub footprint_filters: Vec<String>,
     /// `ki_description`, where a file of KiCad 7 or before kept the description.
     pub legacy_description: Option<String>,
+    /// `ki_locked` is there: the units are not interchangeable (`LIB_SYMBOL::LockUnits( true )`).
+    pub units_locked: bool,
 }
 
 /// `parseEDA_TEXT`'s `(effects (font (size h w) bold italic) (justify ...) (hide yes))` into a field: the size is the height, `bold` and `italic` are bare tokens or `(bold yes)`,
@@ -167,12 +184,13 @@ fn read_effects(field: &mut LibrarySymbolField, effects: &[Sexpr]) {
 }
 
 /// `SCH_IO_KICAD_SEXPR_PARSER::parseProperty` for every `(property ...)` of a symbol's own node.
-pub(crate) fn read_properties(item: &[Sexpr]) -> Properties {
+pub(crate) fn read_properties(item: &[Sexpr], tilde_is_empty: bool) -> Properties {
     let mut out = Properties::default();
     for prop in sexpr::find_all(item, "property") {
-        // `(property private "Name" ...)`: the private flag is not kept
-        let at = if prop.get(1).and_then(Sexpr::text) == Some("private") { 2 } else { 1 };
-        let (Some(name), Some(value)) = (sexpr::txt(prop, at), sexpr::txt(prop, at + 1)) else { continue };
+        // `(property private "Name" ...)`: a field of the library symbol only (`SCH_FIELD::SetPrivate`)
+        let private = prop.get(1).and_then(Sexpr::text) == Some("private");
+        let at = if private { 2 } else { 1 };
+        let (Some(name), Some(value)) = (sexpr::txt(prop, at), sexpr::txt(prop, at + 1).map(|v| file_text(v, tilde_is_empty))) else { continue };
         if name.is_empty() {
             continue;
         }
@@ -180,9 +198,10 @@ pub(crate) fn read_properties(item: &[Sexpr]) -> Properties {
             "ki_keywords" => out.keywords = value.to_string(),
             "ki_description" => out.legacy_description = Some(value.to_string()),
             "ki_fp_filters" => out.footprint_filters = value.split_whitespace().map(str::to_string).collect(),
-            "ki_locked" => {}
+            "ki_locked" => out.units_locked = true,
             _ => {
                 let mut f = LibrarySymbolField::named(name, value);
+                f.private = private;
                 if let Some(canonical) = MANDATORY_FIELDS.iter().find(|m| m.eq_ignore_ascii_case(name)) {
                     f.name = (*canonical).to_string();
                     f.hidden = false;
@@ -228,24 +247,27 @@ pub(crate) fn read_properties(item: &[Sexpr]) -> Properties {
     out
 }
 
-fn build(name: &str, item: &[Sexpr], warnings: &mut Vec<String>) -> LibrarySymbol {
+fn build(name: &str, item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<String>) -> LibrarySymbol {
     let extends = sexpr::find(item, "extends").and_then(|e| sexpr::txt(e, 1)).map(str::to_string);
 
     // A derived symbol keeps no drawing of its own (`SaveSymbol` writes none): what it draws, its units and its pin text options are its root's, which `flatten` takes.
-    let (graphics, pins, unit_count, alt_style) = if extends.is_some() {
-        let own = drawn_items(item, warnings);
+    let (graphics, pins, unit_count, alt_style, strokes, styles, kept) = if extends.is_some() {
+        let own = drawn_items(item, tilde_is_empty, warnings);
         if !own.0.is_empty() || !own.1.is_empty() {
             warnings.push("a derived symbol has a drawing of its own, which is not used: it shows its parent's".to_string());
         }
-        (Vec::new(), Vec::new(), 1, false)
+        (Vec::new(), Vec::new(), 1, false, Vec::new(), Vec::new(), Vec::new())
     } else {
-        drawn_items(item, warnings)
+        drawn_items(item, tilde_is_empty, warnings)
     };
 
     let power = |node: &[Sexpr]| node.iter().any(|it| it.as_list().is_some_and(|l| sexpr::tag(l) == Some("power")) || it.text() == Some("power"));
+    // `(power local)`; `(power)` and `(power global)` are a global power symbol (`parseSymbol`, `T_power`)
+    let power_local = sexpr::find(item, "power").and_then(|p| sexpr::txt(p, 1)) == Some("local");
     let pin_numbers = sexpr::find(item, "pin_numbers");
     let pin_names = sexpr::find(item, "pin_names");
-    let props = read_properties(item);
+    let props = read_properties(item, tilde_is_empty);
+    let derived_symbol = extends.is_some();
     let mut sym = LibrarySymbol {
         lib_id: name.to_string(),
         power: power(item),
@@ -260,8 +282,31 @@ fn build(name: &str, item: &[Sexpr], warnings: &mut Vec<String>) -> LibrarySymbo
         graphics,
         pins,
         extends,
+        power_local,
+        exclude_from_sim: yes_no(item, "exclude_from_sim", false),
+        exclude_from_pos_files: !yes_no(item, "in_pos_files", true),
+        units_locked: props.units_locked,
         ..LibrarySymbol::default()
     };
+    sym.kicad.duplicate_pin_numbers_are_jumpers = yes_no(item, "duplicate_pin_numbers_are_jumpers", false);
+    sym.kicad.items = kept;
+    // a unit's `(unit_name "..")` (`T_unit_name`)
+    if !derived_symbol {
+        for sub in sexpr::find_all(item, "symbol") {
+            if let (Some(sub_name), Some(name)) = (sexpr::txt(sub, 1), sexpr::find(sub, "unit_name").and_then(|n| sexpr::txt(n, 1))) {
+                sym.kicad.unit_names.insert(unit_and_style(sub_name).0, name.to_string());
+            }
+        }
+    }
+    // `(jumper_pin_groups ("1" "2") ..)`: each group a set of pin numbers
+    if let Some(groups) = sexpr::find(item, "jumper_pin_groups") {
+        for g in groups.iter().skip(1).filter_map(Sexpr::as_list) {
+            let mut set: Vec<String> = g.iter().filter_map(Sexpr::text).map(str::to_string).collect();
+            set.sort();
+            set.dedup();
+            sym.kicad.jumper_pin_groups.push(set);
+        }
+    }
     if let Some(offset) = pin_names.and_then(|p| sexpr::find(p, "offset")).and_then(|o| sexpr::num(o, 1)) {
         sym.pin_name_offset_mm = offset;
     }
@@ -280,6 +325,14 @@ fn build(name: &str, item: &[Sexpr], warnings: &mut Vec<String>) -> LibrarySymbo
         sym.reference_prefix = "U".to_string();
     }
     sym.assign_missing_ids();
+    for ((g, stroke), style) in sym.graphics.iter().zip(strokes).zip(styles) {
+        if let Some(t) = stroke {
+            sym.kicad.stroke_types.insert(g.id().to_string(), t);
+        }
+        if let Some(t) = style {
+            sym.kicad.text_styles.insert(g.id().to_string(), t);
+        }
+    }
     sym
 }
 
@@ -318,8 +371,13 @@ fn font_size(item: &[Sexpr]) -> Option<f64> {
 
 /// Every graphic and pin across every `Name_<unit>_<style>` sub-block of one symbol node, the highest
 /// unit seen, and whether a body style above 1 exists.
-fn drawn_items(item: &[Sexpr], warnings: &mut Vec<String>) -> (Vec<LibrarySymbolGraphic>, Vec<LibrarySymbolPin>, u32, bool) {
+fn drawn_items(item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<String>) -> DrawnItems {
     let mut graphics = Vec::new();
+    let mut kept = Vec::new();
+    // each graphic's `(stroke (type ..))` when it is not `default`, in step with `graphics`
+    let mut strokes: Vec<Option<String>> = Vec::new();
+    // and each one's text style (a `(text ..)`'s; none for the others)
+    let mut styles: Vec<Option<eda_model::lib_keep::KeptTextStyle>> = Vec::new();
     let mut pins = Vec::new();
     let mut max_unit = 1u32;
     let mut alt_style = false;
@@ -329,6 +387,7 @@ fn drawn_items(item: &[Sexpr], warnings: &mut Vec<String>) -> (Vec<LibrarySymbol
         max_unit = max_unit.max(unit);
         alt_style |= style >= 2;
         for child in sub.iter().skip(2).filter_map(Sexpr::as_list) {
+            let drawn = graphics.len();
             match sexpr::tag(child) {
                 Some("rectangle") => {
                     if let (Some(start), Some(end)) = (point(child, "start"), point(child, "end")) {
@@ -361,20 +420,54 @@ fn drawn_items(item: &[Sexpr], warnings: &mut Vec<String>) -> (Vec<LibrarySymbol
                     }
                 }
                 Some("pin") => {
-                    if let Some(pin) = parse_pin(child, unit, style) {
+                    if let Some(pin) = parse_pin(child, unit, style, tilde_is_empty) {
                         pins.push(pin);
                     }
                 }
-                Some("bezier") => warnings.push("bezier curves are not supported by the library symbol and were left out".to_string()),
+                Some("bezier") => {
+                    warnings.push("bezier curves are kept as the file has them, but the symbol editor does not draw or edit them".to_string());
+                    kept.push(eda_model::lib_keep::KeptSymbolItem { unit, body_style: style, text: sexpr::to_text(&Sexpr::List(child.to_vec())) });
+                }
                 Some("text_box") => match text_box(child, unit, style) {
                     Some(tb) => graphics.push(tb),
                     None => warnings.push("a text box without a position or a size was left out".to_string()),
                 },
                 _ => {}
             }
+            if graphics.len() > drawn {
+                strokes.push(stroke_type(child));
+                styles.push((sexpr::tag(child) == Some("text")).then(|| text_style(child)).filter(|t| !t.is_default()));
+            }
         }
     }
-    (graphics, pins, max_unit, alt_style)
+    (graphics, pins, max_unit, alt_style, strokes, styles, kept)
+}
+
+/// A symbol text's `(effects ..)` beyond its size (`parseEDA_TEXT`).
+fn text_style(item: &[Sexpr]) -> eda_model::lib_keep::KeptTextStyle {
+    let mut t = eda_model::lib_keep::KeptTextStyle::default();
+    if let Some(effects) = sexpr::find(item, "effects") {
+        if let Some(font) = sexpr::find(effects, "font") {
+            t.thickness_mm = sexpr::find(font, "thickness").and_then(|n| sexpr::num(n, 1));
+            t.bold = bare_or_yes(font, "bold");
+            t.italic = bare_or_yes(font, "italic");
+        }
+        if let Some(j) = sexpr::find(effects, "justify") {
+            t.justify = j.iter().skip(1).filter_map(Sexpr::text).map(str::to_string).collect();
+        }
+        t.hidden = bare_or_yes(effects, "hide");
+    }
+    t.hidden |= sexpr::find(item, "hide").is_some_and(|h| sexpr::txt(h, 1).map(|v| v == "yes").unwrap_or(true));
+    t
+}
+
+/// What [`drawn_items`] finds: the graphics, the pins, the highest unit, whether there is a second body style, each graphic's stroke type and text style, and the items
+/// kept as written.
+type DrawnItems = (Vec<LibrarySymbolGraphic>, Vec<LibrarySymbolPin>, u32, bool, Vec<Option<String>>, Vec<Option<eda_model::lib_keep::KeptTextStyle>>, Vec<eda_model::lib_keep::KeptSymbolItem>);
+
+/// A graphic's `(stroke (type ..))` when it says something other than `default` (`STROKE_PARAMS_PARSER::ParseStroke`).
+fn stroke_type(item: &[Sexpr]) -> Option<String> {
+    sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "type")).and_then(|t| sexpr::txt(t, 1)).filter(|t| *t != "default").map(str::to_string)
 }
 
 /// `SCH_IO_KICAD_SEXPR_PARSER::parseSymbolTextBox`: `(text_box [private] "text" (at x y angle) (size w h) (margins l t r b) (stroke ...) (fill ...) (effects ...))`. A box begun at `(at ..)`
@@ -425,18 +518,18 @@ fn bare_or_yes(node: &[Sexpr], key: &str) -> bool {
 }
 
 /// `(pin <type> <shape> (at x y angle) (length L) [hide] (name "N" (effects ...)) (number "N" (effects ...)))`.
-fn parse_pin(item: &[Sexpr], unit: u32, style: u32) -> Option<LibrarySymbolPin> {
+fn parse_pin(item: &[Sexpr], unit: u32, style: u32, tilde_is_empty: bool) -> Option<LibrarySymbolPin> {
     let electrical_type = sexpr::txt(item, 1)?.to_string();
     let shape = sexpr::txt(item, 2).filter(|s| !s.is_empty()).unwrap_or("line").to_string();
     let at = sexpr::find(item, "at")?;
     let (x, y) = (sexpr::num(at, 1)?, sexpr::num(at, 2)?);
     let name_node = sexpr::find(item, "name");
     let number_node = sexpr::find(item, "number");
-    let name = name_node.and_then(|n| sexpr::txt(n, 1)).unwrap_or("~");
+    let name = file_text(name_node.and_then(|n| sexpr::txt(n, 1)).unwrap_or(""), tilde_is_empty);
     Some(LibrarySymbolPin {
         id: String::new(),
-        number: number_node.and_then(|n| sexpr::txt(n, 1)).unwrap_or("").to_string(),
-        name: if name == "~" { String::new() } else { name.to_string() },
+        number: file_text(number_node.and_then(|n| sexpr::txt(n, 1)).unwrap_or(""), tilde_is_empty).to_string(),
+        name: name.to_string(),
         electrical_type,
         shape,
         at: SPoint { x, y },
@@ -516,6 +609,11 @@ mod tests {
             published: false,
             extends: None,
             fields: vec![],
+            units_locked: false,
+            power_local: false,
+            exclude_from_sim: false,
+            exclude_from_pos_files: false,
+            kicad: Default::default(),
         };
         sym.assign_missing_ids();
         sym
@@ -665,8 +763,29 @@ mod tests {
         assert!(r.pin_numbers_hidden && r.pin_names_hidden, "both the (hide yes) and the bare `hide` spelling");
         assert_eq!(r.pin_name_offset_mm, 0.0);
         assert!(r.pins[0].hidden, "(hide yes) on a pin");
-        assert_eq!(r.pins[0].name, "", "`~` is an empty name");
+        // `SCH_IO_KICAD_SEXPR::ParseLibSymbol` reads the clipboard as the current format, where `~` is a text of its own
+        assert_eq!(r.pins[0].name, "~", "`~` is the text `~` in the current format");
         assert_eq!(r.graphics.len(), 1);
+    }
+
+    #[test]
+    fn a_tilde_is_an_empty_text_in_a_file_before_20250318_and_itself_after() {
+        // `m_requiredVersion < 20250318 && CurStr() == "~"`: a property's value, a pin's name and its number
+        let lib = |version: i64| {
+            format!(
+                r#"(kicad_symbol_lib (version {version}) (symbol "R" (property "Reference" "R" (at 0 0 0)) (property "Datasheet" "~" (at 0 0 0))
+                (symbol "R_1_1" (pin passive line (at 0 3.81 270) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27))))))))"#
+            )
+        };
+        let old = parse_library_symbols(&lib(20241209)).unwrap().symbols.remove(0);
+        assert_eq!((old.pins[0].name.as_str(), old.field("Datasheet").unwrap().text.as_str()), ("", ""));
+        let new = parse_library_symbols(&lib(20251024)).unwrap().symbols.remove(0);
+        assert_eq!((new.pins[0].name.as_str(), new.field("Datasheet").unwrap().text.as_str()), ("~", "~"));
+        // and the writer's file, whose version keeps a `~` a `~` and writes an empty name as ""
+        let back = parse_library_symbols(&crate::export_kicad_sym(&new)).unwrap().symbols.remove(0);
+        assert_eq!((back.pins[0].name.as_str(), back.field("Datasheet").unwrap().text.as_str()), ("~", "~"));
+        let back = parse_library_symbols(&crate::export_kicad_sym(&old)).unwrap().symbols.remove(0);
+        assert_eq!((back.pins[0].name.as_str(), back.field("Datasheet").unwrap().text.as_str()), ("", ""));
     }
 
     #[test]

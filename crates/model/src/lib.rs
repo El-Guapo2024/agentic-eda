@@ -29,6 +29,7 @@ pub mod ir;
 pub mod kicad_font;
 pub mod kicad_geom;
 pub mod layers;
+pub mod lib_keep;
 pub mod line_ending;
 pub mod model_subst;
 pub mod modules;

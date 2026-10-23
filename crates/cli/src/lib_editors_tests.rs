@@ -53,6 +53,7 @@ fn library_pad(number: &str, x: i64, y: i64) -> eda_model::ir::LibraryPad {
         zone_connection: None,
         thermal_spoke_angle_mdeg: None,
         stack: Default::default(),
+        kicad: Default::default(),
     }
 }
 
@@ -199,6 +200,8 @@ fn footprint_with_fields_in(dir: &Path) -> String {
                 FootprintField { name: "MPN".into(), value: "ABC-1".into(), visible: true, layout: Some(mpn) },
                 FootprintField { name: "Vendor".into(), value: "ACME".into(), visible: false, layout: None },
             ]),
+            datasheet: None,
+            description_field: None,
         },
         false,
         "test",
