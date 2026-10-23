@@ -5,7 +5,7 @@
 import type { RatsnestMode } from "./boardControl";
 
 /** The export / output dialogs `BoardExportDialog.tsx` serves (each one is a kicad-cli command, except `cmp`). */
-export type BoardExportKind = "3d" | "vrml" | "gencad" | "ipcd356" | "ipc2581" | "odb" | "pcb_bom" | "cmp";
+export type BoardExportKind = "3d" | "vrml" | "gencad" | "idf" | "ipcd356" | "ipc2581" | "odb" | "pcb_bom" | "cmp";
 
 export interface BoardControlState {
   /** `PCB_DISPLAY_OPTIONS::m_DisplayGraphicsFill` off (`pcbnew.Control.graphicOutlines`, "Sketch Graphic Items"): filled graphics drawn as outlines. */

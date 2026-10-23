@@ -9,6 +9,7 @@ import type { Dispatch } from "react";
 import type { Action, StudioApi, StudioState } from "../state/store";
 import type { BoardControlState, BoardExportKind } from "../kicad-port/boardControlState";
 import { postRepairBoard } from "../api/boardControl";
+import { cliExporterUnavailable } from "../state/cliExporters";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { fetchFootprintLibraryNames } from "../api/client";
 import type { Cmd, ZonePriorityMove } from "../api/types";
@@ -213,11 +214,19 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
     })
   );
 
-  // The export / output dialogs (components/BoardExportDialog.tsx): kicad-cli's, except the .cmp file.
-  const exportDialog = (kind: BoardExportKind) => pcbOnly(() => bcx({ boardExport: kind }));
+  // The export / output dialogs (components/BoardExportDialog.tsx): kicad-cli's, except the .cmp file. IDFv3 and GenCAD are refused, with the
+  // reason, where the server's kicad-cli has no such command (`state/cliExporters.ts`; the menu shows them disabled with it).
+  const exportDialog = (kind: BoardExportKind, action?: string) =>
+    pcbOnly(() => {
+      const why = action ? cliExporterUnavailable(action) : null;
+      if (why) toast(why, "error");
+      else bcx({ boardExport: kind });
+    });
   m.set("pcbnew.EditorControl.exportSTEP", exportDialog("3d"));
   m.set("pcbnew.EditorControl.exportVRML", exportDialog("vrml"));
-  m.set("pcbnew.EditorControl.exportGenCAD", exportDialog("gencad"));
+  m.set("pcbnew.EditorControl.exportGenCAD", exportDialog("gencad", "pcbnew.EditorControl.exportGenCAD"));
+  // ExportIDF: `DIALOG_EXPORT_IDF3`, run as `kicad-cli pcb export idf` (crates/cli/src/board_output_api.rs::idf_args).
+  m.set("pcbnew.EditorControl.exportIDF", exportDialog("idf", "pcbnew.EditorControl.exportIDF"));
   m.set("pcbnew.EditorControl.generateD356File", exportDialog("ipcd356"));
   m.set("pcbnew.EditorControl.generateIPC2581File", exportDialog("ipc2581"));
   m.set("pcbnew.EditorControl.generateODBPPFile", exportDialog("odb"));

@@ -108,6 +108,8 @@ import { toggledUnits } from "../kicad-port/unitToggle";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
 import { otherLayerOfPair } from "../kicad-port/layerPairs";
+import { useCliExporters } from "../state/cliExporters";
+import { cliExporterReason } from "../kicad-port/cliExporters";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -2340,7 +2342,9 @@ export function useActionRunner() {
   // eeschema action now dims while looking at it from the PCB tab (and
   // vice versa) -- arguably more honest ("usable right now" instead of
   // "usable somewhere"), not a regression.
-  const isEnabled = useCallback((name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)), [registry, state.tab]);
+  // An exporter the server's kicad-cli lacks (IDF, GenCAD on an older kicad-cli: `kicad-port/cliExporters.ts`) is disabled too.
+  const cliExporters = useCliExporters();
+  const isEnabled = useCallback((name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)) && cliExporterReason(name, cliExporters) === null, [registry, state.tab, cliExporters]);
   /** `param` is the event parameter KiCad's parameterised actions carry (`zoomPreset`'s entry, `selectItems`' items, `changeSheet`'s path ...). */
   const run = useCallback((name: string, param?: unknown) => registry.get(name)?.(param), [registry]);
   /**
