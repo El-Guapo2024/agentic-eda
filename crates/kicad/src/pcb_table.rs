@@ -302,18 +302,31 @@ fn cell_uuid(t: &Table, i: usize) -> String {
 
 /// One table as `format( const PCB_TABLE* )` writes it; returns its uuid. A board's table is on its layer, so are its cells.
 pub(crate) fn write(out: &mut String, t: &Table, locked: bool) -> String {
-    let uuid = if t.uuid.is_empty() {
-        duid_for(&format!("table:{}", t.id), &t.id)
-    } else {
-        note_uuid(&t.uuid, &t.id);
-        t.uuid.clone()
-    };
+    let uuid = table_uuid(t);
     let layer = sexpr_str(&t.layer);
     let _ = write!(out, "\t(table (column_count {}) (uuid \"{uuid}\")", t.col_count());
     if locked {
         out.push_str(" (locked yes)");
     }
     let _ = write!(out, " (layer {layer})");
+    write_body(out, t, false);
+    uuid
+}
+
+/// The uuid `t` is written with: the file's, else one made from its id.
+pub(crate) fn table_uuid(t: &Table) -> String {
+    if t.uuid.is_empty() {
+        duid_for(&format!("table:{}", t.id), &t.id)
+    } else {
+        note_uuid(&t.uuid, &t.id);
+        t.uuid.clone()
+    }
+}
+
+/// `formatTableData` from the border on: the border, the separators, the column widths and row heights and the cells, and the parenthesis that closes the item. `knockout`
+/// writes each cell's `(knockout no)`, as KiCad 10's `format( const PCB_TEXTBOX* )` does (a drill chart, which only a KiCad 10 file has).
+pub(crate) fn write_body(out: &mut String, t: &Table, knockout: bool) {
+    let layer = sexpr_str(&t.layer);
     let _ = write!(out, " (border (external {}) (header {})", yes(t.border.external), yes(t.border.header));
     if t.border.external || t.border.header {
         let _ = write!(out, " {}", stroke_str(&t.border.stroke));
@@ -342,10 +355,9 @@ pub(crate) fn write(out: &mut String, t: &Table, locked: bool) -> String {
         if t.angle != 0 {
             let _ = write!(out, " (angle {})", fmt_mm_f(t.angle as f64 / 1000.0));
         }
-        let _ = write!(out, " (layer {layer}) (uuid \"{}\") {})", cell_uuid(t, i), effects_str(&c.style));
+        let _ = write!(out, " (layer {layer}) (uuid \"{}\") {}{})", cell_uuid(t, i), effects_str(&c.style), if knockout { " (knockout no)" } else { "" });
     }
     out.push_str("))\n");
-    uuid
 }
 
 fn yes(b: bool) -> &'static str {

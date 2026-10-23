@@ -40,6 +40,7 @@ import { orderedStackLayers } from "../../kicad-port/padStack";
 import { drawPcbItems, drawRefImages } from "./pcbItemsPaint";
 import { drawGridItems, gridItemCovers, shownGridItems } from "./gridItemPaint";
 import { drawViaStitches } from "./viaStitchPaint";
+import { drawDrillItems } from "./drillPaint";
 import { gridGeometry, type GridGeometry } from "../../kicad-port/gridItem";
 import { drawTablePreview, drawTables } from "./tablePaint";
 import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
@@ -1457,6 +1458,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawShapes(ctx, view, pass.b, opts);
       drawTexts(ctx, view, pass.b, opts);
       drawTables(ctx, view, pass.b, opts);
+      // KiCad 10's drill charts' marks and drill maps (`drawChartSymbols`, `draw( PCB_DRILL_MAP )`).
+      drawDrillItems(ctx, view, pass.b, opts.layerVisible, opts.selection);
       drawDimensions(ctx, view, pass.b, opts);
       drawPcbItems(ctx, view, pass.b, opts);
     });
@@ -1482,6 +1485,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     drawShapes(ctx, view, carry.moving, own);
     drawTexts(ctx, view, carry.moving, own);
     drawTables(ctx, view, carry.moving, own);
+    drawDrillItems(ctx, view, carry.moving, own.layerVisible, own.selection);
     drawDimensions(ctx, view, carry.moving, own);
     drawPcbItems(ctx, view, carry.moving, own);
     drawAnchors(ctx, view, carry.moving, own);

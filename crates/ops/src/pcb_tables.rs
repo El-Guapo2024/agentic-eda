@@ -317,7 +317,7 @@ impl Board<'_> {
 
     /// The stackup of the board and its copper layer count: Board Setup's (`GetStackupDescriptor`, which `SynchronizeWithBoard` brings up to date), else the one the
     /// board was brought with, else KiCad's default for its copper layers and thickness.
-    fn effective_stackup(&self) -> (usize, Stackup) {
+    pub(crate) fn effective_stackup(&self) -> (usize, Stackup) {
         let copper = self.model.board.layers.iter().filter(|l| l.ends_with(".Cu")).count().max(2);
         let setup = self
             .design
@@ -364,6 +364,10 @@ impl Board<'_> {
         tables.retain(|t| t.id != id);
         if tables.len() == before {
             return Err(fail("ops_unknown_table", id, "no table with this id"));
+        }
+        // A drill chart goes with its table (KiCad 10's `PCB_DRILL_CHART` is the table).
+        if scope == Scope::Board {
+            self.drawings_mut().board_items.drill_charts.retain(|c| c.table_id != id);
         }
         // A table that is gone is no longer locked (a group that held it is tidied by the editor's own upkeep).
         if scope == Scope::Sheet {

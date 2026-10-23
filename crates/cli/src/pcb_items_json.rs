@@ -96,6 +96,15 @@ pub(crate) fn extend(drawings: &mut Value, design: &eda_model::ir::Design, model
     drawings["grid_items"] = Value::Array(d.board_items.grid_items.iter().map(grid_item_json).collect());
     // KiCad 10's via stitchings, as the model has them (what `set_via_stitch` takes back): the outline as `{x, y}` points, micrometres.
     drawings["via_stitches"] = Value::Array(d.board_items.via_stitches.iter().map(|v| serde_json::to_value(v).unwrap_or(Value::Null)).collect());
+    // KiCad 10's drill charts (what makes a table one), drill maps and drill symbol profile, as the model has them; and, when the board has a map, the mark of every hole
+    // (`ResolveDrillSymbolsByItem`) and the spans a map can show (`EnumerateDrillSpans`), which the canvas draws and the Properties panel offers.
+    drawings["drill_charts"] = serde_json::to_value(&d.board_items.drill_charts).unwrap_or(Value::Null);
+    drawings["drill_maps"] = serde_json::to_value(&d.board_items.drill_maps).unwrap_or(Value::Null);
+    drawings["drill_profile"] = serde_json::to_value(d.board_items.drill_profile.clone().unwrap_or_default()).unwrap_or(Value::Null);
+    if !d.board_items.drill_maps.is_empty() {
+        drawings["drill_marks"] = serde_json::to_value(eda_ops::drill_chart::marks(design, model)).unwrap_or(Value::Null);
+        drawings["drill_spans"] = serde_json::to_value(eda_ops::drill_chart::spans(design, model)).unwrap_or(Value::Null);
+    }
     hatch_json(drawings, design, model, d);
 }
 

@@ -187,3 +187,55 @@ pub(crate) fn transform_via_stitch(v: &mut ViaStitch, x: Xform) {
     }
     v.origin = x.point(v.origin);
 }
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------- drill maps
+
+use eda_model::drill_chart::{is_documentation_layer, DrillMap};
+
+impl<'a> Board<'a> {
+    /// `PCB_CONTROL::PlaceDrillMap`: "Two maps on one layer would overdraw each other's marks", so a layer with a map already, or one that is no documentation layer, is refused.
+    pub(crate) fn place_drill_map(&mut self, layer: &str) -> Result<(), Vec<CheckResult>> {
+        if !is_documentation_layer(layer) {
+            return Err(fail("ops_bad_drill_map", layer, "Every documentation layer already has a drill map."));
+        }
+        let size = crate::drill_chart::profile_of(&self.design).size_um;
+        let dr = self.drawings_mut();
+        if dr.board_items.drill_maps.iter().any(|m| m.layer == layer) {
+            return Err(fail("ops_bad_drill_map", layer, "Every documentation layer already has a drill map."));
+        }
+        dr.board_items.drill_maps.push(DrillMap::new(layer, size));
+        dr.assign_missing_ids();
+        Ok(())
+    }
+
+    pub(crate) fn edit_drill_map(&mut self, id: &str, m: DrillMap) -> Result<(), Vec<CheckResult>> {
+        if !is_documentation_layer(&m.layer) {
+            return Err(fail("ops_bad_drill_map", id, "a drill map is on a documentation layer"));
+        }
+        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_drill_map", id, "the board has no drawings yet"))?;
+        let slot = dr.board_items.drill_maps.iter_mut().find(|x| x.id == id).ok_or_else(|| fail("ops_unknown_drill_map", id, "no drill map with this id"))?;
+        // `SetSymbolSize`: at least one.
+        *slot = DrillMap { id: id.to_string(), size_um: m.size_um.max(1), ..m };
+        Ok(())
+    }
+
+    pub(crate) fn delete_drill_map(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_drill_map", id, "the board has no drawings yet"))?;
+        let before = dr.board_items.drill_maps.len();
+        dr.board_items.drill_maps.retain(|m| m.id != id);
+        if dr.board_items.drill_maps.len() == before {
+            return Err(fail("ops_unknown_drill_map", id, "no drill map with this id"));
+        }
+        Ok(())
+    }
+}
+
+/// `PCB_DRILL_MAP::Move` (the offset moves), `::Rotate` ("there is no geometry here to turn") and `::Flip` (the layer flips: "The side the map documents is still the side it
+/// belongs on").
+pub(crate) fn transform_drill_map(m: &mut DrillMap, x: Xform) {
+    match x {
+        Xform::Move { dx, dy } => m.offset = eda_model::ir::Point { x: m.offset.x + dx, y: m.offset.y + dy },
+        // The flip's layer is `GetFlippedLayer`'s (`transform_board_items` gives it).
+        Xform::Rotate { .. } | Xform::Flip { .. } => {}
+    }
+}

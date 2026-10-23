@@ -97,6 +97,24 @@ pub enum PcbItemCmd {
     },
     /// `PCB_VIA_STITCH::Remove`: the generator and every via it made.
     DeleteViaStitch { id: String },
+    /// `PCB_CONTROL::PlaceDrillChart` ("Place Drill Chart"): KiCad 10's drill chart of the default template on `layer` (a documentation layer), built from the board, its first
+    /// corner at `at`. See [`crate::drill_chart`].
+    PlaceDrillChart { layer: String, at: Point },
+    /// The Properties panel's Units, Decimal Places and Show Totals of a drill chart (and its filter): the chart rebuilt from the board. `id` is the chart's table's.
+    SetDrillChart {
+        id: String,
+        units: eda_model::drill_chart::TableUnits,
+        precision: i32,
+        show_totals: bool,
+        #[serde(default)]
+        filter: eda_model::drill_chart::DrillChartFilter,
+    },
+    /// `PCB_CONTROL::PlaceDrillMap` ("Place Drill Map"): a drill map on `layer`, no offset, the profile's mark size.
+    PlaceDrillMap { layer: String },
+    /// The Properties panel's edits of a drill map (Offset X / Y, Symbol Size, Hole Span, Outline Slots, Guide Cross): every field replaced, in place.
+    EditDrillMap { id: String, map: eda_model::drill_chart::DrillMap },
+    /// Remove a drill map.
+    DeleteDrillMap { id: String },
 }
 
 /// Where a via stitching puts one via: its grid cell (or its position, where the layout has no grid: `cellForPosition`) and its position.
@@ -119,6 +137,8 @@ impl PcbItemCmd {
             PcbItemCmd::EditGridItem { id, .. } | PcbItemCmd::DeleteGridItem { id } => vec![id.as_str()],
             PcbItemCmd::SetViaStitch { id, stitch, .. } => vec![id.as_deref().unwrap_or(stitch.net.as_str())],
             PcbItemCmd::DeleteViaStitch { id } => vec![id.as_str()],
+            PcbItemCmd::PlaceDrillChart { layer, .. } | PcbItemCmd::PlaceDrillMap { layer } => vec![layer.as_str()],
+            PcbItemCmd::SetDrillChart { id, .. } | PcbItemCmd::EditDrillMap { id, .. } | PcbItemCmd::DeleteDrillMap { id } => vec![id.as_str()],
             PcbItemCmd::EditBarcode { id, .. } | PcbItemCmd::DeleteBarcode { id } => vec![id.as_str()],
             PcbItemCmd::EditTextBox { id, .. }
             | PcbItemCmd::DeleteTextBox { id }
@@ -163,6 +183,11 @@ impl PcbItemCmd {
             )
             .to_lowercase(),
             PcbItemCmd::DeleteViaStitch { id } => format!("via-stitch delete {id}"),
+            PcbItemCmd::PlaceDrillChart { layer, at } => format!("drill-chart place --layer {layer} --at {},{}", mm(at.x), mm(at.y)),
+            PcbItemCmd::SetDrillChart { id, units, precision, show_totals, .. } => format!("drill-chart edit {id} --units {} --precision {precision} --totals {show_totals}", units.token()),
+            PcbItemCmd::PlaceDrillMap { layer } => format!("drill-map place --layer {layer}"),
+            PcbItemCmd::EditDrillMap { id, map: m } => format!("drill-map edit {id} --layer {} --offset {},{} --size {}", m.layer, mm(m.offset.x), mm(m.offset.y), mm(m.size_um)),
+            PcbItemCmd::DeleteDrillMap { id } => format!("drill-map delete {id}"),
             PcbItemCmd::SetShapeStyle { ids, fill, start_ending, end_ending } => {
                 let mut out = format!("shape style {} --fill {}", ids.join(","), fill.map_or("unchanged".to_string(), |f| format!("{f:?}").to_lowercase()));
                 for (flag, e) in [("start", start_ending), ("end", end_ending)] {
@@ -185,6 +210,8 @@ impl PcbItemCmd {
             PcbItemCmd::AddBarcode { .. } | PcbItemCmd::EditBarcode { .. } | PcbItemCmd::DeleteBarcode { .. } => "barcode",
             PcbItemCmd::AddGridItem { .. } | PcbItemCmd::EditGridItem { .. } | PcbItemCmd::DeleteGridItem { .. } => "grid-item",
             PcbItemCmd::SetViaStitch { .. } | PcbItemCmd::DeleteViaStitch { .. } => "via-stitch",
+            PcbItemCmd::PlaceDrillChart { .. } | PcbItemCmd::SetDrillChart { .. } => "drill-chart",
+            PcbItemCmd::PlaceDrillMap { .. } | PcbItemCmd::EditDrillMap { .. } | PcbItemCmd::DeleteDrillMap { .. } => "drill-map",
         }
     }
 }
@@ -212,6 +239,11 @@ impl<'a> Board<'a> {
             PcbItemCmd::DeleteGridItem { id } => self.delete_grid_item(id),
             PcbItemCmd::SetViaStitch { id, stitch, vias } => self.set_via_stitch(id.as_deref(), stitch.clone(), vias.as_deref()),
             PcbItemCmd::DeleteViaStitch { id } => self.delete_via_stitch(id),
+            PcbItemCmd::PlaceDrillChart { layer, at } => self.place_drill_chart(layer, *at),
+            PcbItemCmd::SetDrillChart { id, units, precision, show_totals, filter } => self.set_drill_chart(id, *units, *precision, *show_totals, *filter),
+            PcbItemCmd::PlaceDrillMap { layer } => self.place_drill_map(layer),
+            PcbItemCmd::EditDrillMap { id, map } => self.edit_drill_map(id, map.clone()),
+            PcbItemCmd::DeleteDrillMap { id } => self.delete_drill_map(id),
         }
     }
 
@@ -655,6 +687,12 @@ pub(crate) fn transform_board_items(dr: &mut DrawingsSection, ids: &BTreeSet<Str
     }
     for v in dr.board_items.via_stitches.iter_mut().filter(|v| ids.contains(&v.id)) {
         crate::kicad10_items::transform_via_stitch(v, x);
+    }
+    for m in dr.board_items.drill_maps.iter_mut().filter(|m| ids.contains(&m.id)) {
+        crate::kicad10_items::transform_drill_map(m, x);
+        if matches!(x, Xform::Flip { .. }) {
+            m.layer = flip_layer(&m.layer, copper);
+        }
     }
 }
 

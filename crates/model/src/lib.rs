@@ -55,6 +55,7 @@ pub mod text_vars;
 pub mod topo_match;
 pub mod via_extra;
 pub mod via_stitch;
+pub mod drill_chart;
 
 pub use footprint::{Footprint, Pad, PadKind, PadShape};
 pub use symbol::{is_synthetic_lib_id, resolve_lib_id, LibPin, LibSymbol, SymbolGraphic};

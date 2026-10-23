@@ -25,7 +25,7 @@ import { shapeToCmd } from "./pcbPointEdit";
 import { circumcircle } from "./trackArc";
 import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
-import type { BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
+import type { BoardBarcode, BoardDrillMap, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
 import { registerExtraItemProperties } from "./pcbItemProperties";
 import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
 import { NO_ENDING, type LineEnding, type LineEndingStyle } from "./lineEnding";
@@ -57,6 +57,7 @@ export type PcbType =
   | "PCB_BARCODE"
   | "PCB_GRID_ITEM"
   | "PCB_VIA_STITCH"
+  | "PCB_DRILL_MAP"
   | "PCB_TABLE"
   | "PCB_TABLECELL";
 
@@ -83,6 +84,8 @@ export interface PcbItem {
   readonly grid?: BoardGridItem;
   /** KiCad 10's via stitching (a generator). */
   readonly stitch?: BoardViaStitch;
+  /** KiCad 10's drill map. */
+  readonly drillMap?: BoardDrillMap;
   /** A table (`PCB_TABLE`), or the table a cell (`PCB_TABLECELL`) is in. */
   readonly table?: BoardTable;
   readonly cell?: BoardTableCell;
@@ -165,6 +168,8 @@ export function pcbItemOf(board: BoardState, id: string): PcbItem | null {
   if (grid) return { type: "PCB_GRID_ITEM", id, grid };
   const stitch = dr?.via_stitches?.find((v) => v.id === id);
   if (stitch) return { type: "PCB_VIA_STITCH", id, stitch };
+  const drillMap = dr?.drill_maps?.find((m) => m.id === id);
+  if (drillMap) return { type: "PCB_DRILL_MAP", id, drillMap };
   const tableItem = tableItemOf(board, id);
   if (tableItem) return tableItem;
   const pad = id.includes(".") ? padById(board, id) : null;
@@ -198,6 +203,7 @@ function indexOf(board: BoardState): Map<string, PcbItem> {
   for (const barcode of dr?.barcodes ?? []) put({ type: "PCB_BARCODE", id: barcode.id, barcode });
   for (const grid of dr?.grid_items ?? []) put({ type: "PCB_GRID_ITEM", id: grid.id, grid });
   for (const stitch of dr?.via_stitches ?? []) put({ type: "PCB_VIA_STITCH", id: stitch.id, stitch });
+  for (const drillMap of dr?.drill_maps ?? []) put({ type: "PCB_DRILL_MAP", id: drillMap.id, drillMap });
   for (const item of tableItemsOf(board)) put(item);
   return out;
 }
@@ -252,6 +258,8 @@ export function typeName(item: PcbItem): string {
       return "Grid";
     case "PCB_VIA_STITCH":
       return "Generator";
+    case "PCB_DRILL_MAP":
+      return "Drill Map";
     case "PCB_TABLE":
       return "Table";
     case "PCB_TABLECELL":
@@ -262,7 +270,7 @@ export function typeName(item: PcbItem): string {
 }
 
 /** Every `KICAD_T` name an item here can have (the choices of the Type property). */
-export const TYPE_NAMES: readonly string[] = ["Barcode", "Dimension", "Footprint", "Generator", "Graphic", "Grid", "Group", "Leader", "Pad", "Point", "Reference Image", "Table", "Table Cell", "Text", "Text Box", "Track", "Via", "Zone"];
+export const TYPE_NAMES: readonly string[] = ["Barcode", "Dimension", "Drill Map", "Footprint", "Generator", "Graphic", "Grid", "Group", "Leader", "Pad", "Point", "Reference Image", "Table", "Table Cell", "Text", "Text Box", "Track", "Via", "Zone"];
 
 /** `GetFriendlyName()`: the caption of a single selected item (`EDA_ITEM::GetFriendlyName`, `PCB_TRACK::`, `ZONE::`). */
 export function pcbFriendlyName(item: PcbItem): string {
@@ -305,6 +313,8 @@ export function pcbFriendlyName(item: PcbItem): string {
       return "Grid";
     case "PCB_VIA_STITCH":
       return "Via Stitching";
+    case "PCB_DRILL_MAP":
+      return "Drill Map";
     case "PCB_TABLE":
       return "Table";
     case "PCB_TABLECELL":
@@ -399,6 +409,7 @@ export function positionOf(i: PcbItem): [number, number] {
   if (i.barcode) return [i.barcode.x, i.barcode.y];
   if (i.grid) return [i.grid.x, i.grid.y];
   if (i.stitch) return stitchPosition(i.stitch);
+  if (i.drillMap) return [i.drillMap.offset.x, i.drillMap.offset.y];
   const s = i.shape;
   if (s) {
     if (s.kind === "arc") return arcShapeCenter(s) ?? [s.start[0], s.start[1]];

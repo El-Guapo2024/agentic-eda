@@ -3,7 +3,8 @@
 // of an item (`itemKind`, `itemBounds`, the selection, the delete tool, the move tool's carry) ask this file for the kinds they do not know, so each holds a line for all of them.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
+import type { BoardBarcode, BoardDrillMap, BoardDrillMark, BoardDrillProfile, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
+import { DEFAULT_PROFILE, mapBounds, mapHitDistance, outlineBox, outlineRings } from "./drillChart";
 import type { BoardState, Cmd } from "../api/types";
 import { barcodeBounds, barcodeHitDistance, barcodeLabel } from "./barcodeShapes";
 import { imageBoxHitDistance } from "./refImage";
@@ -12,10 +13,10 @@ import { GRID_ITEM_LABEL, gridBounds, gridHitDistance } from "./gridItem";
 import { stitchBounds, stitchHitDistance, stitchPosition, VIA_STITCH_LABEL } from "./viaStitch";
 
 /** The kinds of item this file knows. */
-export type ExtraKind = "textbox" | "image" | "point" | "barcode" | "grid" | "via_stitch";
+export type ExtraKind = "textbox" | "image" | "point" | "barcode" | "grid" | "via_stitch" | "drill_map";
 
 /** Every kind of the family, for the tables that list the kinds an item can be (what a plain drag of a clicked item picks up, ...). */
-export const EXTRA_KINDS: readonly ExtraKind[] = ["textbox", "image", "point", "barcode", "grid", "via_stitch"];
+export const EXTRA_KINDS: readonly ExtraKind[] = ["textbox", "image", "point", "barcode", "grid", "via_stitch", "drill_map"];
 
 export type Box = [number, number, number, number];
 
@@ -37,6 +38,8 @@ export interface ExtraItem {
   grid?: BoardGridItem;
   /** KiCad 10's via stitching: on no layer of its own (its vias are ordinary vias of the board). */
   stitch?: BoardViaStitch;
+  /** KiCad 10's drill map, with what its hit test reads: the board's marks, the profile and the board outline. */
+  map?: { map: BoardDrillMap; marks: BoardDrillMark[]; profile: BoardDrillProfile; outline: [number, number][][] };
 }
 
 /** `DEFAULT_PT_SIZE_MM` of `pcbnew/pcb_point.cpp`: the size of a point the Place Point tool makes, µm. */
@@ -79,6 +82,17 @@ const ofGrid = (g: BoardGridItem): ExtraItem => ({ kind: "grid", id: g.id, layer
 
 const ofStitch = (v: BoardViaStitch): ExtraItem => ({ kind: "via_stitch", id: v.id, layer: "", position: stitchPosition(v), bounds: stitchBounds(v), stitch: v });
 
+/** `PCB_DRILL_MAP`: its position is its offset ("Position is therefore an offset applied to every mark"). */
+const ofMap =
+  (board: (Pick<BoardState, "drawings"> & Partial<Pick<BoardState, "outline" | "outline_polys">>) | null | undefined) =>
+  (m: BoardDrillMap): ExtraItem => {
+    const marks = board?.drawings?.drill_marks ?? [];
+    const profile = board?.drawings?.drill_profile ?? DEFAULT_PROFILE;
+    const outline = board ? outlineRings(board) : [];
+    const bounds = mapBounds(m, marks, profile, board ? outlineBox(board) : null) ?? [m.offset.x, m.offset.y, m.offset.x, m.offset.y];
+    return { kind: "drill_map", id: m.id, layer: m.layer, position: [m.offset.x, m.offset.y], bounds, map: { map: m, marks, profile, outline } };
+  };
+
 const ofImage = (i: BoardRefImage): ExtraItem => ({ kind: "image", id: i.id, layer: i.layer, position: [i.x, i.y], bounds: refImageBounds(i), image: i });
 
 const ofTextBox = (b: BoardTextBox): ExtraItem => ({
@@ -92,7 +106,7 @@ const ofTextBox = (b: BoardTextBox): ExtraItem => ({
 
 /** Every item of the family the board has, in the order the state lists them. */
 export function extraItems(board: Pick<BoardState, "drawings"> | null | undefined): ExtraItem[] {
-  return [...(board?.drawings?.text_boxes ?? []).map(ofTextBox), ...(board?.drawings?.images ?? []).map(ofImage), ...(board?.drawings?.points ?? []).map(ofPoint), ...(board?.drawings?.barcodes ?? []).map(ofBarcode), ...(board?.drawings?.grid_items ?? []).map(ofGrid), ...(board?.drawings?.via_stitches ?? []).map(ofStitch)];
+  return [...(board?.drawings?.text_boxes ?? []).map(ofTextBox), ...(board?.drawings?.images ?? []).map(ofImage), ...(board?.drawings?.points ?? []).map(ofPoint), ...(board?.drawings?.barcodes ?? []).map(ofBarcode), ...(board?.drawings?.grid_items ?? []).map(ofGrid), ...(board?.drawings?.via_stitches ?? []).map(ofStitch), ...(board?.drawings?.drill_maps ?? []).map(ofMap(board))];
 }
 
 /** The item of the family `id` names, or undefined. */
@@ -108,12 +122,14 @@ export function extraItemById(board: Pick<BoardState, "drawings"> | null | undef
   const gr = board?.drawings?.grid_items?.find((t) => t.id === id);
   if (gr) return ofGrid(gr);
   const vs = board?.drawings?.via_stitches?.find((t) => t.id === id);
-  return vs ? ofStitch(vs) : undefined;
+  if (vs) return ofStitch(vs);
+  const dm = board?.drawings?.drill_maps?.find((t) => t.id === id);
+  return dm ? ofMap(board)(dm) : undefined;
 }
 
 /** Every id of the family (for the sets that tell new items from old ones). */
 export function extraItemIds(board: Pick<BoardState, "drawings"> | null | undefined): string[] {
-  return [...(board?.drawings?.text_boxes ?? []).map((b) => b.id), ...(board?.drawings?.images ?? []).map((i) => i.id), ...(board?.drawings?.points ?? []).map((p) => p.id), ...(board?.drawings?.barcodes ?? []).map((b) => b.id), ...(board?.drawings?.grid_items ?? []).map((g) => g.id), ...(board?.drawings?.via_stitches ?? []).map((v) => v.id)];
+  return [...(board?.drawings?.text_boxes ?? []).map((b) => b.id), ...(board?.drawings?.images ?? []).map((i) => i.id), ...(board?.drawings?.points ?? []).map((p) => p.id), ...(board?.drawings?.barcodes ?? []).map((b) => b.id), ...(board?.drawings?.grid_items ?? []).map((g) => g.id), ...(board?.drawings?.via_stitches ?? []).map((v) => v.id), ...(board?.drawings?.drill_maps ?? []).map((m) => m.id)];
 }
 
 /** How far the point `(x, y)` is from the item, for a click's "sloppiness": 0 when it hits (`HitTest`). */
@@ -128,6 +144,8 @@ export function extraHitDistance(item: ExtraItem, x: number, y: number): number 
   if (item.grid) return gridHitDistance(item.grid, x, y);
   // `PCB_VIA_STITCH::HitTest`: `m_outline.Collide( aPosition, aAccuracy )`.
   if (item.stitch) return stitchHitDistance(item.stitch, x, y);
+  // `PCB_DRILL_MAP::HitTest`: its marks and the outline it draws.
+  if (item.map) return mapHitDistance(item.map.map, item.map.marks, item.map.profile, item.map.outline, x, y, 0);
   return Infinity;
 }
 
@@ -147,6 +165,8 @@ export function extraDeleteCmd(item: Pick<ExtraItem, "kind" | "id">): Cmd {
     // `PCB_VIA_STITCH::Remove`: the stitching and every via it made.
     case "via_stitch":
       return { op: "pcb_item", verb: "delete_via_stitch", id: item.id };
+    case "drill_map":
+      return { op: "pcb_item", verb: "delete_drill_map", id: item.id };
   }
 }
 
@@ -166,5 +186,7 @@ export function extraItemLabel(board: Pick<BoardState, "drawings"> | null | unde
   // `PCB_GRID_ITEM::GetItemDescription`
   if (item?.grid) return GRID_ITEM_LABEL;
   if (item?.stitch) return VIA_STITCH_LABEL;
+  // `PCB_DRILL_MAP::GetItemDescription`: "Drill Map on %s".
+  if (item?.map) return `Drill Map on ${item.layer}`;
   return id;
 }

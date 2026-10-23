@@ -153,12 +153,17 @@ fn oval_extents(a: (f64, f64), b: (f64, f64), pen_um: f64) -> (f64, f64, f64, f6
 
 /// The width and height, µm, of the box round the ink of a cell's text: `TransformTextToPolySet( .., 0, ARC_LOW_DEF, ERROR_INSIDE )` of the stroke font and its
 /// `BBox()`. Text with no ink (nothing, or spaces) has none.
+///
+/// The glyphs are laid out in nanometres, as KiCad lays them out (each glyph's advance is rounded to the nanometre, not to the micrometre the IR holds a size in): a line
+/// of fifteen glyphs laid out in micrometres comes out a few micrometres wider than KiCad's.
 fn ink_size(text: &str, size: (Um, Um), thickness: Um, bold: bool) -> (f64, f64) {
-    let pen = effective_pen_width(thickness, size, bold) as f64;
-    let segments = kicad_text_segments(&TextLayout { text, pos: Point { x: 0, y: 0 }, size, thickness, angle_deg: 0.0, mirror: false, halign: -1, valign: 0 });
+    let size_nm = (size.0 * 1000, size.1 * 1000);
+    let thickness_nm = thickness * 1000;
+    let pen = effective_pen_width(thickness_nm, size_nm, bold) as f64 / 1000.0;
+    let segments = kicad_text_segments(&TextLayout { text, pos: Point { x: 0, y: 0 }, size: size_nm, thickness: thickness_nm, angle_deg: 0.0, mirror: false, halign: -1, valign: 0 });
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for seg in &segments {
-        let (ax0, ay0, ax1, ay1) = oval_extents((seg.a.x as f64, seg.a.y as f64), (seg.b.x as f64, seg.b.y as f64), pen);
+        let (ax0, ay0, ax1, ay1) = oval_extents((seg.a.x as f64 / 1000.0, seg.a.y as f64 / 1000.0), (seg.b.x as f64 / 1000.0, seg.b.y as f64 / 1000.0), pen);
         x0 = x0.min(ax0);
         y0 = y0.min(ay0);
         x1 = x1.max(ax1);

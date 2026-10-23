@@ -11,7 +11,7 @@
 
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
-import type { BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch, PcbItemCmd } from "./pcbItemTypes";
+import type { BoardBarcode, BoardDrillChart, BoardDrillMap, BoardDrillMark, BoardDrillProfile, BoardDrillSpan, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch, PcbItemCmd } from "./pcbItemTypes";
 import type { MicrowaveCmd } from "./microwaveTypes";
 import type { EmbeddedCmd } from "./embeddedTypes";
 import type { TableCmdWire } from "./tableTypes";
@@ -612,6 +612,12 @@ export interface Drawings {
   grid_items?: BoardGridItem[];
   /** KiCad 10's via stitchings (`PCB_VIA_STITCH`) -- see api/pcbItemTypes.ts. */
   via_stitches?: BoardViaStitch[];
+  /** KiCad 10's drill charts (what makes a table one), drill maps, drill symbol profile, and -- when the board has a map -- every hole's mark and the spans a map can show. */
+  drill_charts?: BoardDrillChart[];
+  drill_maps?: BoardDrillMap[];
+  drill_profile?: BoardDrillProfile;
+  drill_marks?: BoardDrillMark[];
+  drill_spans?: BoardDrillSpan[];
   barcodes?: BoardBarcode[];
   /** The tables of the board (`PCB_TABLE`, crates/model/src/table.rs), with the geometry `crates/cli/src/table_json.rs` works out. Absent when the board has none. */
   tables?: BoardTable[];

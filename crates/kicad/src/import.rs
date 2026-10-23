@@ -167,10 +167,22 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let barcodes = crate::barcode_io::read_all(root, &mut refs.barcodes);
     let board_items = crate::pcb_items_io::read_all(root, &mut refs.board_items);
     // Tables (`PCB_TABLE`): the ones this model can hold as tables, and the text of the others, kept as they were.
-    let (tables, raw_tables) = crate::pcb_table::read_all(root, &mut refs.tables);
+    let (mut tables, raw_tables) = crate::pcb_table::read_all(root, &mut refs.tables);
     if !raw_tables.is_empty() {
         *notes.unread_items.entry("table".to_string()).or_insert(0) += raw_tables.len();
         raw_items.extend(raw_tables);
+    }
+    // KiCad 10's drill charts: tables of their own, after the board's other tables, and what makes each a chart (named by its table's id once the ids are given).
+    let (charts, raw_charts) = crate::drill_chart_io::read_charts(root, &mut refs.tables);
+    if !raw_charts.is_empty() {
+        *notes.unread_items.entry("drill_chart".to_string()).or_insert(0) += raw_charts.len();
+        raw_items.extend(raw_charts);
+    }
+    let first_chart_table = tables.len();
+    let mut chart_overlays = Vec::new();
+    for (t, c) in charts {
+        tables.push(t);
+        chart_overlays.push(c);
     }
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
@@ -275,6 +287,14 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if let Some(dr) = design.drawings.as_mut() {
         dr.text_extras = dr.texts.iter().zip(text_extras).filter(|(_, x)| !x.is_default()).map(|(t, mut x)| { x.id = t.id.clone(); x }).collect();
     }
+    // The drill charts, named by the ids their tables have just been given.
+    if !chart_overlays.is_empty() {
+        let dr = design.drawings.get_or_insert_with(Default::default);
+        for (i, mut c) in chart_overlays.into_iter().enumerate() {
+            c.table_id = dr.tables[first_chart_table + i].id.clone();
+            dr.board_items.drill_charts.push(c);
+        }
+    }
     // KiCad 10's via stitchings (`(generated (type via_stitch) ..)`), their members named by the ids the vias have just been given.
     crate::via_stitch_io::attach(&mut design, root, &mut refs);
     // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
@@ -312,7 +332,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
 const READ_ITEMS: &[&str] = &[
     "version", "generator", "generator_version", "general", "paper", "page", "title_block", "layers", "setup", "host", "net", "net_class", "footprint", "module", "segment", "arc", "via", "zone", "gr_line", "gr_arc",
     "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "gr_text_box", "image", "point", "dimension", "group", "generated", "barcode", "embedded_fonts",
-    "table", "embedded_files", "grid_item",
+    "table", "embedded_files", "grid_item", "drill_chart", "drill_map",
 ];
 
 /// Whether a reader here takes the top-level `item` of kind `tag`: its kind is in [`READ_ITEMS`], a reference image is one whose data is a file the reader understands

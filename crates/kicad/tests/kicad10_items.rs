@@ -259,9 +259,14 @@ impl Sx {
     /// is given (`(capping no) (covering (front no) (back no)) (plugging (front no) (back no)) (filling no)`: "Versions before 10.0 had no protection features ... must be
     /// interpreted as OFF in legacy boards"), which kicad-cli's re-save of our KiCad 9-version file writes into every via, a via stitching's template among them.
     fn canon(&self) -> String {
+        self.canon_to(1e3)
+    }
+
+    /// [`Sx::canon`] with the numbers to `1 / per_mm` of a millimetre.
+    fn canon_to(&self, per_mm: f64) -> String {
         match self {
             Sx::Atom(a) => match a.parse::<f64>() {
-                Ok(v) if a.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') => format!("{}", (v * 1e3).round() / 1e3),
+                Ok(v) if a.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') => format!("{}", (v * per_mm).round() / per_mm),
                 _ => a.clone(),
             },
             Sx::List(l) => {
@@ -271,7 +276,7 @@ impl Sx {
                     _ => false,
                 };
                 let in_via = self.tag() == Some("via");
-                let parts: Vec<String> = l.iter().filter(|i| !matches!(i.tag(), Some("uuid") | Some("tstamp") | Some("members")) && !(in_via && legacy_off(i))).map(Sx::canon).collect();
+                let parts: Vec<String> = l.iter().filter(|i| !matches!(i.tag(), Some("uuid") | Some("tstamp") | Some("members")) && !(in_via && legacy_off(i))).map(|i| i.canon_to(per_mm)).collect();
                 format!("({})", parts.join(" "))
             }
         }
@@ -293,7 +298,11 @@ fn kicad10_items(text: &str) -> Vec<String> {
                     out.push(format!("{} {} {}", item.tag().unwrap(), at.join(" "), ends.join(" ")));
                 }
             }
-            Some("grid_item" | "drill_chart" | "drill_map") => out.push(item.canon()),
+            Some("grid_item" | "drill_map") => out.push(item.canon()),
+            // A drill chart is built again by kicad-cli's re-save when it is stale (`RefreshGeneratedTables`): from our file, whose cell margins are held to the micrometre
+            // (1.0025 mm is 1.003), its rows come out a micrometre or two off the original's: [`same_items`] takes numbers within 2.5 µm as one there.
+            Some("drill_chart") => out.push(item.canon()),
+            Some("setup") => out.extend(item.find("drill_symbol_profile").map(Sx::canon)),
             Some("generated") if item.find("type").and_then(|t| t.items().get(1)) == Some(&Sx::Atom("via_stitch".into())) => {
                 let members = item.find("members").map_or(0, |m| m.items().len() - 1);
                 out.push(format!("{} members {members}", item.canon()));
@@ -303,6 +312,24 @@ fn kicad10_items(text: &str) -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// Two canonical items are one: the same text, or two drill charts whose words are the same and whose numbers are within 2.5 µm of each other (see [`kicad10_items`]).
+fn same_item(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    if !(a.starts_with("(drill_chart") && b.starts_with("(drill_chart")) {
+        return false;
+    }
+    let words = |s: &str| s.replace(['(', ')'], " ").split_whitespace().map(str::to_string).collect::<Vec<_>>();
+    let (wa, wb) = (words(a), words(b));
+    wa.len() == wb.len()
+        && wa.iter().zip(&wb).all(|(x, y)| x == y || matches!((x.parse::<f64>(), y.parse::<f64>()), (Ok(p), Ok(q)) if (p - q).abs() <= 0.0025))
+}
+
+fn same_items(a: &[String], b: &[String]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_item(x, y))
 }
 
 /// Every KiCad 10 item of the original is in our re-export as the original has it, and kicad-cli's own re-save of our file (`pcb upgrade --force`, which writes every
@@ -315,10 +342,10 @@ fn items_are_written_as_kicad_writes_them(cli: &Path, src: &Path, rel: &str, our
     assert!(up.status.success(), "{rel}: kicad-cli pcb upgrade failed: {}", String::from_utf8_lossy(&up.stderr));
     let resaved = std::fs::read_to_string(&resaved_path).unwrap();
     let (a, b, c) = (kicad10_items(&original), kicad10_items(ours), kicad10_items(&resaved));
-    let diff = |x: &[String], y: &[String]| -> Vec<String> { x.iter().filter(|i| !y.contains(i)).cloned().collect() };
+    let diff = |x: &[String], y: &[String]| -> Vec<String> { x.iter().filter(|i| !y.iter().any(|j| same_item(i, j))).cloned().collect() };
     assert!(!a.is_empty(), "{rel}: no KiCad 10 item in the original");
     assert!(
-        a == b && b == c,
+        same_items(&a, &b) && same_items(&b, &c),
         "{rel}: the KiCad 10 items differ\n  original only:\n    {}\n  ours only:\n    {}\n  kicad-cli's re-save of ours only:\n    {}",
         diff(&a, &b).join("\n    "),
         diff(&b, &a).join("\n    "),

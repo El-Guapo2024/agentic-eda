@@ -28,6 +28,7 @@ mod pcb_items_io;
 mod line_ending_io;
 mod grid_item_io;
 mod via_stitch_io;
+mod drill_chart_io;
 mod pcb_point;
 mod pcb_textbox;
 mod board_text_io;

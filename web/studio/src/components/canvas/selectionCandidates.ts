@@ -100,8 +100,9 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
     // `PCB_GRID_ITEM_T` has `m_filter.gridItems` (KiCad 10).
     case "grid":
       return filter.gridItems !== false;
-    // A generator (`PCB_GENERATOR_T`) has no case of its own: `m_filter.otherItems`.
+    // A generator (`PCB_GENERATOR_T`) has no case of its own: `m_filter.otherItems`; nor has KiCad 10's drill map (`PCB_DRILL_MAP_T`).
     case "via_stitch":
+    case "drill_map":
       return filter.otherItems;
   }
 }
@@ -304,6 +305,12 @@ export function collectSelectionCandidates(
   }
   // `PCB_TABLE`: a click finds a cell, not the table ("Tables should defer to their table cells"); a cell another one covers is not an item. The table is locked as a whole.
   for (const tb of board.drawings?.tables ?? []) {
+    // KiCad 10: "A generated table says what the board says, so a click on it is a click on the table" -- a drill chart is picked whole.
+    if (board.drawings?.drill_charts?.some((c) => c.table_id === tb.id)) {
+      const cells = tb.cells.filter(isSelectableCell);
+      if (cells.length > 0) consider("table", tb.id, Math.min(...cells.map((c) => cellHitDistance(c, xUm, yUm))), cells.reduce((a, c) => a + cellArea(c), 0), tb.layer);
+      continue;
+    }
     for (const c of tb.cells) {
       if (!isSelectableCell(c)) continue;
       consider("tablecell", c.id, cellHitDistance(c, xUm, yUm), cellArea(c), tb.layer, tb.id);

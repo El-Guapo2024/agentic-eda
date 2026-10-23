@@ -843,3 +843,58 @@ fn the_via_stitching_commands_have_one_wire_form() {
     let back: Cmd = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
     assert_eq!(back, c);
 }
+
+// ------------------------------------------------------------------------------------------------------------------ drill maps (KiCad 10)
+
+#[test]
+fn a_drill_map_is_placed_once_a_layer_and_moves_its_marks_not_its_holes() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let place = |b: &mut Board<'_>, layer: &str| b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillMap { layer: layer.into() }));
+    place(&mut b, "F.Fab").unwrap();
+    // "Two maps on one layer would overdraw each other's marks"; copper is no documentation layer.
+    assert_eq!(place(&mut b, "F.Fab").unwrap_err()[0].hint.as_deref(), Some("Every documentation layer already has a drill map."));
+    assert!(place(&mut b, "F.Cu").is_err());
+    let map = drawings(&b).board_items.drill_maps[0].clone();
+    assert!(map.id.starts_with("dmap_"), "{}", map.id);
+    assert_eq!((map.size_um, map.span.is_none(), map.outline_slots, map.guide_cross), (1_500, true, true, false), "PCB_DRILL_MAP's defaults");
+    // Move slides the marks (`m_offset`); a turn has nothing to turn; a flip takes the map to the other side's layer.
+    b.apply(&Cmd::MoveItems { ids: ids(&[&map.id]), dx: 50_000, dy: 0 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&[&map.id]), pivot: p(0, 0), angle_millideg: 90_000 }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&[&map.id]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    let moved = drawings(&b).board_items.drill_maps[0].clone();
+    assert_eq!((moved.offset, moved.layer.as_str()), (p(50_000, 0), "B.Fab"));
+    let mut edited = moved.clone();
+    edited.guide_cross = true;
+    edited.size_um = 0;
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditDrillMap { id: map.id.clone(), map: edited })).unwrap();
+    assert_eq!((drawings(&b).board_items.drill_maps[0].guide_cross, drawings(&b).board_items.drill_maps[0].size_um), (true, 1), "`SetSymbolSize`: at least one");
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteDrillMap { id: map.id })).unwrap();
+    assert!(drawings(&b).board_items.drill_maps.is_empty());
+}
+
+#[test]
+fn a_drill_chart_is_refused_off_the_documentation_layers_and_lists_the_holes() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100, 300);
+    let err = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "F.SilkS".into(), at: p(0, 0) })).unwrap_err();
+    assert_eq!(err[0].hint.as_deref(), Some("No documentation layer is enabled to hold a drill chart."));
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 10_000, y: 10_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "Dwgs.User".into(), at: p(5_000, 6_000) })).unwrap();
+    let dr = drawings(&b);
+    let chart = &dr.board_items.drill_charts[0];
+    let t = dr.tables.iter().find(|t| t.id == chart.table_id).unwrap();
+    assert_eq!((t.col_count(), t.at), (6, p(5_000, 6_000)));
+    let texts: Vec<&str> = t.cells.iter().map(|c| c.text.as_str()).collect();
+    assert!(texts.contains(&"0.300") && texts.contains(&"F.Cu / B.Cu"), "{texts:?}");
+    assert_eq!(chart.row_shapes.get(&1), Some(&0), "the first shape");
+    assert!(dr.board_items.drill_profile.as_ref().is_some_and(|p| p.assignments.len() == 1), "the new mark is the board's");
+    // Nothing changed: nothing is rebuilt. Another via of the size: the chart counts it.
+    let ops_before: usize = t.cells[6 + 4].text.parse().unwrap();
+    assert!(!b.refresh_drill_charts());
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 20_000, y: 10_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    assert!(b.refresh_drill_charts());
+    let dr = drawings(&b);
+    let t = dr.tables.iter().find(|t| t.id == dr.board_items.drill_charts[0].table_id).unwrap();
+    assert_eq!(t.cells[6 + 4].text, (ops_before + 1).to_string(), "the OPS of the 0.3 mm row");
+}

@@ -5,6 +5,8 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { BarcodeEcc, BarcodeKind, BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
+import type { BoardDrillChart, BoardDrillMap, TableUnits } from "../api/pcbItemTypes";
+import { spanChoiceOf, spanChoices, withSpanChoice } from "./drillChart";
 import { LAYOUT_PROPERTY_CHOICES, layoutOf, MODE_CHOICES, modeOf, viaStitchCmd, withLayoutAndMode, type StitchLayout, type StitchMode } from "./viaStitch";
 import { gridItemCmd, normalizedGridItem } from "./gridItem";
 import type { Cmd } from "../api/types";
@@ -294,9 +296,81 @@ function registerViaStitch(pm: PM, add: Add): void {
   });
 }
 
+/**
+ * Register KiCad 10's `PCB_DRILL_MAP` (`PCB_DRILL_MAP_DESC`): a board item with Position X / Y masked ("Relative, not absolute"), then Offset X, Offset Y, Symbol Size, Hole Span (the
+ * spans the board has, `PCB_PROPERTIES_PANEL::updateLists`), Outline Slots and Guide Cross, under "Drill Map Properties". Each is one `edit_drill_map`.
+ */
+function registerDrillMap(pm: PM, add: Add): void {
+  pm.registerType("PCB_DRILL_MAP");
+  pm.inheritsAfter("PCB_DRILL_MAP", "BOARD_ITEM");
+  pm.mask("PCB_DRILL_MAP", "BOARD_ITEM", "Position X");
+  pm.mask("PCB_DRILL_MAP", "BOARD_ITEM", "Position Y");
+  const GROUP = "Drill Map Properties";
+  const own = (i: PcbItem): BoardDrillMap => i.drillMap!;
+  const edit = (i: PcbItem, next: BoardDrillMap): Cmd[] => (JSON.stringify(next) === JSON.stringify(own(i)) ? [] : [{ op: "pcb_item", verb: "edit_drill_map", id: own(i).id, map: next }]);
+  add({ owner: "PCB_DRILL_MAP", name: "Offset X", kind: "int", display: "size", get: (i) => own(i).offset.x, set: (i, v) => edit(i, { ...own(i), offset: { ...own(i).offset, x: Math.round(num(v)) } }) }, GROUP);
+  add({ owner: "PCB_DRILL_MAP", name: "Offset Y", kind: "int", display: "size", get: (i) => own(i).offset.y, set: (i, v) => edit(i, { ...own(i), offset: { ...own(i).offset, y: Math.round(num(v)) } }) }, GROUP);
+  add({ owner: "PCB_DRILL_MAP", name: "Symbol Size", kind: "int", display: "size", get: (i) => own(i).size_um, set: (i, v) => edit(i, { ...own(i), size_um: Math.max(1, Math.round(num(v))) }) }, GROUP);
+  const spans = (c: PcbCtx) => c.board.drawings?.drill_spans ?? [];
+  add(
+    {
+      owner: "PCB_DRILL_MAP",
+      name: "Hole Span",
+      kind: "enum",
+      choices: (_i, c) => spanChoices(spans(c)).map((s) => ({ label: s.label, value: s.value })),
+      get: (i, c) => spanChoiceOf(own(i), spans(c)),
+      set: (i, v, c) => edit(i, withSpanChoice(own(i), spans(c), Number(v))),
+    },
+    GROUP
+  );
+  add({ owner: "PCB_DRILL_MAP", name: "Outline Slots", kind: "bool", get: (i) => own(i).outline_slots !== false, set: (i, v) => edit(i, { ...own(i), outline_slots: Boolean(v) }) }, GROUP);
+  add({ owner: "PCB_DRILL_MAP", name: "Guide Cross", kind: "bool", get: (i) => !!own(i).guide_cross, set: (i, v) => edit(i, { ...own(i), guide_cross: Boolean(v) }) }, GROUP);
+}
+
+/**
+ * KiCad 10's `PCB_GENERATED_TABLE` and `PCB_DRILL_CHART` rows of a table that is a drill chart: Units and Decimal Places ("Table Generator"), Show Totals ("Drill Chart Properties").
+ * Each edit is one `set_drill_chart`, which builds the chart again from the board.
+ */
+function registerDrillChart(add: Add): void {
+  const chartOf = (i: PcbItem, c: PcbCtx): BoardDrillChart | undefined => (i.type === "PCB_TABLE" ? c.board.drawings?.drill_charts?.find((x) => x.table_id === i.id) : undefined);
+  const isChart = (i: PcbItem, c?: PcbCtx): boolean => !!c && !!chartOf(i, c);
+  const edit = (i: PcbItem, c: PcbCtx, patch: { units?: TableUnits; precision?: number; show_totals?: boolean }): Cmd[] => {
+    const ch = chartOf(i, c);
+    if (!ch) return [];
+    const cur = { units: ch.units ?? "mm", precision: ch.precision ?? 3, show_totals: ch.show_totals ?? true };
+    const next = { ...cur, ...patch };
+    if (JSON.stringify(next) === JSON.stringify(cur)) return [];
+    return [{ op: "pcb_item", verb: "set_drill_chart", id: ch.table_id, ...next, filter: ch.filter ?? { plated: true, non_plated: true, vias: true, slots: true, backdrills: true, castellated: true } }];
+  };
+  const UNITS: Choice[] = [
+    { label: "Millimeters", value: "mm" },
+    { label: "Mils", value: "mils" },
+    { label: "Inches", value: "inch" },
+  ];
+  add(
+    { owner: "PCB_TABLE", name: "Units", kind: "enum", choices: () => UNITS, available: (i, c) => isChart(i, c), get: (i, c) => chartOf(i, c)?.units ?? "mm", set: (i, v, c) => edit(i, c, { units: String(v) as TableUnits }) },
+    "Table Generator"
+  );
+  add(
+    {
+      owner: "PCB_TABLE",
+      name: "Decimal Places",
+      kind: "int",
+      available: (i, c) => isChart(i, c),
+      get: (i, c) => chartOf(i, c)?.precision ?? 3,
+      // `SetPrecision`: clamped to 0..6.
+      set: (i, v, c) => edit(i, c, { precision: Math.min(6, Math.max(0, Math.trunc(num(v)))) }),
+    },
+    "Table Generator"
+  );
+  add({ owner: "PCB_TABLE", name: "Show Totals", kind: "bool", available: (i, c) => isChart(i, c), get: (i, c) => chartOf(i, c)?.show_totals ?? true, set: (i, v, c) => edit(i, c, { show_totals: Boolean(v) }) }, "Drill Chart Properties");
+}
+
 export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
   registerGridItem(pm, add);
   registerViaStitch(pm, add);
+  registerDrillMap(pm, add);
+  registerDrillChart(add);
   registerReferenceImage(pm, add, layerChoices);
   registerPoint(pm, add, layerChoices);
   registerBarcode(pm, add, layerChoices);

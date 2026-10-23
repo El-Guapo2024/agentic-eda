@@ -262,7 +262,87 @@ export type PcbItemCmd =
    * (Draw Via Stitch Area: no `id`); the server places the vias from the zone fills when `vias` is left out. One undo step.
    */
   | { verb: "set_via_stitch"; id?: string; stitch: Omit<BoardViaStitch, "id"> & { id?: string }; vias?: { cell: [number, number]; at: PointXY }[] }
-  | { verb: "delete_via_stitch"; id: string };
+  | { verb: "delete_via_stitch"; id: string }
+  /** KiCad 10's Place Drill Chart: a chart of the default template on a documentation layer, built from the board, its first corner at `at`. One undo step. */
+  | { verb: "place_drill_chart"; layer: string; at: PointXY }
+  /** The Properties panel's Units, Decimal Places and Show Totals of a drill chart (`id` is its table's): the chart rebuilt from the board. */
+  | { verb: "set_drill_chart"; id: string; units: TableUnits; precision: number; show_totals: boolean; filter: DrillChartFilter }
+  /** KiCad 10's Place Drill Map: a map on a documentation layer that has none. */
+  | { verb: "place_drill_map"; layer: string }
+  | { verb: "edit_drill_map"; id: string; map: BoardDrillMap }
+  | { verb: "delete_drill_map"; id: string };
+
+/** `GENERATED_TABLE_UNITS` (crates/model/src/drill_chart.rs). */
+export type TableUnits = "mm" | "inch" | "mils";
+
+/** `DRILL_CHART_FILTER`: which holes a chart reports on. */
+export interface DrillChartFilter {
+  plated: boolean;
+  non_plated: boolean;
+  vias: boolean;
+  slots: boolean;
+  backdrills: boolean;
+  castellated: boolean;
+}
+
+/** What makes a table of the board a KiCad 10 drill chart (`eda_model::drill_chart::DrillChart`), keyed by the table's id. */
+export interface BoardDrillChart {
+  table_id: string;
+  units?: TableUnits;
+  precision?: number;
+  columns: { id: string; heading: string; align: "left" | "center" | "right"; width_um?: number }[];
+  /** Table row -> the key of the hole group it reports. */
+  row_keys?: Record<string, string>;
+  filter?: DrillChartFilter;
+  show_totals?: boolean;
+  /** The table column the marks are drawn in, -1 for none. */
+  symbol_column?: number;
+  /** Table row -> the curated shape drawn in its symbol cell. */
+  row_shapes?: Record<string, number>;
+}
+
+/** `DRILL_SPAN`: the layers a drill runs between, start first. */
+export interface BoardDrillSpan {
+  start: string;
+  end: string;
+  backdrill?: boolean;
+  npth?: boolean;
+}
+
+/** KiCad 10's drill map (`eda_model::drill_chart::DrillMap`): the drill marks drawn at the holes on a documentation layer, slid by `offset`. */
+export interface BoardDrillMap {
+  id: string;
+  layer: string;
+  offset: PointXY;
+  size_um: number;
+  /** One span only; absent shows every span. */
+  span?: BoardDrillSpan | null;
+  outline_slots?: boolean;
+  guide_cross?: boolean;
+  custom_properties?: string[];
+}
+
+/** The board's drill symbol profile (`DRILL_SYMBOL_PROFILE`): the size and width of the marks are what the canvas reads. */
+export interface BoardDrillProfile {
+  size_um: number;
+  width_um: number;
+  mark_policy: string;
+  group_by: string[];
+  freeze_assignments: boolean;
+}
+
+/** One hole's mark as a map draws it (`DRILL_SYMBOL_ENTRY`, crates/ops/src/drill_chart.rs `DrillMark`). */
+export interface BoardDrillMark {
+  at: PointXY;
+  span: BoardDrillSpan;
+  mode: "shape" | "letter" | "size_text";
+  shape_index: number;
+  letter: string;
+  diameter_um: number;
+  size_um: [number, number];
+  orientation_deg: number;
+  is_slot: boolean;
+}
 
 /**
  * One line ending as `set_shape_style` takes it (`eda_model::line_ending::LineEnding`): KiCad 10's `(start_shape ..)` / `(end_shape ..)` of a line, an arc or a curve -- the shape dialog's

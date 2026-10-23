@@ -111,6 +111,10 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
     for token in design.drawings.iter().flat_map(|d| d.setup_tokens.iter()) {
         writeln!(out, "\t\t{token}").unwrap();
     }
+    // KiCad 10's drill symbol profile (`formatDrillSymbolProfile`), when the board has one other than the default.
+    if let Some(p) = design.drawings.as_ref().and_then(|d| d.board_items.drill_profile.as_ref()) {
+        crate::drill_chart_io::write_profile(&mut out, p);
+    }
     // Zone Hatch Offsets (`formatSetup`'s `(zone_defaults (property (layer ..) (hatch_position (xy x y))))`), in `PCB_LAYER_ID` order, for the copper layers the board has.
     {
         let mut offsets: Vec<(&String, &eda_model::setup_pages::HatchOffset)> = model.board.hatch_offsets.iter().filter(|(l, o)| !o.is_zero() && model.board.layers.contains(l)).collect();
@@ -424,7 +428,11 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         let mut tables: Vec<&eda_model::table::Table> = drawings.tables.iter().collect();
         tables.sort_by(|a, b| a.id.cmp(&b.id));
         for t in &tables {
-            let uuid = crate::pcb_table::write(&mut out, t, is_locked(&t.id));
+            // A table that is a drill chart is written as one (`format( const PCB_GENERATED_TABLE* )`).
+            let uuid = match drawings.board_items.drill_charts.iter().find(|c| c.table_id == t.id) {
+                Some(c) => crate::drill_chart_io::write_chart(&mut out, t, c, is_locked(&t.id)),
+                None => crate::pcb_table::write(&mut out, t, is_locked(&t.id)),
+            };
             written.entry(t.id.clone()).or_default().push(uuid);
         }
         // `PCB_DIMENSION_BASE`: the geometry and the text are worked out in one place

@@ -96,6 +96,7 @@ pub mod embedded;
 pub use embedded::{CollectedModel, EmbeddedCmd, EmbeddedOwner};
 pub mod pcb_items;
 pub mod kicad10_items;
+pub mod drill_chart;
 mod pcb_props;
 mod pcb_table_builders;
 mod pcb_tables;
