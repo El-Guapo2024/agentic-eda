@@ -49,7 +49,6 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-specctra-cli` | Specctra DSN export through `kicad-cli pcb export specctra` when kicad-cli has it (probed once per process), our exporter as the deprecated fallback; the reply's `engine` | done, gates run | the fallback's deletion, once every machine has the command |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

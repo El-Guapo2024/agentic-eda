@@ -138,7 +138,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 18 | P18 Design blocks | 32 | 23 actions; reusable blocks | **done 2026-10-20 on `task-design-blocks` (not merged)**; item 32 lists what is left | L |
 | 19 | P19 Microwave tools and Specctra | 9, 27 | the five microwave tools (and a schematic dropped on the sheet); DSN export and SES import | **microwave half done 2026-10-21 on `task-microwave` (merged); Specctra (P19b) done 2026-10-23 on `task-specctra-wip` (not merged)**: File > Export > Specctra DSN and File > Import > Specctra Session, `eda board export specctra` and `eda board import-ses` | S-M |
 | 20 | P20 Browser checks for the older areas | 33 | most earlier work was never clicked | standing | M each |
-| 21 | P21 Simulator | 34 | `eeschema.Simulation.*`, `Simulator.*` | last | XL |
+| 21 | P21 Simulator | 34 | `eeschema.Simulation.*`, `Simulator.*` | **done 2026-10-23 on `task-simulator` (not merged)**; item 34 lists what is left | XL |
 | 22 | P24 The multichannel tool | 24, 32 | Generate Placement Rule Areas, Repeat Layout, Apply Design Block Layout; a placement rule area is a zone that names a sheet, a class or a group | **done 2026-10-21 on `task-multichannel` (not merged)**; items 24 and 32 list what is left | L |
 
 ## Items
@@ -753,9 +753,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   force: a fix counts when the C++ function is named in the code, the logic has a `kicad-port/*.test.ts`, one user action is one undo step, and a browser check ran.
 
 ### 34. The simulator
-**New (it was Appendix B), in scope and last.** Package P21, size XL.
-- 29 rows: `eeschema.Simulation.*` (11), `eeschema.Simulator.*` (9), the OP voltages and currents and the simulator window (3), and the plot's zoom history and axes (6, `common.Control`). ngspice 45.2 is installed; the
-  plan is `kicad-cli sch export netlist --format spice` and `ngspice -b`, the raw output read back. Port from: `eeschema/sim/`, `eeschema/tools/simulator_control.cpp`, `eeschema/dialogs/dialog_sim_*`.
+**Done 2026-10-23 on `task-simulator` (package P21).** PARITY-sch.md section 38 has the ports and the tests.
+- Every row is wired: Inspect > Simulator, the 12 `eeschema.Simulation.*` (Probe and Tune on the sheet among them), the 9 `eeschema.Simulator.*` (the exports, the View toggles), Show OP Voltages and Currents, and the plot's zoom history and axes (6 `common.Control`).
+- The architecture is the user's: kicad-cli's SPICE netlist (`kicad-cli sch export netlist --format spice`, and `--format kicadxml` for the fields and pins), ngspice as a separate program in batch mode (`ngspice -b`, `EDA_NGSPICE` or `PATH`), its raw files read back; the plot is a canvas painted as mathplot paints. The workbook (`.wbk`) is read and written byte for byte and kept in the design (`Cmd::SetSimulator`), the project's `schematic.ngspice` with it.
+- Left, by that architecture: libngspice's background run and its live plot (a batch run shows its result when it is over; Stop kills ngspice and what it computed); a measurement or a Fourier analysis added after a run is a new run, not a command to the loaded simulator.
+- Left: the user-defined signals' auto-completion, the probe's cursors and its net highlight, the SP analysis's S-parameter signals, the multi-run cursor's run labels. A net drawn in pieces gets one OP label per sheet. Tuning a potentiometer.
+- Found on the way: the derived schematic now gives a placed symbol its library symbol's `Sim.*` fields (it had dropped them, so no `Simulation_SPICE` source simulated); two symbols of one library symbol placed at different angles still share one transform in the derived schematic (`write_regular_lib_symbol`), which can leave a pin unconnected for kicad-cli.
 
 ### 35. The long tail of the PCB tools
 **New, open.** Hit: rarely each. Package P6, with P13 for zones. From the "not ported" rows of `PARITY-pcb.md`.
@@ -808,7 +811,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   IPC-2581, ODB++, D356 and GenCAD. Old #2, #3 and #19-#24. The UI around them is in scope (item 11). IDF, Hyperlynx and the footprint report stay unwired: kicad-cli has none (3 rows).
 - **Python scripting and plugins**: `common.API.pluginsReload`, `pcbnew.ScriptingTool.*`, the footprint wizards (`pcbnew.FpWizard.*`, `ModuleEditor.createFootprint`) (6 rows).
 - **Project management and the application shell**: New, Open, Revert, Quit, the project manager, Rescue, Open Directory, Open with Text Editor, the calculators (9 rows). A web page has none of these. (Open Non-KiCad Board was one: it replaces the board that is open and needs no project of its own, so it is wired, with Import Non-KiCad Schematic File, since 2026-10-15: item 28.)
-- **Simulator, in scope and last**: 29 rows, now item 34 and package P21.
+- **Simulator**: 29 rows, item 34, package P21: done 2026-10-23 on `task-simulator`.
 - **Deferred until the IR has the item** (reasons in `ui-parity-missing.json`, re-checked in `STALE-REASONS.md`): design blocks (none left: item 32), generators (9), tables (18), PCB text boxes, barcodes, points,
   reference images and hatch fills, schematic images, the symbol text box (item 24), derived symbols, alternate pin functions, design variants (3), padstacks (Remove Unused Pads),
   embedded files (4: done 2026-10-23, P26, with `zstd`), custom pads (item 31: Explode, Recombine and the microwave shapes are left). The autoplacer (2) is declined: placement runs through `eda board` behind the placement gates. The Footprint and Symbol

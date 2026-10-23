@@ -1,0 +1,334 @@
+/* The SPICE Simulator window (components/simulator/): a modeless window over the schematic editor, moved by its title bar and sized by its corner. */
+.sim-window {
+  position: fixed;
+  right: 16px;
+  bottom: 40px;
+  width: min(1180px, calc(100vw - 32px));
+  height: min(640px, calc(100vh - 120px));
+  min-width: 520px;
+  min-height: 360px;
+  resize: both;
+  overflow: hidden;
+  z-index: 1800;
+  display: flex;
+  flex-direction: column;
+  background: var(--chrome-bg-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px var(--chrome-shadow);
+  color: var(--chrome-text);
+  font-size: 12px;
+}
+.sim-window.focused {
+  border-color: var(--chrome-accent);
+}
+.sim-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  cursor: move;
+  border-bottom: 1px solid var(--chrome-border);
+  user-select: none;
+  font-weight: 600;
+}
+.sim-close {
+  background: none;
+  border: none;
+  color: var(--chrome-text);
+  font-size: 16px;
+  cursor: pointer;
+}
+.sim-infobar {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--chrome-warn, #e0b000);
+  color: #000;
+}
+.sim-menubar {
+  height: 24px;
+}
+.sim-menubar .menubar-dropdown {
+  z-index: 1900;
+}
+.sim-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--chrome-border);
+}
+.sim-tool {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px;
+  cursor: pointer;
+  line-height: 0;
+}
+.sim-tool:hover:not(:disabled) {
+  background: var(--chrome-hover);
+}
+.sim-tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sim-toolbar-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--chrome-border);
+}
+.sim-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+}
+.sim-left {
+  flex: 1 1 0;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+}
+.sim-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--chrome-border);
+}
+.sim-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-right: 1px solid var(--chrome-border);
+}
+.sim-tab.active {
+  background: var(--chrome-active);
+}
+.sim-tab-close {
+  background: none;
+  border: none;
+  color: var(--chrome-text-dim);
+  cursor: pointer;
+}
+.sim-plot-area {
+  flex: 1 1 0;
+  min-height: 200px;
+  position: relative;
+}
+.sim-plot {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.sim-plot canvas {
+  display: block;
+}
+.sim-plot-menu {
+  position: absolute;
+  min-width: 200px;
+}
+.sim-noplot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-weight: 600;
+  color: var(--chrome-text-dim);
+}
+.sim-console {
+  flex: 0 0 120px;
+  min-height: 100px;
+  resize: vertical;
+  font-family: monospace;
+  font-size: 11px;
+  border: none;
+  border-top: 1px solid var(--chrome-border);
+  background: var(--chrome-input-bg);
+  color: var(--chrome-text);
+  padding: 4px;
+  white-space: pre;
+}
+.sim-side {
+  flex: 0 0 340px;
+  min-width: 200px;
+  border-left: 1px solid var(--chrome-border);
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.sim-section {
+  border-bottom: 1px solid var(--chrome-border);
+  padding: 4px;
+}
+.sim-filter {
+  width: 100%;
+  margin-bottom: 4px;
+}
+.sim-grid-wrap {
+  max-height: 220px;
+  overflow: auto;
+}
+.sim-grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+.sim-grid th,
+.sim-grid td {
+  border: 1px solid var(--chrome-border);
+  padding: 1px 4px;
+  text-align: left;
+  white-space: nowrap;
+}
+.sim-grid th {
+  background: var(--chrome-bg);
+  font-weight: 500;
+}
+.sim-grid tr.selected td.sim-signal {
+  background: var(--chrome-selected-bg);
+}
+.sim-grid input[type="color"] {
+  width: 28px;
+  height: 16px;
+  padding: 0;
+  border: none;
+}
+.sim-cell {
+  width: 100%;
+  min-width: 60px;
+  border: none;
+  background: transparent;
+  color: var(--chrome-text);
+}
+.sim-context {
+  position: fixed;
+  z-index: 2100;
+}
+.sim-tuners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+}
+.sim-tuner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 150px;
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  padding: 4px;
+}
+.sim-tuner-head {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.sim-tuner-series,
+.sim-tuner-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.sim-tuner-mode input[type="number"] {
+  width: 44px;
+}
+.dialog-backdrop.sim-dialog {
+  z-index: 2200;
+}
+.sim-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 0;
+}
+.sim-row-label {
+  flex: 0 0 170px;
+}
+.sim-row input,
+.sim-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sim-row-unit {
+  flex: 0 0 auto;
+  color: var(--chrome-text-dim);
+}
+.sim-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0;
+}
+.sim-hint {
+  color: var(--chrome-text-dim);
+  margin: 0 0 4px 176px;
+}
+.sim-page {
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  padding: 6px;
+  margin: 6px 0;
+  min-height: 160px;
+}
+.sim-pages {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.sim-pages button.active {
+  background: var(--chrome-active);
+}
+.sim-dc {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sim-checklist {
+  max-height: 160px;
+  overflow: auto;
+  border: 1px solid var(--chrome-border);
+  margin: 4px 0;
+}
+.sim-custom {
+  width: 100%;
+  font-family: monospace;
+}
+.sim-netlist {
+  max-height: 60vh;
+  overflow: auto;
+  font-family: monospace;
+  font-size: 12px;
+  margin: 0;
+  background: var(--chrome-input-bg);
+  padding: 4px;
+}
+.sim-lineno {
+  display: inline-block;
+  width: 3.5em;
+  color: var(--chrome-text-dim);
+  user-select: none;
+}
+.sim-messages {
+  margin-top: 6px;
+  max-height: 20vh;
+  overflow: auto;
+  font-family: monospace;
+  white-space: pre-wrap;
+  color: var(--chrome-danger);
+}
+.sim-help {
+  margin-top: 6px;
+  color: var(--chrome-text-dim);
+}
+.sim-buttons {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.sim-lock {
+  margin-bottom: 6px;
+}

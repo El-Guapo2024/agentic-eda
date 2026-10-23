@@ -501,6 +501,37 @@ fn offload(stream: &TcpStream, lane: &Arc<Lane>, dir: &Path, job: &Job, route: &
         .map_err(|e| e.to_string())
 }
 
+/// `POST /api/sim/run` (`crate::sim_api`): the netlist step -- kicad-cli -- on the lane like any kicad-cli job, then ngspice on the same thread
+/// outside it, so a long simulation never holds up a DRC or an export. Every run is its own lane job (the counter): two runs never join.
+fn offload_sim_run(stream: &TcpStream, lane: &Arc<Lane>, dir: &Path, job: &Job, body: &[u8]) -> Result<(), String> {
+    static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut out = stream.try_clone().map_err(|e| e.to_string())?;
+    let what = format!("/api/sim/run #{}", RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let (lane, dir, job, body) = (lane.clone(), dir.to_path_buf(), job.clone(), body.to_vec());
+    std::thread::Builder::new()
+        .name("ngspice".into())
+        .spawn(move || {
+            let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let prepared = std::sync::Mutex::new(None);
+            let stamp = lane.run(&what, || version_string(&dir, &job), || {
+                if crate::sim_api::slot().is_running() {
+                    *prepared.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Err(eda_sim::ngspice::ALREADY_RUNNING.to_string()));
+                } else {
+                    *prepared.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(crate::sim_api::prepare(&dir, &req));
+                }
+                json!({})
+            });
+            let prepared = prepared.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner).unwrap_or_else(|| Err("the simulation was not prepared".to_string()));
+            let mut reply = crate::sim_api::simulate(&dir, prepared);
+            if let Some(rev) = stamp.get("revision") {
+                reply["revision"] = rev.clone();
+            }
+            let _ = respond(&mut out, "200 OK", "application/json", reply.to_string().as_bytes());
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// One request off a connection: its method, its target (path and query) and its body.
 fn read_request(stream: &TcpStream) -> Result<(String, String, Vec<u8>), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
@@ -1001,6 +1032,13 @@ fn handle(
         ("POST", "/api/fab/bom") => offload(stream, lane, dir, job, path, &body, |dir, _| fab_api::bom(dir)),
         ("POST", "/api/sch/plot") => offload(stream, lane, dir, job, path, &body, sch_output_api::plot),
         ("POST", "/api/sch/netlist") => offload(stream, lane, dir, job, path, &body, sch_output_api::netlist),
+        // The SPICE simulator (`crate::sim_api`): the circuit is kicad-cli's, so off the loop; a run is kicad-cli then ngspice; Stop and the
+        // workbook's text are answered here (Stop must not wait behind the run it stops).
+        ("POST", "/api/sim/circuit") => offload(stream, lane, dir, job, path, &body, crate::sim_api::circuit_route),
+        ("POST", "/api/sim/run") => offload_sim_run(stream, lane, dir, job, &body),
+        ("POST", "/api/sim/stop") => respond(stream, "200 OK", "application/json", crate::sim_api::stop_route().to_string().as_bytes()),
+        ("POST", "/api/sim/workbook/parse") => respond(stream, "200 OK", "application/json", crate::sim_api::workbook_parse_route(&body).to_string().as_bytes()),
+        ("POST", "/api/sim/workbook/text") => respond(stream, "200 OK", "application/json", crate::sim_api::workbook_text_route(&body).to_string().as_bytes()),
         // The schematic control actions' outputs (`crate::sch_export_api`): the Fields Table's BOM file, a legacy BOM generator's output and one symbol's SVG.
         // kicad-cli's, so off the loop like the plots above.
         ("POST", "/api/sch/bom") => offload(stream, lane, dir, job, path, &body, sch_export_api::bom),

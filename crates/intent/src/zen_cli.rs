@@ -279,6 +279,7 @@ fn parse_netlist_json(json: &str) -> Result<ConstraintModel, String> {
         edited_models: Default::default(),
         installed_art: Default::default(),
         symbols: Vec::new(),
+        symbol_sim_fields: Default::default(),
         board: Default::default(),
         allow: Default::default(),
         solver: Default::default(),

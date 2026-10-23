@@ -71,7 +71,7 @@ mod footprint_scan;
 pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
 
 mod symbol_lib;
-pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, export_kicad_sym_library_with, find_symbol_library_file, list_symbol_libraries, list_symbols_in_file, list_symbols_in_library, resolve_library_symbols, resolve_library_symbols_with, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
+pub use symbol_lib::{default_symbol_library_root, sim_fields_of, export_kicad_sym, export_kicad_sym_library, export_kicad_sym_library_with, find_symbol_library_file, list_symbol_libraries, list_symbols_in_file, list_symbols_in_library, resolve_library_symbols, resolve_library_symbols_with, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
 // KiCad's library tables (`sym-lib-table`, `fp-lib-table`, `design-block-lib-table`): the file format, the path variables, how global and project tables are put together.
 pub mod library_table;
@@ -364,6 +364,15 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         }
         for f in &shown {
             write_page_field(&mut out, f);
+        }
+        // The library symbol's simulation fields the symbol has none of (`SCH_SYMBOL` gets every field of its library symbol when it is placed), hidden, so
+        // kicad-cli's SPICE netlist models a `Simulation_SPICE` source or transistor the way KiCad does. A sheet read from a KiCad file has its symbols' own.
+        if !sch.imported_from_kicad {
+            if let Some(sim) = model.symbol_sim_fields.get(&lib_id) {
+                for (name, text) in sim.iter().filter(|(n, _)| !shown.iter().any(|f| f.name == *n)) {
+                    write_property(&mut out, name, text, mm(sym.at.x).parse().unwrap_or(0.0), mm(sym.at.y).parse().unwrap_or(0.0), true);
+                }
+            }
         }
         // Only this instance's own unit's pins (plus any `unit == 0`
         // common-to-every-unit pin) -- a multi-unit instance's pin-uuid

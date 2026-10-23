@@ -1824,6 +1824,8 @@ export type Cmd =
   | { op: "delete_erc_exclusion"; check: string; location: string }
   | { op: "clear_erc_exclusions" }
   | { op: "set_connection_grid"; mils: number }
+  // The SPICE simulator's settings (`NGSPICE_SETTINGS`, the project's `schematic.ngspice`) and the workbook's text (crates/ops/src/simulator.rs).
+  | { op: "set_simulator"; ngspice: { workbook_filename: string; fix_include_paths: boolean; model_mode: number } | null; workbook: string | null }
   /** Symbol Fields Table's Apply (dialog_symbol_fields_table.cpp) -- ONE verb for the whole staged batch so a single undo reverts it all. Applied remove -> rename -> add -> edits; edits address the FINAL field names. */
   | { op: "set_symbol_fields"; edits: SymbolFieldEdit[]; add_fields?: string[]; rename_fields?: SymbolFieldRename[]; remove_fields?: string[] }
   /** Find and Replace's Replace / Replace All (sch_find_replace_tool.cpp): `items` = `FindMatch.key`s to restrict to (one = "Replace"), omitted/null = "Replace All". */
