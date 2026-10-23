@@ -294,14 +294,18 @@ impl<'a> Board<'a> {
                 sch.extras.pin_swaps.insert(eda_model::ir::field_key(new, s.unit), swaps.clone());
             }
         }
-        // a pasted label keeps its spin, size, bold and italic
+        // a pasted label keeps its spin, size, bold and italic, and its fields
         for (k, l) in src.labels.iter().enumerate() {
             let Some(new_id) = sch.labels.get(first_label + k).map(|n| n.id.clone()) else { continue };
             if let Some(spin) = src.extras.label_spins.get(&l.id) {
                 sch.extras.label_spins.insert(new_id.clone(), *spin);
             }
             if let Some(look) = src.extras.label_looks.get(&l.id) {
-                sch.extras.label_looks.insert(new_id, *look);
+                sch.extras.label_looks.insert(new_id.clone(), *look);
+            }
+            // and its own fields (its net class, ...)
+            if let Some(fields) = src.extras.label_fields.get(&l.id) {
+                sch.extras.label_fields.insert(new_id, fields.clone());
             }
         }
         // a pasted text keeps its justification

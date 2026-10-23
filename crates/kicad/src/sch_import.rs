@@ -464,6 +464,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     let mut label_uuid: Vec<Option<String>> = Vec::new();
     // each label's spin and look, parallel to `labels`: the file's own, not an inference from the wires
     let mut label_geometry: Vec<(eda_model::sch_extras::LabelSpin, crate::sch_extras_io::EffectsLook)> = Vec::new();
+    // each label's own fields (`parseSchText`'s properties), parallel to `labels`
+    let mut label_fields_read: Vec<Vec<eda_model::sch_extras::LabelField>> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
         for l in sexpr::find_all(root, tag) {
             let Some(net) = sexpr::txt(l, 1).map(String::from) else { continue };
@@ -490,6 +492,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             label_locked.push(is_locked(l));
             label_uuid.push(uuid_of(l));
             label_geometry.push((spin, look));
+            label_fields_read.push(crate::label_fields::read_label_fields(l));
         }
     }
 
@@ -625,6 +628,12 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             let label_look = eda_model::sch_extras::LabelLook { size_um, bold: look.bold, italic: look.italic, auto_rotate: false };
             if !label_look.is_default() {
                 sch.extras.label_looks.insert(id, label_look);
+            }
+        }
+        // A label's own fields (`SchExtras::label_fields`): its net class and the others, not a global label's Sheet References.
+        for (id, fields) in sch.labels.iter().map(|l| l.id.clone()).zip(label_fields_read) {
+            if !id.is_empty() && !fields.is_empty() {
+                sch.extras.label_fields.insert(id, fields);
             }
         }
         // A text's justification, as the file has it (`SchExtras::text_justify`); the default keeps no entry.

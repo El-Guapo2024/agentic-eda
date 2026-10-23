@@ -23,6 +23,8 @@
 //! - `pin_swaps`: which pin of a placed symbol sits where another one of its pins is in the library symbol (`SwapPinGeometry`, Swap Pins).
 //! - `text_justify`: how a free-standing text is justified about its anchor (`EDA_TEXT::GetHorizJustify` / `GetVertJustify`), once Text Properties, a turn or a mirror set it.
 //! - `groups`: the sheet's groups (`SCH_GROUP`, `(group ...)` in the file), the same [`crate::ir::Group`] the board's drawings keep; see `crate::groups`.
+//! - `label_fields`: a label's own fields (`SCH_LABEL_BASE::m_fields`): its net class (`Netclass`) and any other, as Label Properties' grid edits them.
+//! - `intersheet_refs`: Schematic Setup > Formatting > Inter-sheet References, how a global label's Sheet References field reads (`SCHEMATIC_SETTINGS`).
 
 use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Um};
 use serde::{Deserialize, Serialize};
@@ -49,6 +51,15 @@ pub struct SchExtras {
     /// KiCad's default, 50 mils. Additive. (Counts in `writes_nothing`, not in `is_empty`: it is a project setting, no part of the drawing.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection_grid_mils: Option<u32>,
+    /// Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`, `panel_setup_formatting.cpp`): whether a global label shows the pages its
+    /// net is on, and how. Written to the derived project as `schematic.drawing.intersheets_ref_*`. `None`: KiCad's defaults (not shown). Kept on the root. Additive. (Counts in
+    /// `writes_nothing`, not in `is_empty`, like the grid.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intersheet_refs: Option<IntersheetRefs>,
+    /// A label's own fields beyond a global label's Sheet References (`SCH_LABEL_BASE::m_fields`, `(property ..)` in the file), by label id, in order: its net class
+    /// (`Netclass`, which puts the label's net in that class: `CONNECTION_GRAPH` `checkNetclassDrivers`) and any field the user added. A label with no entry has none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub label_fields: BTreeMap<String, Vec<LabelField>>,
     /// Drawn graphics and annotations, in drawing order (later ones paint over earlier ones).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphics: Vec<SchGraphic>,
@@ -245,6 +256,83 @@ impl LabelLook {
     }
 }
 
+/// The canonical name of a label's net class field (`SCH_FIELD::GetCanonicalName`: "Net Class" is how it reads, "Netclass" how it is stored).
+pub const NETCLASS_FIELD: &str = "Netclass";
+/// The canonical name of a global label's Sheet References field (`FIELD_T::INTERSHEET_REFS`), whose text is always `${INTERSHEET_REFS}`.
+pub const INTERSHEET_REFS_FIELD: &str = "Intersheetrefs";
+
+fn yes() -> bool {
+    true
+}
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+/// One of a label's own fields (`SCH_FIELD` of an `SCH_LABEL_BASE`): its name as stored (`Netclass` for the net class), its text, whether it is shown and whether it
+/// is set in italics. It is placed where `SCH_LABEL_BASE::AutoplaceFields` puts it, under the label's text (a field moved by hand is placed there again).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabelField {
+    pub name: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub italic: bool,
+}
+
+/// Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS`): `m_IntersheetRefsShow` ("Show inter-sheet references", off by default),
+/// `m_IntersheetRefsListOwnPage` ("Show own page reference", on), `m_IntersheetRefsFormatShort` ("Abbreviated (1..3)" rather than "Standard (1,2,3)"), and the
+/// prefix and suffix (`DEFAULT_IREF_PREFIX` "[" and `DEFAULT_IREF_SUFFIX` "]").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntersheetRefs {
+    #[serde(default)]
+    pub show: bool,
+    #[serde(default = "yes")]
+    pub own_page: bool,
+    #[serde(default)]
+    pub short: bool,
+    #[serde(default = "iref_prefix")]
+    pub prefix: String,
+    #[serde(default = "iref_suffix")]
+    pub suffix: String,
+}
+
+fn iref_prefix() -> String {
+    "[".into()
+}
+fn iref_suffix() -> String {
+    "]".into()
+}
+
+impl Default for IntersheetRefs {
+    fn default() -> Self {
+        IntersheetRefs { show: false, own_page: true, short: false, prefix: iref_prefix(), suffix: iref_suffix() }
+    }
+}
+
+impl IntersheetRefs {
+    /// `SCH_GLOBALLABEL::ResolveTextVar( "INTERSHEET_REFS" )`: the pages (`pages`: each sheet's page text by virtual page number, in order) a global label of this
+    /// name is on, `current` (the virtual page of the sheet in view) left out unless "Show own page reference" is on, joined by "," or as "first..last" when
+    /// abbreviated and more than two, between the prefix and the suffix; "?" when no sheet has a global label of that name.
+    pub fn shown(&self, on_pages: Option<&BTreeSet<usize>>, current: usize, page_text: &dyn Fn(usize) -> String) -> String {
+        let r = match on_pages {
+            None => "?".to_string(),
+            Some(set) => {
+                let list: Vec<usize> = set.iter().copied().filter(|p| self.own_page || *p != current).collect();
+                if self.short && list.len() > 2 {
+                    format!("{}..{}", page_text(list[0]), page_text(list[list.len() - 1]))
+                } else {
+                    list.iter().map(|p| page_text(*p)).collect::<Vec<_>>().join(",")
+                }
+            }
+        };
+        format!("{}{r}{}", self.prefix, self.suffix)
+    }
+}
+
 /// How a wire, bus, bus entry or graphic line is stroked (`STROKE_PARAMS`): the part of `DIALOG_WIRE_BUS_PROPERTIES` and
 /// `DIALOG_LINE_PROPERTIES` that is not the item's place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -327,7 +415,17 @@ impl SchExtras {
     /// Whether design.json has nothing to say for `extras` (it is then not written): [`is_empty`](Self::is_empty), no table of ERC severities and no connection grid. The
     /// severities and the grid are no part of the schematic KiCad's files draw -- they go to the derived project -- so they are not in `is_empty`.
     pub fn writes_nothing(&self) -> bool {
-        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none()
+        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none()
+    }
+
+    /// The net class a label's fields give its net (`SCH_LABEL_BASE`'s `Netclass` field; the first that is not empty), if any.
+    pub fn label_netclass(&self, id: &str) -> Option<&str> {
+        self.label_netclasses(id).into_iter().next()
+    }
+
+    /// Every net class a label's fields give its net (`CONNECTION_SUBGRAPH::GetNetclassesForDriver`: each `Netclass` field that is not empty).
+    pub fn label_netclasses(&self, id: &str) -> Vec<&str> {
+        self.label_fields.get(id).map(|fs| fs.iter().filter(|f| f.name == NETCLASS_FIELD && !f.text.trim().is_empty()).map(|f| f.text.trim()).collect()).unwrap_or_default()
     }
 }
 
@@ -407,6 +505,7 @@ impl SchExtras {
             && self.strokes.is_empty()
             && self.junction_looks.is_empty()
             && self.label_looks.is_empty()
+            && self.label_fields.is_empty()
             && self.sheet_pin_looks.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()

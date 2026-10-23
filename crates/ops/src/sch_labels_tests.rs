@@ -286,7 +286,7 @@ fn place_label_applies_the_look_and_refuses_what_the_dialog_would() {
 // ------------------------------------------------------------------------------------------------------------------------- Label Properties
 
 fn edit_label(id: &str, spin: Option<LabelSpin>, auto: Option<bool>) -> SchCmd {
-    SchCmd::EditLabel { id: id.into(), text: None, shape: None, spin, size_um: None, bold: None, italic: None, auto_rotate: auto }
+    SchCmd::EditLabel { id: id.into(), text: None, shape: None, spin, size_um: None, bold: None, italic: None, auto_rotate: auto, fields: None }
 }
 
 #[test]

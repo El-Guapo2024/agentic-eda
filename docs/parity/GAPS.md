@@ -403,7 +403,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `field_name_whitespace`, `label_multiple_wires`, `four_way_junction`, `no_connect_connected`, `hier_label_mismatch`, `similar_*`, `same_local_global_*`, `bus_definition_conflict`, `duplicate_pins`; a DRC check whose marker
   carries a layer (`copper_sliver`, `starved_thermal`, `generic-*`, `unresolved_variable`) is waived in the studio alone too. **The records are what kicad-cli 10.99.0-5334 reads**: an older kicad-cli
   (up to the pinned source, `8303b2ad`) reads the pipe-delimited texts only and would ignore them. Not ported: the ERC Fix entry "Edit Netclasses..." (Schematic Setup has no Net Classes page), Report all errors
-  for each track (`--all-track-errors`), the cross-probe options, the other pages of Schematic Setup > Formatting (text sizes, line widths, junction and hop-over sizes, intersheet references), and a file dialog
+  for each track (`--all-track-errors`), the cross-probe options, the other pages of Schematic Setup > Formatting (text sizes, line widths, junction and hop-over sizes; the inter-sheet references are done, item 12), and a file dialog
   for Save... (the page downloads the report).
 - Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `eeschema/sch_marker.cpp`, `eeschema/schematic.cpp` (`ResolveERCExclusions`), `eeschema/erc/erc_settings.cpp`,
   `common/rc_item.cpp`, `common/dialogs/panel_setup_severities.cpp`.
@@ -418,7 +418,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-10-12 (`PARITY-sch.md` sections 21 and 23): a free text's justification (`SchExtras::text_justify`: stored when it is not left and bottom, written as `(justify ..)`, read back, flipped by Rotate and Mirror, carried by copy and paste); a label's Auto
   (`LabelLook::auto_rotate`); a symbol's pins are items, and Swap Pins keeps each pin's place in `SchExtras::pin_swaps`.
 - Done 2026-10-13 (`task-sch-groups`, `PARITY-sch.md` section 30): a user-defined field's place on the sheet (`FieldPlacement::name` names it in `field_layout`; `symbol_specs_in`, the writer, the reader, the editor); a sheet read from a KiCad file keeps the places of its user fields and no others.
-- Missing: a field's font face and colour and a label's own fields (netclass, intersheet references) have no place in the IR; the
+- Done 2026-10-23 (`task-sch-details`, P10; `PARITY-sch.md` section 38): **a label's own fields** (`SchExtras::label_fields`): its net class (`Netclass`) and any other field, edited in
+  Label Properties' grid (`DIALOG_LABEL_PROPERTIES`: Add Field gives a net class first, OK's rules for empty and unnamed rows, a name used twice refused), placed by
+  `SCH_LABEL_BASE::AutoplaceFields`, drawn, written and read back, carried by the clipboard; the net is in the class (the model's net class, the project kicad-cli reads:
+  its ERC's `undefined_netclass` and its netlist's `class` follow the field). **A global label's Sheet References** (`Intersheetrefs`, `${INTERSHEET_REFS}`) with
+  Schematic Setup > Formatting > Inter-sheet References (`Cmd::SetIntersheetRefs`, `schematic.drawing.intersheets_ref_*`): the studio shows the pages as kicad-cli plots them.
+- Missing: a field's font face and colour have no place in the IR; a label's field moved by hand is placed by `AutoplaceFields` again; the net class of a label on a bus is not
+  given to the bus's members; the
   fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
   label's spin; only the normal and the De Morgan body style are modelled.
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
@@ -1045,7 +1051,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `common/dialogs/{panel_text_variables,panel_setup_netclasses}.cpp`, `common/project/component_class_settings.cpp`, `pcbnew/drc/rule_editor/` (82 files), `pcbnew/tools/drc_rule_editor_tool.cpp`.
 - Conflicts: P15 (the project writer in `kicad-engine`: a hunk); `ops`, `runner` hunks.
 
-### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10. **Mostly done on `task-sch-details` (2026-10-12, 15 commits, not merged) and, for the schematic's groups, on `task-sch-groups` (2026-10-13 to 15, P10b, not merged); a label's own fields are left.**
+### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10. **Mostly done on `task-sch-details` (2026-10-12, 15 commits, not merged) and, for the schematic's groups, on `task-sch-groups` (2026-10-13 to 15, P10b, not merged); a label's own fields, shared screens and buses across sheets done on `task-sch-details` 2026-10-23.**
 - Done there: pin selection (`SCH_PIN_T`: Swap Pins, Swap Pin Labels, Swap Unit Labels, the pin-level highlight and Select Node), sheet pins one by one, the net-collision overlay of a drag, `AutoRotateItem` after a label lands, a power symbol's Properties dialog,
   text justification flipping on a mirror, pan with the middle and right button and auto-pan while drawing and moving, the Symbol Fields Table's attribute columns and Exclude DNP filter, Copy as Text, part of the item 15 schematic list. `PARITY-sch.md` sections 21 to 27;
   `web/studio/e2e/sch-details.check.js`; the kicad-cli proof is `crates/kicad/tests/sch_details.rs`.
@@ -1053,7 +1059,9 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 30): a user-defined field's place on the sheet (item 12): the symbol's user fields listed, drawn, placed, moved, turned, edited, added, removed, written and read back; `crates/kicad/tests/sch_user_fields.rs` and the slow proof in `sch_groups.rs` (kicad-cli draws the field where we put it).
 - Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 31): Pin Helpers and swapped pins through the file and the clipboard (items 1, 12); `crates/kicad/tests/sch_pin_swaps.rs`, `crates/ops/src/sch_pin_helpers_tests.rs`.
 - Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 32): a sheet pin's text look (size, bold, italic: Sheet Pin Properties, the painter, the pin's box, `(effects (font ..))` written and read; `SchExtras::sheet_pin_looks`).
-- Left: a label's own fields (netclass, intersheet references), a sheet pin's font face and colour.
+- Done on `task-sch-details` (2026-10-23, `PARITY-sch.md` section 38): a label's own fields (its net class), a global label's Sheet References and Schematic Setup's Inter-sheet
+  References; a screen shown by two sheets (a net per placement, Paste sharing it); buses across sheets. `web/studio/e2e/sch-details-2.check.js`.
+- Left: a sheet pin's font face and colour; a label's field moved by hand; see items 4 and 12.
 - Files: `web/studio/src/components/SchematicView.tsx`, `components/schematic/{schItems,schHit,schSelectionSummary}.ts`, `kicad-port/{schMove,selection,schConnection}.ts`, `components/SymbolFieldsTableDialog.tsx`,
   `crates/ops/src/{sch_move,sch_edit,sch_props,sch_fields,fields_table}.rs`, `crates/model/src/sch_extras.rs`.
 - KiCad: `eeschema/tools/{sch_edit_tool,sch_selection_tool,sch_drag_net_collision,sch_group_tool,sch_move_tool}.cpp`, `sch_label.cpp`, `sch_pin.cpp`, `dialogs/dialog_symbol_fields_table.cpp`, `fields_data_model.cpp`, `common/view/wx_view_controls.cpp`.

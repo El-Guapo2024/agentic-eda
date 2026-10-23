@@ -1,10 +1,11 @@
 // "Schematic Setup..." (eeschema.EditorControl.schematicSetup -- eeschema/
 // dialogs/dialog_schematic_setup.cpp): a tree of pages on the left and the
 // page on the right, like Board Setup's. The pages this app has a backing
-// setting for are General > Formatting (the connection grid) and the two of Electrical Rules:
+// setting for are General > Formatting (the connection grid, the inter-sheet references) and the two of Electrical Rules:
 //
 //   Formatting           eeschema/dialogs/panel_setup_formatting.cpp -- Connection grid spacing, written to the
-//                        derived project's `schematic.connection_grid_size` for kicad-cli's `endpoint_off_grid`
+//                        derived project's `schematic.connection_grid_size` for kicad-cli's `endpoint_off_grid`, and
+//                        Inter-sheet References (`schematic.drawing.intersheets_ref_*`)
 //   Violation Severity   common/dialogs/panel_setup_severities.cpp over eeschema/erc/erc_settings.cpp --
 //                        the severity of each ERC check (schematicSetup/ErcSeveritiesPage.tsx), written
 //                        to the derived project's `erc.rule_severities` for kicad-cli
@@ -14,7 +15,7 @@
 //
 // The real dialog's other pages (annotation, field name templates, net classes, text
 // variables, ...) are not ported -- see PARITY-sch.md -- so they are not shown as dead tabs.
-// General > Formatting has the one setting of its panel the design keeps, the connection grid
+// General > Formatting has the settings of its panel the design keeps, the connection grid and the inter-sheet references
 // (schematicSetup/FormattingPage.tsx).
 //
 // The pin map grid is PANEL_SETUP_PINMAP's: the lower triangle of the 11 pin

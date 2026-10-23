@@ -1824,6 +1824,7 @@ export type Cmd =
   | { op: "delete_erc_exclusion"; check: string; location: string }
   | { op: "clear_erc_exclusions" }
   | { op: "set_connection_grid"; mils: number }
+  | { op: "set_intersheet_refs"; settings: IntersheetRefs }
   /** Symbol Fields Table's Apply (dialog_symbol_fields_table.cpp) -- ONE verb for the whole staged batch so a single undo reverts it all. Applied remove -> rename -> add -> edits; edits address the FINAL field names. */
   | { op: "set_symbol_fields"; edits: SymbolFieldEdit[]; add_fields?: string[]; rename_fields?: SymbolFieldRename[]; remove_fields?: string[] }
   /** Find and Replace's Replace / Replace All (sch_find_replace_tool.cpp): `items` = `FindMatch.key`s to restrict to (one = "Replace"), omitted/null = "Replace All". */
@@ -2542,6 +2543,32 @@ export interface SchematicLabel {
   italic?: boolean;
   /** The "Auto" check of a global or hierarchical label (`SCH_LABEL_BASE::AutoRotateOnPlacement`): the label takes the spin of what it is connected to when it is placed or moved. */
   auto_rotate?: boolean;
+  /** The label's fields where `AutoplaceFields` puts them: a global label's Sheet References first, then its own (its net class, ...). */
+  fields?: SchLabelField[];
+}
+
+/** One field of a label (`SCH_FIELD` of an `SCH_LABEL_BASE`), placed: `shown` is its text as drawn (a global label's Sheet References read as the pages its name is on). */
+export interface SchLabelField {
+  name: string;
+  text: string;
+  shown: string;
+  visible: boolean;
+  italic: boolean;
+  /** The global label's Sheet References (`FIELD_T::INTERSHEET_REFS`): shown or hidden by Schematic Setup, not by the label. */
+  intersheet_refs: boolean;
+  at: [Um, Um];
+  vertical: boolean;
+  h: "left" | "center" | "right";
+  size_um: Um;
+}
+
+/** Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`). */
+export interface IntersheetRefs {
+  show: boolean;
+  own_page: boolean;
+  short: boolean;
+  prefix: string;
+  suffix: string;
 }
 
 /**
@@ -3055,6 +3082,8 @@ export interface SchFormattingReply {
   max_connection_grid_mils: number;
   /** True when the design stores a setting of its own. */
   custom: boolean;
+  /** Inter-sheet References, KiCad's defaults when the design set none (an older backend sends none). */
+  intersheet_refs?: IntersheetRefs;
 }
 
 /** GET /api/sch/erc_severities: the ERC severities Schematic Setup > Violation Severity edits. */

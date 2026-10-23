@@ -85,6 +85,7 @@ pub use bus::expand_bus_members;
 mod sch_clipboard;
 pub use sch_clipboard::{fragment_as_sheet_file, parse_clipboard, write_clipboard, CopyInput, CopyOutput};
 mod sch_extras_io;
+pub mod label_fields;
 mod sch_table_io;
 pub mod sch_overlap;
 mod sch_import;
@@ -97,6 +98,7 @@ pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_t
 pub mod drc_exclusions;
 pub mod erc_exclusions;
 pub use pcb::effective_erc_severities;
+pub use pcb::exact_pattern;
 // The zone fills kicad-cli makes (Fill All Zones, B): read back from a refilled board and kept as derived data beside `design.json`.
 pub mod zone_fills;
 // The Appearance panel's share: the layers, objects, colours, presets and views the person chose, in the derived `.kicad_prl` and `.kicad_pro`.
@@ -578,11 +580,16 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         // Label Properties gave it, else away from the wire the label ends
         let (angle, effects) = label_effects(sch, l, tag == "label");
         writeln!(out, " (at {x} {y} {angle})").unwrap();
+        // `saveText`: `(fields_autoplaced yes)` for a label with fields (they are where `AutoplaceFields` puts them), then its fields
+        if tag == "global_label" || sch.extras.label_fields.get(&l.id).is_some_and(|f| !f.is_empty()) {
+            writeln!(out, "\t\t(fields_autoplaced yes)").unwrap();
+        }
         writeln!(out, "\t\t{effects}").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&l.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
         }
+        label_fields::write_label_fields(&mut out, sch, l, design_intersheet_refs(design).show);
         writeln!(out, "\t)").unwrap();
     }
 
@@ -745,7 +752,10 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
     let mut out = vec![(root_filename.to_string(), export_screen(design, model, meta, &root_ctx)?)];
     if let Some(screens) = &design.sheet_contents {
         for (file, sch) in screens {
-            let child_design = Design { schematic: Some(sch.clone()), sheet_contents: None, nets: None, ..design.clone() };
+            // (Schematic Setup's settings are the root's: the screen is written with them)
+            let mut sch = sch.clone();
+            sch.extras.intersheet_refs = root_sch.extras.intersheet_refs.clone();
+            let child_design = Design { schematic: Some(sch), sheet_contents: None, nets: None, ..design.clone() };
             let title = file.strip_suffix(".kicad_sch").unwrap_or(file);
             let child_meta = ExportMeta { date: meta.date, title };
             let ctx = ScreenCtx {
@@ -812,6 +822,11 @@ pub(crate) fn label_spin_of(sch: &eda_model::ir::SchematicSection, l: &NetLabel)
         (-1, 0) => LabelSpin::Left,
         _ => LabelSpin::Right,
     }
+}
+
+/// Schematic Setup > Formatting > Inter-sheet References of the design (kept on the root sheet): KiCad's defaults when it set none.
+pub fn design_intersheet_refs(design: &Design) -> eda_model::sch_extras::IntersheetRefs {
+    design.schematic.as_ref().and_then(|s| s.extras.intersheet_refs.clone()).unwrap_or_default()
 }
 
 /// A label's file angle and horizontal justification, as `SCH_IO_KICAD_SEXPR::saveText` writes a spin: the text's own angle (0 or 90) with half a turn

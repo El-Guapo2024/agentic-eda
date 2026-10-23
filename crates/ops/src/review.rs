@@ -92,6 +92,19 @@ pub(crate) fn set_erc_severities(design: &mut Design, severities: &BTreeMap<Stri
     Ok(())
 }
 
+/// `Cmd::SetIntersheetRefs`: Schematic Setup > Formatting > Inter-sheet References (`PANEL_SETUP_FORMATTING::TransferDataFromWindow` takes the controls as they are:
+/// "Show inter-sheet references", "Show own page reference", "Standard (1,2,3)" or "Abbreviated (1..3)", the prefix and the suffix). Kept on the root sheet; KiCad's
+/// defaults are the absence of a setting. Refused when nothing changes.
+pub(crate) fn set_intersheet_refs(design: &mut Design, settings: &eda_model::sch_extras::IntersheetRefs) -> Done {
+    let sch = design.schematic.get_or_insert_with(crate::empty_schematic_section);
+    let now = (*settings != eda_model::sch_extras::IntersheetRefs::default()).then(|| settings.clone());
+    if sch.extras.intersheet_refs == now {
+        return Err(vec![CheckResult::fail("ops_no_change", "intersheet_refs", "the inter-sheet references are already set so")]);
+    }
+    sch.extras.intersheet_refs = now;
+    Ok(())
+}
+
 /// `Cmd::SetConnectionGrid`: Schematic Setup > Formatting > Connection grid spacing (`PANEL_SETUP_FORMATTING::TransferDataFromWindow` validates the value
 /// between `MIN_CONNECTION_GRID_MILS` and 10000 mils). KiCad's default, 50 mils, is the absence of a setting.
 pub(crate) fn set_connection_grid(design: &mut Design, mils: u32) -> Done {

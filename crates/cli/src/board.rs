@@ -205,6 +205,8 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
             eda_kicad::merge_custom_rules(&mut model, text);
         }
     }
+    // A label's net class field puts its net in that class (`checkNetclassDrivers`, the project's `netclass_assignments`).
+    fold_label_netclasses(design, &mut model);
     // A symbol placed with `AddSymbol` has no part in the intent: its synthesized one (see `reconcile_schematic`) is not stored anywhere, so it is rebuilt here.
     fold_unknown_symbols(design, &mut model);
     // A footprint copied onto the board has no part in the intent either; `board_parts` is where it lives.
@@ -312,6 +314,34 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
             if let Some(mut part) = model.part(&sym.id).cloned() {
                 part.reference = reference;
                 model.parts.push(part);
+            }
+        }
+    }
+}
+
+/// The nets a label's `Netclass` field puts in a class (`CONNECTION_GRAPH` `checkNetclassDrivers`: every net class a label on a net names, `NET_SETTINGS::
+/// AppendNetclassLabelAssignment`, which `GetEffectiveNetClass` reads with the pattern assignments): the net's name added to the class's nets as the
+/// pattern that matches that net alone, as the importer reads a project's `netclass_assignments`. The net is the one the wire under the label carries (a
+/// label off any wire names its own); a class the board does not define has no parameters to give (KiCad's implicit class) and is left out here --
+/// kicad-cli's ERC reports it (`undefined_netclass`).
+fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
+    for e in eda_model::sheet_list::walk(design) {
+        let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        for l in &sec.labels {
+            let classes = sec.extras.label_netclasses(&l.id);
+            if classes.is_empty() {
+                continue;
+            }
+            let on = |w: &&eda_model::ir::Wire| !w.bus && (w.pts.contains(&l.at) || w.pts.windows(2).any(|s| (s[0].x == s[1].x && s[0].x == l.at.x && (s[0].y.min(s[1].y)..=s[0].y.max(s[1].y)).contains(&l.at.y)) || (s[0].y == s[1].y && s[0].y == l.at.y && (s[0].x.min(s[1].x)..=s[0].x.max(s[1].x)).contains(&l.at.x))));
+            let net = sec.wires.iter().find(on).map(|w| w.net.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| l.net.clone());
+            let pattern = eda_kicad::exact_pattern(&net);
+            // `validateNetclassName` compares without regard to case
+            for class in classes {
+                if let Some(nc) = model.board.net_classes.iter_mut().find(|c| c.name.eq_ignore_ascii_case(class)) {
+                    if !nc.nets.contains(&pattern) {
+                        nc.nets.push(pattern.clone());
+                    }
+                }
             }
         }
     }
@@ -1480,6 +1510,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::ClearErcExclusions => "schematic erc-unexclude --all".to_string(),
         Cmd::SetConnectionGrid { mils } => format!("schematic connection-grid {mils}"),
+        Cmd::SetIntersheetRefs { settings } => format!("schematic intersheet-refs {}", if settings.show { "shown" } else { "hidden" }),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
         Cmd::AddSchText { content, at, .. } => format!("schematic text add --content {content:?} --at {},{}", mm(at.x), mm(at.y)),
@@ -1752,6 +1783,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::Multichannel(c) => c.kind(),
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
         Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
+        Cmd::SetIntersheetRefs { .. } => "schematic-intersheet-refs",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
@@ -5199,8 +5231,8 @@ mod tests {
         let start = sheet_of(&load(&dir).unwrap().1);
         let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
         let commands = vec![
-            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None, auto_rotate: None },
-            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None, auto_rotate: None },
+            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None, auto_rotate: None, fields: None },
+            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None, auto_rotate: None, fields: None },
             V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_um: Some(2_540), angle: Some(90_000), h: None, v: None },
             V::EditSheet { id: "sheet_a".into(), name: Some("Power".into()), file: Some("power".into()) },
             V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_um: Some(300), style: Some(SchLineStyle::Dash), color: Some(red), diameter_um: Some(900) },
@@ -5237,7 +5269,7 @@ mod tests {
             Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_um: Some(2_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::AutoplaceFields { ids: vec!["R1".into()] }),
-            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true), auto_rotate: None }),
+            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true), auto_rotate: None, fields: None }),
         ];
         for cmd in commands {
             let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd.clone()) };
@@ -6210,7 +6242,7 @@ mod tests {
         };
         // Label Properties with "Auto" off: the spin chosen is kept
         let l2 = label.clone();
-        check(Cmd::SchEdit(V::EditLabel { id: label.clone(), text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Left), size_um: None, bold: None, italic: None, auto_rotate: Some(false) }), &move |d| {
+        check(Cmd::SchEdit(V::EditLabel { id: label.clone(), text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Left), size_um: None, bold: None, italic: None, auto_rotate: Some(false), fields: None }), &move |d| {
             let sch = d.schematic.as_ref().unwrap();
             assert_eq!(sch.extras.label_spins.get(&l2), Some(&eda_model::sch_extras::LabelSpin::Left));
             assert!(!sch.extras.label_looks.contains_key(&l2));

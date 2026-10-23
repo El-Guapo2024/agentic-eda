@@ -195,6 +195,18 @@ pub fn reference_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstanc
         .unwrap_or_else(|| sym.id.clone())
 }
 
+/// `SCHEMATIC::RecomputeIntersheetRefs`: the virtual pages each global label text is on (`GetPageRefsMap`), over every sheet of the hierarchy.
+pub fn global_label_pages(design: &Design) -> std::collections::BTreeMap<String, std::collections::BTreeSet<usize>> {
+    let mut out: std::collections::BTreeMap<String, std::collections::BTreeSet<usize>> = std::collections::BTreeMap::new();
+    for e in walk(design) {
+        let Some(sec) = screen_of(design, &e.path) else { continue };
+        for l in sec.labels.iter().filter(|l| matches!(l.kind, crate::ir::LabelKind::Global { .. })) {
+            out.entry(l.net.clone()).or_default().insert(e.virtual_page);
+        }
+    }
+    out
+}
+
 /// How many placements show each screen: a file two sheet symbols name is one screen shown twice (`SCH_SCREEN::GetRefCount`).
 pub fn placement_counts(design: &Design) -> std::collections::BTreeMap<String, usize> {
     let mut out = std::collections::BTreeMap::new();

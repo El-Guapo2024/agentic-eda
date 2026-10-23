@@ -4,11 +4,12 @@
 // (`DIALOG_SHAPE_PROPERTIES`). A text box and a directive label reopen the dialogs that created them (SchToolDialogs.tsx).
 //
 // Each OK sends one command (kicad-port/schProperties.ts builds it from what the user changed), so it is one undo step; nothing is sent when nothing changed.
-// What the drawing model has no place for is not offered: fonts, bold/italic and text colours, a sheet's border and fill and extra fields, a label's fields.
+// What the drawing model has no place for is not offered: fonts, bold/italic and text colours, a sheet's border and fill and extra fields. A label's own fields (its net
+// class, ...) are the grid of Label Properties; a global label's Sheet References row is shown, Schematic Setup shows or hides it.
 import { useState, type ReactNode } from "react";
 import type { LabelShape, Schematic, SchematicLabel, SchematicText } from "../api/types";
-import type { SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
-import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, mmToUm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
+import type { LabelFieldEdit, SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
+import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, labelFieldDisplayName, newLabelField, ownLabelFields, mmToUm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { inferSpin } from "./schematic/labelShape";
@@ -83,6 +84,11 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const [size, setSize] = useState(umToMm(label.size_um && label.size_um > 0 ? label.size_um : 1270));
   const [bold, setBold] = useState(!!label.bold);
   const [italic, setItalic] = useState(!!label.italic);
+  // the grid of the label's own fields (`m_grid` over `m_fields`), a global label's Sheet References above them
+  const [fields, setFields] = useState<LabelFieldEdit[]>(() => ownLabelFields(label).map((f) => ({ ...f, name: labelFieldDisplayName(f.name) })));
+  const isr = (label.fields ?? []).find((f) => f.intersheet_refs) ?? null;
+  const setField = (i: number, change: Partial<LabelFieldEdit>) => setFields((fs) => fs.map((f, k) => (k === i ? { ...f, ...change } : f)));
+  const addField = () => setFields((fs) => [...fs, (() => { const f = newLabelField(fs.map((x) => ({ ...x, name: x.name === "Net Class" ? "Netclass" : x.name })), isr ? isr.visible : null); return { ...f, name: labelFieldDisplayName(f.name) }; })()]);
   const title = label.scope === "global" ? "Global Label Properties" : label.scope === "hierarchical" ? "Hierarchical Label Properties" : "Label Properties";
   const sizeUm = mmToUm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
@@ -91,7 +97,7 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const canOk = text.trim().length > 0 && sizeOk;
   // while "Auto" is on the label takes the spin of what it is connected to (`AutoRotateItem`): the select shows the one it will get
   const autoSpin = auto ? labelOrientationForPoint(orientationSceneOf(sch), label.at, turn) : null;
-  const submit = () => canOk && void send(labelEditCmd(label, spin, { text, shape, spin: turn, sizeUm, bold, italic, autoRotate: supportsAuto ? auto : undefined }));
+  const submit = () => canOk && void send(labelEditCmd(label, spin, { text, shape, spin: turn, sizeUm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields }));
   return (
     <SchDialogShell title={title} width={380} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
@@ -137,6 +143,54 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
           </label>
         </span>
       </Grid>
+      <table className="label-fields" aria-label="Label fields" style={{ width: "100%", marginTop: 8, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: "left" }}>Name</th>
+            <th style={{ textAlign: "left" }}>Value</th>
+            <th>Show</th>
+            <th>Italic</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {isr && (
+            <tr title="Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting">
+              <td>Sheet References</td>
+              <td>{isr.text}</td>
+              <td style={{ textAlign: "center" }}>
+                <input type="checkbox" checked={isr.visible} disabled aria-label="Show Sheet References" />
+              </td>
+              <td />
+              <td />
+            </tr>
+          )}
+          {fields.map((f, i) => (
+            <tr key={i}>
+              <td>
+                <input aria-label={`Field ${i + 1} name`} value={f.name} onChange={(e) => setField(i, { name: e.target.value })} style={{ width: 110 }} />
+              </td>
+              <td>
+                <input aria-label={`Field ${i + 1} value`} value={f.text} onChange={(e) => setField(i, { text: e.target.value })} />
+              </td>
+              <td style={{ textAlign: "center" }}>
+                <input type="checkbox" aria-label={`Field ${i + 1} shown`} checked={f.visible} onChange={(e) => setField(i, { visible: e.target.checked })} />
+              </td>
+              <td style={{ textAlign: "center" }}>
+                <input type="checkbox" aria-label={`Field ${i + 1} italic`} checked={f.italic} onChange={(e) => setField(i, { italic: e.target.checked })} />
+              </td>
+              <td>
+                <button type="button" aria-label={`Delete field ${i + 1}`} title="Delete field" onClick={() => setFields((fs) => fs.filter((_, k) => k !== i))}>
+                  ✕
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button type="button" aria-label="Add field" title="Add field" onClick={addField} style={{ marginTop: 4 }}>
+        + Add Field
+      </button>
     </SchDialogShell>
   );
 }

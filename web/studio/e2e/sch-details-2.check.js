@@ -1,5 +1,6 @@
 // Schematic details, part 2 (HANDOFF "Next tasks" 5; GAPS.md items 4, 12 and 20, package P10): a sheet duplicated (or copied and pasted) beside its original shows the same screen, its
-// symbols with references of their own and their pins on nets of their own; buses across sheets; a label's own fields (its net class, a global label's intersheet references).
+// symbols with references of their own and their pins on nets of their own; a bus across sheets joins its members' nets, parted by Delete and joined again by Undo; a label's own
+// fields (Label Properties' grid: a net class) and a global label's Sheet References (Schematic Setup > Formatting > Inter-sheet References).
 // Run it in the page of a served board made from examples/mcu_board_30plus.yaml (`eda board new examples/mcu_board_30plus.yaml -o <dir>` then `eda board serve -C <dir>`), with the schematic tab
 // open -- `node web/studio/e2e/run-check.mjs <url> web/studio/e2e/sch-details-2.check.js` -- on a COPY of a board: every scenario undoes what it did (and, if it left anything behind, the run
 // undoes until the sheets are as they were).
@@ -205,6 +206,74 @@
       t((await netOf(led.id, ledPA0[0])) !== (await netOf(mcu.id, mcuPA0[0])), "and the two sheets' PA0 are apart");
       await undo();
       t((await netOf(led.id, ledPA0[0])) === (await netOf(mcu.id, mcuPA0[0])), "one undo brings the bus and the join back");
+    });
+
+    // ----- (c) a label's own fields: its net class, a global label's Sheet References
+    await scenario("Label Properties' fields: Add Field gives a net class, OK keeps it, one undo takes it back", async (t) => {
+      const led = (await sch("")).sheets.find((s) => s.name.startsWith("LED"));
+      const hl = (await sch(led.id)).labels.find((l) => l.net === "PA0" && l.scope === "hierarchical");
+      t(!!hl, "the LED sheet's hierarchical label PA0");
+      await enterSheet(led.id);
+      await select([hl.id]);
+      await __eda.run("eeschema.InteractiveEdit.properties");
+      await sleep(600);
+      const dialog = () => document.querySelector(".dialog");
+      t(/Hierarchical Label Properties/.test(dialog()?.innerText ?? ""), "Properties opens Hierarchical Label Properties");
+      const ctl = (label) => dialog()?.querySelector(`[aria-label="${label}"]`);
+      ctl("Add field")?.click();
+      await sleep(200);
+      t(ctl("Field 1 name")?.value === "Net Class", `Add Field gives a net class first (${ctl("Field 1 name")?.value})`);
+      t(ctl("Field 1 italic")?.checked === true && ctl("Field 1 shown")?.checked === true, "shown and in italics, as KiCad's first field");
+      setValue(ctl("Field 1 value"), "Signal");
+      await sleep(100);
+      buttonText(dialog(), "OK")?.click();
+      await sleep(1200);
+      const after = (await sch(led.id)).labels.find((l) => l.id === hl.id);
+      const nc = (after?.fields ?? []).find((f) => f.name === "Netclass");
+      t(!!nc && nc.text === "Signal" && nc.visible && nc.italic, `the label has its net class (${JSON.stringify(after?.fields)})`);
+      t(!!nc && nc.at[1] !== hl.at[1] || (!!nc && nc.at[0] !== hl.at[0]), "placed off the label's text (`AutoplaceFields`)");
+      // the dialog opened again shows the row, and the same OK changes nothing
+      await select([hl.id]);
+      await __eda.run("eeschema.InteractiveEdit.properties");
+      await sleep(600);
+      t(ctl("Field 1 name")?.value === "Net Class" && ctl("Field 1 value")?.value === "Signal", "Label Properties shows the field again");
+      buttonText(dialog(), "Cancel")?.click();
+      await sleep(300);
+      await undo();
+      const back = (await sch(led.id)).labels.find((l) => l.id === hl.id);
+      t(!(back?.fields ?? []).some((f) => f.name === "Netclass"), "one undo takes the field away");
+    });
+
+    await scenario("Schematic Setup > Formatting > Inter-sheet References: a global label shows the pages its name is on; one undo hides them again", async (t) => {
+      const root = await sch("");
+      const mcu = root.sheets.find((s) => s.name.startsWith("MCU"));
+      const led = root.sheets.find((s) => s.name.startsWith("LED"));
+      for (const sh of [mcu, led]) await post({ op: "add_label", net: "GLOBX", at: { x: 12700, y: 25400 }, kind: { scope: "global", shape: "input" } }, sh.id);
+      await sleep(400);
+      const isrOf = async (id) => ((await sch(id)).labels.find((l) => l.net === "GLOBX")?.fields ?? []).find((f) => f.intersheet_refs);
+      const hidden = await isrOf(mcu.id);
+      t(!!hidden && hidden.visible === false, "a global label has its Sheet References, hidden by default");
+      await __eda.run("eeschema.EditorControl.schematicSetup");
+      await sleep(900);
+      const setup = [...document.querySelectorAll(".dialog")].find((d) => d.innerText.startsWith("Schematic Setup"));
+      t(!!setup, "Schematic Setup opens");
+      const show = setup && [...setup.querySelectorAll("label.bs-check")].find((l) => /Show inter-sheet references/.test(l.textContent))?.querySelector("input");
+      t(!!show && show.checked === false, "on Formatting, with Show inter-sheet references off");
+      show?.click();
+      await sleep(200);
+      t(setup.querySelector('[aria-label="Inter-sheet references prefix"]')?.disabled === false, "the others are no longer greyed out");
+      buttonText(setup, "Apply")?.click();
+      await sleep(1500);
+      const fmt = await json("/api/sch/formatting");
+      t(fmt.intersheet_refs?.show === true, "the design keeps it");
+      const pages = (await json("/api/schematic")).sheets;
+      const a = await isrOf(mcu.id);
+      const b = await isrOf(led.id);
+      t(!!a && a.visible && /^\[.+,.+\]$/.test(a.shown) && a.shown === b?.shown, `both labels show the two pages (${a?.shown} / ${b?.shown}; ${pages.map((p) => p.page).join(",")})`);
+      buttonText(setup, "Close")?.click() ?? buttonText(document, "Close")?.click();
+      await closeDialogs();
+      await undo();
+      t((await isrOf(mcu.id))?.visible === false, "one undo hides them again");
     });
 
     check.ok = results.every((r) => r.ok);

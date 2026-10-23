@@ -1359,6 +1359,9 @@ pub enum Cmd {
     /// Schematic Setup > Formatting > Connection grid spacing (`panel_setup_formatting.cpp`): the grid, in mils, that ERC expects wire ends and pins on
     /// (`SCHEMATIC_SETTINGS::m_ConnectionGridSize`). From `MIN_CONNECTION_GRID_MILS` (25) to 10000; 50, KiCad's default, is stored as none.
     SetConnectionGrid { mils: u32 },
+    /// Schematic Setup > Formatting > Inter-sheet References (`panel_setup_formatting.cpp`): whether a global label shows the pages its net is on, its own page among
+    /// them, abbreviated, and the prefix and suffix (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`). KiCad's defaults are stored as none. One undo step.
+    SetIntersheetRefs { settings: eda_model::sch_extras::IntersheetRefs },
     /// Delete All Markers with "Errors, Warnings and Exclusions"
     /// (`DIALOG_ERC::OnDeleteAllClick`): every marker goes, the excluded ones
     /// too, and KiCad records the markers that are left, so no exclusion
@@ -2008,6 +2011,7 @@ impl Cmd {
             | Cmd::DeleteErcExclusion { .. }
             | Cmd::ClearErcExclusions
             | Cmd::SetConnectionGrid { .. }
+            | Cmd::SetIntersheetRefs { .. }
             | Cmd::AddLabel { .. }
             | Cmd::DeleteLabel { .. }
             | Cmd::AddSchText { .. }
@@ -2098,7 +2102,7 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.edits_connectivity(),
             // A severity table and the findings waived are about the report, not the drawing.
-            Cmd::SetErcSeverities { .. } | Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions | Cmd::SetConnectionGrid { .. } => false,
+            Cmd::SetErcSeverities { .. } | Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions | Cmd::SetConnectionGrid { .. } | Cmd::SetIntersheetRefs { .. } => false,
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
@@ -2305,6 +2309,7 @@ impl Cmd {
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::ClearErcExclusions => vec!["erc_exclusions"],
             Cmd::SetConnectionGrid { .. } => vec!["connection_grid"],
+            Cmd::SetIntersheetRefs { .. } => vec!["intersheet_refs"],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
@@ -2720,6 +2725,7 @@ impl<'a> Board<'a> {
             Cmd::ClearDrcExclusions => review::clear_drc_exclusions(&mut self.design),
             Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
             Cmd::SetConnectionGrid { mils } => review::set_connection_grid(&mut self.design, *mils),
+            Cmd::SetIntersheetRefs { settings } => review::set_intersheet_refs(&mut self.design, settings),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::EditDrcRule { action, entry, name, rule } => rule_editor::edit_drc_rule(&mut self.design, self.model, *action, *entry, name, rule.as_ref()),
             Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),

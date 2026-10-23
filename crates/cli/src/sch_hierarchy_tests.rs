@@ -646,3 +646,111 @@ fn slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it() {
         assert!(ours.is_empty() || ours == apart, "{bus_label}: {ours:?}");
     }
 }
+
+// ---------------------------------------------------------------------------------------- a label's own fields
+
+fn edit_label_fields(id: &str, fields: Vec<eda_model::sch_extras::LabelField>) -> Cmd {
+    Cmd::SchEdit(eda_ops::sch_edit::SchCmd::EditLabel { id: id.into(), text: None, shape: None, spin: None, size_um: None, bold: None, italic: None, auto_rotate: None, fields: Some(fields) })
+}
+
+fn netclass(text: &str) -> eda_model::sch_extras::LabelField {
+    eda_model::sch_extras::LabelField { name: "Netclass".into(), text: text.into(), visible: true, italic: true }
+}
+
+/// A label's net class field (`Netclass`, Label Properties' grid: one `edit_label` with `fields`, one undo step) is in the file kicad-cli reads: its ERC reports a class
+/// the project does not define (`ERC_TESTER::TestMissingNetclasses`, "Netclass %s is not defined") and none once the board defines it; the label's net is then in
+/// the class -- in the studio's model and in kicad-cli's netlist (`<net .. class=..>`). Schematic Setup's Inter-sheet References reach the project file.
+#[test]
+fn slow_a_labels_net_class_field_is_read_by_kicad_cli() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let dir = mcu30_board("slow_label_fields");
+    let (_, design, _) = load(&dir).unwrap();
+    let root = design.schematic.as_ref().unwrap();
+    let label = root.labels.iter().find(|l| l.kind == eda_model::ir::LabelKind::Local && root.wires.iter().any(|w| w.pts.contains(&l.at))).expect("mcu30's flat sheet has a local label on a wire").clone();
+    let net = root.wires.iter().find(|w| w.pts.contains(&label.at)).unwrap().net.clone();
+    let undefined = |dir: &Path| erc_kinds(dir).get("undefined_netclass").copied().unwrap_or(0);
+    assert_eq!(undefined(&dir), 0);
+
+    step(&dir, edit_label_fields(&label.id, vec![netclass("NoSuchClass")]), false, "test").unwrap();
+    let (_, d, _) = load(&dir).unwrap();
+    assert_eq!(d.schematic.as_ref().unwrap().extras.label_netclass(&label.id), Some("NoSuchClass"));
+    assert_eq!(undefined(&dir), 1, "kicad-cli reads the label's net class and has no such class");
+
+    // the board defines the class: no finding, and the label's net is in it
+    let (_, _, model) = load(&dir).unwrap();
+    let defaults = eda_model::rules::net_class_settings_of(&model.board);
+    let power = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(400), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+    step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults } }, false, "test").unwrap();
+    step(&dir, edit_label_fields(&label.id, vec![netclass("HighCurrent")]), false, "test").unwrap();
+    assert_eq!(undefined(&dir), 0, "the class is defined");
+    let (_, _, model) = load(&dir).unwrap();
+    let class = model.board.net_classes.iter().find(|c| c.name == "HighCurrent").unwrap();
+    assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)), "{net} is in the class: {:?}", class.nets);
+    let done = crate::kicad_engine::export_sch(&dir, "netlist", &["--format".to_string(), "kicadxml".to_string()]).unwrap();
+    let xml = std::fs::read_to_string(dir.join(done["files"][0].as_str().unwrap())).unwrap();
+    let line = xml.lines().map(str::trim).find(|l| l.starts_with("<net ") && (l.contains(&format!("name=\"/{net}\"")) || l.contains(&format!("name=\"{net}\"")))).unwrap_or_else(|| panic!("{net} in the netlist"));
+    // (a composite of the classes the net is in, the Default one last: `NET_SETTINGS::makeEffectiveNetclass`)
+    let class = line.split("class=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or("");
+    assert!(class.split(',').any(|c| c == "HighCurrent"), "kicad-cli puts the net in the label's class: {line}");
+
+    // one undo takes the field's edit back
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert_eq!(load(&dir).unwrap().1.schematic.as_ref().unwrap().extras.label_netclass(&label.id), Some("NoSuchClass"));
+
+    // Schematic Setup > Formatting > Inter-sheet References: in the project kicad-cli reads
+    let settings = eda_model::sch_extras::IntersheetRefs { show: true, own_page: false, short: true, prefix: "<".into(), suffix: ">".into() };
+    step(&dir, Cmd::SetIntersheetRefs { settings }, false, "test").unwrap();
+    let (d, m) = crate::kicad_engine::load_with_schematic(&dir).unwrap();
+    let pro: serde_json::Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(&d, &m)).unwrap();
+    assert_eq!(pro["schematic"]["drawing"]["intersheets_ref_show"], true);
+    assert_eq!(pro["schematic"]["drawing"]["intersheets_ref_prefix"], "<");
+    assert!(erc_kinds(&dir).get("undefined_netclass").is_some(), "kicad-cli still loads the project");
+}
+
+/// The `<text>`s of the SVG pages kicad-cli plots of the board's schematic (`kicad-cli sch export svg`): KiCad writes each text it draws once more as a hidden text.
+fn plotted_texts(dir: &Path) -> Vec<String> {
+    let done = crate::kicad_engine::export_sch(dir, "svg", &[]).expect("kicad-cli plots the schematic");
+    let mut out = Vec::new();
+    for f in done["files"].as_array().unwrap() {
+        let svg = std::fs::read_to_string(dir.join(f.as_str().unwrap())).unwrap();
+        for part in svg.split("<text").skip(1) {
+            if let Some(t) = part.split_once('>').and_then(|(_, r)| r.split("</text>").next()) {
+                out.push(t.trim().to_string());
+            }
+        }
+    }
+    out
+}
+
+/// A global label's Sheet References (`SCH_GLOBALLABEL`'s mandatory field, `${INTERSHEET_REFS}`) as Schematic Setup > Formatting sets them (`set_intersheet_refs`,
+/// one undo step): kicad-cli's plot shows the pages the label's name is on as the studio shows them, its own page left out when "Show own page reference" is off.
+#[test]
+fn slow_a_global_labels_sheet_references_read_as_kicad_cli_plots_them() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let (dir, sheet_id, _) = bus_board("slow_isr", "D[0..1]");
+    let global = || eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input };
+    step(&dir, Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: 50_800, y: 101_600 }, kind: global() }, false, "test").unwrap();
+    step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: 60_960, y: 101_600 }, kind: global() }) }, false, "test").unwrap();
+    assert!(!plotted_texts(&dir).iter().any(|t| t.starts_with('[')), "not shown by default (`m_IntersheetRefsShow` is off)");
+    let shown = |dir: &Path, sheet: &str| -> Vec<String> {
+        let (_, d, m) = load(dir).unwrap();
+        let j = crate::studio::schematic_json_of(&d, &m, sheet);
+        j["labels"].as_array().unwrap().iter().flat_map(|l| l["fields"].as_array().cloned().unwrap_or_default()).filter(|f| f["intersheet_refs"] == true && f["visible"] == true).map(|f| f["shown"].as_str().unwrap().to_string()).collect()
+    };
+    let mut settings = eda_model::sch_extras::IntersheetRefs { show: true, ..Default::default() };
+    step(&dir, Cmd::SetIntersheetRefs { settings: settings.clone() }, false, "test").unwrap();
+    let texts = plotted_texts(&dir);
+    assert_eq!(texts.iter().filter(|t| *t == "[1,2]").count(), 2, "both labels show both pages: {texts:?}");
+    assert_eq!((shown(&dir, ""), shown(&dir, &sheet_id)), (vec!["[1,2]".to_string()], vec!["[1,2]".to_string()]), "as the studio shows them");
+    settings.own_page = false;
+    step(&dir, Cmd::SetIntersheetRefs { settings }, false, "test").unwrap();
+    let texts = plotted_texts(&dir);
+    assert!(texts.iter().any(|t| t == "[2]") && texts.iter().any(|t| t == "[1]"), "each the other's page only: {texts:?}");
+    assert_eq!((shown(&dir, ""), shown(&dir, &sheet_id)), (vec!["[2]".to_string()], vec!["[1]".to_string()]));
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert_eq!(shown(&dir, ""), vec!["[1,2]".to_string()], "one undo puts the setting back");
+}

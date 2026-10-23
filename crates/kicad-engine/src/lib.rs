@@ -401,12 +401,8 @@ fn studio_appearance(work: &Path) -> Option<Value> {
 /// The project file next to the derived board/schematic: our design rules
 /// and ERC pin map, plus the custom-rule file an imported project carried,
 /// so kicad-cli judges against this design's own rules and not its
-/// hard-coded floors.
-fn write_project(work: &Path, stem: &str, design: &Design, model: &ConstraintModel) -> Result<(), Vec<CheckResult>> {
-    write_project_with(work, stem, design, model, None)
-}
-
-/// [`write_project`], with the board's net classes in the project file when [`export_board`] moved them there (a class with a colour: see `eda_kicad::appearance`).
+/// hard-coded floors; with the board's net classes in the project file when [`export_board`] moved them there (a class with a colour: see
+/// `eda_kicad::appearance`), and always for a schematic ([`export_schematic`]).
 fn write_project_with(work: &Path, stem: &str, design: &Design, model: &ConstraintModel, classes: Option<&eda_kicad::appearance::SplitClasses>) -> Result<(), Vec<CheckResult>> {
     let mut pro_text = export_kicad_pro_for(design, model);
     // What the person chose in the studio's Appearance panel (layers and objects shown, colours, presets, views) goes into the derived project as KiCad keeps it:
@@ -513,8 +509,32 @@ fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem:
     for (name, text) in &files {
         write_file(&work.join(name), text)?;
     }
-    write_project(work, stem, design, model)?;
+    // A schematic's project has no board to hold the net classes, so they are in the project file (`net_settings.classes`, `netclass_patterns`), where KiCad keeps
+    // them: its ERC knows the classes a label names (`TestMissingNetclasses`) and its netlist puts a net in its class.
+    let classes = project_net_classes(model);
+    write_project_with(work, stem, design, model, Some(&classes))?;
     Ok((work.join(&root_name), map))
+}
+
+/// The board's net classes in the project file's form (`NETCLASS` in `net_settings.classes`, mm): each class with its name, its precedence (`priority`, the
+/// board's order; Default last) and the numbers it sets, and each of its net patterns as a `netclass_patterns` entry.
+fn project_net_classes(model: &ConstraintModel) -> eda_kicad::appearance::SplitClasses {
+    let mm = |um: i64| um as f64 / 1000.0;
+    let mut classes = vec![json!({ "name": "Default", "priority": i64::from(i32::MAX) })];
+    let mut patterns = Vec::new();
+    for (i, c) in model.board.net_classes.iter().filter(|c| c.name != "Default").enumerate() {
+        let mut class = serde_json::Map::new();
+        class.insert("name".into(), json!(c.name));
+        class.insert("priority".into(), json!(i));
+        for (key, v) in [("track_width", c.track_width), ("clearance", c.clearance), ("via_diameter", c.via_diameter), ("via_drill", c.via_drill), ("microvia_diameter", c.microvia_diameter), ("microvia_drill", c.microvia_drill), ("diff_pair_width", c.diff_pair_width), ("diff_pair_gap", c.diff_pair_gap)] {
+            if let Some(v) = v {
+                class.insert(key.into(), json!(mm(v)));
+            }
+        }
+        classes.push(Value::Object(class));
+        patterns.extend(c.nets.iter().map(|n| json!({ "netclass": c.name, "pattern": n })));
+    }
+    eda_kicad::appearance::SplitClasses { pcb: String::new(), classes, patterns }
 }
 
 /// Run `f` with a fresh temp directory, removed afterwards.
@@ -2161,7 +2181,7 @@ fi"#;
         )
         .unwrap();
         let work = dir.join(".kicad");
-        write_project(&work, "b", &design, &model).unwrap();
+        write_project_with(&work, "b", &design, &model, None).unwrap();
         let pro: Value = serde_json::from_str(&std::fs::read_to_string(work.join("b.kicad_pro")).unwrap()).unwrap();
         assert_eq!(pro["net_settings"]["net_colors"]["GND"], "rgb(1, 2, 3)");
         assert_eq!(pro["board"]["layer_presets"][0]["name"], "Mine");
@@ -2175,7 +2195,7 @@ fi"#;
         assert_eq!(prl["board"]["hidden_nets"], json!(["GND"]));
         // The studio clears everything: the next export leaves no local settings file behind.
         std::fs::write(dir.join("appearance.json"), r#"{"version":1,"local":{},"project":{}}"#).unwrap();
-        write_project(&work, "b", &design, &model).unwrap();
+        write_project_with(&work, "b", &design, &model, None).unwrap();
         assert!(!work.join("b.kicad_prl").exists());
         let pro: Value = serde_json::from_str(&std::fs::read_to_string(work.join("b.kicad_pro")).unwrap()).unwrap();
         assert!(pro.get("net_settings").is_none() && pro["board"].get("layer_presets").is_none());
@@ -2187,7 +2207,7 @@ fi"#;
         let (design, model) = empty_design();
         // No appearance.json beside the board.
         let dir = board_dir("no-appearance");
-        write_project(&dir.join(".kicad"), "b", &design, &model).unwrap();
+        write_project_with(&dir.join(".kicad"), "b", &design, &model, None).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join(".kicad").join("b.kicad_pro")).unwrap(), export_kicad_pro_for(&design, &model));
         assert!(!dir.join(".kicad").join("b.kicad_prl").exists());
         // A scratch folder is no board's `.kicad`: whatever lies beside it is not that board's.
@@ -2195,7 +2215,7 @@ fi"#;
         std::fs::write(loose.join("appearance.json"), r#"{"local":{"visible_items":["tracks"]},"project":{}}"#).unwrap();
         let scratch = loose.join("scratch");
         std::fs::create_dir_all(&scratch).unwrap();
-        write_project(&scratch, "b", &design, &model).unwrap();
+        write_project_with(&scratch, "b", &design, &model, None).unwrap();
         assert!(!scratch.join("b.kicad_prl").exists());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&loose);
