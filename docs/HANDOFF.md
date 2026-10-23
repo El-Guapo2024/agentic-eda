@@ -49,6 +49,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | Library editors review (10-23) | P3 and P17 against KiCad's code; KiCad's installed libraries round-trip through our readers and writers (164 footprints, 243 symbols, none differing beyond sub-µm rounding). `LibraryPad` has a new `kicad` field: older branches' literals need `Default::default()`. Left: the IR's µm (70 of 164 footprints round by up to 0.5 µm), a hidden fp_text, colours, `.kicad_mod` still written as 20240108. |
 | Schematic core review (10-23) | P4, P10 and P10b against eeschema's code. Turned and mirrored symbols now go through KiCad's TRANSFORM in the engine, the tracer and the writer; before, their pins were not where they were drawn. 87 of KiCad's 130 QA schematics written back are judged alike by kicad-cli's ERC and netlist (a ratchet). Left: sheet naming (kept together), nested shared screens, `${#}`. PARITY-sch.md section 40. |
 | Connectivity measure (10-23) | A fixed set of 186 boards (`examples/` plus KiCad's QA boards, never `work/`); 97.8% of counts equal kicad-cli's; the ratchet passes on the box. Left: sub-µm segments (6 boards, needs nm in the IR), pads sharing a number but not a net, copper graphics with a net, teardrops, a custom-rule board. The studio's Fill All may lose teardrop zones' fills (read from the code, not run: GAPS.md item 36). PARITY-pcb.md section 51. |
+| P20 (10-23) | 42 browser checks; `tools/run-all-checks.sh [-j N]` builds once, serves each check a fresh copy of its board and prints one line per check (42/42, about 24 min at -j 3). Found and left: the schematic-parity DRC on the routed mcu30 finds 76 board-vs-schematic differences (footprint fields, nets), the Symbol Editor's pin tool and New Symbol skip their dialogs, Both sides writes one placement file. GAPS.md item 33 has the coverage table. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
@@ -59,7 +60,6 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-p20-browser-checks` | P20: `tools/run-all-checks.sh` (every browser check headless, on the boards their headers name); five new checks (board-edit, sch-edit, lib-edit, board-setup-rules, plot-exports); eight fixes they found (item edits off the placement grid, the junction of a T, the library editors' E / R / Del actions, Pre-defined Sizes in one undo step, Escape on a popup menu, a CSV placement file's name, the parity DRC on a board with no stored schematic); stale checks brought up to date | done, main merged 2026-10-23; gates: cargo check 0 warnings, check.sh fast Rust 3623/0, web 2449; run-all-checks 42/42 | what GAPS.md item 33 lists |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -78,7 +78,7 @@ Gates for any of them:
    - ~~the router: springback, rounded corners, virtual vias~~ merged 2026-10-23 (left: springback in the dragger and the pair placer);
    - ~~the schematic: copying and pasting whole sheets, buses across sheets, a label's own fields~~ merged 2026-10-23;
    - ~~KiCad 10 items the reader skips~~ merged 2026-10-23;
-   - browser checks for the older areas (P20): on `task-p20-browser-checks`, 38 of 42 after the latest main, being fixed;
+   - ~~browser checks for the older areas (P20)~~ merged 2026-10-23: `tools/run-all-checks.sh` runs all 42, 42/42.
    - ~~re-running `tools/parity_report.py`~~ merged 2026-10-23: the connectivity set is fixed at 186 boards, 97.8%.
 
 Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Python plugins, the autoplacer and the viewer windows (see `STALE-REASONS.md`); Hyperlynx and footprint-report export (no kicad-cli exporter, not even in the box's nightly; ask the user before porting them as was done for Specctra). IDFv3 and GenCAD are kicad-cli's (user, 2026-10-23: `task-cli-exports`), offered where the kicad-cli in use has the command and disabled with the reason where it has not.
