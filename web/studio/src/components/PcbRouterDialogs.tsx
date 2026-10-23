@@ -3,11 +3,16 @@
 //   LayerPairDialog               SELECT_COPPER_LAYERS_PAIR_DIALOG (pcbnew/sel_layer.cpp): the top and bottom
 //                                 layer of the pair, the "add to presets" button and the presets table.
 //   DiffPairDimensionsDialog      DIALOG_PNS_DIFF_PAIR_DIMENSIONS (dialogs/dialog_pns_diff_pair_dimensions.cpp).
+//   SelectLayerDialog             PCB_ONE_LAYER_SELECTOR (pcbnew/sel_layer.cpp, `PCB_BASE_FRAME::SelectOneLayer`): the layer a
+//                                 "Select Layer and Place ... Via" command places its via to.
+//   TrackViaSizeDialog            DIALOG_TRACK_VIA_SIZE (dialogs/dialog_track_via_size.cpp): Custom Track/Via Size (Q).
 import { useState } from "react";
 import { closeSweepDialog } from "../actions/pcbSweepDialogs";
 import { addLayerPair, hasSameLayers, layerPairName, removeLayerPair, setCurrentLayerPair, type LayerPairInfo, type LayerPairSettings } from "../kicad-port/layerPairs";
 import type { CustomDiffPair } from "../kicad-port/pcbParityState";
-import { DialogShell, LengthRow, useLengthField } from "./pcbDialogKit";
+import { DialogShell, LengthRow, useEscape, useLengthField } from "./pcbDialogKit";
+import { colorOfLayer } from "./ZonePreview";
+import { validateViaParameters, type CustomTrackVia } from "../kicad-port/routerVia";
 
 export function LayerPairDialog({ settings, copper, onOk }: { settings: LayerPairSettings; copper: readonly string[]; onOk: (settings: LayerPairSettings) => void }) {
   // `m_dialogPairSettings`: a local copy edited by the dialog, handed back on OK.
@@ -145,6 +150,98 @@ export function DiffPairDimensionsDialog({ value, onOk }: { value: CustomDiffPai
         Via gap same as track gap
       </label>
       {error && <div style={{ color: "#ef5b5b", fontSize: 11, marginTop: 6 }}>{error}</div>}
+    </DialogShell>
+  );
+}
+
+/** `PCB_ONE_LAYER_SELECTOR::getLayerHotKey`: the hotkey of the layer's `PCB_ACTIONS::LayerIDToAction` -- PgUp for F.Cu, PgDn for B.Cu (`layerTop` / `layerBottom`); the inner layers' actions have none. */
+function layerHotkey(layer: string, copper: readonly string[]): string {
+  return layer === copper[0] ? "PgUp" : layer === copper[copper.length - 1] ? "PgDn" : "";
+}
+
+/**
+ * `PCB_ONE_LAYER_SELECTOR` as `SelectOneLayer` opens it (`aHideCheckBoxes = true`): "Select Layer", the board's layers in order less the
+ * ones not allowed -- here the copper layers `layers` (`not_allowed_ly = LSET::AllNonCuMask()`, and the current layer for a via that is not a
+ * through via) -- each a row with its colour, name and hotkey, the default layer marked. A click on a row picks it and closes the dialog
+ * (`OnLeftGridCellClick`: `EndDialog( 1 )`); Escape cancels (`UNDEFINED_LAYER`).
+ */
+export function SelectLayerDialog({ layers, copper, current, onPick, onCancel }: { layers: readonly string[]; copper: readonly string[]; current: string; onPick: (layer: string) => void; onCancel: () => void }) {
+  const cancel = () => {
+    closeSweepDialog();
+    onCancel();
+  };
+  useEscape(cancel);
+  const [hover, setHover] = useState<string | null>(current);
+  return (
+    <div className="dialog-backdrop" onClick={cancel}>
+      <div className="dialog" style={{ width: 240 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Select Layer">
+        <div className="dialog-header">
+          <span>Select Layer</span>
+        </div>
+        <div className="dialog-body">
+          <table style={{ width: "100%", borderCollapse: "collapse" }} data-testid="select-layer-grid">
+            <tbody>
+              {layers.map((layer) => (
+                <tr
+                  key={layer}
+                  data-layer={layer}
+                  aria-selected={hover === layer}
+                  style={{ cursor: "pointer", background: hover === layer ? "var(--accent-soft, rgba(80,140,255,0.25))" : undefined, fontWeight: layer === current ? 600 : 400 }}
+                  onMouseEnter={() => setHover(layer)}
+                  onClick={() => {
+                    closeSweepDialog();
+                    onPick(layer);
+                  }}
+                >
+                  <td style={{ width: 14, padding: "2px 4px" }}>
+                    <span style={{ display: "inline-block", width: 12, height: 12, background: colorOfLayer(layer), border: "1px solid #0006" }} />
+                  </td>
+                  <td style={{ padding: "2px 6px", fontSize: 12 }}>{` ${layer}`}</td>
+                  <td style={{ padding: "2px 6px", fontSize: 11, opacity: 0.7, textAlign: "right" }}>{layerHotkey(layer, copper)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * `DIALOG_TRACK_VIA_SIZE` ("Track and Via Dimensions"): the custom track width, via diameter and via hole (`GetCustomTrackWidth` / `GetCustomViaSize` /
+ * `GetCustomViaDrill`). OK checks the via with `PCB_VIA::ValidateViaParameters` -- its message is shown and the dialog stays open -- and stores the values
+ * (`SetCustomTrackWidth` ..). KiCad's track width has no check of its own (the `minSize` the dialog passes its `UNIT_BINDER`s lands in `allowEval`); the
+ * studio refuses one that is not a positive length rather than route at width 0.
+ */
+export function TrackViaSizeDialog({ value, onOk }: { value: CustomTrackVia; onOk: (v: CustomTrackVia) => void }) {
+  const track = useLengthField(value.trackUm);
+  const diameter = useLengthField(value.viaDiameterUm);
+  const drill = useLengthField(value.viaDrillUm);
+  const [error, setError] = useState<string | null>(null);
+  const submit = () => {
+    // `UNIT_BINDER::GetIntValue` of a field that is not a length is 0 (and so "too small"); a track width that is none is the studio's own refusal
+    const t = track.parse();
+    const d = diameter.parse() ?? 0;
+    const h = drill.parse() ?? 0;
+    const problem = t == null || t <= 0 ? "Track width must be a length greater than 0." : validateViaParameters(d, h);
+    if (problem || t == null) {
+      setError(problem);
+      return;
+    }
+    closeSweepDialog();
+    onOk({ trackUm: t, viaDiameterUm: d, viaDrillUm: h });
+  };
+  return (
+    <DialogShell title="Track and Via Dimensions" width={320} onCancel={closeSweepDialog} onOk={submit}>
+      <LengthRow label="Track width:" field={track} autoFocus onEnter={submit} />
+      <LengthRow label="Via diameter:" field={diameter} onEnter={submit} />
+      <LengthRow label="Via hole:" field={drill} onEnter={submit} />
+      {error && (
+        <div role="alert" style={{ color: "#ef5b5b", fontSize: 11, marginTop: 6 }}>
+          {error}
+        </div>
+      )}
     </DialogShell>
   );
 }

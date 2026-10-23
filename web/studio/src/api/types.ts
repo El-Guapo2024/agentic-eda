@@ -344,6 +344,8 @@ export interface Via {
   to: string;
   /** What the via does with the layers nothing connects it on (`remove_unused_layers`); absent when it keeps them all. */
   unconnected?: UnconnectedLayers | null;
+  /** `VIATYPE` when it is not a through via (the router's Place Blind/Buried Via and Place Microvia, or the board file's `(via blind ..)`); absent for a through via. */
+  type?: "blind" | "buried" | "micro" | null;
   /** With `unconnected`: the copper layers that have its ring. */
   flashed?: string[] | null;
 }

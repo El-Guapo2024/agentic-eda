@@ -19,6 +19,7 @@ import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { modificationSnapFor } from "../state/modificationSnap";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { registerPcbRouterSweep } from "./pcbRouterSweep";
+import { registerRouterViaActions } from "./routerViaActions";
 import { registerPcbSelectionSync } from "./pcbSelectionSync";
 import { registerPcbConvertSweep } from "./pcbConvertSweep";
 import { registerPcbGlobalEditSweep } from "./pcbGlobalEditSweep";
@@ -122,6 +123,8 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
     m.set("pcbnew.InteractiveRouter.SwitchRoundingArc45", pcbOnly(() => setCornerMode("rounded_45")));
     m.set("pcbnew.InteractiveRouter.SwitchRounding90", pcbOnly(() => setCornerMode("mitered_90")));
     m.set("pcbnew.InteractiveRouter.SwitchRoundingArc90", pcbOnly(() => setCornerMode("rounded_90")));
+    // the via commands, Switch Track Posture and Custom Track/Via Size (actions/routerViaActions.ts)
+    registerRouterViaActions(m, ctx);
   }
 
   // ------------------------------------------------------------ selection by net

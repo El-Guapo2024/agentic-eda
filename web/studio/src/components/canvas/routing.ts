@@ -56,7 +56,9 @@ export async function fixInteractiveRoute(x: number, y: number, draw: RouteDrawS
     await finishInteractiveRoute(x, y, dispatch, api);
     return;
   }
-  if (reply.preview) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, reply.preview) });
+  // a fix places the armed via and goes on on its other layer (`Router::fix` takes the pending via): nothing is armed any more, as in KiCad
+  // (`IsPlacingVia()` is false after `FixRoute`), so V or a via command arms the next one rather than taking this one back
+  if (reply.preview) dispatch({ type: "SET_DRAW_STATE", draw: { ...drawStateFromPreview(draw, reply.preview), placingVia: false, pendingViaLayer: undefined } });
 }
 
 /** Finish the route at `(x, y)` -- Enter/double-click/"F" (AttemptFinish),

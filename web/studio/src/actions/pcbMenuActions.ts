@@ -41,6 +41,7 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
     "studio.Router.useNetclassSizes",
     pcbOnly(() => {
       dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
+      dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
       dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthUm: base.width });
       dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: base.via });
       reroute(dispatch, base.width);
@@ -53,6 +54,8 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
       const width = widths()[index(param)];
       if (width == null) return;
       dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
+      // `SetTrackWidthIndex`: "m_useCustomTrackVia = false"
+      dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
       dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthUm: width });
       reroute(dispatch, width);
     })
@@ -64,6 +67,8 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
       const preset = vias()[index(param)];
       if (!preset) return;
       dispatch({ type: "BCX", patch: { autoTrackWidth: false } });
+      // `SetViaSizeIndex`: "m_useCustomTrackVia = false"
+      dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
       dispatch({ type: "SET_CURRENT_VIA_PRESET", preset });
     })
   );

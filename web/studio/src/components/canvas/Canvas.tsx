@@ -1386,36 +1386,32 @@ export function Canvas() {
       e.preventDefault();
       finishDraw();
     }
-    // `/` flips posture while routing (router_tool.cpp's own hotkey for
-    // this -- real pcbnew binds it with no separate registered
-    // TOOL_ACTION the way most hotkeys get one, so it's handled directly
-    // here rather than through useActionRunner.ts's dotted-action
-    // registry, same as this app's own Enter-to-finish convention just
-    // above). Re-requests the preview at the last known cursor position so
-    // the flip is visible immediately rather than waiting for the next
-    // mouse pixel to move.
-    if (e.key === "/" && !(e.ctrlKey || e.metaKey) && state.drawState?.kind === "route" && state.cursorUm) {
-      e.preventDefault();
-      const draw = state.drawState;
-      const token = routeMoveGuardRef.current.next();
-      routeMove(state.cursorUm.x, state.cursorUm.y, true).then((preview) => {
-        if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
-        dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) });
-      });
-    }
     // The Track Corner Mode hotkeys (router_tool.cpp's `ACT_SwitchCornerMode*`, static TOOL_ACTIONs of the router tool): Ctrl+/ the next
-    // mode, Ctrl+W 45, Ctrl+Shift+W arc 45, Ctrl+Alt+W 90, Alt+W arc 90 -- in the router tool only (`AS_CONTEXT`), the pair router's too.
+    // mode, Ctrl+W 45, Ctrl+Shift+W arc 45, Ctrl+Alt+W 90, Alt+W arc 90 -- in the router tool only (`AS_CONTEXT`), the pair router's too; and
+    // the router's other context actions: Ctrl+V microvia, Alt+Shift+V blind via, < / Alt+< pick a layer and place a through / blind via,
+    // / Switch Track Posture (`ACT_SwitchPosture`, which takes the key over from the drawing tools' posture keys), Q Custom Track/Via Size.
     // Matched here by the physical key so that a layout's Alt+W character does not hide it. (A browser keeps Ctrl+W for itself; the
     // menu has the same five.)
     if (state.activeTool === "route" || state.activeTool === "diffpair" || state.drawState?.kind === "route" || state.drawState?.kind === "diffpair") {
       const ctrl = e.ctrlKey || e.metaKey;
       const w = e.code === "KeyW";
+      const v = e.code === "KeyV";
+      // `<` is Shift+Comma on a US keyboard and its own key (IntlBackslash) on an ISO one
+      const less = e.key === "<" || e.code === "IntlBackslash" || (e.shiftKey && e.code === "Comma");
+      const slash = e.key === "/" || (e.code === "Slash" && !e.shiftKey);
       const action =
-        ctrl && (e.key === "/" || e.code === "Slash") ? "pcbnew.InteractiveRouter.SwitchRoundingToNext"
+        ctrl && slash ? "pcbnew.InteractiveRouter.SwitchRoundingToNext"
         : ctrl && e.altKey && w ? "pcbnew.InteractiveRouter.SwitchRounding90"
         : ctrl && e.shiftKey && w ? "pcbnew.InteractiveRouter.SwitchRoundingArc45"
         : ctrl && w ? "pcbnew.InteractiveRouter.SwitchRounding45"
         : e.altKey && w ? "pcbnew.InteractiveRouter.SwitchRoundingArc90"
+        // the router's other context actions (actions/routerViaActions.ts): Ctrl+V is Paste's elsewhere, and Alt+.. may type another character
+        : ctrl && v && !e.altKey && !e.shiftKey ? "pcbnew.InteractiveRouter.PlaceMicroVia"
+        : !ctrl && e.altKey && e.shiftKey && v ? "pcbnew.InteractiveRouter.PlaceBlindVia"
+        : !ctrl && e.altKey && less ? "pcbnew.InteractiveRouter.SelLayerAndPlaceBlindVia"
+        : !ctrl && !e.altKey && less ? "pcbnew.InteractiveRouter.SelLayerAndPlaceVia"
+        : !ctrl && !e.altKey && slash ? "pcbnew.InteractiveRouter.SwitchPosture"
+        : !ctrl && !e.altKey && !e.shiftKey && e.code === "KeyQ" ? "pcbnew.InteractiveRouter.CustomTrackViaSize"
         : null;
       if (action) {
         e.preventDefault();
@@ -1423,16 +1419,6 @@ export function Canvas() {
         void run(action);
         return;
       }
-    }
-    // Same `/` posture flip, for the diff-pair tool's own spine posture.
-    if (e.key === "/" && state.drawState?.kind === "diffpair" && state.cursorUm) {
-      e.preventDefault();
-      const draw = state.drawState;
-      const token = routeMoveGuardRef.current.next();
-      dpMove(state.cursorUm.x, state.cursorUm.y, true).then((preview) => {
-        if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
-        dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(draw, preview) });
-      });
     }
   };
 

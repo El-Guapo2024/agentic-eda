@@ -83,15 +83,17 @@ export function trackViaWidthMenu(state: StudioState, board: BoardState): MenuNo
   const rules = board.board_rules;
   const widths = [rules?.track_width ?? 250, ...(board.routing?.track_width_presets ?? [])];
   const vias = [{ diameter: rules?.via_diameter ?? 600, drill: rules?.via_drill ?? 300 }, ...(board.routing?.via_presets ?? [])];
-  const auto = state.bcx.autoTrackWidth;
-  const useIndex = !auto;
+  // `useIndex = !bds.m_UseConnectedTrackWidth && !bds.UseCustomTrackViaSize()`
+  const custom = state.pcbx.useCustomTrackVia;
+  const auto = state.bcx.autoTrackWidth && !custom;
+  const useIndex = !state.bcx.autoTrackWidth && !custom;
   const width = state.currentTrackWidthUm;
   const via = state.currentViaPreset;
   const mm = (um: number) => formatLength(um, state.units);
   const out: MenuNode[] = [
     { type: "item", action: "pcbnew.EditorControl.autoTrackWidth", label: "Use Starting Track Width", checked: auto },
     { type: "item", action: "studio.Router.useNetclassSizes", label: "Use Net Class Values", checked: useIndex && width == null && via == null },
-    { type: "item", action: "pcbnew.InteractiveRouter.CustomTrackViaSize", label: "Use Custom Values...", checked: false },
+    { type: "item", action: "pcbnew.InteractiveRouter.CustomTrackViaSize", label: "Use Custom Values...", checked: custom },
     { type: "separator" },
   ];
   widths.forEach((w, i) => {

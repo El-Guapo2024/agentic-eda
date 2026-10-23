@@ -5,6 +5,7 @@
 import type { Cmd } from "../api/types";
 import type { TuneHoverReply, TuneKind, TuneSettings } from "../api/tuneTypes";
 import type { LayerPairSettings } from "./layerPairs";
+import { DEFAULT_CUSTOM_TRACK_VIA, type CustomTrackVia } from "./routerVia";
 import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
 
 /**
@@ -65,6 +66,9 @@ export interface PcbParityState {
   layerPairs: LayerPairSettings | null;
   /** `BOARD_DESIGN_SETTINGS::UseCustomDiffPairDimensions`: the "Differential Pair Dimensions..." dialog's width and gap for the pairs routed from now on (null = the net class's own). `viaGap*` are kept as the dialog entered them: this port's pair has no via. */
   customDiffPair: CustomDiffPair | null;
+  /** `BOARD_DESIGN_SETTINGS::m_customTrackWidth` / `m_customViaSize`: the Custom Track/Via Size dialog's values (`DIALOG_TRACK_VIA_SIZE`), and whether they are in use (`UseCustomTrackViaSize()`, the "Use Custom Values..." check of the width menu; choosing a width or via size of the list turns it off). */
+  customTrackVia: CustomTrackVia;
+  useCustomTrackVia: boolean;
   /** "Create Zone / Rule Area from Selection" (convert_tool.cpp `CreatePolys`): what the zone dialog does once the first outline's zone is added -- the other outlines the conversion made get the same settings, then the source items go. */
   zoneConvert: ZoneConvertPending | null;
   /** `PCBNEW_SETTINGS::m_ArcEditMode`: how editing an arc's handles recomputes the arc (kicad-port/pcbPointEdit.ts). */
@@ -102,6 +106,8 @@ export const DEFAULT_PCB_PARITY: PcbParityState = {
   menuCursorUm: null,
   layerPairs: null,
   customDiffPair: null,
+  customTrackVia: DEFAULT_CUSTOM_TRACK_VIA,
+  useCustomTrackVia: false,
   zoneConvert: null,
   arcEditMode: DEFAULT_ARC_EDIT_MODE,
   vertexEditorOpen: false,

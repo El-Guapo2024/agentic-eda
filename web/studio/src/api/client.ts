@@ -570,8 +570,9 @@ export function routeUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
   return postJson("/api/route/undo_segment", {});
 }
 
-export function routeToggleVia(enabled: boolean, diameter?: Um, drill?: Um, toLayer?: string): Promise<{ ok: boolean }> {
-  return postJson("/api/route/via", { enabled, diameter, drill, to_layer: toLayer });
+/** `typed`: the via's type and the layers it spans (`ROUTER_TOOL::handleLayerSwitch`'s `sizes.SetViaType` / `AddLayerPair`, kicad-port/routerVia.ts); without it, a via from the layer being routed to `toLayer`. */
+export function routeToggleVia(enabled: boolean, diameter?: Um, drill?: Um, toLayer?: string, typed?: { viaType: string; span: [string, string] }): Promise<{ ok: boolean; message?: string }> {
+  return postJson("/api/route/via", { enabled, diameter, drill, to_layer: toLayer, ...(typed ? { via_type: typed.viaType, span: typed.span } : {}) });
 }
 
 export function routeFinish(x: Um, y: Um): Promise<CmdReply> {
