@@ -32,10 +32,10 @@ test("a pin is on the border it sits at: left, right, top, then bottom", () => {
 });
 
 test("the body box is the flag and the name from the pin's own point, into the sheet (SCH_HIERLABEL::GetBodyBoundingBox)", () => {
-  // text 1.27 mm: pen 159, margin 191 (0.15 of the size, rounded) -> height 1620; the name is 4 mm wide -> length 5620
+  // text 1.27 mm: pen 158750, margin 190500 (0.15 of the size) -> height 1619250; the name is 4 mm wide -> length 5619250
   const left = sheetPinBodyBox([100_000_000, 60_000_000], "left", 4_000_000);
-  assert.ok(Math.abs(left.minX - (100_000_000 - 304.8)) < 0.01 && Math.abs(left.maxX - (100_000_000 - 304.8 + 5_620_000)) < 0.01, JSON.stringify(left));
-  assert.ok(Math.abs(left.minY - (60_000_000 - 810_000)) < 0.01 && Math.abs(left.maxY - (60_000_000 + 810_000)) < 0.01);
+  assert.ok(Math.abs(left.minX - (100_000_000 - 304_800)) < 0.01 && Math.abs(left.maxX - (100_000_000 - 304_800 + 5_619_250)) < 0.01, JSON.stringify(left));
+  assert.ok(Math.abs(left.minY - (60_000_000 - 809_625)) < 0.01 && Math.abs(left.maxY - (60_000_000 + 809_625)) < 0.01);
   // a pin on the right border runs the other way, into the sheet
   const right = sheetPinBodyBox([140_000_000, 70_000_000], "right", 4_000_000);
   assert.ok(right.maxX > 140_000_000 && right.minX < 140_000_000 - 5_000_000);
@@ -73,11 +73,11 @@ test("a box takes the pins it touches or holds", () => {
 });
 
 test("a pin moved along its border stays on it; one dragged past a corner goes to the nearest border (SCH_SHEET_PIN::ConstrainOnEdge)", () => {
-  assert.deepEqual(constrainOnEdge({ at: sheet.at, size: sheet.size }, [101_000, 65_000]), { at: [100_000, 65_000], side: "left" });
+  assert.deepEqual(constrainOnEdge({ at: sheet.at, size: sheet.size }, [101_000_000, 65_000_000]), { at: [100_000_000, 65_000_000], side: "left" });
   // below the bottom-left corner the left border still is the nearest, clamped to the corner
-  assert.deepEqual(constrainOnEdge({ at: sheet.at, size: sheet.size }, [100_000, 90_000]).at, [100_000, 80_000]);
+  assert.deepEqual(constrainOnEdge({ at: sheet.at, size: sheet.size }, [100_000_000, 90_000_000]).at, [100_000_000, 80_000_000]);
   // dragged into the middle of the sheet, near the top
-  assert.deepEqual(constrainOnEdge({ at: sheet.at, size: sheet.size }, [120_000, 52_000]), { at: [120_000, 50_000], side: "top" });
+  assert.deepEqual(constrainOnEdge({ at: sheet.at, size: sheet.size }, [120_000_000, 52_000_000]), { at: [120_000_000, 50_000_000], side: "top" });
 });
 
 test("what the dialog sends: the name and the shape that changed, one verb", () => {
@@ -98,7 +98,7 @@ test("a pin's text look is set by Sheet Pin Properties: only what changed goes, 
   assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeNm: 1_270_000, bold: true, italic: true }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", bold: true, italic: true });
   // no size is refused: `SetTextSize` clamps it to 0.001 .. 250 mm
   assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeNm: 500_000_000 }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", size_nm: 250_000_000 });
-  assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeNm: 0.4 }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", size_nm: 1 });
+  assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeNm: 400 }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", size_nm: 1_000 });
   const styled = { ...pin, size_nm: 2_000_000, bold: true };
   assert.equal(sheetPinEditCmd(styled, { name: "IN", shape: "input", sizeNm: 2_000_000, bold: true, italic: false }), null);
   assert.deepEqual(sheetPinEditCmd(styled, { name: "IN", shape: "input", sizeNm: 1_270_000, bold: false, italic: false }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", size_nm: 1_270_000, bold: false });

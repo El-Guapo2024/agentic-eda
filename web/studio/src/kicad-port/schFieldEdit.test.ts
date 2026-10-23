@@ -63,7 +63,7 @@ test("a bold text with its name shown reads as Name: value", () => {
 test("the box of a field is justified against its anchor and turned with a vertical text", () => {
   const left = fieldBox(field("Value", "ABCDE", [1_000_000, 5_000_000]), measure);
   assert.equal(left.minX, 1_000_000);
-  assert.ok(left.maxX > 1_000_000 + 5 * 0.5 * 1270 && left.maxX < 1_000_000 + 5 * 0.5 * 1270 + 700_000, `${left.maxX}`);
+  assert.ok(left.maxX > 1_000_000 + 5 * 0.5 * 1_270_000 && left.maxX < 1_000_000 + 5 * 0.5 * 1_270_000 + 700_000, `${left.maxX}`);
   assert.ok(left.minY < 5_000_000 && left.maxY > 5_000_000, "centred on the anchor, a little taller than the text");
   const right = fieldBox(field("Value", "ABCDE", [1_000_000, 5_000_000], { h: "right" }), measure);
   assert.equal(right.maxX, 1_000_000);
@@ -73,7 +73,7 @@ test("the box of a field is justified against its anchor and turned with a verti
   // a vertical text runs up the sheet from its anchor
   const up = fieldBox(field("Value", "ABCDE", [1_000_000, 5_000_000], { vertical: true }), measure);
   assert.equal(up.maxY, 5_000_000);
-  assert.ok(up.minY < 5_000_000 - 5 * 0.5 * 1270);
+  assert.ok(up.minY < 5_000_000 - 5 * 0.5 * 1_270_000);
   assert.ok(up.maxX - up.minX < 2_200_000, "and is as wide as a line is tall");
   // the box follows the size and a bold pen
   const big = fieldBox(field("Value", "ABCDE", [1_000_000, 5_000_000], { size_nm: 2_540_000 }), measure);
@@ -107,7 +107,7 @@ test("a marquee takes the fields it crosses, or only those it encloses", () => {
 test("Field Properties sends only what changed, and nothing when it changed nothing", () => {
   const f = findField(sheet(), "fld:R1:Value")!.field;
   assert.equal(fieldEditCmd(f, {}), null);
-  assert.equal(fieldEditCmd(f, { text: "330", sizeNm: 1_270_000, bold: false, visible: true, allowAutoplace: true, at: [10_000.4, 12_540_000] }), null);
+  assert.equal(fieldEditCmd(f, { text: "330", sizeNm: 1_270_000, bold: false, visible: true, allowAutoplace: true, at: [10_000_000.4, 12_540_000] }), null);
   assert.deepEqual(fieldEditCmd(f, { text: "470", sizeNm: 2_000_000, bold: true, vertical: true, at: [11_000_000, 12_540_000] }), {
     op: "sch_edit",
     verb: "edit_field",

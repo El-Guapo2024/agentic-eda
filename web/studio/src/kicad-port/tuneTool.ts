@@ -75,7 +75,7 @@ export interface ReadoutBox {
 
 /** `TUNING_STATUS_VIEW_ITEM::ViewDraw`: the length is red when it is outside `[min, max]`, the minimum when the length is below it, the maximum when it is above. `fmt` prints a length in micrometres. */
 export function readoutBox(r: TuneReadout, fmt: (um: number) => string): ReadoutBox {
-  const um = (mm: number) => mm * 1e6;
+  const um = (mm: number) => mm * 1e6; // mm to nm
   // a time domain pattern: the box reads the delay and the range of the delay, in picoseconds (`SetIsTimeDomain`)
   if (r.time_domain && r.delay) {
     const d = r.delay;

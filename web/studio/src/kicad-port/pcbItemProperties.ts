@@ -68,7 +68,7 @@ function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => C
       kind: "int",
       display: "size",
       get: (i) => (name === "Width" ? own(i).w : own(i).h),
-      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
       set: (i, v) => {
         const image = own(i);
         const want = Math.round(num(v));
@@ -106,7 +106,7 @@ function registerPoint(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]):
     kind: "int",
     display: "size",
     get: (i) => own(i).size,
-    validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+    validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
     set: (i, v) => {
       const size = Math.round(num(v));
       return size <= 0 || size === own(i).size ? [] : pointCmd(own(i), { size });
@@ -144,7 +144,7 @@ function registerBarcode(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]
       kind: "int",
       display: "size",
       get: (i) => get(own(i)),
-      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
       set: (i, v) => {
         const want = Math.round(num(v));
         return want <= 0 || want === get(own(i)) ? [] : barcodeCmd(own(i), { [key]: want } as Partial<BoardBarcode>);

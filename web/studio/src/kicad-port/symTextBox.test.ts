@@ -53,17 +53,17 @@ test("the text is laid out in the box: wrapped to its width less the margins, fr
 test("the box can be no smaller than its text: as high (as wide, vertically) as the lines and the margins", () => {
   const g = box({ text: "one", end: { x: -10.16, y: 6.35 - 1 } });
   const min = textBoxMinSizeNm(g, measure);
-  // ext = 1270 + 2 * round(159 * 1.5) = 1270 + 478 = 1748; + 17 % = 297; 2 margins of 1016
+  // ext = 1270000 + 2 * round(158750 * 1.5) = 1270000 + 476250 = 1746250; + 17 % = 296863; 2 margins of 1016000
   assert.equal(min.w, 0);
-  assert.equal(min.h, 1_748_000 + 297_000 + 2_032_000);
+  assert.equal(min.h, 1_746_250 + 296_863 + 2_032_000);
   assert.equal(textBoxMinSizeNm(box({ text: "" }), measure).h, 0, "no text, no minimum");
   const v = textBoxMinSizeNm(box({ angle_deg: 90 }), measure);
   assert.equal(v.h, 0);
   assert.ok(v.w > 0, "for text that runs up the box the width is what is held");
   // a second line adds an interline: round(1270 * 1.68 * 0.9583) = 2045 (and a text too long for the box wraps to two lines, so it has them too)
-  assert.equal(textBoxMinSizeNm(box({ text: "one line", end: { x: -10.16, y: 6.35 - 1 } }), measure).h, min.h + 2_045_000, "wrapped to two lines");
+  assert.equal(textBoxMinSizeNm(box({ text: "one line", end: { x: -10.16, y: 6.35 - 1 } }), measure).h, min.h + 2_044_629, "wrapped to two lines");
   const two = textBoxMinSizeNm(box({ text: "one\ntwo" }), measure);
-  assert.equal(two.h, min.h + 2_045_000);
+  assert.equal(two.h, min.h + 2_044_629);
   // bold has the pen of a fifth
   assert.ok(textBoxMinSizeNm(box({ bold: true }), measure).h > textBoxMinSizeNm(box(), measure).h);
 });
@@ -71,7 +71,7 @@ test("the box can be no smaller than its text: as high (as wide, vertically) as 
 test("a box smaller than its text is grown past its start the way it was drawn", () => {
   const small = box({ text: "one", end: { x: -10.16, y: 6.35 - 1 } }); // one mm high, drawn downward
   const grown = grownToFit(small, measure);
-  const min = textBoxMinSizeNm(small, measure).h / 1000; // mm
+  const min = textBoxMinSizeNm(small, measure).h / 1e6; // mm
   assert.ok(Math.abs(grown.start.y - 6.35) < 1e-9 && grown.start.x === -17.78, "the start stays");
   assert.ok(Math.abs(grown.end.y - (6.35 - min)) < 1e-4, `${grown.end.y}`);
   assert.equal(grown.end.x, -10.16, "the width is not touched for text that runs along it");
@@ -82,8 +82,8 @@ test("a box smaller than its text is grown past its start the way it was drawn",
   const big = box();
   assert.equal(grownToFit(big, measure), big);
   // vertical: the width
-  const narrow = grownToFit(box({ angle_deg: 90, start: { x: 0, y: 0 }, end: { x: 1, y: -10_000 } }), measure);
-  assert.ok(narrow.end.x > 1 && narrow.end.y === -10_000);
+  const narrow = grownToFit(box({ angle_deg: 90, start: { x: 0, y: 0 }, end: { x: 1, y: -10 } }), measure);
+  assert.ok(narrow.end.x > 1 && narrow.end.y === -10);
 });
 
 test("a click is on a text box anywhere in it", () => {
@@ -115,6 +115,6 @@ test("the tool starts a box the way the last one was, with the corners the click
   });
   const edited = { ...first, bold: true, italic: true, angle_deg: 90, h_align: "right" as const, fill: "background" as const, stroke_mm: 0.5 };
   assert.deepEqual(lastOf(edited), { bold: true, italic: true, vertical: true, hAlign: "right", fill: "background", strokeMm: 0.5 });
-  const second = newTextBox([0, 0], [1_270_000, -1_270_000], 2000, 2000, lastOf(edited));
+  const second = newTextBox([0, 0], [1_270_000, -1_270_000], 2, 2, lastOf(edited));
   assert.deepEqual([second.unit, second.body_style, second.bold, second.italic, second.angle_deg, second.h_align, second.v_align, second.fill, second.stroke_mm], [2, 2, true, true, 90, "right", "top", "background", 0.5]);
 });

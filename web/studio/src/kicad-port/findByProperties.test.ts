@@ -25,7 +25,7 @@ test("one track: its visible properties in the alphabetical order of their names
   assert.deepEqual(names(b.rows), ["End X", "End Y", "Layer", "Locked", "Net", "Start X", "Start Y", "Type", "Width"]);
   assert.equal(row(b.rows, "Type").display, "Track");
   assert.equal(row(b.rows, "Width").display, "0.2 mm");
-  assert.equal(row(b.rows, "Width").raw, 200);
+  assert.equal(row(b.rows, "Width").raw, 200_000);
   assert.equal(row(b.rows, "Layer").display, "F.Cu");
   assert.equal(row(b.rows, "Net").display, "GND");
   assert.equal(row(b.rows, "Locked").display, "false");
@@ -218,7 +218,7 @@ test("completion after A.: the names of the properties and the fields, with _ fo
 
 test("recent queries: newest first, once each, ten", () => {
   let recent: string[] = [];
-  for (let i = 0; i < 12_000; i++) recent = withRecentQuery(recent, `q${i}`);
+  for (let i = 0; i < 12; i++) recent = withRecentQuery(recent, `q${i}`);
   assert.equal(recent.length, 10);
   assert.equal(recent[0], "q11");
   recent = withRecentQuery(recent, "q5");

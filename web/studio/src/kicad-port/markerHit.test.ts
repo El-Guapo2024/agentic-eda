@@ -5,7 +5,7 @@ import { DRC_MARKER_HIT_NM, nearestMarker } from "./markerHit";
 test("a right click finds the nearest marker whose circle holds the point", () => {
   const points = [[0, 0], [1_000_000, 0], null, [1_000_000, 200_000]] as const;
   assert.equal(nearestMarker(points, 10_000, 10_000, DRC_MARKER_HIT_NM), 0);
-  assert.equal(nearestMarker(points, 1_000_000, 150_000, DRC_MARKER_HIT_NM), 3000, "two circles hold it: the nearer centre wins");
+  assert.equal(nearestMarker(points, 1_000_000, 150_000, DRC_MARKER_HIT_NM), 3, "two circles hold it: the nearer centre wins");
   assert.equal(nearestMarker(points, 1_000_000, 60_000, DRC_MARKER_HIT_NM), 1);
 });
 

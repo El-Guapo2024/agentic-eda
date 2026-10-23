@@ -10,7 +10,7 @@ const part = (ref: string, at: [number, number], pads: Pad[] = []): Part =>
   ({ ref, value: null, package: null, mpn: null, footprint: null, block: null, placed: true, size: [2_000_000, 1_000_000], at, rot: 0, side: "top", label: "above", courtyard: [at[0] - 1_000_000, at[1] - 500_000, at[0] + 1_000_000, at[1] + 500_000], pads }) as Part;
 const board = (parts: Part[]): BoardState => ({ name: "t", dir: "", outline: null, layers: ["F.Cu", "B.Cu"], snap: 100_000, parts, rules: [], routing: null, drawings: null, checks: [], activity: [], job: "idle" }) as unknown as BoardState;
 // 0.01 px per um: the snap range is 25 px = 2500 um, a 1 mm grid.
-const view = (b: BoardState, extra: Partial<ModificationView> = {}): ModificationView => ({ board: b, scale: 0.01, gridNm: 1_000_000, grids: [1000], overrides: null, origin: [0, 0], magnetic: DEFAULT_PCB_MAGNETIC, layerVisible: {}, highContrast: false, activeLayer: null, ...extra });
+const view = (b: BoardState, extra: Partial<ModificationView> = {}): ModificationView => ({ board: b, scale: 0.00001, gridNm: 1_000_000, grids: [1_000_000], overrides: null, origin: [0, 0], magnetic: DEFAULT_PCB_MAGNETIC, layerVisible: {}, highContrast: false, activeLayer: null, ...extra });
 
 test("with nothing near, the reference point goes to the nearest grid point (the grid half)", () => {
   const b = board([part("U1", [10_300_000, 10_300_000])]);
@@ -25,9 +25,9 @@ test("a footprint's origin within the snap range wins over the grid point: the a
   // a point beyond the range is the grid's
   assert.deepEqual(modificationAnchor(view(b), [14_000_000, 10_100_000]), [14_000_000, 10_000_000]);
   // the range is 25 screen pixels (less 5 for the hysteresis): zoomed in 10 times (0.1 px/um) an anchor must be within 200 um, the origin 224 away is too far
-  assert.deepEqual(modificationAnchor(view(b, { scale: 0.1 }), [10_250_000, 10_250_000]), [10_300_000, 10_300_000]);
-  assert.deepEqual(modificationAnchor(view(b, { scale: 0.1 }), [10_200_000, 10_100_000]), [10_000_000, 10_000_000], "224 um away is out of the range: the grid's");
-  assert.deepEqual(modificationAnchor(view(b, { scale: 0.1 }), [10_600_000, 10_300_000]), [11_000_000, 10_000_000], "so is 300 um");
+  assert.deepEqual(modificationAnchor(view(b, { scale: 0.0001 }), [10_250_000, 10_250_000]), [10_300_000, 10_300_000]);
+  assert.deepEqual(modificationAnchor(view(b, { scale: 0.0001 }), [10_200_000, 10_100_000]), [10_000_000, 10_000_000], "224 um away is out of the range: the grid's");
+  assert.deepEqual(modificationAnchor(view(b, { scale: 0.0001 }), [10_600_000, 10_300_000]), [11_000_000, 10_000_000], "so is 300 um");
 });
 
 test("a pad is an anchor only where the magnetic setting says, and only under the point", () => {

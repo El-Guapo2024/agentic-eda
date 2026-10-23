@@ -87,8 +87,8 @@ test("every edit of a text box is one edit_text_box of the whole box", () => {
 test("the pen: a thickness is the user's, one wider than a sixth of the glyph is clamped, 0 is the automatic one, and bold moves the automatic one", () => {
   const b = board();
   const own = sent(edit(b, ["tbx_a"], "Thickness", 120_000));
-  assert.deepEqual([own.thickness_nm], [120]);
-  assert.equal(sent(edit(b, ["tbx_a"], "Thickness", 600_000)).thickness_nm, 167_000, "a sixth of 1 mm");
+  assert.deepEqual([own.thickness_nm], [120_000]);
+  assert.equal(sent(edit(b, ["tbx_a"], "Thickness", 600_000)).thickness_nm, 166_667, "a sixth of 1 mm");
   assert.equal(sent(edit(b, ["tbx_a"], "Thickness", 0)).thickness_nm, 0);
   const auto = board();
   auto.drawings!.text_boxes = [{ ...textBox, thickness_auto: true, thickness: 125_000 }];
@@ -110,7 +110,7 @@ test("a size sets the glyph, the orientation turns the box about its position an
 
 // ------------------------------------------------------------------------------------------------------------------------- reference images
 
-const refImage = { id: "img_a", layer: "Cmts.User", x: 50_000, y: 40_000, w: 12_000, h: 8_000, scale_ppm: 1_000_000, px: [120, 80] as [number, number], ppi: 254, hash: "h" };
+const refImage = { id: "img_a", layer: "Cmts.User", x: 50_000_000, y: 40_000_000, w: 12_000_000, h: 8_000_000, scale_ppm: 1_000_000, px: [120, 80] as [number, number], ppi: 254, hash: "h" };
 const withImage = (): BoardState => {
   const b = board();
   b.drawings!.images = [refImage];
@@ -136,10 +136,10 @@ test("a reference image is a PCB_REFERENCE_IMAGE with the rows of PCB_REFERENCE_
 test("the scale, the size and the layer of an image are one edit_ref_image that keeps its centre; a size is a scale about the centre", () => {
   const b = withImage();
   const half = sentImage(edit(b, ["img_a"], "Scale", 0.5));
-  assert.deepEqual([half.id, half.layer, half.at, half.scale_ppm], ["img_a", "Cmts.User", { x: 50_000_000, y: 40_000_000 }, 500_000_000]);
+  assert.deepEqual([half.id, half.layer, half.at, half.scale_ppm], ["img_a", "Cmts.User", { x: 50_000_000, y: 40_000_000 }, 500_000]);
   // 120 px at 254 ppi are 12 mm: 6 mm wide is half the scale, 16 mm high (80 px are 8 mm) is twice
-  assert.equal(sentImage(edit(b, ["img_a"], "Width", 6_000_000)).scale_ppm, 500_000_000);
-  assert.equal(sentImage(edit(b, ["img_a"], "Height", 16_000_000)).scale_ppm, 2_000_000_000);
+  assert.equal(sentImage(edit(b, ["img_a"], "Width", 6_000_000)).scale_ppm, 500_000);
+  assert.equal(sentImage(edit(b, ["img_a"], "Height", 16_000_000)).scale_ppm, 2_000_000);
   assert.equal(sentImage(edit(b, ["img_a"], "Associated Layer", "Dwgs.User")).layer, "Dwgs.User");
   assert.deepEqual(edit(b, ["img_a"], "Scale", 1), [], "the same scale sends nothing");
   assert.deepEqual(edit(b, ["img_a"], "Position X", 51_000_000), [{ op: "move_items", ids: ["img_a"], dx: 1_000_000, dy: 0 }]);

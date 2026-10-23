@@ -39,7 +39,7 @@ test("the state JSON's page is read back (nothing is the default)", () => {
   assert.deepEqual(paperOf(null), DEFAULT_PAPER);
   assert.deepEqual(paperOf(undefined), DEFAULT_PAPER);
   assert.deepEqual(paperOf({ paper: "A3", portrait: true, user_size_nm: null }), { paper: "A3", portrait: true, userSize: null });
-  assert.deepEqual(paperOf({ paper: "User", user_size_nm: [300_000, 200_000] }), { paper: "User", portrait: false, userSize: [300_000_000, 200_000_000] });
+  assert.deepEqual(paperOf({ paper: "User", user_size_nm: [300_000_000, 200_000_000] }), { paper: "User", portrait: false, userSize: [300_000_000, 200_000_000] });
 });
 
 test("normalising drops what does not apply and gives a new user paper KiCad's 17 x 11 in", () => {
@@ -63,7 +63,7 @@ test("two papers are the same page when they normalise alike", () => {
 
 test("a user size must be inside the editor's limits", () => {
   assert.equal(userSizeError(300_000_000, 200_000_000, MAX_PAGE_SIZE_PCBNEW_NM), null);
-  assert.match(userSizeError(10_000_000, 200_000_000, MAX_PAGE_SIZE_PCBNEW_NM)!, /width must be between 25_000\.4 mm and 1_219_000\.2 mm/);
+  assert.match(userSizeError(10_000_000, 200_000_000, MAX_PAGE_SIZE_PCBNEW_NM)!, /width must be between 25\.4 mm and 1219\.2 mm/);
   assert.match(userSizeError(300_000_000, 2_000_000_000, MAX_PAGE_SIZE_PCBNEW_NM)!, /height must be between/);
   assert.match(userSizeError(Number.NaN, 200_000_000, MAX_PAGE_SIZE_PCBNEW_NM)!, /must be numbers/);
 });

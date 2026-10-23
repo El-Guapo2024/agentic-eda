@@ -735,7 +735,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         display,
         get: (i) => read(shapeOf(i)),
         available: applies,
-        validate: display === "size" && name !== "Corner Radius" ? (v, _i, c) => (num(v) < 1 ? tooSmall(1, "size", c.units) : null) : (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
+        validate: display === "size" && name !== "Corner Radius" ? (v, _i, c) => (num(v) < 1_000 ? tooSmall(1_000, "size", c.units) : null) : (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
         set: (i, v) => {
           const next = graphicShapeWith(shapeOf(i), name, Math.round(num(v)));
           return next ? [withShape(i.graphic!, next)] : [];
@@ -883,7 +883,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         kind: "int",
         display: "size",
         get: (i) => imageSizeNm(image(i).px ?? [0, 0], image(i).ppi ?? DEFAULT_PPI, image(i).scale_ppm ?? SCALE_PPM)[name === "Width" ? 0 : 1],
-        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
         set: (i, v) => {
           const want = Math.round(num(v));
           const px = image(i).px ?? [0, 0];

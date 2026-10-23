@@ -18,10 +18,10 @@ const square = (): BoardViaStitch => ({
 });
 
 test("the twister is MT19937 and the tile the server bakes", () => {
-  const mt = new Mt19937(5_489_000);
+  const mt = new Mt19937(5489);
   let last = 0;
-  for (let i = 0; i < 10_000_000; i++) last = mt.next();
-  assert.equal(last, 4_123_659_995_000);
+  for (let i = 0; i < 10_000; i++) last = mt.next();
+  assert.equal(last, 4123659995);
   const tile = bakedPoissonTile();
   // crates/drc/src/via_stitch.rs bakes the same: 42 samples from (0.404105.., 0.559086..).
   assert.equal(tile.length, 42);
@@ -30,15 +30,15 @@ test("the twister is MT19937 and the tile the server bakes", () => {
 
 test("a via's cell is on the stitching's grid, the odd rows of a staggered one half a pitch over (cellForPosition)", () => {
   const v = square();
-  assert.deepEqual(cellForPosition(v, [3_000_000, 2_000_000]), [3000, 2000]);
-  assert.deepEqual(cellForPosition({ ...v, origin_offset: { x: 250_000, y: 0 } }, [3_250_000, 2_000_000]), [3000, 2000]);
-  assert.deepEqual(cellForPosition({ ...v, layout: "staggered" }, [3_500_000, 1_000_000]), [3000, 1]);
+  assert.deepEqual(cellForPosition(v, [3_000_000, 2_000_000]), [3, 2]);
+  assert.deepEqual(cellForPosition({ ...v, origin_offset: { x: 250_000, y: 0 } }, [3_250_000, 2_000_000]), [3, 2]);
+  assert.deepEqual(cellForPosition({ ...v, layout: "staggered" }, [3_500_000, 1_000_000]), [3, 1]);
   assert.deepEqual(cellForPosition({ ...v, layout: "poisson" }, [3_123_000, 1_456_000]), [3_123_000, 1_456_000], "no grid: the position");
 });
 
 test("Exclude From Stitching keeps the cell, Clear takes the exclusions away, a change of layout or mode drops them", () => {
   const v = excludedAt(square(), [3_000_000, 2_000_000]);
-  assert.deepEqual(v.excluded_cells, [[3000, 2000]]);
+  assert.deepEqual(v.excluded_cells, [[3, 2]]);
   assert.equal(excludedAt(v, [3_000_000, 2_000_000]), v, "already out");
   assert.equal(hasExclusions(v), true);
   assert.equal(hasExclusions(withoutExclusions(v)), false);

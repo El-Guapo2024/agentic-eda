@@ -8,7 +8,7 @@ import { box, type Pt } from "./snapGeom";
 
 const GRID = 1_270_000; // 50 mil, the current grid
 const env = (overrides: GridOverrides | null = defaultGridOverrides("schematic"), current = GRID): GridEnv => ({
-  scale: 0.05,
+  scale: 0.00005,
   gridNm: current,
   visibleGridNm: current,
   origin: [0, 0],
@@ -22,12 +22,12 @@ const item = (over: Partial<SchSnapItem> & Pick<SchSnapItem, "id" | "kind" | "po
   bbox: box(over.position[0] - 100_000, over.position[1] - 100_000, over.position[0] + 100_000, over.position[1] + 100_000),
   ...over,
 });
-const symbol = (id: string, at: Pt, pins: Pt[], size = 3000): SchSnapItem => item({ id, kind: "symbol", position: at, connectionPoints: pins, bbox: box(at[0] - size, at[1] - size, at[0] + size, at[1] + size) });
+const symbol = (id: string, at: Pt, pins: Pt[], size = 3_000_000): SchSnapItem => item({ id, kind: "symbol", position: at, connectionPoints: pins, bbox: box(at[0] - size, at[1] - size, at[0] + size, at[1] + size) });
 const wire = (id: string, a: Pt, b: Pt): SchSnapItem => item({ id, kind: "wire", position: a, connectionPoints: [a, b], bbox: box(Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])), line: { a, b, graphic: false } });
 const near = (got: Pt, want: Pt, tol = 1e-6) => assert.ok(Math.abs(got[0] - want[0]) <= tol && Math.abs(got[1] - want[1]) <= tol, `expected (${want}) got (${got})`);
 
 test("the snap range is 55 mil", () => {
-  assert.equal(SCH_SNAP_RANGE_MIL, 55_000);
+  assert.equal(SCH_SNAP_RANGE_MIL, 55);
   assert.equal(new SchGridHelper(env(), []).snapRange(), 55 * NM_PER_MIL);
 });
 
@@ -70,7 +70,7 @@ test("Shift (no anchor snapping) leaves the grid, or the cursor with the grid of
   near(h.bestSnapAnchor([1_100_000, 1_050_000], "connectable"), [1_100_000, 1_050_000]);
 });
 
-test("an anchor is taken within the diagonal of the range (55 mil x sqrt 2 = 1976 um), not beyond it", () => {
+test("an anchor is taken within the diagonal of the range (55 mil x sqrt 2 = 1976 um, 1 976 000 nm), not beyond it", () => {
   const items = [symbol("U1", [10_000_000, 10_000_000], [[1_000_000, 1_000_000]], 12_000_000)];
   const within = new SchGridHelper(env(), items);
   within.setUseGrid(false);
@@ -138,7 +138,7 @@ test("BestDragOrigin: the pin nearest the mouse, or the symbol's origin when the
 });
 
 test("BestDragOrigin of text alone uses the text's position", () => {
-  const text = item({ id: "T1", kind: "text", connectable: false, position: [700, 800] });
+  const text = item({ id: "T1", kind: "text", connectable: false, position: [700_000, 800_000] });
   const h = new SchGridHelper(env(), [text]);
   near(h.bestDragOrigin([750_000, 760_000], "text", [text]), [700_000, 800_000]);
   // With a connectable item in the selection the text is left out of the anchors.

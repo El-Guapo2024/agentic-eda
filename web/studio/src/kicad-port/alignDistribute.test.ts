@@ -50,7 +50,7 @@ test("alignDeltas: centerX/centerY target the smallest center, same convention a
     [2_000_000, 4_000_000, 2_200_000, 4_200_000], // center (2100, 4100)
   ];
   assert.deepEqual(alignDeltas(boxes, "centerX"), [0, -1_600_000]);
-  assert.deepEqual(alignDeltas(boxes, "centerY"), [0, -3600]);
+  assert.deepEqual(alignDeltas(boxes, "centerY"), [0, -3_600_000]);
 });
 
 test("getDeltasForDistributeByGaps: fewer than 3 items is a no-op", () => {
@@ -58,7 +58,7 @@ test("getDeltasForDistributeByGaps: fewer than 3 items is a no-op", () => {
   assert.deepEqual(
     getDeltasForDistributeByGaps([
       [0, 100_000],
-      [900, 1_000_000],
+      [900_000, 1_000_000],
     ]),
     [0, 0]
   );
@@ -71,7 +71,7 @@ test("getDeltasForDistributeByGaps: end caps never move; the middle item centers
   const extents: [number, number][] = [
     [0, 100_000],
     [400_000, 500_000],
-    [900, 1_000_000],
+    [900_000, 1_000_000],
   ];
   assert.deepEqual(getDeltasForDistributeByGaps(extents), [0, 50_000, 0]);
 });
@@ -84,7 +84,7 @@ test("getDeltasForDistributeByGaps: four items split the remaining gap evenly be
     [0, 100_000],
     [300_000, 400_000],
     [700_000, 800_000],
-    [900, 1_000_000],
+    [900_000, 1_000_000],
   ];
   const deltas = getDeltasForDistributeByGaps(extents);
   assert.equal(deltas[0], 0);
@@ -104,8 +104,8 @@ test("getDeltasForDistributeByPoints: evenly spaces the middle points between th
   const deltas = getDeltasForDistributeByPoints([0, 100_000, 300_000, 1_000_000]);
   assert.equal(deltas[0], 0);
   assert.equal(deltas[3], 0);
-  assert.equal(deltas[1], 233_000); // 100 -> 333
-  assert.equal(deltas[2], 367_000); // 300 -> 667
+  assert.equal(deltas[1], 233_333); // 100 -> 333.333
+  assert.equal(deltas[2], 366_667); // 300 -> 666.667
 });
 
 
@@ -114,49 +114,49 @@ test("getDeltasForDistributeByPoints: evenly spaces the middle points between th
 const item = (id: string, box: Box, locked = false): AlignItem => ({ id, box, locked });
 
 test("planAlign: without a lock the extreme item is the target and only the others move", () => {
-  const moves = planAlign([item("a", [0, 500, 1000, 1500]), item("b", [2000, 0, 3000, 1000]), item("c", [4000, 1000, 5000, 2000])], "top");
+  const moves = planAlign([item("a", [0, 500_000, 1_000_000, 1_500_000]), item("b", [2_000_000, 0, 3_000_000, 1_000_000]), item("c", [4_000_000, 1_000_000, 5_000_000, 2_000_000])], "top");
   assert.deepEqual(moves, [
     { id: "a", dx: 0, dy: -500_000 },
     { id: "c", dx: 0, dy: -1_000_000 },
   ]);
-  assert.deepEqual(planAlign([item("a", [0, 0, 10, 10]), item("b", [5, 3, 15, 13])], "right").map((m) => m.id), ["a"], "the right-most edge is the target; the item already on it stays");
+  assert.deepEqual(planAlign([item("a", [0, 0, 10_000, 10_000]), item("b", [5000, 3000, 15_000, 13_000])], "right").map((m) => m.id), ["a"], "the right-most edge is the target; the item already on it stays");
 });
 
 test("planAlign: a locked item is the target and never moves, whatever else is selected", () => {
-  const moves = planAlign([item("free1", [0, 0, 1000, 1000]), item("pinned", [2000, 700, 3000, 1700], true), item("free2", [4000, -300, 5000, 700])], "top").sort((a, b) => (a.id < b.id ? -1 : 1));
+  const moves = planAlign([item("free1", [0, 0, 1_000_000, 1_000_000]), item("pinned", [2_000_000, 700_000, 3_000_000, 1_700_000], true), item("free2", [4_000_000, -300_000, 5_000_000, 700_000])], "top").sort((a, b) => (a.id < b.id ? -1000 : 1000));
   assert.deepEqual(moves, [
     { id: "free1", dx: 0, dy: 700_000 },
     { id: "free2", dx: 0, dy: 1_000_000 },
   ]);
-  assert.deepEqual(planAlign([item("a", [0, 0, 10, 10], true), item("b", [0, 5, 10, 15], true)], "top"), [], "all locked: nothing moves");
+  assert.deepEqual(planAlign([item("a", [0, 0, 10_000, 10_000], true), item("b", [0, 5000, 10_000, 15_000], true)], "top"), [], "all locked: nothing moves");
 });
 
 test("planAlign: the cursor picks the target when it sits inside an item's box, among locked items first", () => {
-  const items = [item("a", [0, 0, 1000, 1000]), item("b", [2000, 500, 3000, 1500]), item("c", [4000, 900, 5000, 1900])];
+  const items = [item("a", [0, 0, 1_000_000, 1_000_000]), item("b", [2_000_000, 500_000, 3_000_000, 1_500_000]), item("c", [4_000_000, 900_000, 5_000_000, 1_900_000])];
   // The extreme (top-most) item is "a", but the cursor is over "c": its top (900) is the target.
   assert.deepEqual(planAlign(items, "top", [4_500_000, 1_200_000]), [
-    { id: "a", dx: 0, dy: 900 },
+    { id: "a", dx: 0, dy: 900_000 },
     { id: "b", dx: 0, dy: 400_000 },
   ]);
   // Two locked items: the one under the cursor wins over the first.
-  const locked = [item("L1", [0, 0, 100, 100], true), item("L2", [200, 40, 300, 140], true), item("m", [500, 500, 600, 600])];
+  const locked = [item("L1", [0, 0, 100_000, 100_000], true), item("L2", [200_000, 40_000, 300_000, 140_000], true), item("m", [500_000, 500_000, 600_000, 600_000])];
   assert.deepEqual(planAlign(locked, "top", [250_000, 100_000]), [{ id: "m", dx: 0, dy: -460_000 }]);
   assert.deepEqual(planAlign(locked, "top", null), [{ id: "m", dx: 0, dy: -500_000 }], "no cursor: the first (extreme) locked item");
 });
 
 test("planAlign: centre and bottom edges, like the sort each action gives GetSelections", () => {
-  const items = [item("a", [0, 0, 1000, 1000]), item("b", [0, 200, 1000, 400])];
+  const items = [item("a", [0, 0, 1_000_000, 1_000_000]), item("b", [0, 200_000, 1_000_000, 400_000])];
   // Centres are 500 and 300: the smallest is the target, so a goes up to it.
   assert.deepEqual(planAlign(items, "centerY"), [{ id: "a", dx: 0, dy: -200_000 }]);
   assert.deepEqual(planAlign(items, "bottom"), [{ id: "b", dx: 0, dy: 600_000 }]);
 });
 
 test("planDistribute: end items stay, gaps equalise; fewer than three do nothing", () => {
-  const moves = planDistribute([item("a", [0, 0, 1000, 10]), item("b", [1500, 0, 2500, 10]), item("c", [9000, 0, 10_000, 10])], "x", "gaps");
+  const moves = planDistribute([item("a", [0, 0, 1_000_000, 10_000]), item("b", [1_500_000, 0, 2_500_000, 10_000]), item("c", [9_000_000, 0, 10_000_000, 10_000])], "x", "gaps");
   // total space 8000 (1000 -> 9000), the middle item takes 1000 of it: gaps of 3500.
   assert.deepEqual(moves, [{ id: "b", dx: 3_000_000, dy: 0 }]);
-  assert.deepEqual(planDistribute([item("a", [0, 0, 10, 10]), item("b", [20, 0, 30, 10])], "x", "centers"), []);
-  assert.deepEqual(planDistribute([item("a", [0, 0, 10, 10]), item("b", [0, 12, 10, 22]), item("c", [0, 100, 10, 110])], "y", "centers"), [{ id: "b", dx: 0, dy: 38_000 }], "the middle centre goes to the mean of the end centres");
+  assert.deepEqual(planDistribute([item("a", [0, 0, 10_000, 10_000]), item("b", [20_000, 0, 30_000, 10_000])], "x", "centers"), []);
+  assert.deepEqual(planDistribute([item("a", [0, 0, 10_000, 10_000]), item("b", [0, 12_000, 10_000, 22_000]), item("c", [0, 100_000, 10_000, 110_000])], "y", "centers"), [{ id: "b", dx: 0, dy: 38_000 }], "the middle centre goes to the mean of the end centres");
 });
 
 // ------------------------------------------------ over a real board: every kind, pads, groups

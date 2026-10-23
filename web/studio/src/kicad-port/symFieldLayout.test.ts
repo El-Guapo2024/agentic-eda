@@ -22,9 +22,9 @@ test("a library field is drawn in the editor's space: mm, +y up, becomes um, +y 
 
 test("the Reference of a multi-unit symbol has the unit's letter", () => {
   const f = allFields(sym())[0]!;
-  assert.equal(schFieldOf(f, 2, 3000).text, "RB");
+  assert.equal(schFieldOf(f, 2, 3).text, "RB");
   assert.equal(schFieldOf(f, 1, 1).text, "R");
-  assert.deepEqual([1, 2000, 26_000, 27_000, 28_000].map(unitLetters), ["A", "B", "Z", "AA", "AB"]);
+  assert.deepEqual([1, 2, 26, 27, 28].map(unitLetters), ["A", "B", "Z", "AA", "AB"]);
 });
 
 test("a hidden field is on show only with Show Hidden Fields, and a field with no text never", () => {

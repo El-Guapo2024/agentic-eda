@@ -30,7 +30,7 @@ export function scaleForWidthNm(px: PxSize, ppi: number, widthNm: number): numbe
 
 /** The scale (in millionths) that makes the image `heightNm` high (`onHeightChanged`). */
 export function scaleForHeightNm(px: PxSize, ppi: number, heightNm: number): number {
-  return Math.round((heightNm / ((px[1] * 25_400) / ppi)) * SCALE_PPM);
+  return Math.round((heightNm / ((px[1] * 25_400_000) / ppi)) * SCALE_PPM);
 }
 
 /** A scale typed as a decimal number, in millionths; NaN when it is not a number. */

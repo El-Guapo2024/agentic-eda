@@ -29,11 +29,11 @@ const ok = (e: GridEdit) => {
 test("the board and footprint editors start with KiCad's PCB list and fast grids 0.5 mm and 0.25 mm; the symbol editor with 100/50/25/10 mil", () => {
   const pcb = defaultGridSettings("pcb");
   assert.equal(pcb.grids.length, 22);
-  assert.deepEqual([pcb.grids[pcb.fast1], pcb.grids[pcb.fast2]], [500, 250]);
+  assert.deepEqual([pcb.grids[pcb.fast1], pcb.grids[pcb.fast2]], [500_000, 250_000]);
   assert.deepEqual(defaultGridSettings("footprint"), pcb);
   const sym = defaultGridSettings("symbol");
   assert.deepEqual(sym.grids, EESCHEMA_GRIDS_NM);
-  assert.deepEqual([sym.grids[sym.fast1], sym.grids[sym.fast2]], [1270, 635], "the default grid (50 mil) and the one after it");
+  assert.deepEqual([sym.grids[sym.fast1], sym.grids[sym.fast2]], [1_270_000, 635_000], "the default grid (50 mil) and the one after it");
 });
 
 test("the board, schematic, footprint and symbol editors have a grid list", () => {
@@ -48,7 +48,7 @@ test("the schematic starts with eeschema's list and fast grids 50 and 25 mil, li
   const sch = defaultGridSettings("schematic");
   assert.deepEqual(sch, defaultGridSettings("symbol"));
   assert.deepEqual(sch.grids, EESCHEMA_GRIDS_NM);
-  assert.deepEqual([sch.grids[sch.fast1], sch.grids[sch.fast2]], [1270, 635]);
+  assert.deepEqual([sch.grids[sch.fast1], sch.grids[sch.fast2]], [1_270_000, 635_000]);
 });
 
 test("a fast grid outside the list is the first grid, and the list is never empty", () => {
@@ -77,10 +77,10 @@ test("a new grid goes in before the selected row and becomes the selected one", 
 
 test("a size outside 0.001 .. 1000 mm or in the list already is refused", () => {
   assert.deepEqual(insertGrid(base, 0, 0), { ok: false, error: "range" });
-  assert.deepEqual(insertGrid(base, 0, 0.5), { ok: false, error: "range" });
-  assert.deepEqual(insertGrid(base, 0, 1_000_001_000), { ok: false, error: "range" });
+  assert.deepEqual(insertGrid(base, 0, 500), { ok: false, error: "range" });
+  assert.deepEqual(insertGrid(base, 0, 1_000_000_001), { ok: false, error: "range" });
   assert.deepEqual(insertGrid(base, 0, Number.NaN), { ok: false, error: "range" });
-  assert.equal(ok(insertGrid(base, 0, 1)).settings.grids[0], 1, "0.001 mm is the smallest");
+  assert.equal(ok(insertGrid(base, 0, 1_000)).settings.grids[0], 1_000, "0.001 mm is the smallest");
   assert.equal(ok(insertGrid(base, 0, 1_000_000_000)).settings.grids[0], 1_000_000_000, "1000 mm is the largest");
   assert.deepEqual(insertGrid(base, 0, 250_000), { ok: false, error: "duplicate" });
 });
@@ -110,7 +110,7 @@ test("removing a grid keeps the last one, selects the row above and keeps the fa
   assert.equal(c.row, 0);
   const d = removeGrid(base, 2);
   assert.deepEqual(d.settings, { grids: [1_000_000, 500_000, 100_000], fast1: 1, fast2: 2 }, "the removed grid was fast grid 2: the last entry");
-  assert.deepEqual(removeGrid({ grids: [1000], fast1: 0, fast2: 0 }, 0).settings.grids, [1000]);
+  assert.deepEqual(removeGrid({ grids: [1_000_000], fast1: 0, fast2: 0 }, 0).settings.grids, [1_000_000]);
   assert.equal(removeGrid(base, 9).settings, base);
 });
 
@@ -123,7 +123,7 @@ test("moving a grid swaps it with its neighbour and the selection follows", () =
   assert.equal(down.row, 1);
   assert.equal(moveGrid(base, 0, -1).settings, base, "the first cannot go up");
   assert.equal(moveGrid(base, 3, 1).settings, base, "the last cannot go down");
-  assert.equal(moveGrid({ grids: [1000], fast1: 0, fast2: 0 }, 0, 1).row, 0);
+  assert.equal(moveGrid({ grids: [1_000_000], fast1: 0, fast2: 0 }, 0, 1).row, 0);
 });
 
 test("Reset to Defaults puts the default list back; the fast grids stay on their size when the list has it", () => {
@@ -133,7 +133,7 @@ test("Reset to Defaults puts the default list back; the fast grids stay on their
   const custom: GridSettings = { grids: [650_000, 500_000, 250_000], fast1: 0, fast2: 2 };
   const reset = resetGrids(custom, "pcb");
   assert.deepEqual(reset.grids, DEFAULT_PCB_GRIDS_NM);
-  assert.deepEqual([reset.grids[reset.fast1], reset.grids[reset.fast2]], [DEFAULT_PCB_GRIDS_NM[0], 250], "650 um is not a default grid, so fast grid 1 is the first entry; 250 um is");
+  assert.deepEqual([reset.grids[reset.fast1], reset.grids[reset.fast2]], [DEFAULT_PCB_GRIDS_NM[0], 250_000], "650 um is not a default grid, so fast grid 1 is the first entry; 250 um is");
   const sym = resetGrids({ grids: [1_270_000, 100_000], fast1: 1, fast2: 0 }, "symbol");
   assert.deepEqual(sym, { grids: EESCHEMA_GRIDS_NM, fast1: 0, fast2: 1 });
 });
@@ -158,7 +158,7 @@ test("saved settings are read back when sound and the defaults used when not", (
   assert.deepEqual(parseGridSettings(good, "pcb"), good);
   assert.deepEqual(parseGridSettings(null, "pcb"), defaultGridSettings("pcb"));
   assert.deepEqual(parseGridSettings({ grids: [] }, "symbol"), defaultGridSettings("symbol"));
-  assert.deepEqual(parseGridSettings({ grids: [10_000, "x"] }, "symbol").grids, [10], "a non-number is dropped");
+  assert.deepEqual(parseGridSettings({ grids: [10_000, "x"] }, "symbol").grids, [10_000], "a non-number is dropped");
   assert.deepEqual(parseGridSettings({ grids: [1_000_000, 500_000], fast1: 7, fast2: 8 }, "pcb"), { grids: [1_000_000, 500_000], fast1: 0, fast2: 0 }, "fast grids out of range are the first grid");
 });
 

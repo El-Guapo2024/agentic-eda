@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { Cmd } from "../api/types";
 import { repeatCmds, repeatSource, REPEAT_OFFSET_NM } from "./schRepeat";
 
-const ctx = { cursor: [50_800, 25_400] as [number, number], nextReference: (id: string) => id.replace(/\d+$/, (n) => String(Number(n) + 1)) };
+const ctx = { cursor: [50_800_000, 25_400_000] as [number, number], nextReference: (id: string) => id.replace(/\d+$/, (n) => String(Number(n) + 1)) };
 
 test("repeatSource: a placement is remembered, an edit or a deletion is not", () => {
   const label: Cmd = { op: "add_label", net: "D0", at: { x: 0, y: 0 }, kind: { scope: "local" } };

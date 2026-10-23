@@ -11,10 +11,10 @@ test("refDesPrefix (UTIL::GetRefDesPrefix): up to the last non-digit, non-? char
 });
 
 test("trailingInt (GetTrailingInt)", () => {
-  assert.equal(trailingInt("R12"), 12_000);
+  assert.equal(trailingInt("R12"), 12);
   assert.equal(trailingInt("R"), 0);
   assert.equal(trailingInt("U1A"), 0);
-  assert.equal(trailingInt("C007"), 7000);
+  assert.equal(trailingInt("C007"), 7);
 });
 
 test("compareByRef (compareFootprintsbyRef): prefix first, then the number, not the text", () => {
@@ -27,15 +27,15 @@ test("compareByRef (compareFootprintsbyRef): prefix first, then the number, not 
 
 test("optimalCountPerLine: a short run stays one line; a long one wraps near a square and takes SpreadFootprints' remainder rule", () => {
   // 4 wide parts: 1000*4/2000 = 2 <= 5 -> no wrapping, remainder 0
-  assert.equal(optimalCountPerLine(4, [2_000_000, 1_000_000]), 4000);
+  assert.equal(optimalCountPerLine(4, [2000, 1000]), 4);
   // 30 wide parts: ratio 15 > 5 -> initial = trunc(sqrt(2000*1000*30)/1000) = 7, remainder 2;
   // the search over 5..9 ends on 8 (the C++ keeps any `r == 0 || r >= optimalRemainder`)
-  assert.equal(optimalCountPerLine(30, [2_000_000, 1_000_000]), 8000);
+  assert.equal(optimalCountPerLine(30, [2000, 1000]), 8);
   // one part
-  assert.equal(optimalCountPerLine(1, [2_000_000, 1_000_000]), 1);
+  assert.equal(optimalCountPerLine(1, [2000, 1000]), 1);
   // tall parts (not "vertical"): 20 of 1000 x 2000 -> ratio trunc(1000*20/2000) = 10 > 5, initial = trunc(6324/1000) = 6,
   // remainder 2; i = 4..8 gives r = 0, 0, 2, 6, 4 and the `r == 0 || r >= remainder` rule keeps 7 (r = 6)
-  assert.equal(optimalCountPerLine(20, [1_000_000, 2_000_000]), 7000);
+  assert.equal(optimalCountPerLine(20, [1000, 2000]), 7);
 });
 
 function box(x: number, y: number, w: number, h: number): Box {
@@ -68,7 +68,7 @@ test("packFootprints: identical parts become one ordered column/row starting at 
   const byRef = Object.fromEntries(m.map((x) => [x.ref, x.b]));
   // wide parts (x >= y) are stacked in a column ("vertical"), ordered R1..R4, one cell (size + 1 mm gap) apart
   for (const [i, ref] of ["R1", "R2", "R3", "R4"].entries()) {
-    assert.deepEqual(byRef[ref]!.slice(0, 2), [2_000_000, 2_000_000 + 2000 * i], ref);
+    assert.deepEqual(byRef[ref]!.slice(0, 2), [2_000_000, 2_000_000 + 2_000_000 * i], ref);
     assert.equal(byRef[ref]![2] - byRef[ref]![0], 2_000_000, "a footprint keeps its size");
   }
 });
@@ -89,7 +89,7 @@ test("packFootprints: mixed sizes never overlap, keep the selection's top-left, 
     [8_000_000, 5_000_000],
     [2_000_000, 1_000_000],
   ];
-  const items: PackItem[] = sizes.map(([w, h], i) => ({ ref: `X${i + 1}`, bbox: box(1000 * i, 700 * (i % 3), w, h) }));
+  const items: PackItem[] = sizes.map(([w, h], i) => ({ ref: `X${i + 1}`, bbox: box(1_000_000 * i, 700_000 * (i % 3), w, h) }));
   const { offsets, origin } = packFootprints(items);
   const m = moved(items, offsets);
   const minX = Math.min(...m.map((x) => x.b[0]));
@@ -117,15 +117,15 @@ test("packFootprints: a part and its 90-degree twin share one group (VECTOR2 ord
   const r2 = m[1]!.b;
   // R1's size (2600 >= 1800) is the group key -> a column ("vertical"), ordered R1 then R2, one 1800 um cell apart
   assert.deepEqual([r1[0], r1[1]], [0, 0]);
-  assert.deepEqual([r2[0], r2[1]], [0, 1800]);
+  assert.deepEqual([r2[0], r2[1]], [0, 1_800_000]);
   assert.ok(!overlap(r1, r2));
 });
 
 test("packFootprints: a 1 mm gap separates neighbours of different groups too", () => {
   const items: PackItem[] = [
-    { ref: "A1", bbox: box(0, 0, 3_000_000, 3_000_000) },
-    { ref: "B1", bbox: box(100_000, 100_000, 1_000_000, 1_000_000) },
-    { ref: "B2", bbox: box(200_000, 200_000, 1_000_000, 1_000_000) },
+    { ref: "A1", bbox: box(0, 0, 3000, 3000) },
+    { ref: "B1", bbox: box(100, 100, 1000, 1000) },
+    { ref: "B2", bbox: box(200, 200, 1000, 1000) },
   ];
   const m = moved(items, packFootprints(items).offsets);
   for (let i = 0; i < m.length; i++) {
@@ -141,12 +141,12 @@ test("packFootprints: a 1 mm gap separates neighbours of different groups too", 
 
 test("packRects: the smallest square bin the shelf packer can use, never overlapping", () => {
   const rects = [
-    { w: 100_000, h: 50_000 },
-    { w: 100_000, h: 50_000 },
-    { w: 50_000, h: 50_000 },
-    { w: 50_000, h: 50_000 },
+    { w: 100, h: 50 },
+    { w: 100, h: 50 },
+    { w: 50, h: 50 },
+    { w: 50, h: 50 },
   ];
-  const pos = packRects(rects, 10_000);
+  const pos = packRects(rects, 10);
   for (let i = 0; i < rects.length; i++) {
     for (let j = i + 1; j < rects.length; j++) {
       const a = [pos[i]!.x, pos[i]!.y, pos[i]!.x + rects[i]!.w, pos[i]!.y + rects[i]!.h] as const;
@@ -155,19 +155,19 @@ test("packRects: the smallest square bin the shelf packer can use, never overlap
     }
   }
   const side = Math.max(...rects.map((r, i) => pos[i]!.x + r.w), ...rects.map((r, i) => pos[i]!.y + r.h));
-  assert.ok(side <= 150_000, `bin side ${side} should be tight for 4 rects of total area 15000 (<= 150)`);
+  assert.ok(side <= 150, `bin side ${side} should be tight for 4 rects of total area 15000 (<= 150)`);
 });
 
 test("packRects: nothing to pack", () => {
-  assert.deepEqual(packRects([], 5000), []);
+  assert.deepEqual(packRects([], 5), []);
 });
 
 test("footprintBBox: anchor +- 0.25 mm merged with the courtyard and the pads; null when unplaced", () => {
   assert.equal(footprintBBox({ ref: "U1", placed: false }), null);
   // no courtyard, no pads: the minimum box around the anchor
-  assert.deepEqual(footprintBBox({ ref: "TP1", placed: true, at: [1_000_000, 2_000_000] }), [750_000, 1_750_000, 1_250_000, 2250]);
+  assert.deepEqual(footprintBBox({ ref: "TP1", placed: true, at: [1_000_000, 2_000_000] }), [750_000, 1_750_000, 1_250_000, 2_250_000]);
   // a courtyard bigger than the anchor box wins
-  assert.deepEqual(footprintBBox({ ref: "R1", placed: true, at: [1_000_000, 2_000_000], courtyard: [200_000, 1_500_000, 1800, 2_500_000] }), [200_000, 1_500_000, 1800, 2_500_000]);
+  assert.deepEqual(footprintBBox({ ref: "R1", placed: true, at: [1_000_000, 2_000_000], courtyard: [200_000, 1_500_000, 1_800_000, 2_500_000] }), [200_000, 1_500_000, 1_800_000, 2_500_000]);
   // a pad poking out of the courtyard grows the box
   assert.deepEqual(
     footprintBBox({ ref: "J1", placed: true, at: [1_000_000, 2_000_000], courtyard: [500_000, 1_500_000, 1_500_000, 2_500_000], pads: [{ x: 1_700_000, y: 2_000_000, w: 800_000, h: 400_000 }] }),
@@ -177,9 +177,9 @@ test("footprintBBox: anchor +- 0.25 mm merged with the courtyard and the pads; n
 
 test("planPack: keeps footprints only (unknown refs, unplaced parts and locked parts drop out)", () => {
   const parts: PackPart[] = [
-    { ref: "R1", placed: true, at: [1_000_000, 1_000_000], courtyard: [0, 500_000, 2_000_000, 1_500_000] },
-    { ref: "R2", placed: true, at: [9_000_000, 1_000_000], courtyard: [8_000_000, 500_000, 10_000_000, 1_500_000] },
-    { ref: "R3", placed: true, at: [5_000_000, 5_000_000], courtyard: [4_000_000, 4_500_000, 6_000_000, 5_500_000] },
+    { ref: "R1", placed: true, at: [1000, 1000], courtyard: [0, 500, 2000, 1500] },
+    { ref: "R2", placed: true, at: [9000, 1000], courtyard: [8000, 500, 10000, 1500] },
+    { ref: "R3", placed: true, at: [5000, 5000], courtyard: [4000, 4500, 6000, 5500] },
     { ref: "R4", placed: false },
   ];
   const plan = planPack(parts, ["R2", "R1", "R3", "R4", "T7", "R2"], new Set(["R3"]));

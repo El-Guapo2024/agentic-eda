@@ -4,7 +4,7 @@
 import type { ImportGraphicsCmd, ImportSchGraphicsCmd, ImportSymbolGraphicsCmd, PointXY } from "../api/types";
 import { nmFrom, type LengthUnit } from "../state/units";
 
-/** A length typed in the dialog ("1.5", "0.2mm", "10mil", `0.01"`), in micrometres; a bare number is in the display units. Null when it is not a length. */
+/** A length typed in the dialog ("1.5", "0.2mm", "10mil", `0.01"`), in nanometres; a bare number is in the display units. Null when it is not a length. */
 export function parseLength(text: string, units: LengthUnit): number | null {
   const m = /^\s*(-?\d*\.?\d+)\s*(mm|mil|in|")?\s*$/i.exec(text);
   if (!m) return null;
@@ -75,7 +75,7 @@ export interface GraphicsInfo {
   items?: number;
   counts?: Record<string, number>;
   messages?: Array<{ text: string; count: number }>;
-  /** The picture's box in micrometres at the scale asked, with no offset: x0, y0, x1, y1. */
+  /** The picture's box in nanometres at the scale asked, with no offset: x0, y0, x1, y1. */
   bbox_nm?: [number, number, number, number] | null;
   width_mm?: number;
   height_mm?: number;
@@ -163,7 +163,7 @@ export function buildImportCmd(args: {
     replace_outline: replace,
   };
   if (v.placeAt) {
-    // The importer's offset, in nanometres: the typed origin over the scale (micrometres to nanometres is a thousand).
+    // The importer's offset, in nanometres: the typed origin over the scale.
     const cmd: ImportGraphicsCmd = { ...base, offset_x_nm: Math.round(originNm.x / scale), offset_y_nm: Math.round(originNm.y / scale) };
     return { ok: true, interactive: false, build: () => cmd };
   }
@@ -248,7 +248,7 @@ export function buildSchImportCmd(args: {
     return { op: "import_sch_graphics", ...base };
   };
   if (v.placeAt) {
-    // The importer's offset, in nanometres: the typed origin over the scale (micrometres to nanometres is a thousand).
+    // The importer's offset, in nanometres: the typed origin over the scale.
     const cmd = make(Math.round(originNm.x / scale), Math.round(originNm.y / scale));
     return { ok: true, interactive: false, build: () => cmd };
   }

@@ -13,16 +13,16 @@ test("messageTextFromValue: long-form distances per unit", () => {
 });
 
 test("messageTextFromValue: short-form areas trim one trailing zero in mm", () => {
-  assert.equal(messageTextFromValue(5e9, "mm", true, "area"), "5000.00 mm²");
-  assert.equal(messageTextFromValue(1234.5e6, "mm", true, "area"), "1234.50 mm²");
-  assert.equal(messageTextFromValue(1234.567e6, "mm", true, "area"), "1234.567 mm²");
+  assert.equal(messageTextFromValue(5e15, "mm", true, "area"), "5000.00 mm²");
+  assert.equal(messageTextFromValue(1234.5e12, "mm", true, "area"), "1234.50 mm²");
+  assert.equal(messageTextFromValue(1234.567e12, "mm", true, "area"), "1234.567 mm²");
 });
 
 test("messageTextFromValue: a non-zero value that prints as zeros switches to %.3e", () => {
-  assert.equal(messageTextFromValue(0.01, "mm", false), "1.000e-05");
+  assert.equal(messageTextFromValue(10, "mm", false), "1.000e-05");
   assert.equal(messageTextFromValue(0, "mm", false), "0.0000");
 });
 
 test("messageTextFromValue: INT_MAX nm (an unset minimum) prints like KiCad's dialog", () => {
-  assert.equal(messageTextFromValue(2147483.647, "mm"), "2147.4836 mm");
+  assert.equal(messageTextFromValue(2147483647, "mm"), "2147.4836 mm");
 });

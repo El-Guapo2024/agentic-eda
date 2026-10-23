@@ -4,7 +4,7 @@ import type { BoardState, FpGraphic, FpTextInfo, Part } from "../api/types";
 import { artBounds, artHitDistance, artLayerShown, artTextAsField, artTextShown, dashPattern, graphicsOf, layerRank, layersOf, unionBox } from "./fpArt";
 import { itemBounds } from "./pcbItems";
 
-const line = (layer: string, a: [number, number], b: [number, number], width = 120, over: Partial<FpGraphic> = {}): FpGraphic => ({ kind: "segment", layer, stroke_width: width, start: a, end: b, ...over }) as FpGraphic;
+const line = (layer: string, a: [number, number], b: [number, number], width = 120_000, over: Partial<FpGraphic> = {}): FpGraphic => ({ kind: "segment", layer, stroke_width: width, start: a, end: b, ...over }) as FpGraphic;
 
 const part = (graphics: FpGraphic[], over: Partial<Part> = {}): Part =>
   ({ ref: "U1", value: "MCU", package: null, mpn: null, footprint: null, block: null, placed: true, size: null, at: [10_000_000, 10_000_000], rot: 0, side: "top", courtyard: [9_000_000, 9_000_000, 11_000_000, 11_000_000], graphics, ...over }) as Part;
@@ -22,7 +22,7 @@ test("a graphic from the wire is a complete shape, kept per array", () => {
 });
 
 test("a shape on several layers is on each of them", () => {
-  const g = graphicsOf(part([line("F.Cu", [0, 0], [1, 1], 100_000, { layers: ["F.Cu", "F.Mask"] })]))[0]!;
+  const g = graphicsOf(part([line("F.Cu", [0, 0], [1000, 1000], 100_000, { layers: ["F.Cu", "F.Mask"] })]))[0]!;
   assert.deepEqual(layersOf(g), ["F.Cu", "F.Mask"]);
   assert.deepEqual(layersOf({ layer: "F.SilkS" }), ["F.SilkS"]);
 });
@@ -51,7 +51,7 @@ test("the box of the graphics holds the strokes; the footprint's box holds those
   assert.deepEqual(artBounds(p), [7_950_000, 8_940_000, 12_060_000, 11_060_000]);
   assert.deepEqual(unionBox([9_000_000, 9_000_000, 11_000_000, 11_000_000], artBounds(p)), [7_950_000, 8_940_000, 12_060_000, 11_060_000]);
   assert.equal(artBounds(part([])), null);
-  assert.deepEqual(unionBox(null, [1, 2000, 3000, 4000]), [1, 2000, 3000, 4000]);
+  assert.deepEqual(unionBox(null, [1000, 2000, 3000, 4000]), [1000, 2000, 3000, 4000]);
   assert.equal(unionBox(null, null), null);
   const board = { parts: [p], routing: undefined, drawings: undefined } as unknown as BoardState;
   assert.deepEqual(itemBounds(board, "U1"), [7_950_000, 8_940_000, 12_060_000, 11_060_000], "a footprint's box in the selection tools is its graphics and its courtyard");

@@ -146,7 +146,7 @@ test("selectedCopperZones: only the zones of the selection that are copper (a ru
 test("zoneOrder / rankPriorities: higher priority first, ties by id; the manager hands out consecutive priorities, the top highest", () => {
   const order = zoneOrder([{ id: "a", priority: 0 }, { id: "b", priority: 5 }, { id: "c", priority: 5 }, { id: "d", priority: 2 }]);
   assert.deepEqual(order, ["c", "b", "d", "a"], "b and c tie at 5: the greater id first");
-  assert.deepEqual(rankPriorities(order), { c: 3000, b: 2, d: 1, a: 0 });
+  assert.deepEqual(rankPriorities(order), { c: 3, b: 2, d: 1, a: 0 });
   assert.deepEqual(rankPriorities([]), {});
 });
 
@@ -180,21 +180,21 @@ test("filterZones: by name and/or net text, case-insensitive, and by layer", () 
 
 test("trackUnder: the track whose copper the point is in on the layer, the nearest centre line first", () => {
   const tracks = [
-    { id: "a", layer: "F.Cu", width: 400_000, pts: [[0, 0], [10_000_000, 0]] as [number, number][] },
-    { id: "b", layer: "F.Cu", width: 200_000, pts: [[0, 150_000], [10_000_000, 150_000]] as [number, number][] },
-    { id: "c", layer: "B.Cu", width: 800_000, pts: [[0, 0], [10_000_000, 0]] as [number, number][] },
+    { id: "a", layer: "F.Cu", width: 400, pts: [[0, 0], [10000, 0]] as [number, number][] },
+    { id: "b", layer: "F.Cu", width: 200, pts: [[0, 150], [10000, 150]] as [number, number][] },
+    { id: "c", layer: "B.Cu", width: 800, pts: [[0, 0], [10000, 0]] as [number, number][] },
   ];
-  assert.deepEqual(trackUnder(tracks, 5_000_000, 10_000, "F.Cu"), { id: "a", width: 400_000 }, "inside a's copper (200 off its centre line at most) and nearest to its centre line");
-  assert.deepEqual(trackUnder(tracks, 5_000_000, 140_000, "F.Cu"), { id: "b", width: 200_000 }, "nearer to b's centre line");
-  assert.deepEqual(trackUnder(tracks, 5_000_000, 100_000, "B.Cu"), { id: "c", width: 800_000 }, "only the layer's own");
-  assert.equal(trackUnder(tracks, 5_000_000, 700_000, "F.Cu"), null, "outside the copper");
-  assert.equal(trackUnder(tracks, 20_000_000, 0, "F.Cu"), null, "beyond the end");
+  assert.deepEqual(trackUnder(tracks, 5000, 10, "F.Cu"), { id: "a", width: 400 }, "inside a's copper (200 off its centre line at most) and nearest to its centre line");
+  assert.deepEqual(trackUnder(tracks, 5000, 140, "F.Cu"), { id: "b", width: 200 }, "nearer to b's centre line");
+  assert.deepEqual(trackUnder(tracks, 5000, 100, "B.Cu"), { id: "c", width: 800 }, "only the layer's own");
+  assert.equal(trackUnder(tracks, 5000, 700, "F.Cu"), null, "outside the copper");
+  assert.equal(trackUnder(tracks, 20000, 0, "F.Cu"), null, "beyond the end");
 });
 
 test("connectedTrackWidth: a route that starts at a track's end takes that track's width; a pad or via start leaves the current width", () => {
-  const tracks = [{ id: "trk_1", width: 400_000 }, { id: "trk_2", width: 250_000 }];
-  assert.equal(connectedTrackWidth("track trk_1", tracks), 400_000);
-  assert.equal(connectedTrackWidth("track trk_2", tracks), 250_000);
+  const tracks = [{ id: "trk_1", width: 400 }, { id: "trk_2", width: 250 }];
+  assert.equal(connectedTrackWidth("track trk_1", tracks), 400);
+  assert.equal(connectedTrackWidth("track trk_2", tracks), 250);
   assert.equal(connectedTrackWidth("track gone", tracks), null);
   assert.equal(connectedTrackWidth("U1.3", tracks), null);
   assert.equal(connectedTrackWidth("via via_1", tracks), null);
@@ -208,30 +208,30 @@ test("duplicatedZoneOutline: moved 1 mm each way when the copy stays on the laye
 });
 
 test("flipLocalX: the mirror about the canvas middle is its own inverse and leaves the middle where it is", () => {
-  assert.equal(flipLocalX(false, 800_000, 100_000), 100_000);
-  assert.equal(flipLocalX(true, 800_000, 100_000), 700_000);
-  assert.equal(flipLocalX(true, 800_000, 400_000), 400_000);
-  assert.equal(flipLocalX(true, 800_000, flipLocalX(true, 800_000, 123.5)), 123.5);
+  assert.equal(flipLocalX(false, 800, 100), 100);
+  assert.equal(flipLocalX(true, 800, 100), 700);
+  assert.equal(flipLocalX(true, 800, 400), 400);
+  assert.equal(flipLocalX(true, 800, flipLocalX(true, 800, 123.5)), 123.5);
 });
 
 test("panDeltaX: a drag to the right moves a mirrored view's origin to the left", () => {
-  assert.equal(panDeltaX(false, 30_000), 30_000);
-  assert.equal(panDeltaX(true, 30_000), -30_000);
+  assert.equal(panDeltaX(false, 30), 30);
+  assert.equal(panDeltaX(true, 30), -30);
   assert.equal(panDeltaX(true, 0), 0);
 });
 
 test("flipPan: a pan made without the mirror in mind goes the other way along x only when the view is flipped", () => {
-  const before = { x: 100_000, y: 50_000, scale: 0.01 };
-  const after = { x: 130_000, y: 20_000, scale: 0.01 };
+  const before = { x: 100, y: 50, scale: 0.01 };
+  const after = { x: 130, y: 20, scale: 0.01 };
   assert.deepEqual(flipPan(false, before, after), after);
-  assert.deepEqual(flipPan(true, before, after), { x: 70_000, y: 20_000, scale: 0.01 });
+  assert.deepEqual(flipPan(true, before, after), { x: 70, y: 20, scale: 0.01 });
 });
 
 test("stagedPriorities: what Auto-Assign staged when it staged every zone, else the consecutive ranks of the list", () => {
   const order = ["c", "b", "a"];
-  assert.deepEqual(stagedPriorities(order, null, order), { c: 2000, b: 1, a: 0 });
+  assert.deepEqual(stagedPriorities(order, null, order), { c: 2, b: 1, a: 0 });
   assert.deepEqual(stagedPriorities(order, { a: 2, b: 2, c: 1 }, order), { a: 2, b: 2, c: 1 }, "a same-net group keeps one priority");
-  assert.deepEqual(stagedPriorities(order, { a: 2, b: 2 }, order), { c: 2000, b: 1, a: 0 }, "a zone that came since has none staged: back to the ranks");
+  assert.deepEqual(stagedPriorities(order, { a: 2, b: 2 }, order), { c: 2, b: 1, a: 0 }, "a zone that came since has none staged: back to the ranks");
   const staged = { a: 5 };
   assert.notEqual(stagedPriorities(["a"], staged, ["a"]), staged, "a copy, not the staged map itself");
 });

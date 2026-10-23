@@ -111,7 +111,7 @@ test("assigning a pattern adds a row as typed, skips a copy, and keeps it under 
 });
 
 test("Assign Netclass adds the pattern to the class chosen, or takes it off the others for Default", () => {
-  const def = cls("Default", [], { clearance: 200_000 });
+  const def = cls("Default", [], { clearance: 200 });
   const settings = { default: def, classes: [cls("power", ["VBUS"]), cls("bus", ["SPI_*"])] };
   const added = withAssignment(settings, "SPI_M(ISO|OSI)", "bus");
   assert.deepEqual(added.classes.map((c) => c.nets), [["VBUS"], ["SPI_*", "SPI_M(ISO|OSI)"]]);
@@ -130,11 +130,11 @@ test("a net KiCad named itself is not offered for a class", () => {
 });
 
 test("the page starts from the Default class the board sends, or rebuilds one from its sizes", () => {
-  const rules = { track_width: 200_000, clearance: 180, via_diameter: 600_000, via_drill: 300_000, net_classes: [cls("power", ["VBUS"])] };
+  const rules = { track_width: 200, clearance: 180, via_diameter: 600, via_drill: 300, net_classes: [cls("power", ["VBUS"])] };
   const rebuilt = netClassSettingsOf(rules);
-  assert.deepEqual(rebuilt.default, { name: "Default", nets: [], track_width: 200_000, clearance: 180, via_diameter: 600_000, via_drill: 300_000, priority: 0 });
+  assert.deepEqual(rebuilt.default, { name: "Default", nets: [], track_width: 200, clearance: 180, via_diameter: 600, via_drill: 300, priority: 0 });
   assert.deepEqual(rebuilt.classes, rules.net_classes);
-  const sent = cls("Default", [], { clearance: 150_000, diff_pair_gap: 100_000 });
+  const sent = cls("Default", [], { clearance: 150, diff_pair_gap: 100 });
   assert.equal(netClassSettingsOf({ ...rules, default_class: sent }).default, sent);
 });
 
@@ -160,8 +160,8 @@ test("the first class with a matching pattern owns the net, and a net is in ever
 });
 
 test("the effective class of a net is named as KiCad names it: the classes joined by a comma, with Default when it gives a setting", () => {
-  const full = { ...cls("full", ["FULL"], { clearance: 1, track_width: 2000, via_diameter: 3000, via_drill: 1 }), microvia_diameter: 2000, microvia_drill: 1, diff_pair_width: 2000, diff_pair_gap: 2000 };
-  const classes = [cls("power", ["VBUS", "V[0-9]+"], { clearance: 400_000 }), cls("fast", ["USB_*", "VBUS"], { clearance: 100_000, track_width: 500_000 }), full];
+  const full = { ...cls("full", ["FULL"], { clearance: 1, track_width: 2, via_diameter: 3, via_drill: 1 }), microvia_diameter: 2, microvia_drill: 1, diff_pair_width: 2, diff_pair_gap: 2 };
+  const classes = [cls("power", ["VBUS", "V[0-9]+"], { clearance: 400 }), cls("fast", ["USB_*", "VBUS"], { clearance: 100, track_width: 500 }), full];
   assert.equal(effectiveClassName(classes, "VBUS"), "power,fast,Default");
   assert.equal(effectiveClassName(classes, "V12"), "power,Default");
   assert.equal(effectiveClassName(classes, "GND"), "Default");
@@ -181,8 +181,8 @@ test("the nets of a board are those its pads, tracks, vias and zones name", () =
 // ---------------------------------------------------------------- net class checks
 
 test("the Net Classes page is refused for what KiCad's panel refuses", () => {
-  const def = cls("Default", [], { clearance: 200_000, track_width: 200_000, via_diameter: 600_000, via_drill: 300_000 });
-  assert.deepEqual(validateNetClasses(def, [cls("power", ["VBUS"], { clearance: 400_000 })]), []);
+  const def = cls("Default", [], { clearance: 200, track_width: 200, via_diameter: 600, via_drill: 300 });
+  assert.deepEqual(validateNetClasses(def, [cls("power", ["VBUS"], { clearance: 400 })]), []);
 
   const names = validateNetClasses(def, [cls("A"), cls(" "), cls("a"), cls("default")]);
   assert.deepEqual(names.map((i) => [i.row, i.field, i.message]), [[2, "name", "Netclass must have a name."], [3, "name", "Netclass name already in use."], [4, "name", "Netclass name already in use."]]);
@@ -193,7 +193,7 @@ test("the Net Classes page is refused for what KiCad's panel refuses", () => {
   assert.equal(validateNetClasses(def, [cls("big", [], { clearance: MAXIMUM_CLEARANCE_NM + 1 })])[0]!.field, "clearance");
   assert.deepEqual(validateNetClasses(def, [cls("big", [], { clearance: MAXIMUM_CLEARANCE_NM })]), []);
 
-  const drill = validateNetClasses(def, [cls("v", [], { via_diameter: 400_000, via_drill: 400_000 })]);
+  const drill = validateNetClasses(def, [cls("v", [], { via_diameter: 400, via_drill: 400 })]);
   assert.deepEqual(drill.map((i) => [i.row, i.field]), [[1, "via_drill"]]);
   assert.equal(validateNetClasses(cls("Default", [], { via_diameter: 400, via_drill: 400 }), [])[0]!.row, 0, "the Default class is checked too");
 
@@ -222,8 +222,8 @@ const constraints = (over: Partial<Constraints> = {}): Constraints => ({
   min_groove_width_nm: 0,
   min_silk_text_height_nm: 800_000,
   min_silk_text_thickness_nm: 80_000,
-  max_error_nm: 5000,
-  min_resolved_spokes: 2000,
+  max_error_nm: 5_000,
+  min_resolved_spokes: 2,
   use_height_for_length_calcs: true,
   zones_allow_external_fillets: false,
   ...over,
@@ -231,12 +231,12 @@ const constraints = (over: Partial<Constraints> = {}): Constraints => ({
 
 test("the Constraints page is range-checked like ValidateDesignRules", () => {
   assert.deepEqual(validateConstraints(constraints()), {});
-  const bad = validateConstraints(constraints({ min_clearance_nm: 30_000_000, max_error_nm: 0, min_resolved_spokes: 100_000 }));
+  const bad = validateConstraints(constraints({ min_clearance_nm: 30_000_000, max_error_nm: 0, min_resolved_spokes: 100 }));
   assert.deepEqual(Object.keys(bad).sort(), ["max_error_nm", "min_clearance_nm", "min_resolved_spokes"]);
   assert.equal(bad.min_clearance_nm, "Value must be between 0 and 25 mm.");
   assert.equal(bad.max_error_nm, "Value must be between 0.001 and 1 mm.");
   assert.deepEqual(validateConstraints(constraints({ min_silk_clearance_nm: -5_000_000 })), {}, "the silk clearance may be negative, down to -10 mm");
-  assert.deepEqual(Object.keys(validateConstraints(constraints({ min_silk_clearance_nm: -10_001_000 }))), ["min_silk_clearance_nm"]);
+  assert.deepEqual(Object.keys(validateConstraints(constraints({ min_silk_clearance_nm: -10_000_001 }))), ["min_silk_clearance_nm"]);
   assert.deepEqual(validateConstraints(constraints({ min_copper_edge_clearance_nm: -10_000 })), {}, "-0.01 mm is the legacy flag value");
   assert.equal(validateConstraints(constraints({ min_track_width_nm: Number.NaN })).min_track_width_nm, "Value is not a number.");
   assert.ok(validateConstraints(constraints({ min_resolved_spokes: 1.5 })).min_resolved_spokes);
@@ -249,7 +249,7 @@ test("the Constraints page is range-checked like ValidateDesignRules", () => {
 test("the Solder Mask/Paste page is range-checked, the paste ratio as a fraction", () => {
   const ok: MaskPaste = { expansion_nm: 50_000, min_width_nm: 100_000, to_copper_clearance_nm: 0, allow_bridges_in_footprints: false, tent_vias_front: true, tent_vias_back: true, paste_margin_nm: -50_000, paste_margin_ratio: -0.05 };
   assert.deepEqual(validateMaskPaste(ok), {});
-  assert.deepEqual(Object.keys(validateMaskPaste({ ...ok, expansion_nm: 25_001_000, min_width_nm: -1, paste_margin_ratio: 1.5 })).sort(), ["expansion_nm", "min_width_nm", "paste_margin_ratio"]);
+  assert.deepEqual(Object.keys(validateMaskPaste({ ...ok, expansion_nm: 25_000_001, min_width_nm: -1, paste_margin_ratio: 1.5 })).sort(), ["expansion_nm", "min_width_nm", "paste_margin_ratio"]);
   assert.equal(validateMaskPaste({ ...ok, paste_margin_nm: Number.NaN }).paste_margin_nm, "Value is not a number.");
   assert.deepEqual(validateMaskPaste({ ...ok, paste_margin_ratio: 1 }), {}, "100 % is the largest");
 });
@@ -301,7 +301,7 @@ test("the default stackups are the ones the backend computes (src/kicad/default_
   for (const d of fixture.defaults) {
     assert.deepEqual(defaultStackup(d.copper_layers, d.board_thickness_nm), d.stackup, `${d.copper_layers} layers, ${d.board_thickness_nm} um`);
     assert.deepEqual(newStackupSettings(d.copper_layers, d.board_thickness_nm), { copper_layers: d.copper_layers, stackup: d.stackup });
-    assert.ok(Math.abs(stackupThicknessNm(d.stackup) - d.board_thickness_nm) <= 2000, "the layers add up to the board thickness");
+    assert.ok(Math.abs(stackupThicknessNm(d.stackup) - d.board_thickness_nm) <= 2, "the layers add up to the board thickness");
   }
 });
 
@@ -313,10 +313,10 @@ test("a new copper layer count keeps what the layers that remain say (the backen
 test("the copper layers are named front, inner and back; the stackup is checked like the backend does", () => {
   assert.deepEqual(copperLayerNames(2), ["F.Cu", "B.Cu"]);
   assert.deepEqual(copperLayerNames(6), ["F.Cu", "In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu", "B.Cu"]);
-  const four = newStackupSettings(4000, 1_600_000);
+  const four = newStackupSettings(4, 1600);
   assert.equal(validateStackup(four), null);
-  assert.match(validateStackup({ ...four, copper_layers: 3000 })!, /2, 4000, 6/);
-  assert.match(validateStackup({ ...four, copper_layers: 34_000 })!, /2, 4000, 6/);
+  assert.match(validateStackup({ ...four, copper_layers: 3 })!, /2, 4, 6/);
+  assert.match(validateStackup({ ...four, copper_layers: 34 })!, /2, 4, 6/);
   assert.match(validateStackup({ ...four, copper_layers: 6 })!, /copper layers/, "the table has to hold the layers the count names");
   const negative = { ...four, stackup: { layers: four.stackup.layers.map((l) => (l.name === "In1.Cu" ? { ...l, thickness_mm: -0.1 } : l)) } };
   assert.match(validateStackup(negative)!, /In1\.Cu/);
@@ -328,17 +328,17 @@ test("a stackup from before the table was editable gets its copper layers typed;
   const typed = withKnownKinds(legacy);
   assert.deepEqual(typed.layers.map((l) => l.kind), ["copper", undefined, "copper"]);
   assert.equal(legacy.layers[0]!.kind, undefined, "nothing is changed in place");
-  assert.deepEqual(withKnownKinds(newStackupSettings(4000, 1_600_000).stackup), newStackupSettings(4000, 1_600_000).stackup, "a typed stackup is left as it is");
+  assert.deepEqual(withKnownKinds(newStackupSettings(4, 1600).stackup), newStackupSettings(4, 1600).stackup, "a typed stackup is left as it is");
 
   const routing = {
     tracks: [{ layer: "F.Cu" }, { layer: "In1.Cu" }, { layer: "In3.Cu" }],
     vias: [{ from: "F.Cu", to: "In3.Cu" }, { from: "F.Cu", to: "B.Cu" }],
     zones: [{ layer: "In3.Cu" }, { layer: "F.SilkS" }],
   };
-  assert.deepEqual(copperLayersLost(routing, 2000), [{ layer: "In1.Cu", items: 1 }, { layer: "In3.Cu", items: 3000 }]);
-  assert.deepEqual(copperLayersLost(routing, 4000), [{ layer: "In3.Cu", items: 3000 }]);
-  assert.deepEqual(copperLayersLost(routing, 6000), []);
-  assert.deepEqual(copperLayersLost(null, 2000), []);
+  assert.deepEqual(copperLayersLost(routing, 2), [{ layer: "In1.Cu", items: 1 }, { layer: "In3.Cu", items: 3 }]);
+  assert.deepEqual(copperLayersLost(routing, 4), [{ layer: "In3.Cu", items: 3 }]);
+  assert.deepEqual(copperLayersLost(routing, 6), []);
+  assert.deepEqual(copperLayersLost(null, 2), []);
 });
 
 test("copper, dielectrics and masks have a thickness; only dielectrics a dielectric constant", () => {
@@ -369,12 +369,12 @@ test("a check has the table's severity, else KiCad's default", () => {
 });
 
 test("predefinedSizesCmds: Pre-defined Sizes' Apply is the track widths and the via sizes in one command, so one Undo takes the page back", () => {
-  const cmds = predefinedSizesCmds([250_000, 350_000], [{ diameter: 900, drill: 450 }]);
+  const cmds = predefinedSizesCmds([250, 350], [{ diameter: 900, drill: 450 }]);
   assert.equal(cmds.length, 1);
   assert.deepEqual(cmds[0], {
     op: "batch",
     cmds: [
-      { op: "set_track_width_presets", widths: [250_000, 350_000] },
+      { op: "set_track_width_presets", widths: [250, 350] },
       { op: "set_via_presets", presets: [{ diameter: 900, drill: 450 }] },
     ],
   });

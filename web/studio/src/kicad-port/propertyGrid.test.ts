@@ -122,7 +122,7 @@ test("extractValueAndWritability says null for a property a class lacks", () => 
 });
 
 test("planEdit sets the property on every item, in selection order, and skips what the item already has", () => {
-  const plan = planEdit(manager(), [track("a", { x: 1 }), track("b", { x: 7000 }), track("c", { x: 1 })], "Position X", 7000, ctx);
+  const plan = planEdit(manager(), [track("a", { x: 1 }), track("b", { x: 7 }), track("c", { x: 1 })], "Position X", 7, ctx);
   assert.equal(plan.ok, true);
   assert.deepEqual(plan.ok && plan.cmds, ["x a 7", "x c 7"], "b already has 7: its setter returns nothing");
 });
@@ -159,7 +159,7 @@ test("lengths show the number and the display unit; angles the degree sign; choi
   assert.equal(formatValue({ kind: "double", display: "degree", choices: null }, 12.34567, "mm"), "12.3457°");
   assert.equal(formatValue({ kind: "enum", display: "default", choices: copper }, "B.Cu", "mm"), "B.Cu");
   assert.equal(formatValue({ kind: "enum", display: "default", choices: [{ label: "Solid fill", value: 0 }, { label: "Hatch pattern", value: 1 }] }, 1, "mm"), "Hatch pattern");
-  assert.equal(formatValue({ kind: "int", display: "area", choices: null }, 10_000_000_000, "mm"), "10 mm²");
+  assert.equal(formatValue({ kind: "int", display: "area", choices: null }, 10_000_000_000_000, "mm"), "10 mm²");
   assert.equal(formatValue({ kind: "bool", display: "default", choices: null }, true, "mm"), "true");
 });
 
@@ -186,7 +186,7 @@ test("angles take a degree sign, whole numbers must be whole, a string is taken 
   assert.deepEqual(parseValue(angle, "45°", "mm"), { ok: true, value: 45 });
   assert.deepEqual(parseValue(angle, "-90.5", "mm"), { ok: true, value: -90.5 });
   assert.equal(parseValue({ kind: "int", display: "default" }, "3.5", "mm").ok, false);
-  assert.deepEqual(parseValue({ kind: "int", display: "default" }, "7", "mm"), { ok: true, value: 7000 });
+  assert.deepEqual(parseValue({ kind: "int", display: "default" }, "7", "mm"), { ok: true, value: 7 });
   assert.deepEqual(parseValue({ kind: "string", display: "default" }, "  keep spaces ", "mm"), { ok: true, value: "  keep spaces " });
   assert.deepEqual(parseValue({ kind: "double", display: "ratio" }, "0.25", "mm"), { ok: true, value: 0.25 });
 });

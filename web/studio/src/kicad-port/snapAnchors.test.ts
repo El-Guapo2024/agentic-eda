@@ -22,26 +22,26 @@ const withType = (list: Anchor[], t: number) => list.filter((a) => (a.pointTypes
 const snappable = (list: Anchor[]) => list.filter((a) => a.flags & ANCHOR.SNAPPABLE);
 
 test("flags are KiCad's values", () => {
-  assert.deepEqual(ANCHOR, { CORNER: 1, OUTLINE: 2000, SNAPPABLE: 4000, ORIGIN: 8000, VERTICAL: 16_000, HORIZONTAL: 32_000, CONSTRUCTED: 64_000, ALL: 127_000 });
+  assert.deepEqual(ANCHOR, { CORNER: 1, OUTLINE: 2, SNAPPABLE: 4, ORIGIN: 8, VERTICAL: 16, HORIZONTAL: 32, CONSTRUCTED: 64, ALL: 127 });
 });
 
 test("a rectangular pad: its centre, then each corner and side middle", () => {
   const list = anchorsOf({ parts: [part("U1", 0, 0, [pad("1", 1_000_000, 2_000_000, 600_000, 400_000)])] }, "pad");
-  const centre = at(list, 1000, 2000);
+  const centre = at(list, 1_000_000, 2_000_000);
   assert.equal(centre.length, 1);
   assert.equal(centre[0]!.flags, ANCHOR.ORIGIN | ANCHOR.SNAPPABLE);
   assert.equal(centre[0]!.pointTypes, PT.CENTER);
   for (const [x, y] of [
     [700_000, 2_200_000],
     [1_300_000, 2_200_000],
-    [1_300_000, 1800],
-    [700_000, 1800],
+    [1_300_000, 1_800_000],
+    [700_000, 1_800_000],
   ] as [number, number][])
     assert.equal(withType(at(list, x, y), PT.CORNER).length >= 1, true, `corner ${x},${y}`);
   for (const [x, y] of [
     [1_000_000, 2_200_000],
     [1_300_000, 2_000_000],
-    [1_000_000, 1800],
+    [1_000_000, 1_800_000],
     [700_000, 2_000_000],
   ] as [number, number][])
     assert.equal(withType(at(list, x, y), PT.MID).length >= 1, true, `middle ${x},${y}`);
@@ -56,7 +56,7 @@ test("a round pad gives four quadrants; an oval its middles and tips", () => {
   const oval = anchorsOf({ parts: [part("U1", 0, 0, [pad("1", 0, 0, 1_200_000, 600_000, true)])] }, "pad");
   assert.equal(withType(oval, PT.QUADRANT).length, 2, "the two tips, on the long axis");
   assert.equal(withType(oval, PT.MID).length, 2);
-  assert.equal(at(oval, 600, 0).length, 1);
+  assert.equal(at(oval, 600_000, 0).length, 1);
 });
 
 test("picking a pad up (from) gives only its centre; the filter can exclude pads", () => {
@@ -64,14 +64,14 @@ test("picking a pad up (from) gives only its centre; the filter can exclude pads
   const from = anchorsOf(board, "pad", [1_000_000, 2_000_000], true);
   assert.equal(from.length, 1);
   assert.equal(from[0]!.pointTypes, PT.CENTER);
-  assert.equal(anchorsOf(board, "pad", [1000, 2000], true, ctx(always, { pads: false })).length, 0);
+  assert.equal(anchorsOf(board, "pad", [1_000_000, 2_000_000], true, ctx(always, { pads: false })).length, 0);
 });
 
 test("pads are anchors for snapping only when the magnetic setting is 'always'", () => {
   const board = { parts: [part("U1", 0, 0, [pad("1", 1_000_000, 2_000_000)])] };
-  assert.equal(anchorsOf(board, "pad", [1000, 2000], false, ctx(DEFAULT_PCB_MAGNETIC)).length, 0);
-  assert.equal(anchorsOf(board, "pad", [1000, 2000], false, ctx({ ...DEFAULT_PCB_MAGNETIC, pads: "never" })).length, 0);
-  assert.ok(anchorsOf(board, "pad", [1000, 2000], false, ctx({ ...DEFAULT_PCB_MAGNETIC, pads: "always" })).length > 0);
+  assert.equal(anchorsOf(board, "pad", [1_000_000, 2_000_000], false, ctx(DEFAULT_PCB_MAGNETIC)).length, 0);
+  assert.equal(anchorsOf(board, "pad", [1_000_000, 2_000_000], false, ctx({ ...DEFAULT_PCB_MAGNETIC, pads: "never" })).length, 0);
+  assert.ok(anchorsOf(board, "pad", [1_000_000, 2_000_000], false, ctx({ ...DEFAULT_PCB_MAGNETIC, pads: "always" })).length > 0);
 });
 
 test("a footprint: its position, and the centre of its box when that is farther than a grid", () => {
@@ -86,19 +86,19 @@ test("a footprint: its position, and the centre of its box when that is farther 
 test("a footprint contributes the pads under the cursor only", () => {
   const board = { parts: [part("U1", 5_000_000, 5_000_000, [pad("1", 5_000_000, 5_000_000), pad("2", 8_000_000, 5_000_000)], [4_000_000, 4_000_000, 9_000_000, 6_000_000])] };
   const list = anchorsOf(board, "footprint", [5_050_000, 5_020_000]);
-  assert.equal(at(list, 5000, 5000).length >= 2, true, "pad 1 under the cursor, and the position");
-  assert.equal(at(list, 8000, 5000).length, 0, "pad 2 is not under the cursor");
+  assert.equal(at(list, 5_000_000, 5_000_000).length >= 2, true, "pad 1 under the cursor, and the position");
+  assert.equal(at(list, 8_000_000, 5_000_000).length, 0, "pad 2 is not under the cursor");
 });
 
 test("an unplaced or hidden footprint gives nothing", () => {
   const board = { parts: [part("U1", 5_000_000, 5_000_000)] };
   const hidden = ctx(always);
   hidden.visible = () => false;
-  assert.equal(anchorsOf(board, "footprint", [5000, 5000], false, hidden).length, 0);
-  assert.equal(anchorsOf(board, "footprint", [5000, 5000], true, hidden).length, 1, "picking up: the position regardless of visibility");
+  assert.equal(anchorsOf(board, "footprint", [5_000_000, 5_000_000], false, hidden).length, 0);
+  assert.equal(anchorsOf(board, "footprint", [5_000_000, 5_000_000], true, hidden).length, 1, "picking up: the position regardless of visibility");
   const layerOff = ctx(always);
   layerOff.footprintLayerVisible = () => false;
-  assert.equal(anchorsOf(board, "footprint", [5000, 5000], true, layerOff).length, 0);
+  assert.equal(anchorsOf(board, "footprint", [5_000_000, 5_000_000], true, layerOff).length, 0);
   const scene = buildScene({ parts: [{ ref: "U2", placed: false }] });
   assert.equal(scene.items.length, 0);
 });
@@ -110,7 +110,7 @@ test("graphic shapes: segment, rectangle, circle, arc, polygon, Bezier", () => {
     { ...common("circ"), kind: "circle" as const, center: [5_000_000, 0] as [number, number], end: [5_500_000, 0] as [number, number] },
     { ...common("arc"), kind: "arc" as const, start: [7_000_000, 0] as [number, number], mid: [7_500_000, 500_000] as [number, number], end: [8_000_000, 0] as [number, number] },
     { ...common("poly"), kind: "polygon" as const, pts: [[0, 3_000_000], [1_000_000, 3_000_000], [1_000_000, 4_000_000]] as [number, number][] },
-    { ...common("bez"), kind: "bezier" as const, start: [0, 6_000_000] as [number, number], c1: [100_000, 7_000_000] as [number, number], c2: [900, 7_000_000] as [number, number], end: [1_000_000, 6_000_000] as [number, number] },
+    { ...common("bez"), kind: "bezier" as const, start: [0, 6_000_000] as [number, number], c1: [100_000, 7_000_000] as [number, number], c2: [900_000, 7_000_000] as [number, number], end: [1_000_000, 6_000_000] as [number, number] },
   ];
   const scene = buildScene({ parts: [], drawings: { shapes, texts: [], dimensions: [] } });
   const by = (id: string) => {
@@ -169,7 +169,7 @@ test("tracks: ends are snap targets, the middle only a place to pick the track u
   const v = anchorsOf({ routing: { tracks: [], vias: [{ id: "v", net: "N", x: 100_000, y: 200_000, d: 600_000, drill: 300_000, from: "F.Cu", to: "B.Cu" }], zones: [] } }, "via");
   assert.equal(v.length, 1);
   assert.equal(v[0]!.flags, ANCHOR.ORIGIN | ANCHOR.CORNER | ANCHOR.SNAPPABLE);
-  assert.equal(anchorsOf({ routing: { tracks: [], vias: [{ id: "v", net: "N", x: 100, y: 200, d: 600, drill: 300, from: "F.Cu", to: "B.Cu" }], zones: [] } }, "via", [0, 0], false, ctx(DEFAULT_PCB_MAGNETIC)).length, 0);
+  assert.equal(anchorsOf({ routing: { tracks: [], vias: [{ id: "v", net: "N", x: 100_000, y: 200_000, d: 600_000, drill: 300_000, from: "F.Cu", to: "B.Cu" }], zones: [] } }, "via", [0, 0], false, ctx(DEFAULT_PCB_MAGNETIC)).length, 0);
 });
 
 test("an arc track gives its two ends and the middle of its chord, as one item", () => {
@@ -191,19 +191,19 @@ test("a dimension: its ends and the points of its crossbar", () => {
   const dim = (over: object) => ({ id: "d1", layer: "Dwgs.User", kind: "aligned", height: 1_000_000, horizontal: null, leader_length: null, start: [0, 0], end: [4_000_000, 0], lines: [[[0, 0], [4_000_000, 0]]], text_at: [2_000_000, 1_000_000], stroke_width: 100_000, ...over }) as unknown as import("../api/types").Dimension;
   const aligned = anchorsOf({ drawings: { shapes: [], texts: [], dimensions: [dim({})] } }, "dimension");
   assert.equal(aligned.length, 4);
-  assert.equal(at(aligned, 0, 1000).length, 1, "crossbar start: height 1000 along the normal (-dy, dx)");
-  assert.equal(at(aligned, 4000, 1000).length, 1);
+  assert.equal(at(aligned, 0, 1_000_000).length, 1, "crossbar start: height 1000 along the normal (-dy, dx)");
+  assert.equal(at(aligned, 4_000_000, 1_000_000).length, 1);
   const flipped = anchorsOf({ drawings: { shapes: [], texts: [], dimensions: [dim({ height: -1_000_000 })] } }, "dimension");
-  assert.equal(at(flipped, 0, -1000).length, 1, "negative height: the other side");
+  assert.equal(at(flipped, 0, -1_000_000).length, 1, "negative height: the other side");
   const ortho = anchorsOf({ drawings: { shapes: [], texts: [], dimensions: [dim({ kind: "orthogonal", height: 500_000, horizontal: true, start: [0, 0], end: [4_000_000, 2_000_000] })] } }, "dimension");
-  assert.equal(at(ortho, 0, 500).length, 1);
-  assert.equal(at(ortho, 4000, 500).length, 1, "the crossbar of a horizontal orthogonal dimension ends above the end point");
+  assert.equal(at(ortho, 0, 500_000).length, 1);
+  assert.equal(at(ortho, 4_000_000, 500_000).length, 1, "the crossbar of a horizontal orthogonal dimension ends above the end point");
   const leader = anchorsOf({ drawings: { shapes: [], texts: [], dimensions: [dim({ kind: "leader" })] } }, "dimension");
   assert.equal(leader.length, 3);
   const center = anchorsOf({ drawings: { shapes: [], texts: [], dimensions: [dim({ kind: "center", start: [0, 0], end: [1_000_000, 0] })] } }, "dimension");
   assert.equal(center.length, 4);
-  assert.equal(at(center, 0, 1000).length, 1, "the radial turned by -90 degrees");
-  assert.equal(at(center, -1000, 0).length, 1, "and again");
+  assert.equal(at(center, 0, 1_000_000).length, 1, "the radial turned by -90 degrees");
+  assert.equal(at(center, -1_000_000, 0).length, 1, "and again");
 });
 
 test("text is a place to pick it up by, not a snap target", () => {
@@ -216,7 +216,7 @@ test("text is a place to pick it up by, not a snap target", () => {
 test("the mask drops anchors whose flags are not all in it", () => {
   const out = new AnchorList(ANCHOR.SNAPPABLE | ANCHOR.CORNER);
   out.add([0, 0], ANCHOR.SNAPPABLE | ANCHOR.CORNER, []);
-  out.add([1, 1], ANCHOR.SNAPPABLE | ANCHOR.ORIGIN, []);
+  out.add([1000, 1000], ANCHOR.SNAPPABLE | ANCHOR.ORIGIN, []);
   out.add([2000, 2000], ANCHOR.CORNER, []);
   assert.equal(out.list.length, 2);
 });
@@ -247,10 +247,10 @@ test("the scene: polylines are segments, pads and vias are on the right layers, 
   assert.deepEqual(pads[0]!.layers, ["F.Cu"]);
   assert.deepEqual(pads[1]!.layers, ["F.Cu", "B.Cu"], "a through-hole pad is on every copper layer");
   assert.deepEqual(scene.items.find((i) => i.type === "via")!.layers, ["F.Cu", "B.Cu"]);
-  assert.equal(queryScene(scene, box(4900, 4900, 5100, 5100)).filter((i) => i.type === "pad").length, 1);
-  assert.equal(queryScene(scene, box(4900, 4900, 5100, 5100), new Set(["U1"])).length, 0, "skipping the footprint skips its pads");
-  assert.equal(queryScene(scene, box(0, -100, 100, 100), new Set(["t1"])).length, 0, "skipping a track skips its segments");
-  assert.equal(queryScene(scene, box(0, -100, 100, 100), new Set(["t1#1"])).length, 1);
+  assert.equal(queryScene(scene, box(4_900_000, 4_900_000, 5_100_000, 5_100_000)).filter((i) => i.type === "pad").length, 1);
+  assert.equal(queryScene(scene, box(4_900_000, 4_900_000, 5_100_000, 5_100_000), new Set(["U1"])).length, 0, "skipping the footprint skips its pads");
+  assert.equal(queryScene(scene, box(0, -100_000, 100_000, 100_000), new Set(["t1"])).length, 0, "skipping a track skips its segments");
+  assert.equal(queryScene(scene, box(0, -100_000, 100_000, 100_000), new Set(["t1#1"])).length, 1);
 });
 
 test("a point: its position is an origin anchor, snappable, of the centre type; the selection filter's Points switch takes it away, picking up or not", () => {

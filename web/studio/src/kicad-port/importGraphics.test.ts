@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DXF_UNITS, buildImportCmd, buildSchImportCmd, defaultImportValues, defaultSchImportValues, describeInfo, graphicsFormatOf, importLayers, parseLength } from "./importGraphics";
 
-const info = { ok: true, items: 8, counts: { line: 4, arc: 4 }, bbox_nm: [0, -30_000, 40_000, 0] as [number, number, number, number], fits: true };
+const info = { ok: true, items: 8, counts: { line: 4, arc: 4 }, bbox_nm: [0, -30_000_000, 40_000_000, 0] as [number, number, number, number], fits: true };
 
 function build(over: Partial<ReturnType<typeof defaultImportValues>> = {}, extra: { activeLayer?: string | null; polygonOutline?: boolean; format?: "dxf" | "svg" } = {}) {
   return buildImportCmd({ format: extra.format ?? "dxf", text: "0\nEOF\n", values: { ...defaultImportValues("mm"), ...over }, units: "mm", activeLayer: extra.activeLayer === undefined ? "F.SilkS" : extra.activeLayer, info, polygonOutline: extra.polygonOutline ?? false });
@@ -41,7 +41,7 @@ test("Place at sets the origin over the scale, as the dialog does", () => {
   if (!r.ok) return;
   const cmd = r.build(null);
   assert.equal(cmd.op, "import_graphics");
-  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm, cmd.scale], [5_000_000_000, -2_500_000_000, 2000]);
+  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm, cmd.scale], [5_000_000, -2_500_000, 2]);
 });
 
 test("interactive placement puts the picture's upper left corner at the cursor", () => {
@@ -50,7 +50,7 @@ test("interactive placement puts the picture's upper left corner at the cursor",
   if (!r.ok) return;
   const cmd = r.build({ x: 50_000_000, y: 20_000_000 });
   // The box at offset 0 starts at (0, -30 mm): the offset takes it to (50 mm, 20 mm).
-  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm], [50_000_000_000, 50_000_000_000]);
+  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm], [50_000_000, 50_000_000]);
 });
 
 test("the layer is the dialog's, or the active layer when it is not checked", () => {
@@ -131,7 +131,7 @@ test("the schematic's At sets the origin over the scale, as the board's dialog d
   if (!r.ok) return;
   const cmd = r.build(null);
   assert.equal(cmd.op, "import_sch_graphics");
-  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm, cmd.scale, cmd.line_width_nm], [5_000_000_000, -2_500_000_000, 2000, 150_000]);
+  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm, cmd.scale, cmd.line_width_nm], [5_000_000, -2_500_000, 2, 150_000]);
 });
 
 test("interactive placement in the schematic puts the drawing's origin at the cursor", () => {
@@ -139,7 +139,7 @@ test("interactive placement in the schematic puts the drawing's origin at the cu
   assert.ok(r.ok && r.interactive);
   if (!r.ok) return;
   const cmd = r.build({ x: 50_000_000, y: -20_000_000 });
-  assert.deepEqual([cmd.op, cmd.offset_x_nm, cmd.offset_y_nm], ["import_sch_graphics", 50_000_000_000, -20_000_000_000]);
+  assert.deepEqual([cmd.op, cmd.offset_x_nm, cmd.offset_y_nm], ["import_sch_graphics", 50_000_000, -20_000_000]);
 });
 
 test("the Symbol Editor's command names the symbol, the unit and the body style", () => {

@@ -770,7 +770,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         get: (i) => padSize(i.pad!)[axis],
         // "Circle pads have no usable y-size"
         available: (i) => axis === 0 || padShape(i.pad!) !== "circle",
-        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
         set: (i, v) => {
           const [w, h] = padSize(i.pad!);
           const n = Math.round(num(v));
@@ -846,7 +846,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         // "Circle holes have no usable y-size"
         available: (i) => axis === 0 || !!i.pad!.slot,
         writeable: canHaveHole,
-        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
         set: (i, v) => {
           const pad = i.pad!;
           const n = Math.round(num(v));
@@ -868,7 +868,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     kind: "int",
     display: "size",
     get: (i) => i.track!.width,
-    validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+    validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
     set: (i, v) => (i.track!.width === num(v) ? [] : [{ op: "set_track_width", id: i.id, width: Math.round(num(v)) }]),
   });
   const end = (t: Track, which: "start" | "end"): [number, number] => (which === "start" ? t.pts[0] : t.pts[t.pts.length - 1]) ?? [0, 0];
@@ -1190,7 +1190,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         kind: "int",
         display: "size",
         get: own,
-        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
         set: (i, v) => {
           const s = Math.round(num(v));
           if (own(i) === s) return [];
@@ -1308,7 +1308,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       display: "size",
       get: (i) => circleRadius(i.shape as Extract<Shape, { kind: "circle" }>),
       available: isCircle,
-      validate: (v, _i, c) => (num(v) < 1 ? tooSmall(1, "size", c.units) : null),
+      validate: (v, _i, c) => (num(v) < 1_000 ? tooSmall(1_000, "size", c.units) : null),
       set: (i, v) => {
         const next = shapeWith(i.shape!, "Radius", Math.round(num(v)));
         return next ? [replaceShapeCmd(next)] : [];
@@ -1330,7 +1330,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
           return Math.abs(s.end[axis] - s.start[axis]);
         },
         available: isRect,
-        validate: (v, _i, c) => (num(v) < 1 ? tooSmall(1, "size", c.units) : null),
+        validate: (v, _i, c) => (num(v) < 1_000 ? tooSmall(1_000, "size", c.units) : null),
         set: (i, v) => {
           const next = shapeWith(i.shape!, name, Math.round(num(v)));
           const s = i.shape as Extract<Shape, { kind: "rect" }>;
@@ -1349,7 +1349,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       kind: "int",
       display: "size",
       get: (i) => i.shape!.stroke_width,
-      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
       set: (i, v) => (i.shape!.stroke_width === num(v) ? [] : [{ op: "edit_shape", id: i.id, layer: i.shape!.layer, stroke_width: Math.round(num(v)), filled: i.shape!.filled }]),
     },
     SHAPE

@@ -49,9 +49,9 @@ test("a table: Locked of the sheet's item, then Start X / Y and the Table Proper
 
 test("editing a table sends the sheet's table verb, not the board's", () => {
   const s = sheet(fixtureTable(2, 3, ""));
-  const [move] = edit(s, ["tbl_a"], "Start X", 12_000_000);
+  const [move] = edit(s, ["tbl_a"], "Start X", 12_000);
   assert.equal(move && (move as { op: string }).op, "sch_table");
-  assert.deepEqual(move, { op: "sch_table", verb: "set", id: "tbl_a", patch: { at: { x: 12_000_000, y: 0 } } });
+  assert.deepEqual(move, { op: "sch_table", verb: "set", id: "tbl_a", patch: { at: { x: 12_000, y: 0 } } });
   assert.deepEqual(edit(s, ["tbl_a"], "Row Separators", false), [{ op: "sch_table", verb: "set", id: "tbl_a", patch: { props: { rows: false } } }]);
   // Locked is the sheet item's: `set_locked` of the table's id
   assert.deepEqual(edit(s, ["tbl_a"], "Locked", true), [{ op: "sch_edit", verb: "set_locked", ids: ["tbl_a"], locked: true }]);
@@ -70,23 +70,23 @@ test("a cell: the rows of a text box and of the text that a cell keeps (SCH_TABL
 
 test("editing a cell sends one edit_cells of its address, and several cells one batch of them", () => {
   const s = sheet(fixtureTable(2, 3, ""));
-  assert.deepEqual(edit(s, ["tbl_a:1:2"], "Text", "hello"), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[1, 2000]], edit: { text: "hello" } }]);
+  assert.deepEqual(edit(s, ["tbl_a:1:2"], "Text", "hello"), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[1, 2]], edit: { text: "hello" } }]);
   assert.deepEqual(edit(s, ["tbl_a:1:2"], "Text", "r1c2"), [], "no change, no command");
   assert.deepEqual(edit(s, ["tbl_a:0:0"], "Bold", true), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { bold: true } }]);
-  assert.deepEqual(edit(s, ["tbl_a:0:0"], "Margin Top", 500_000), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { margins: [null, 500_000, null, null] } }]);
-  assert.deepEqual(edit(s, ["tbl_a:0:1"], "Column Width", 12_000_000), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 1]], edit: { col_width_nm: 12_000_000 } }]);
+  assert.deepEqual(edit(s, ["tbl_a:0:0"], "Margin Top", 500), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { margins: [null, 500, null, null] } }]);
+  assert.deepEqual(edit(s, ["tbl_a:0:1"], "Column Width", 12_000), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 1]], edit: { col_width_nm: 12_000 } }]);
   // `SCH_TEXTBOX::SetSchTextSize`: one number for both dimensions of the glyph
   assert.deepEqual(edit(s, ["tbl_a:0:0"], "Text Size", 1_000_000), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { width_nm: 1_000_000, height_nm: 1_000_000 } }]);
   const two = edit(s, ["tbl_a:0:0", "tbl_a:0:1"], "Italic", true);
   assert.equal(two.length, 2);
   // the text size must not make the text disappear
-  const refused = schEdit(s, ["tbl_a:0:0"], "Text Size", 5000, "mm");
+  const refused = schEdit(s, ["tbl_a:0:0"], "Text Size", 5, "mm");
   assert.equal(refused.ok, false);
 });
 
 test("the background rows: filling takes the colour the cell has, a colour makes the fill, an empty one takes it away", () => {
   const t = fixtureTable(1, 2, "");
-  const s = sheet({ ...t, cells: [{ ...t.cells[0]!, fill: "color", fill_color: [255_000, 240_000, 200_000, 255_000] }, t.cells[1]!] });
+  const s = sheet({ ...t, cells: [{ ...t.cells[0]!, fill: "color", fill_color: [255, 240, 200, 255] }, t.cells[1]!] });
   assert.equal(rowOf(s, ["tbl_a:0:0"], "Background Fill")?.value, true);
   assert.equal(rowOf(s, ["tbl_a:0:1"], "Background Fill")?.value, false);
   assert.equal(rowOf(s, ["tbl_a:0:0"], "Background Fill Color")?.value, "#fff0c8");

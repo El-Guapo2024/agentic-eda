@@ -27,7 +27,7 @@ const typed = (base: ArrayOptions, over: Partial<ArrayEntries> = {}): ArrayEntri
 
 test("the dialog starts from KiCad's own entries: 5 x 5 at 2.54 mm, four points a quarter turn apart, unique references", () => {
   const d = DEFAULT_ARRAY_OPTIONS;
-  assert.deepEqual([d.nx, d.ny, d.dx, d.dy, d.stagger, d.count, d.angleDeg, d.clockwise, d.arrange, d.reannotate], [5, 5, 2540, 2540, 1, 4, 90, true, false, true]);
+  assert.deepEqual([d.nx, d.ny, d.dx, d.dy, d.stagger, d.count, d.angleDeg, d.clockwise, d.arrange, d.reannotate], [5, 5, 2_540_000, 2_540_000, 1, 4, 90, true, false, true]);
   assert.equal(d.centred, true, "both position radios are restored true, the second one stays selected");
   assert.equal(checkArrayOptions(d), null);
 });
@@ -65,67 +65,67 @@ test("Full circle is 360 over the count", () => {
 test("the geometry the backend takes carries every option of the current tab", () => {
   assert.deepEqual(arrayGeometry(grid({ nx: 3, ny: 2, dx: 5000, dy: 4000, offsetX: 100, offsetY: -50, stagger: -2, staggerRows: false, centred: true, verticalFirst: true, reverseAlternate: true })), {
     kind: "grid",
-    nx: 3000,
-    ny: 2000,
-    dx: 5_000_000,
-    dy: 4_000_000,
-    offset_x: 100_000,
-    offset_y: -50_000,
+    nx: 3,
+    ny: 2,
+    dx: 5000,
+    dy: 4000,
+    offset_x: 100,
+    offset_y: -50,
     centred: true,
-    stagger: -2000,
+    stagger: -2,
     stagger_rows: false,
     horizontal_then_vertical: false,
     reverse_alternate: true,
   });
   assert.deepEqual(arrayGeometry(circular({ centerX: 1000, centerY: 2000, count: 6, angleDeg: 60, offsetAngleDeg: 15, clockwise: false, rotateItems: true })), {
     kind: "circular",
-    center: { x: 1_000_000, y: 2_000_000 },
+    center: { x: 1000, y: 2000 },
     count: 6,
-    angle_millideg: 60_000_000,
-    angle_offset_millideg: 15_000_000,
+    angle_millideg: 60_000,
+    angle_offset_millideg: 15_000,
     clockwise: false,
     rotate_items: true,
   });
 });
 
 test("the command is create_array over the selection, with arrange and the reference choice", () => {
-  assert.deepEqual(arrayCmd(grid({ arrange: true, reannotate: false, nx: 2000, ny: 1 }), ["U1", "U2"]), {
+  assert.deepEqual(arrayCmd(grid({ arrange: true, reannotate: false, nx: 2, ny: 1 }), ["U1", "U2"]), {
     op: "create_array",
     ids: ["U1", "U2"],
-    geometry: arrayGeometry(grid({ nx: 2000, ny: 1 })),
+    geometry: arrayGeometry(grid({ nx: 2, ny: 1 })),
     arrange: true,
     reannotate: false,
   });
 });
 
 test("the circle's centre starts at a lone item's position, or the middle of the box around several", () => {
-  const at: Record<string, [number, number]> = { A: [1000, 2000], B: [0, 0], C: [4_000_000, 2_000_000], D: [1_000_000, 500_000] };
-  const box: Record<string, [number, number, number, number]> = { A: [900, 1900, 1100, 2100], B: [-100, -100, 100, 100], C: [3_900_000, 1_900_000, 4_100_000, 2_100_000], D: [900, 400_000, 1_100_000, 600_000] };
+  const at: Record<string, [number, number]> = { A: [1000, 2000], B: [0, 0], C: [4000, 2000], D: [1000, 500] };
+  const box: Record<string, [number, number, number, number]> = { A: [900, 1900, 1100, 2100], B: [-100, -100, 100, 100], C: [3900, 1900, 4100, 2100], D: [900, 400, 1100, 600] };
   const position = (id: string) => at[id] ?? null;
   const bounds = (id: string) => box[id] ?? null;
-  assert.deepEqual(arrayOrigin(["A"], position, bounds), [1_000_000, 2_000_000]);
-  assert.deepEqual(arrayOrigin(["B", "C", "D"], position, bounds), [2_000_000, 1_000_000], "the box is -100..4100 by -100..2100");
+  assert.deepEqual(arrayOrigin(["A"], position, bounds), [1000, 2000]);
+  assert.deepEqual(arrayOrigin(["B", "C", "D"], position, bounds), [2000, 1000], "the box is -100..4100 by -100..2100");
   assert.equal(arrayOrigin([], position, bounds), null);
   assert.equal(arrayOrigin(["nothing"], position, bounds), null);
-  assert.deepEqual(arrayOrigin(["B", "nothing", "D"], position, bounds), [500_000, 250_000], "an id with no box is left out of it");
+  assert.deepEqual(arrayOrigin(["B", "nothing", "D"], position, bounds), [500, 250], "an id with no box is left out of it");
   assert.equal(arrayOrigin(["nothing", "nowhere"], position, bounds), null);
 });
 
 test("the grid's points are the backend's: across then down, a serpentine, skewed, staggered and centred", () => {
   const p = (o: Partial<ArrayOptions>) => gridPoints(grid({ stagger: 0, centred: false, offsetX: 0, offsetY: 0, ...o }));
-  assert.deepEqual(p({ nx: 3000, ny: 2000, dx: 1_000_000, dy: 2_000_000 }), [[0, 0], [1_000_000, 0], [2_000_000, 0], [0, 2_000_000], [1_000_000, 2_000_000], [2_000_000, 2_000_000]]);
-  assert.deepEqual(p({ nx: 3000, ny: 2000, dx: 1_000_000, dy: 2_000_000, verticalFirst: true }), [[0, 0], [0, 2_000_000], [1_000_000, 0], [1_000_000, 2_000_000], [2_000_000, 0], [2_000_000, 2_000_000]]);
-  assert.deepEqual(p({ nx: 3000, ny: 2000, dx: 1_000_000, dy: 2_000_000, reverseAlternate: true }), [[0, 0], [1_000_000, 0], [2_000_000, 0], [2_000_000, 2_000_000], [1_000_000, 2_000_000], [0, 2_000_000]]);
+  assert.deepEqual(p({ nx: 3, ny: 2, dx: 1000, dy: 2000 }), [[0, 0], [1000, 0], [2000, 0], [0, 2000], [1000, 2000], [2000, 2000]]);
+  assert.deepEqual(p({ nx: 3, ny: 2, dx: 1000, dy: 2000, verticalFirst: true }), [[0, 0], [0, 2000], [1000, 0], [1000, 2000], [2000, 0], [2000, 2000]]);
+  assert.deepEqual(p({ nx: 3, ny: 2, dx: 1000, dy: 2000, reverseAlternate: true }), [[0, 0], [1000, 0], [2000, 0], [2000, 2000], [1000, 2000], [0, 2000]]);
   assert.deepEqual(p({ nx: 2, ny: 2, dx: 1000, dy: 2000, offsetX: 300, offsetY: 50 })[3], [1300, 2050]);
   assert.deepEqual(p({ nx: 2, ny: 2, dx: 1000, dy: 2000, offsetX: 300, offsetY: 50, centred: true })[0], [-650, -1025]);
-  assert.deepEqual(p({ nx: 2000, ny: 3000, dx: 1_000_000, dy: 2_000_000, stagger: 2000 }).filter((_, i) => i % 2 === 0), [[0, 0], [500_000, 2_000_000], [0, 4_000_000]]);
-  assert.deepEqual(p({ nx: 1, ny: 3000, dx: 1_000_000, dy: 2_000_000, stagger: 3000 }).slice(1), [[333_000, 2_000_000], [666_000, 4_000_000]], "1000 / 3 truncates toward zero");
-  assert.deepEqual(p({ nx: 2000, ny: 2000, dx: 1_000_000, dy: 2_000_000, stagger: 2000, staggerRows: false })[1], [1_000_000, 1_000_000]);
-  assert.deepEqual(p({ nx: 0, ny: 2000 }), [], "no column, no point");
+  assert.deepEqual(p({ nx: 2, ny: 3, dx: 1000, dy: 2000, stagger: 2 }).filter((_, i) => i % 2 === 0), [[0, 0], [500, 2000], [0, 4000]]);
+  assert.deepEqual(p({ nx: 1, ny: 3, dx: 1000, dy: 2000, stagger: 3 }).slice(1), [[333, 2000], [666, 4000]], "1000 / 3 truncates toward zero");
+  assert.deepEqual(p({ nx: 2, ny: 2, dx: 1000, dy: 2000, stagger: 2, staggerRows: false })[1], [1000, 1000]);
+  assert.deepEqual(p({ nx: 0, ny: 2 }), [], "no column, no point");
 });
 
 test("the entries show the options in the display units, and the angle as the division when Full circle is on", () => {
-  const e = entriesOf(grid({ dx: 2540, dy: 1270, offsetX: 5, centerX: -12345, count: 8, fullCircle: true }), "mm");
+  const e = entriesOf(grid({ dx: 2_540_000, dy: 1_270_000, offsetX: 5_000, centerX: -12_345_000, count: 8, fullCircle: true }), "mm");
   assert.deepEqual([e.nx, e.ny, e.dx, e.dy, e.offsetX, e.offsetY, e.stagger], ["5", "5", "2.54", "1.27", "0.005", "0", "1"]);
   assert.deepEqual([e.centerX, e.count, e.angle, e.offsetAngle], ["-12.345", "8", "45", "0"]);
   assert.equal(entriesOf(grid(), "mil").dx, "100");
@@ -136,13 +136,13 @@ test("typing in the entries is read the way TransferDataFromWindow reads them", 
   const ok = optionsFromEntries(grid(), typed(grid(), { nx: " 3 ", ny: "2", dx: "5", dy: "1.5mm", offsetX: "10mil", stagger: "-2" }), "mm");
   assert.equal(ok.ok, true);
   if (ok.ok) {
-    assert.deepEqual([ok.options.nx, ok.options.ny, ok.options.dx, ok.options.dy, ok.options.offsetX, ok.options.stagger], [3, 2, 5000, 1500, 254, -2]);
+    assert.deepEqual([ok.options.nx, ok.options.ny, ok.options.dx, ok.options.dy, ok.options.offsetX, ok.options.stagger], [3, 2, 5_000_000, 1_500_000, 254_000, -2]);
     assert.equal(ok.options.tab, "grid");
     assert.equal(ok.options.reannotate, true, "the flags are the base's");
   }
   const circle = optionsFromEntries(circular(), typed(circular(), { centerX: "10", centerY: "-2.5", count: "6", angle: "60°", offsetAngle: "15" }), "mm");
   assert.equal(circle.ok, true);
-  if (circle.ok) assert.deepEqual([circle.options.centerX, circle.options.centerY, circle.options.count, circle.options.angleDeg, circle.options.offsetAngleDeg], [10000, -2500, 6, 60, 15]);
+  if (circle.ok) assert.deepEqual([circle.options.centerX, circle.options.centerY, circle.options.count, circle.options.angleDeg, circle.options.offsetAngleDeg], [10_000_000, -2_500_000, 6, 60, 15]);
 });
 
 test("a count that is not whole, or a length that is not a length, is reported with the entry's name and what was typed", () => {
@@ -169,7 +169,7 @@ test("a zero spacing is found after the entries are read, and is the dialog's me
 test("with Full circle on the typed angle is not read: the division is the angle", () => {
   const r = optionsFromEntries(circular({ fullCircle: true }), typed(circular({ fullCircle: true }), { angle: "nonsense", count: "10" }), "mm");
   assert.equal(r.ok, true);
-  if (r.ok) assert.equal(effectiveAngleDeg(r.options), 36_000);
+  if (r.ok) assert.equal(effectiveAngleDeg(r.options), 36);
 });
 
 test("what is remembered for the next time keeps the angle the entry held", () => {
@@ -184,7 +184,7 @@ test("the preview puts a grid at the origin and a circle about its centre, clock
       assert.ok(Math.abs(g[0] - want[i]![0]) < 1e-6 && Math.abs(g[1] - want[i]![1]) < 1e-6, `${JSON.stringify(g)} is not ${JSON.stringify(want[i])}`);
     });
   };
-  near(previewPoints(grid({ nx: 2000, ny: 1, dx: 1_000_000, stagger: 0, centred: false }), [500_000, 700_000]), [[500_000, 700_000], [1_500_000, 700_000]]);
+  near(previewPoints(grid({ nx: 2, ny: 1, dx: 1000, stagger: 0, centred: false }), [500, 700]), [[500, 700], [1500, 700]]);
   near(previewPoints(circular({ centerX: 0, centerY: 0, count: 4, angleDeg: 90, offsetAngleDeg: 0 }), [1000, 0]), [[1000, 0], [0, 1000], [-1000, 0], [0, -1000]]);
   near(previewPoints(circular({ centerX: 0, centerY: 0, count: 2, angleDeg: 90, clockwise: false }), [1000, 0]), [[1000, 0], [0, -1000]]);
   near(previewPoints(circular({ centerX: 0, centerY: 0, count: 4, fullCircle: true, offsetAngleDeg: 90 }), [1000, 0]), [[0, 1000], [-1000, 0], [0, -1000], [1000, 0]]);
@@ -210,7 +210,7 @@ test("a coordinate scheme sends both axes; \"Use first free number\" sends none 
   const pads = { ...DEFAULT_PAD_NUMBERING, gridCoordinates: true, primary: { kind: "alpha_full" as const, start: "b", step: "2" }, secondary: { kind: "hex" as const, start: "A", step: "1" } };
   assert.deepEqual(padNumberingOf(grid({ pads })), {
     ok: true,
-    numbering: { start_specified: true, two_d: true, primary: { kind: "alpha_full", start: "b", step: 2000 }, secondary: { kind: "hex", start: "A", step: 1 } },
+    numbering: { start_specified: true, two_d: true, primary: { kind: "alpha_full", start: "b", step: 2 }, secondary: { kind: "hex", start: "A", step: 1 } },
   });
   const free = padNumberingOf(grid({ pads: { ...pads, gridFromStart: false } }));
   assert.ok(free.ok && free.numbering?.start_specified === false && free.numbering.two_d === false);
@@ -230,7 +230,7 @@ test("a start the alphabet lacks, or a step that is no whole number, is named th
 });
 
 test("the command sends the geometry and the numbering, and \"Arrange selection\" numbers nothing", () => {
-  const r = fpArrayCmd(grid({ nx: 4000, ny: 1, dx: 1_270_000, dy: 0 }), "Lib:Row", ["pad_1", "pad_2"]);
+  const r = fpArrayCmd(grid({ nx: 4, ny: 1, dx: 1270, dy: 0 }), "Lib:Row", ["pad_1", "pad_2"]);
   assert.ok(r.ok);
   if (!r.ok || r.cmd.op !== "create_footprint_array") return;
   assert.equal(r.cmd.footprint, "Lib:Row");
@@ -244,17 +244,17 @@ test("the command sends the geometry and the numbering, and \"Arrange selection\
 });
 
 const padAt = (id: string, number: string, kind: LibraryPad["kind"] = "smd"): LibraryPad =>
-  ({ id, number, at: { x: 0, y: 0 }, size: [1_000_000, 600_000], offset: { x: 0, y: 0 }, shape: "rect", kind, drill: null, rot: 0, layers: [] }) as unknown as LibraryPad;
+  ({ id, number, at: { x: 0, y: 0 }, size: [1000, 600], offset: { x: 0, y: 0 }, shape: "rect", kind, drill: null, rot: 0, layers: [] }) as unknown as LibraryPad;
 
 test("the preview tells the numbers the pads will take: the first free ones skip the pads that stay, a start value does not", () => {
   const pads = [padAt("a", "1"), padAt("b", "3"), padAt("c", "9")];
-  const free = grid({ nx: 4000, ny: 1, pads: { ...DEFAULT_PAD_NUMBERING, gridFromStart: false } });
-  assert.deepEqual(previewPadNumbers(free, pads, new Set(["c"]), 10_000), ["2", "4", "5", "6"]);
-  assert.deepEqual(previewPadNumbers(grid({ nx: 4000, ny: 1 }), pads, new Set(["c"]), 10_000), ["1", "2", "3", "4"]);
-  assert.deepEqual(previewPadNumbers(grid({ nx: 4000, ny: 1 }), pads, new Set(["c"]), 2000), ["1", "2"], "a limit");
+  const free = grid({ nx: 4, ny: 1, pads: { ...DEFAULT_PAD_NUMBERING, gridFromStart: false } });
+  assert.deepEqual(previewPadNumbers(free, pads, new Set(["c"]), 10), ["2", "4", "5", "6"]);
+  assert.deepEqual(previewPadNumbers(grid({ nx: 4, ny: 1 }), pads, new Set(["c"]), 10), ["1", "2", "3", "4"]);
+  assert.deepEqual(previewPadNumbers(grid({ nx: 4, ny: 1 }), pads, new Set(["c"]), 2), ["1", "2"], "a limit");
   // two pads a point, a hole that takes none
   const withHole = [padAt("a", "1"), padAt("h", "", "non_plated_hole"), padAt("c", "2")];
-  assert.deepEqual(previewPadNumbers(grid({ nx: 2000, ny: 1 }), withHole, new Set(["a", "h", "c"]), 10_000), ["1", "2", "3", "4"]);
-  assert.deepEqual(previewPadNumbers(grid({ nx: 2000, ny: 1, arrange: true }), pads, new Set(["a"]), 10_000), [], "arranging numbers nothing");
-  assert.deepEqual(previewPadNumbers(grid({ nx: 2000, ny: 1, pads: { ...DEFAULT_PAD_NUMBERING, renumber: false } }), pads, new Set(["a"]), 10_000), []);
+  assert.deepEqual(previewPadNumbers(grid({ nx: 2, ny: 1 }), withHole, new Set(["a", "h", "c"]), 10), ["1", "2", "3", "4"]);
+  assert.deepEqual(previewPadNumbers(grid({ nx: 2, ny: 1, arrange: true }), pads, new Set(["a"]), 10), [], "arranging numbers nothing");
+  assert.deepEqual(previewPadNumbers(grid({ nx: 2, ny: 1, pads: { ...DEFAULT_PAD_NUMBERING, renumber: false } }), pads, new Set(["a"]), 10), []);
 });

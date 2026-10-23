@@ -51,7 +51,7 @@ test("netNavigatorItems: another net sees only its own", () => {
 
 test("netNavigatorItems: coordinates follow the units", () => {
   const items = netNavigatorItems(sch, "GND", "mil");
-  assert.match(items[0]!.text, /^Label 'GND' at \(39_000\.37 mils, 39_000\.37 mils\)$/);
+  assert.match(items[0]!.text, /^Label 'GND' at \(39.37 mils, 39.37 mils\)$/);
 });
 
 test("stepNetItem: Tab / Shift+Tab walk the list and wrap at both ends", () => {

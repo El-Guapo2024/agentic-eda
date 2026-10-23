@@ -529,7 +529,7 @@ export function colsOf(cells: readonly BoardTableCell[]): number[] {
 export function boardNumbersOf(stats: BoardStatsReply): TableBoardNumbers | null {
   const b = stats.board;
   if (!stats.ok || !b) return null;
-  const nm = (um: number): number => Math.round(um);
+  const nm = (v: number): number => Math.round(v);
   const count = (title: string): number => (stats.pad_properties ?? []).find((e) => e.title === title)?.qty ?? 0;
   return {
     thickness_nm: nm(b.thickness_nm),

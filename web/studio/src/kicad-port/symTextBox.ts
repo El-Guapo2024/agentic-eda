@@ -102,7 +102,7 @@ export function grownToFit(g: LibTextBox, measure: Measure): LibTextBox {
   }
   if (!grown) return g;
   // the file is in 0.1 um: no float noise in the far corner
-  const mm = (v: number) => Math.round(v * 10) / 10_000;
+  const mm = (v: number) => Math.round(v / 100) / 10_000; // nm to mm, on the file's 100 nm
   return { ...g, end: { x: mm(ex), y: -mm(ey) } };
 }
 
@@ -133,7 +133,7 @@ export const INITIAL_LAST_TEXT_BOX: LastTextBox = { bold: false, italic: false, 
  * where the editor is (a graphic is drawn on its own unit and body style here).
  */
 export function newTextBox(a: readonly [number, number], b: readonly [number, number], unit: number, bodyStyle: number, last: LastTextBox): LibTextBox {
-  const mm = (v: number) => Math.round(v * 10) / 10_000;
+  const mm = (v: number) => Math.round(v / 100) / 10_000; // nm to mm, on the file's 100 nm
   return {
     kind: "text_box",
     unit,

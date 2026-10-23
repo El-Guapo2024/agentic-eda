@@ -10,18 +10,18 @@ const zone = (over: Partial<Zone> = {}): Zone => ({
   net: "GND",
   layer: "F.Cu",
   teardrop: false,
-  outline: [[0, 0], [1_000_000, 0], [1_000_000, 1_000_000]],
-  clearance: 500_000,
-  min_thickness: 250_000,
-  thermal_gap: 500_000,
-  thermal_spoke_width: 500_000,
+  outline: [[0, 0], [1000, 0], [1000, 1000]],
+  clearance: 500,
+  min_thickness: 250,
+  thermal_gap: 500,
+  thermal_spoke_width: 500,
   pad_connection: "Thermal",
   priority: 0,
   island_removal_mode: "Always",
-  min_island_area: 10_000_000_000,
+  min_island_area: 10_000_000,
   fill_mode: "Polygons",
-  hatch_thickness: 1_000_000,
-  hatch_gap: 1_500_000,
+  hatch_thickness: 1000,
+  hatch_gap: 1500,
   hatch_orientation_mdeg: 0,
   hatch_smoothing_level: 0,
   hatch_smoothing_value: 0.1,
@@ -40,31 +40,31 @@ const dim = (over: Partial<Dimension> = {}): Dimension => ({
   id: "dim_a",
   layer: "Dwgs.User",
   kind: "aligned",
-  height: 2_000_000,
+  height: 2000,
   horizontal: null,
   leader_length: null,
-  start: [70_000_000, 50_000_000],
-  end: [80_000_000, 50_000_000],
+  start: [70_000, 50_000],
+  end: [80_000, 50_000],
   prefix: "",
   suffix: "",
   override_text: null,
   units: "mm",
   units_format: "no_suffix",
-  precision: 2000,
+  precision: 2,
   suppress_trailing_zeros: true,
   text_position: "outside",
   keep_text_aligned: true,
   text_angle: 0,
-  text_size_nm: 1_000_000,
-  stroke_width: 150_000,
-  arrow_length: 1_000_000,
-  extension_offset: 300_000,
-  extension_height: 500_000,
+  text_size_nm: 1000,
+  stroke_width: 150,
+  arrow_length: 1000,
+  extension_offset: 300,
+  extension_height: 500,
   arrow_direction: "inward",
   lines: [],
-  text_at: [75_000_000, 48_000_000],
+  text_at: [75_000, 48_000],
   computed_text_angle: 0,
-  measured_value_nm: 10_000_000,
+  measured_value_nm: 10_000,
   text: "10.00",
   ...over,
 });
@@ -75,7 +75,7 @@ const board = (): BoardState =>
     dir: "/t",
     outline: null,
     layers: ["F.Cu", "B.Cu"],
-    snap: 100_000,
+    snap: 100,
     parts: [
       {
         ref: "U1",
@@ -85,27 +85,27 @@ const board = (): BoardState =>
         footprint: "Package_QFP:LQFP-48",
         block: "core",
         placed: true,
-        size: [4_000_000, 4_000_000],
-        at: [30_000_000, 20_000_000],
+        size: [4000, 4000],
+        at: [30_000, 20_000],
         rot: 90,
         side: "top",
         pads: [
-          { num: "1", net: "GND", x: 29_000_000, y: 19_000_000, w: 600_000, h: 600_000, round: false, th: false },
-          { num: "2", net: "VCC", x: 31_000_000, y: 19_000_000, w: 800_000, h: 800_000, round: true, th: true },
-          { num: "3", net: "VCC", x: 31_000_000, y: 21_000_000, w: 800_000, h: 400_000, round: true, th: false },
+          { num: "1", net: "GND", x: 29_000, y: 19_000, w: 600, h: 600, round: false, th: false },
+          { num: "2", net: "VCC", x: 31_000, y: 19_000, w: 800, h: 800, round: true, th: true },
+          { num: "3", net: "VCC", x: 31_000, y: 21_000, w: 800, h: 400, round: true, th: false },
         ],
       },
-      { ref: "R1", value: "10k", package: "0603", mpn: null, footprint: "R_0603", block: null, placed: true, size: null, at: [60_000_000, 20_000_000], rot: 0, side: "bottom", pads: [] },
+      { ref: "R1", value: "10k", package: "0603", mpn: null, footprint: "R_0603", block: null, placed: true, size: null, at: [60_000, 20_000], rot: 0, side: "bottom", pads: [] },
       { ref: "C9", value: null, package: null, mpn: null, footprint: null, block: null, placed: false, size: null },
     ],
     rules: [],
     routing: {
       tracks: [
-        { id: "trk_a", net: "GND", layer: "F.Cu", width: 200_000, pts: [[10_000_000, 40_000_000], [20_000_000, 40_000_000], [20_000_000, 50_000_000]] },
-        { id: "trk_b", net: "VCC", layer: "F.Cu", width: 300_000, pts: [[0, 0], [5_000_000, 0]] },
-        { id: "trk_arc", net: "GND", layer: "B.Cu", width: 200_000, pts: [[10_000_000, 10_000_000], [20_000_000, 10_000_000]], arc_mid: [15_000_000, 5_000_000] },
+        { id: "trk_a", net: "GND", layer: "F.Cu", width: 200, pts: [[10_000, 40_000], [20_000, 40_000], [20_000, 50_000]] },
+        { id: "trk_b", net: "VCC", layer: "F.Cu", width: 300, pts: [[0, 0], [5_000, 0]] },
+        { id: "trk_arc", net: "GND", layer: "B.Cu", width: 200, pts: [[10_000, 10_000], [20_000, 10_000]], arc_mid: [15_000, 5_000] },
       ],
-      vias: [{ id: "via_a", net: "GND", x: 20_000_000, y: 50_000_000, d: 600_000, drill: 300_000, from: "F.Cu", to: "B.Cu" }],
+      vias: [{ id: "via_a", net: "GND", x: 20_000, y: 50_000, d: 600, drill: 300, from: "F.Cu", to: "B.Cu" }],
       zones: [zone(), zone({ id: "zone_ra", net: "", is_rule_area: true, keepout_vias: true, name: "keepout" })],
       track_width_presets: [],
       via_presets: [],
@@ -113,18 +113,18 @@ const board = (): BoardState =>
     },
     drawings: {
       shapes: [
-        { id: "shp_seg", kind: "segment", layer: "F.SilkS", stroke_width: 150_000, filled: false, start: [0, 80_000_000], end: [10_000_000, 80_000_000] },
-        { id: "shp_rect", kind: "rect", layer: "F.Fab", stroke_width: 100_000, filled: false, start: [0, 90_000], end: [10_000_000, 95_000_000] },
-        { id: "shp_arc", kind: "arc", layer: "F.SilkS", stroke_width: 150_000, filled: false, start: [40_000_000, 80_000_000], mid: [45_000, 77_000_000], end: [50_000_000, 80_000_000] },
-        { id: "shp_circle", kind: "circle", layer: "F.SilkS", stroke_width: 150_000, filled: true, center: [5_000_000, 5_000_000], end: [8_000_000, 9_000_000] },
-        { id: "shp_poly", kind: "polygon", layer: "Edge.Cuts", stroke_width: 100_000, filled: false, pts: [[0, 0], [10_000_000, 0], [10_000_000, 10_000_000]] },
-        { id: "shp_bez", kind: "bezier", layer: "F.SilkS", stroke_width: 150_000, filled: false, start: [0, 0], c1: [1_000_000, 1_000_000], c2: [2_000_000, 1_000_000], end: [3_000_000, 0] },
+        { id: "shp_seg", kind: "segment", layer: "F.SilkS", stroke_width: 150, filled: false, start: [0, 80_000], end: [10_000, 80_000] },
+        { id: "shp_rect", kind: "rect", layer: "F.Fab", stroke_width: 100, filled: false, start: [0, 90_000], end: [10_000, 95_000] },
+        { id: "shp_arc", kind: "arc", layer: "F.SilkS", stroke_width: 150, filled: false, start: [40_000, 80_000], mid: [45_000, 77_000], end: [50_000, 80_000] },
+        { id: "shp_circle", kind: "circle", layer: "F.SilkS", stroke_width: 150, filled: true, center: [5_000, 5_000], end: [8_000, 9_000] },
+        { id: "shp_poly", kind: "polygon", layer: "Edge.Cuts", stroke_width: 100, filled: false, pts: [[0, 0], [10_000, 0], [10_000, 10_000]] },
+        { id: "shp_bez", kind: "bezier", layer: "F.SilkS", stroke_width: 150, filled: false, start: [0, 0], c1: [1000, 1000], c2: [2000, 1000], end: [3000, 0] },
       ],
-      texts: [{ id: "txt_a", content: "hello", x: 70_000_000, y: 80_000_000, angle: 90_000, layer: "F.SilkS", size: 1_000_000, stroke_width: 150_000, justify: "center", mirror: false }],
+      texts: [{ id: "txt_a", content: "hello", x: 70_000, y: 80_000, angle: 90_000, layer: "F.SilkS", size: 1000, stroke_width: 150, justify: "center", mirror: false }],
       groups: [{ id: "grp_a", name: "block", member_ids: ["U1", "trk_a"] }],
       dimensions: [
         dim(),
-        dim({ id: "dim_rad", kind: "radial", height: null, leader_length: 3_000_000 }),
+        dim({ id: "dim_rad", kind: "radial", height: null, leader_length: 3000 }),
         dim({ id: "dim_lead", kind: "leader", height: null, override_text: "NOTE" }),
         dim({ id: "dim_ortho", kind: "orthogonal", horizontal: true }),
         dim({ id: "dim_ctr", kind: "center", height: null }),
@@ -320,7 +320,7 @@ test("a footprint's orientation is KiCad's (counter-clockwise), the model's rot 
 
 test("a track shows its end points; a via its type; a locked item its lock", () => {
   const b = board();
-  assert.deepEqual([rowOf(b, ["trk_a"], "Start X")!.value, rowOf(b, ["trk_a"], "Start Y")!.value, rowOf(b, ["trk_a"], "End X")!.value, rowOf(b, ["trk_a"], "End Y")!.value], [10_000_000, 40_000_000, 20_000_000, 50_000_000]);
+  assert.deepEqual([rowOf(b, ["trk_a"], "Start X")!.value, rowOf(b, ["trk_a"], "Start Y")!.value, rowOf(b, ["trk_a"], "End X")!.value, rowOf(b, ["trk_a"], "End Y")!.value], [10_000, 40_000, 20_000, 50_000]);
   assert.equal(rowOf(b, ["via_a"], "Via Type")!.value, "Through");
   assert.equal(rowOf(b, ["trk_b"], "Locked")!.value, true);
   assert.equal(rowOf(b, ["trk_a"], "Locked")!.value, false);
@@ -328,10 +328,10 @@ test("a track shows its end points; a via its type; a locked item its lock", () 
 
 test("a circle shows its radius from the centre to the point on it, a rectangle its sides, an arc the angle it sweeps", () => {
   const b = board();
-  assert.equal(rowOf(b, ["shp_circle"], "Radius")!.value, 5_000_000);
-  assert.equal(rowOf(b, ["shp_circle"], "Center X")!.value, 5_000_000);
-  assert.equal(rowOf(b, ["shp_rect"], "Width")!.value, 10_000_000);
-  assert.equal(rowOf(b, ["shp_rect"], "Height")!.value, 5_000_000);
+  assert.equal(rowOf(b, ["shp_circle"], "Radius")!.value, 5000);
+  assert.equal(rowOf(b, ["shp_circle"], "Center X")!.value, 5000);
+  assert.equal(rowOf(b, ["shp_rect"], "Width")!.value, 10_000);
+  assert.equal(rowOf(b, ["shp_rect"], "Height")!.value, 5000);
   const angle = rowOf(b, ["shp_arc"], "Angle")!;
   assert.ok(typeof angle.value === "number" && angle.value > 0 && angle.value < 180);
   assert.equal(angle.writable, false);
@@ -359,14 +359,14 @@ test("a mixed selection keeps the rows every class has, in the order of the firs
 
 test("a footprint: position moves it by the difference, orientation turns it about itself, layer flips it", () => {
   const b = board();
-  assert.deepEqual(edit(b, ["U1"], "Position X", 32_000_000), [{ op: "move_items", ids: ["U1"], dx: 2_000_000, dy: 0 }]);
-  assert.deepEqual(edit(b, ["U1"], "Position Y", 19_000_000), [{ op: "move_items", ids: ["U1"], dx: 0, dy: -1_000_000 }]);
-  assert.deepEqual(edit(b, ["U1"], "Position X", 30_000_000), [], "already there: nothing to send");
+  assert.deepEqual(edit(b, ["U1"], "Position X", 32_000), [{ op: "move_items", ids: ["U1"], dx: 2_000, dy: 0 }]);
+  assert.deepEqual(edit(b, ["U1"], "Position Y", 19_000), [{ op: "move_items", ids: ["U1"], dx: 0, dy: -1_000 }]);
+  assert.deepEqual(edit(b, ["U1"], "Position X", 30_000), [], "already there: nothing to send");
   // 270 is where it is (rot 90 clockwise); 0 is a quarter turn counter-clockwise from 270... clockwise from rot 90 to rot 0 is -90.
-  assert.deepEqual(edit(b, ["U1"], "Orientation", 0), [{ op: "rotate_items", ids: ["U1"], pivot: { x: 30_000_000, y: 20_000_000 }, angle_millideg: -90_000 }]);
+  assert.deepEqual(edit(b, ["U1"], "Orientation", 0), [{ op: "rotate_items", ids: ["U1"], pivot: { x: 30_000, y: 20_000 }, angle_millideg: -90_000 }]);
   assert.deepEqual(edit(b, ["U1"], "Orientation", 270), []);
-  assert.deepEqual(edit(b, ["U1"], "Orientation", 90), [{ op: "rotate_items", ids: ["U1"], pivot: { x: 30_000_000, y: 20_000_000 }, angle_millideg: -180_000 }]);
-  assert.deepEqual(edit(b, ["U1"], "Layer", "B.Cu"), [{ op: "flip_items", ids: ["U1"], pivot: { x: 30_000_000, y: 20_000_000 }, direction: "left_right" }]);
+  assert.deepEqual(edit(b, ["U1"], "Orientation", 90), [{ op: "rotate_items", ids: ["U1"], pivot: { x: 30_000, y: 20_000 }, angle_millideg: -180_000 }]);
+  assert.deepEqual(edit(b, ["U1"], "Layer", "B.Cu"), [{ op: "flip_items", ids: ["U1"], pivot: { x: 30_000, y: 20_000 }, direction: "left_right" }]);
   assert.deepEqual(edit(b, ["U1"], "Layer", "F.Cu"), []);
   assert.deepEqual(edit(b, ["U1"], "Locked", true), [{ op: "set_locked", ids: ["U1"], locked: true }]);
 });
@@ -379,19 +379,19 @@ test("a footprint's reference, value and library link are read-only", () => {
 
 test("a pad's position moves its footprint", () => {
   const b = board();
-  assert.deepEqual(edit(b, ["U1.1"], "Position X", 29_500_000), [{ op: "move_items", ids: ["U1"], dx: 500_000, dy: 0 }]);
+  assert.deepEqual(edit(b, ["U1.1"], "Position X", 29_500), [{ op: "move_items", ids: ["U1"], dx: 500, dy: 0 }]);
   assert.deepEqual(edit(b, ["U1.1"], "Net", "VCC"), [], "a pad's net is not editable");
 });
 
 test("a track: width, layer, net and the end points each go through their verb", () => {
   const b = board();
-  assert.deepEqual(edit(b, ["trk_a"], "Width", 250_000), [{ op: "set_track_width", id: "trk_a", width: 250_000 }]);
-  assert.deepEqual(edit(b, ["trk_a"], "Width", 200_000), []);
+  assert.deepEqual(edit(b, ["trk_a"], "Width", 250), [{ op: "set_track_width", id: "trk_a", width: 250 }]);
+  assert.deepEqual(edit(b, ["trk_a"], "Width", 200), []);
   assert.deepEqual(edit(b, ["trk_a"], "Layer", "B.Cu"), [{ op: "edit_tracks_and_vias", ids: ["trk_a"], layer: "B.Cu" }]);
   assert.deepEqual(edit(b, ["trk_a"], "Net", "VCC"), [{ op: "set_item_net", ids: ["trk_a"], net: "VCC" }]);
-  assert.deepEqual(edit(b, ["trk_a"], "Start X", 11_000_000), [{ op: "edit_track", id: "trk_a", start: { x: 11_000_000, y: 40_000_000 } }]);
-  assert.deepEqual(edit(b, ["trk_a"], "End Y", 52_000_000), [{ op: "edit_track", id: "trk_a", end: { x: 20_000_000, y: 52_000_000 } }]);
-  assert.deepEqual(edit(b, ["trk_arc"], "End X", 24_000_000), [{ op: "edit_track", id: "trk_arc", end: { x: 24_000_000, y: 10_000_000 } }]);
+  assert.deepEqual(edit(b, ["trk_a"], "Start X", 11_000), [{ op: "edit_track", id: "trk_a", start: { x: 11_000, y: 40_000 } }]);
+  assert.deepEqual(edit(b, ["trk_a"], "End Y", 52_000), [{ op: "edit_track", id: "trk_a", end: { x: 20_000, y: 52_000 } }]);
+  assert.deepEqual(edit(b, ["trk_arc"], "End X", 24_000), [{ op: "edit_track", id: "trk_arc", end: { x: 24_000, y: 10_000 } }]);
 });
 
 test("a width of zero or less is refused, and so is taking a track off its net", () => {
@@ -406,12 +406,12 @@ test("a width of zero or less is refused, and so is taking a track off its net",
 
 test("a via: diameter and hole keep each other in order", () => {
   const b = board();
-  assert.deepEqual(edit(b, ["via_a"], "Diameter", 700_000), [{ op: "edit_via", id: "via_a", diameter: 700_000, drill: 300_000 }]);
-  assert.deepEqual(edit(b, ["via_a"], "Hole", 350_000), [{ op: "edit_via", id: "via_a", diameter: 600_000, drill: 350_000 }]);
-  const big = pcbEdit(b, ["via_a"], "Hole", 700_000, "mm");
+  assert.deepEqual(edit(b, ["via_a"], "Diameter", 700), [{ op: "edit_via", id: "via_a", diameter: 700, drill: 300 }]);
+  assert.deepEqual(edit(b, ["via_a"], "Hole", 350), [{ op: "edit_via", id: "via_a", diameter: 600, drill: 350 }]);
+  const big = pcbEdit(b, ["via_a"], "Hole", 700, "mm");
   assert.equal(big.ok, false);
   assert.match(!big.ok ? big.error : "", /^Hole: Via hole size must be smaller than via diameter$/);
-  const small = pcbEdit(b, ["via_a"], "Diameter", 300_000, "mm");
+  const small = pcbEdit(b, ["via_a"], "Diameter", 300, "mm");
   assert.equal(small.ok, false, "the diameter may not shrink to the hole");
   assert.deepEqual(edit(b, ["via_a"], "Net", "VCC"), [{ op: "set_item_net", ids: ["via_a"], net: "VCC" }]);
   assert.equal(rowOf(b, ["via_a"], "Layer Top")!.writable, false);
@@ -419,12 +419,12 @@ test("a via: diameter and hole keep each other in order", () => {
 
 test("a zone: one edit_zone with every setting and the one that changed", () => {
   const b = board();
-  const [cmd] = edit(b, ["zone_a"], "Priority", 3000);
+  const [cmd] = edit(b, ["zone_a"], "Priority", 3);
   const c = cmd as unknown as Record<string, unknown>;
   assert.equal(c.op, "edit_zone");
   assert.deepEqual(
     { id: c.id, priority: c.priority, net: c.net, layer: c.layer, clearance: c.clearance, min_thickness: c.min_thickness, thermal_gap: c.thermal_gap, fill_mode: c.fill_mode, is_rule_area: c.is_rule_area, hatch_gap: c.hatch_gap },
-    { id: "zone_a", priority: 3, net: "GND", layer: "F.Cu", clearance: 500_000, min_thickness: 250_000, thermal_gap: 500_000, fill_mode: "Polygons", is_rule_area: false, hatch_gap: 1_500_000 },
+    { id: "zone_a", priority: 3, net: "GND", layer: "F.Cu", clearance: 500, min_thickness: 250, thermal_gap: 500, fill_mode: "Polygons", is_rule_area: false, hatch_gap: 1500 },
     "the zone's other settings are sent as they are: the verb replaces them all"
   );
   assert.deepEqual(edit(b, ["zone_a"], "Fill Mode", "HatchPattern").map((c) => (c as { fill_mode?: string }).fill_mode), ["HatchPattern"]);
@@ -453,59 +453,59 @@ test("a hatched zone's hatch rows can be edited, and the validators of the zone 
   b.routing!.zones[0] = zone({ fill_mode: "HatchPattern" });
   assert.equal(rowOf(b, ["zone_a"], "Hatch Width")!.writable, true);
   assert.equal(edit(b, ["zone_a"], "Hatch Orientation", 45).length, 1);
-  const narrow = pcbEdit(b, ["zone_a"], "Hatch Width", 100_000, "mm");
+  const narrow = pcbEdit(b, ["zone_a"], "Hatch Width", 100, "mm");
   assert.equal(narrow.ok, false);
   assert.match(!narrow.ok ? narrow.error : "", /Cannot be less than zone minimum width/);
-  const spoke = pcbEdit(b, ["zone_a"], "Thermal Relief Spoke Width", 100_000, "mm");
+  const spoke = pcbEdit(b, ["zone_a"], "Thermal Relief Spoke Width", 100, "mm");
   assert.equal(spoke.ok, false);
-  const clear = pcbEdit(b, ["zone_a"], "Clearance", -5000, "mm");
+  const clear = pcbEdit(b, ["zone_a"], "Clearance", -5, "mm");
   assert.equal(clear.ok, false);
-  const thin = pcbEdit(b, ["zone_a"], "Minimum Width", 10_000, "mm");
+  const thin = pcbEdit(b, ["zone_a"], "Minimum Width", 10, "mm");
   assert.equal(thin.ok, false);
 });
 
 test("a text: every edit is an edit_text with the rest of the text as it was", () => {
   const b = board();
-  const base = { op: "edit_text", id: "txt_a", content: "hello", angle: 90_000, layer: "F.SilkS", size_nm: 1_000_000, stroke_width: 150_000, justify: "center", mirror: false };
+  const base = { op: "edit_text", id: "txt_a", content: "hello", angle: 90_000, layer: "F.SilkS", size_nm: 1000, stroke_width: 150, justify: "center", mirror: false };
   assert.deepEqual(edit(b, ["txt_a"], "Text", "bye"), [{ ...base, content: "bye" }]);
   assert.deepEqual(edit(b, ["txt_a"], "Orientation", 180), [{ ...base, angle: 180_000 }]);
   assert.deepEqual(edit(b, ["txt_a"], "Orientation", -90), [{ ...base, angle: 270_000 }], "an angle is kept in 0 to 360");
   assert.deepEqual(edit(b, ["txt_a"], "Layer", "F.Fab"), [{ ...base, layer: "F.Fab" }]);
-  assert.deepEqual(edit(b, ["txt_a"], "Thickness", 200_000), [{ ...base, stroke_width: 200_000 }]);
-  assert.deepEqual(edit(b, ["txt_a"], "Height", 1_500_000), [{ ...base, size_nm: 1_500_000 }]);
-  assert.deepEqual(edit(b, ["txt_a"], "Width", 1_500_000), [{ ...base, size_nm: 1_500_000 }], "the text is square: width and height are one size");
+  assert.deepEqual(edit(b, ["txt_a"], "Thickness", 200), [{ ...base, stroke_width: 200 }]);
+  assert.deepEqual(edit(b, ["txt_a"], "Height", 1500), [{ ...base, size_nm: 1500 }]);
+  assert.deepEqual(edit(b, ["txt_a"], "Width", 1500), [{ ...base, size_nm: 1500 }], "the text is square: width and height are one size");
   assert.deepEqual(edit(b, ["txt_a"], "Mirrored", true), [{ ...base, mirror: true }]);
   assert.deepEqual(edit(b, ["txt_a"], "Horizontal Justification", "left"), [{ ...base, justify: "left" }]);
-  assert.deepEqual(edit(b, ["txt_a"], "Position X", 71_000_000), [{ op: "move_items", ids: ["txt_a"], dx: 1_000_000, dy: 0 }]);
+  assert.deepEqual(edit(b, ["txt_a"], "Position X", 71_000), [{ op: "move_items", ids: ["txt_a"], dx: 1_000, dy: 0 }]);
 });
 
 test("a shape's geometry is set the way the EDA_SHAPE setters do", () => {
   const seg = board().drawings!.shapes[0] as Extract<Shape, { kind: "segment" }>;
-  assert.deepEqual(shapeWith(seg, "Start X", 1_000_000), { ...seg, start: [1_000_000, 80_000_000] });
-  assert.deepEqual(shapeWith(seg, "End Y", 70_000_000), { ...seg, end: [10_000_000, 70_000_000] });
+  assert.deepEqual(shapeWith(seg, "Start X", 1000), { ...seg, start: [1000, 80_000] });
+  assert.deepEqual(shapeWith(seg, "End Y", 70_000), { ...seg, end: [10_000, 70_000] });
   assert.equal(shapeWith(seg, "Start X", 0), null, "unchanged");
-  assert.equal(shapeWith(seg, "Radius", 5000), null, "a segment has no radius");
+  assert.equal(shapeWith(seg, "Radius", 5), null, "a segment has no radius");
 
   const rect = board().drawings!.shapes[1] as Extract<Shape, { kind: "rect" }>;
-  assert.deepEqual(shapeWith(rect, "Width", 12_000_000), { ...rect, end: [12_000_000, 95_000_000] });
-  assert.deepEqual(shapeWith(rect, "Height", 2_000_000), { ...rect, end: [10_000_000, 92_000_000] });
-  const flipped: Shape = { ...rect, start: [10_000_000, 95_000_000], end: [0, 90_000] };
-  assert.deepEqual(shapeWith(flipped, "Width", 4_000_000), { ...flipped, end: [6_000_000, 90_000] }, "the corners keep their order");
+  assert.deepEqual(shapeWith(rect, "Width", 12_000), { ...rect, end: [12_000, 95_000] });
+  assert.deepEqual(shapeWith(rect, "Height", 2_000), { ...rect, end: [10_000, 92_000] });
+  const flipped: Shape = { ...rect, start: [10_000, 95_000], end: [0, 90_000] };
+  assert.deepEqual(shapeWith(flipped, "Width", 4_000), { ...flipped, end: [6_000, 90_000] }, "the corners keep their order");
 
   const circle = board().drawings!.shapes[3] as Extract<Shape, { kind: "circle" }>;
-  assert.deepEqual(shapeWith(circle, "Center X", 6_000_000), { ...circle, center: [6_000_000, 5_000_000], end: [9_000_000, 9_000_000] }, "the point on the circle goes with the centre");
-  assert.deepEqual(shapeWith(circle, "Radius", 2_000_000), { ...circle, end: [7_000_000, 5_000_000] }, "SetRadius puts the point to the right of the centre");
+  assert.deepEqual(shapeWith(circle, "Center X", 6_000), { ...circle, center: [6_000, 5_000], end: [9_000, 9_000] }, "the point on the circle goes with the centre");
+  assert.deepEqual(shapeWith(circle, "Radius", 2_000), { ...circle, end: [7_000, 5_000] }, "SetRadius puts the point to the right of the centre");
 });
 
 test("shape rows send a replace_shape for the geometry and an edit_shape for line, layer and fill", () => {
   const b = board();
-  const [seg] = edit(b, ["shp_seg"], "End X", 12_000_000);
+  const [seg] = edit(b, ["shp_seg"], "End X", 12_000);
   assert.equal(seg!.op, "replace_shape");
-  assert.deepEqual(seg, { op: "replace_shape", id: "shp_seg", shape: { kind: "segment", layer: "F.SilkS", stroke_width: 150_000, filled: false, start: { x: 0, y: 80_000_000 }, end: { x: 12_000_000, y: 80_000_000 } } });
-  assert.deepEqual(edit(b, ["shp_seg"], "Line Width", 300_000), [{ op: "edit_shape", id: "shp_seg", layer: "F.SilkS", stroke_width: 300_000, filled: false }]);
-  assert.deepEqual(edit(b, ["shp_seg"], "Layer", "F.Fab"), [{ op: "edit_shape", id: "shp_seg", layer: "F.Fab", stroke_width: 150_000, filled: false }]);
+  assert.deepEqual(seg, { op: "replace_shape", id: "shp_seg", shape: { kind: "segment", layer: "F.SilkS", stroke_width: 150, filled: false, start: { x: 0, y: 80_000 }, end: { x: 12_000, y: 80_000 } } });
+  assert.deepEqual(edit(b, ["shp_seg"], "Line Width", 300), [{ op: "edit_shape", id: "shp_seg", layer: "F.SilkS", stroke_width: 300, filled: false }]);
+  assert.deepEqual(edit(b, ["shp_seg"], "Layer", "F.Fab"), [{ op: "edit_shape", id: "shp_seg", layer: "F.Fab", stroke_width: 150, filled: false }]);
   assert.deepEqual(edit(b, ["shp_rect"], "Fill", 1), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_rect"], fill: "solid" }]);
-  assert.deepEqual(edit(b, ["shp_poly"], "Position X", 1_000_000), [{ op: "move_items", ids: ["shp_poly"], dx: 1_000_000, dy: 0 }]);
+  assert.deepEqual(edit(b, ["shp_poly"], "Position X", 1_000), [{ op: "move_items", ids: ["shp_poly"], dx: 1_000, dy: 0 }]);
   assert.equal(edit(b, ["shp_rect"], "Width", 10_000).length, 0, "the width it already has");
   assert.equal(pcbEdit(b, ["shp_circle"], "Radius", 0, "mm").ok, false);
 });
@@ -514,14 +514,14 @@ test("the Fill row offers the five fills of UI_FILL_MODE and sends one set_shape
   const b = board();
   const choices = rowOf(b, ["shp_rect"], "Fill")!.choices!.map((c) => c.label);
   assert.deepEqual(choices, ["None", "Solid", "Hatch", "Reverse Hatch", "Cross-hatch"]);
-  assert.deepEqual(edit(b, ["shp_rect"], "Fill", 2000), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_rect"], fill: "hatch" }]);
-  assert.deepEqual(edit(b, ["shp_circle"], "Fill", 3000), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_circle"], fill: "reverse_hatch" }]);
-  assert.deepEqual(edit(b, ["shp_poly"], "Fill", 4000), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_poly"], fill: "cross_hatch" }]);
+  assert.deepEqual(edit(b, ["shp_rect"], "Fill", 2), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_rect"], fill: "hatch" }]);
+  assert.deepEqual(edit(b, ["shp_circle"], "Fill", 3), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_circle"], fill: "reverse_hatch" }]);
+  assert.deepEqual(edit(b, ["shp_poly"], "Fill", 4), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_poly"], fill: "cross_hatch" }]);
   assert.equal(edit(b, ["shp_rect"], "Fill", 0).length, 0, "not filled already");
   // A hatched shape says so: the row shows its hatch, and None takes it away.
   const hatched = board();
-  Object.assign(hatched.drawings!.shapes[1]!, { fill: "cross_hatch", hatch_lines: [[0, 90_000, 1_000_000, 91_000_000]], hatch_width: 100_000 });
-  assert.equal(rowOf(hatched, ["shp_rect"], "Fill")!.value, 4000);
+  Object.assign(hatched.drawings!.shapes[1]!, { fill: "cross_hatch", hatch_lines: [[0, 90_000, 1_000, 91_000]], hatch_width: 100 });
+  assert.equal(rowOf(hatched, ["shp_rect"], "Fill")!.value, 4);
   assert.equal(edit(hatched, ["shp_rect"], "Fill", 4).length, 0);
   assert.deepEqual(edit(hatched, ["shp_rect"], "Fill", 0), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_rect"], fill: "none" }]);
   // A line has no fill row.
@@ -536,10 +536,10 @@ test("the line ending rows of an open shape: Start Shape in ENUM_MAP order, the 
   assert.deepEqual(edit(b, ["shp_seg"], "Start Shape", 1), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_seg"], start_ending: { style: "arrow", length_nm: 0, width_nm: 0, stroke_width_nm: 0 } }]);
   assert.equal(edit(b, ["shp_seg"], "End Shape", 0).length, 0, "none already");
   const arrowed = board();
-  Object.assign(arrowed.drawings!.shapes[0]!, { end_ending: { style: "arrow_open", length: 3_000_000, width: 3_000_000, stroke_width: 600_000 } });
-  assert.equal(rowOf(arrowed, ["shp_seg"], "End Shape")!.value, 4000);
-  assert.equal(rowOf(arrowed, ["shp_seg"], "End Stroke Width")!.value, 600_000);
-  assert.deepEqual(edit(arrowed, ["shp_seg"], "End Length", 2_000_000), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_seg"], end_ending: { style: "arrow_open", length_nm: 2_000_000, width_nm: 3_000_000, stroke_width_nm: 600_000 } }]);
+  Object.assign(arrowed.drawings!.shapes[0]!, { end_ending: { style: "arrow_open", length: 3_000, width: 3_000, stroke_width: 600 } });
+  assert.equal(rowOf(arrowed, ["shp_seg"], "End Shape")!.value, 4);
+  assert.equal(rowOf(arrowed, ["shp_seg"], "End Stroke Width")!.value, 600);
+  assert.deepEqual(edit(arrowed, ["shp_seg"], "End Length", 2_000), [{ op: "pcb_item", verb: "set_shape_style", ids: ["shp_seg"], end_ending: { style: "arrow_open", length_nm: 2_000, width_nm: 3_000, stroke_width_nm: 600 } }]);
   assert.equal(edit(arrowed, ["shp_seg"], "End Width", 3_000).length, 0);
   // A closed shape has none of the rows.
   assert.equal(rowOf(b, ["shp_rect"], "Start Shape"), undefined);
@@ -553,17 +553,17 @@ test("a dimension: an edit_dimension that keeps everything else, the label's pen
   const d = (cmd as unknown as { dimension: Record<string, unknown> }).dimension;
   assert.equal(d.prefix, "L=");
   assert.equal(d.text_thickness_nm, 180, "the pen survives an edit that does not mention it");
-  assert.deepEqual(d.kind, { kind: "aligned", height: 2_000_000 });
-  assert.deepEqual(d.start, { x: 70_000_000, y: 50_000_000 });
-  const [h] = edit(b, ["dim_a"], "Crossbar Height", 3_000_000);
-  assert.deepEqual((h as unknown as { dimension: { kind: unknown } }).dimension.kind, { kind: "aligned", height: 3_000_000 });
-  const [o] = edit(b, ["dim_ortho"], "Crossbar Height", 1_000_000);
-  assert.deepEqual((o as unknown as { dimension: { kind: unknown } }).dimension.kind, { kind: "orthogonal", height: 1_000_000, horizontal: true });
-  const [r] = edit(b, ["dim_rad"], "Leader Length", 4_000_000);
-  assert.deepEqual((r as unknown as { dimension: { kind: unknown } }).dimension.kind, { kind: "radial", leader_length: 4_000_000 });
-  const [p] = edit(b, ["dim_a"], "Position X", 71_000_000);
-  assert.deepEqual((p as unknown as { dimension: { start: unknown; end: unknown } }).dimension.start, { x: 71_000_000, y: 50_000_000 }, "the first feature point alone, as SetPosition does");
-  assert.deepEqual((p as unknown as { dimension: { start: unknown; end: unknown } }).dimension.end, { x: 80_000_000, y: 50_000_000 });
+  assert.deepEqual(d.kind, { kind: "aligned", height: 2000 });
+  assert.deepEqual(d.start, { x: 70_000, y: 50_000 });
+  const [h] = edit(b, ["dim_a"], "Crossbar Height", 3000);
+  assert.deepEqual((h as unknown as { dimension: { kind: unknown } }).dimension.kind, { kind: "aligned", height: 3000 });
+  const [o] = edit(b, ["dim_ortho"], "Crossbar Height", 1000);
+  assert.deepEqual((o as unknown as { dimension: { kind: unknown } }).dimension.kind, { kind: "orthogonal", height: 1000, horizontal: true });
+  const [r] = edit(b, ["dim_rad"], "Leader Length", 4000);
+  assert.deepEqual((r as unknown as { dimension: { kind: unknown } }).dimension.kind, { kind: "radial", leader_length: 4000 });
+  const [p] = edit(b, ["dim_a"], "Position X", 71_000);
+  assert.deepEqual((p as unknown as { dimension: { start: unknown; end: unknown } }).dimension.start, { x: 71_000, y: 50_000 }, "the first feature point alone, as SetPosition does");
+  assert.deepEqual((p as unknown as { dimension: { start: unknown; end: unknown } }).dimension.end, { x: 80_000, y: 50_000 });
   const [t] = edit(b, ["dim_lead"], "Text", "NEW");
   assert.equal((t as unknown as { dimension: { override_text: unknown } }).dimension.override_text, "NEW");
   const [overridden] = edit(b, ["dim_a"], "Override Text", "X");
@@ -571,10 +571,10 @@ test("a dimension: an edit_dimension that keeps everything else, the label's pen
   const [cleared] = edit(b, ["dim_lead"], "Text", "");
   assert.equal((cleared as unknown as { dimension: { override_text: unknown } }).dimension.override_text, null, "empty text is no override");
   assert.equal(edit(b, ["dim_a"], "Orientation", 30).length, 0, "the text follows the dimension: its angle is read-only");
-  b.drawings!.dimensions[0] = dim({ keep_text_aligned: false, text_angle: 10_000_000 });
+  b.drawings!.dimensions[0] = dim({ keep_text_aligned: false, text_angle: 10_000 });
   assert.equal(rowOf(b, ["dim_a"], "Orientation")!.writable, true);
-  assert.equal(rowOf(b, ["dim_a"], "Orientation")!.value, 10_000);
-  assert.equal((edit(b, ["dim_a"], "Orientation", 30_000)[0] as { dimension: { text_angle: number } }).dimension.text_angle, 30_000_000);
+  assert.equal(rowOf(b, ["dim_a"], "Orientation")!.value, 10);
+  assert.equal((edit(b, ["dim_a"], "Orientation", 30)[0] as { dimension: { text_angle: number } }).dimension.text_angle, 30_000);
 });
 
 test("a group is renamed with its members as they are", () => {
@@ -584,9 +584,9 @@ test("a group is renamed with its members as they are", () => {
 
 test("one edit of several items is one command each, in selection order, and the ones that already have the value send nothing", () => {
   const b = board();
-  assert.deepEqual(edit(b, ["trk_a", "trk_b", "trk_arc"], "Width", 300_000), [
-    { op: "set_track_width", id: "trk_a", width: 300_000 },
-    { op: "set_track_width", id: "trk_arc", width: 300_000 },
+  assert.deepEqual(edit(b, ["trk_a", "trk_b", "trk_arc"], "Width", 300), [
+    { op: "set_track_width", id: "trk_a", width: 300 },
+    { op: "set_track_width", id: "trk_arc", width: 300 },
   ]);
   assert.deepEqual(edit(b, ["trk_a", "via_a", "zone_a"], "Net", "VCC"), [
     { op: "set_item_net", ids: ["trk_a"], net: "VCC" },
@@ -626,17 +626,17 @@ const edited = (): BoardState => {
   const b = board();
   const u1 = b.parts.find((p) => p.ref === "U1")!;
   const field = (name: string, text: string, over: Record<string, unknown> = {}) => ({
-    id: `U1:${name}`, name, text, x: 30_000_000, y: 16_900_000, angle: 0, w: 1_000_000, h: 1_000_000, thickness: 150_000, layer: "F.SilkS", visible: true, halign: 0, valign: 0, mirror: false, bold: false, italic: false, upright: true, knockout: false,
-    lx: 0, ly: -3_100_000, langle: 270_000, custom: false, ...over,
+    id: `U1:${name}`, name, text, x: 30_000, y: 16_900, angle: 0, w: 1000, h: 1000, thickness: 150, layer: "F.SilkS", visible: true, halign: 0, valign: 0, mirror: false, bold: false, italic: false, upright: true, knockout: false,
+    lx: 0, ly: -3100, langle: 270_000, custom: false, ...over,
   });
   Object.assign(u1, {
-    fields: [field("Reference", "U1"), field("Value", "MCU", { layer: "F.Fab", y: 21_000_000, ly: 1_000_000 }), field("Vendor", "ACME", { layer: "F.Fab", visible: false, custom: true })],
+    fields: [field("Reference", "U1"), field("Value", "MCU", { layer: "F.Fab", y: 21_000, ly: 1000 }), field("Vendor", "ACME", { layer: "F.Fab", visible: false, custom: true })],
     attrs: { kind: "smd", board_only: false, exclude_from_pos_files: false, exclude_from_bom: false, dnp: false, allow_missing_courtyard: false, custom: false },
   });
   const [p1, p2, p3] = u1.pads!;
   Object.assign(p1!, { id: "U1.1", shape: "rect", kind: "smd", size: [600_000, 600_000], rot: 0, ratio: null, drill: null, slot: null, edit: null });
   Object.assign(p2!, { id: "U1.2", shape: "circle", kind: "through_hole", size: [800_000, 800_000], rot: 0, ratio: null, drill: 400_000, slot: null, edit: null });
-  Object.assign(p3!, { id: "U1.3", shape: "round_rect", kind: "smd", size: [800_000, 400_000], rot: 0, ratio: 0.25, drill: null, slot: null, edit: { number: "3", nth: 1, size: [800_000, 400_000] } });
+  Object.assign(p3!, { id: "U1.3", shape: "round_rect", kind: "smd", size: [800_000, 400_000], rot: 0, ratio: 0.25, drill: null, slot: null, edit: { number: "3", nth: 1000, size: [800_000, 400_000] } });
   return b;
 };
 
@@ -659,16 +659,16 @@ test("a field: position, layer, orientation, then its text properties; a user fi
   assert.equal(rowOf(b, ["U1:Value"], "Text")!.writable, false);
   assert.equal(rowOf(b, ["U1:Vendor"], "Text")!.writable, true);
   assert.equal(rowOf(b, ["U1:Vendor"], "Visible")!.value, false);
-  assert.equal(rowOf(b, ["U1:Reference"], "Width")!.value, 1_000_000);
+  assert.equal(rowOf(b, ["U1:Reference"], "Width")!.value, 1000);
 });
 
 test("editing a field sends edit_board_field with its layout in the footprint's frame, and moves go through move_items", () => {
   const b = edited();
   const layout = {
-    at: { x: 0, y: -3_100_000 }, angle: 270_000, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.SilkS", visible: true, halign: 0, valign: 0, mirror: false, bold: false, italic: false, keep_upright: true, knockout: false,
+    at: { x: 0, y: -3100 }, angle: 270_000, size: [1000, 1000], thickness: 150, layer: "F.SilkS", visible: true, halign: 0, valign: 0, mirror: false, bold: false, italic: false, keep_upright: true, knockout: false,
   };
-  assert.deepEqual(edit(b, ["U1:Reference"], "Height", 1_200_000), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, size: [1_000_000, 1_200_000] } }]);
-  assert.deepEqual(edit(b, ["U1:Reference"], "Thickness", 200_000), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, thickness: 200_000 } }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Height", 1200), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, size: [1000, 1200] } }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Thickness", 200), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, thickness: 200 } }]);
   assert.deepEqual(edit(b, ["U1:Reference"], "Layer", "F.Fab"), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, layer: "F.Fab" } }]);
   assert.deepEqual(edit(b, ["U1:Reference"], "Horizontal Justification", "left"), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, halign: -1 } }]);
   assert.deepEqual(edit(b, ["U1:Reference"], "Vertical Justification", "bottom"), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, valign: 1 } }]);
@@ -676,8 +676,8 @@ test("editing a field sends edit_board_field with its layout in the footprint's 
   assert.deepEqual(edit(b, ["U1:Reference"], "Bold", true), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, bold: true } }]);
   assert.deepEqual(edit(b, ["U1:Vendor"], "Text", "Other"), [{ op: "edit_board_field", part: "U1", name: "Vendor", layout: { ...layout, layer: "F.Fab", visible: false }, text: "Other" }]);
   assert.deepEqual(edit(b, ["U1:Reference"], "Text", "R9"), [], "a reference is not edited here");
-  assert.deepEqual(edit(b, ["U1:Reference"], "Position X", 31_000_000), [{ op: "move_items", ids: ["U1:Reference"], dx: 1_000_000, dy: 0 }]);
-  assert.deepEqual(edit(b, ["U1:Reference"], "Position Y", 16_900_000), [], "already there");
+  assert.deepEqual(edit(b, ["U1:Reference"], "Position X", 31_000), [{ op: "move_items", ids: ["U1:Reference"], dx: 1_000, dy: 0 }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Position Y", 16_900), [], "already there");
 });
 
 test("a field's orientation is its absolute angle: the footprint's own turn is taken back out", () => {
@@ -719,7 +719,7 @@ test("a pad: type, shape, size, corner radius and hole are edit_board_pad comman
   assert.deepEqual(edit(b, ["U1.1"], "Pad Shape", "oval"), pad({ shape: "oval" }));
   assert.deepEqual(edit(b, ["U1.1"], "Size X", 700_000), pad({ size: [700_000, 600_000] }));
   assert.deepEqual(edit(b, ["U1.1"], "Size Y", 650_000), pad({ size: [600_000, 650_000] }));
-  assert.deepEqual(edit(b, ["U1.2"], "Size X", 900), pad({ size: [900, 900] }, "2"), "a circle stays round");
+  assert.deepEqual(edit(b, ["U1.2"], "Size X", 900_000), pad({ size: [900_000, 900_000] }, "2"), "a circle stays round");
   // The edit that is already stored comes back with the new change laid over it.
   assert.deepEqual(edit(b, ["U1.3"], "Corner Radius Ratio", 0.4), pad({ size: [800_000, 400_000], roundrect_ratio: 0.4 }, "3"));
   assert.deepEqual(edit(b, ["U1.3"], "Corner Radius Size", 100_000), [], "100 um on a 400 um side is the 25% it already has");
@@ -727,11 +727,11 @@ test("a pad: type, shape, size, corner radius and hole are edit_board_pad comman
   assert.equal(rowOf(b, ["U1.3"], "Corner Radius Size")!.value, 100_000);
   assert.equal(rowOf(b, ["U1.1"], "Corner Radius Ratio"), undefined, "only a rounded rectangle has a radius");
   // The hole: size, and round or oblong.
-  assert.deepEqual(edit(b, ["U1.2"], "Hole Size X", 450), pad({ drill: 450 }, "2"));
+  assert.deepEqual(edit(b, ["U1.2"], "Hole Size X", 450_000), pad({ drill: 450_000 }, "2"));
   assert.deepEqual(edit(b, ["U1.2"], "Hole Shape", "oblong"), pad({ drill_slot: [400_000, 600_000] }, "2"));
   assert.deepEqual(edit(b, ["U1.1"], "Hole Size X", 300_000), [], "an SMD pad has no hole to edit");
   // Making an SMD pad through-hole gives it a hole to start from: half its smaller side.
   assert.deepEqual(edit(b, ["U1.1"], "Pad Type", "through_hole"), pad({ kind: "through_hole", drill: 300_000 }));
   // Several pads: one command each.
-  assert.equal(edit(b, ["U1.1", "U1.3"], "Size X", 700).length, 2);
+  assert.equal(edit(b, ["U1.1", "U1.3"], "Size X", 700_000).length, 2);
 });

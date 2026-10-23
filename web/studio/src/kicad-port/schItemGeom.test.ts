@@ -50,7 +50,7 @@ test("a bezier's outline runs from its start to its end", () => {
   const { pts, closed } = graphicOutline(z);
   assert.equal(closed, false);
   assert.deepEqual(pts[0], [0, 0]);
-  assert.deepEqual(pts[pts.length - 1], [10_000, 0]);
+  assert.deepEqual(pts[pts.length - 1], [10_000_000, 0]);
 });
 
 test("point in polygon, even-odd", () => {
@@ -84,13 +84,13 @@ test("a directive label is hit on its flag", () => {
 
 test("an image on the sheet is its box: pixels at their definition times the scale, centred, hit anywhere inside", () => {
   // 60 x 40 px at 254 ppi are 6 x 4 mm
-  const g = { id: "img_a", shape: { type: "image" as const, at: { x: 10_000, y: 20_000 }, scale_ppm: 1_000_000, px: [60, 40] as [number, number], ppi: 254, hash: "h" } };
+  const g = { id: "img_a", shape: { type: "image" as const, at: { x: 10_000_000, y: 20_000_000 }, scale_ppm: 1_000_000, px: [60, 40] as [number, number], ppi: 254, hash: "h" } };
   assert.deepEqual(graphicBounds(g), { minX: 7_000_000, minY: 18_000_000, maxX: 13_000_000, maxY: 22_000_000 });
   assert.equal(graphicHit(g, [10_000_000, 20_000_000], 0), true, "the middle of an image is a hit, whatever is drawn there");
   assert.equal(graphicHit(g, [13_000_000, 22_000_000], 0), true, "the corner");
   assert.equal(graphicHit(g, [13_200_000, 20_000_000], 100_000), false);
   assert.equal(graphicHit(g, [13_050_000, 20_000_000], 100_000), true, "within the accuracy of the box");
   assert.deepEqual(graphicOutline(g).pts, [[7_000_000, 18_000_000], [13_000_000, 18_000_000], [13_000_000, 22_000_000], [7_000_000, 22_000_000]]);
-  const big = { ...g, shape: { ...g.shape, scale_ppm: 2_500_000_000 } };
+  const big = { ...g, shape: { ...g.shape, scale_ppm: 2_500_000 } };
   assert.deepEqual(graphicBounds(big), { minX: 2_500_000, minY: 15_000_000, maxX: 17_500_000, maxY: 25_000_000 });
 });

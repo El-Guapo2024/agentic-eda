@@ -6,16 +6,16 @@ const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-6, `${a} !
 const pin = { electrical_type: "passive" as const, name_size_mm: 1.27 };
 
 test("the text offset is KiROUND( 24 * 0.15 ) = 4 mil", () => {
-  near(pinTextOffsetNm(), 101.6);
+  near(pinTextOffsetNm(), 101_600);
 });
 
 test("the electrical type text sits beyond the connection point of a pin whose body points right", () => {
   // body points right => the way it sticks out (body -> connection point) is -x
   const l = electricalTypeLayout(pin, [0, 0], [-1, 0]);
   assert.equal(l.text, "Passive");
-  near(l.sizeNm, 952.5); // 1.27 mm * 3/4
-  near(l.thicknessNm, 952.5 / 8);
-  near(l.at[0], -(101.6 + 952.5 / 16 + TARGET_PIN_RADIUS_NM + TARGET_PIN_RADIUS_NM / 2));
+  near(l.sizeNm, 952_500); // 1.27 mm * 3/4
+  near(l.thicknessNm, 952_500 / 8);
+  near(l.at[0], -(101_600 + 952_500 / 16 + TARGET_PIN_RADIUS_NM + TARGET_PIN_RADIUS_NM / 2));
   assert.equal(l.at[1], 0);
   assert.equal(l.vertical, false);
   assert.equal(l.justify, "right");

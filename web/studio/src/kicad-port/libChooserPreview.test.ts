@@ -19,7 +19,7 @@ test("a symbol's box is its graphics and its pins from tip to root, Y flipped to
 
 test("only the unit and body style shown are framed; a shared item (0) is in every one", () => {
   const rect = (unit: number, style: number, x: number): LibrarySymbolGraphic => ({ kind: "rectangle", unit, body_style: style, start: { x: x, y: 1 }, end: { x: x + 1, y: -1 }, stroke_mm: 0.1, fill: "none" });
-  const graphics = [rect(1, 1, 0), rect(2000, 1, 10_000), rect(0, 1, -5000), rect(1, 2000, 20_000)];
+  const graphics = [rect(1, 1, 0), rect(2, 1, 10), rect(0, 1, -5), rect(1, 2, 20)];
   assert.deepEqual(symbolPreviewBounds({ graphics, pins: [] }, 1, 1), { minX: -5_000_000, minY: -1_000_000, maxX: 1_000_000, maxY: 1_000_000 });
   assert.deepEqual(symbolPreviewBounds({ graphics, pins: [] }, 2, 1), { minX: -5_000_000, minY: -1_000_000, maxX: 11_000_000, maxY: 1_000_000 });
   assert.deepEqual(symbolPreviewBounds({ graphics, pins: [] }, 1, 2), { minX: 20_000_000, minY: -1_000_000, maxX: 21_000_000, maxY: 1_000_000 }, "the alternate style's own graphics");

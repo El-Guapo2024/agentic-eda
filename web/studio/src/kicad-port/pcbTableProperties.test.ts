@@ -106,7 +106,7 @@ test("a cell: text, font, thickness, bold, justification, margins and the table'
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Text")!.value, "r1c1");
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Font")!.value, "KiCad Font");
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Auto Thickness")!.value, true);
-  assert.equal(rowOf(b, ["tbl_a:1:1"], "Thickness")!.value, 159_000, "the pen the text is drawn with while the thickness is automatic");
+  assert.equal(rowOf(b, ["tbl_a:1:1"], "Thickness")!.value, 158_750, "the pen the text is drawn with while the thickness is automatic");
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Horizontal Justification")!.value, "left");
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Margin Left")!.value, 1_000_000);
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Column Width")!.value, 10_000_000);
@@ -116,7 +116,7 @@ test("a cell: text, font, thickness, bold, justification, margins and the table'
 
 test("a cell's rows send edit_cells for that cell, and a selection of cells sends one for each", () => {
   const b = board(fixtureTable(2, 3));
-  const one = (edit_: Record<string, unknown>) => [{ op: "table", verb: "edit_cells", id: "tbl_a", cells: [[1, 2000]], edit: edit_ }];
+  const one = (edit_: Record<string, unknown>) => [{ op: "table", verb: "edit_cells", id: "tbl_a", cells: [[1, 2]], edit: edit_ }];
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Text", "hello"), one({ text: "hello" }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Bold", true), one({ bold: true }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Italic", true), one({ italic: true }));
@@ -125,7 +125,7 @@ test("a cell's rows send edit_cells for that cell, and a selection of cells send
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Width", 1_500_000), one({ width_nm: 1_500_000 }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Height", 1_600_000), one({ height_nm: 1_600_000 }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Thickness", 200_000), one({ thickness_nm: 200_000 }));
-  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Auto Thickness", false), one({ thickness_nm: 159_000 }), "off keeps the pen it was drawn with");
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Auto Thickness", false), one({ thickness_nm: 158_750 }), "off keeps the pen it was drawn with");
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Horizontal Justification", "right"), one({ h_align: "right" }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Vertical Justification", "top"), one({ v_align: "top" }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Margin Top", 700_000), one({ margins: [null, 700_000, null, null] }));

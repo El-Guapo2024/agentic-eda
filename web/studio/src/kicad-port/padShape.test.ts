@@ -36,8 +36,8 @@ import {
   type PadShapeSource,
 } from "./padShape";
 
-const pad = (over: Partial<PadShapeSource> = {}): PadShapeSource => ({ shape: "rect", size: [1_000_000, 600_000], w: 1_000_000, h: 600_000, ...over });
-const fmt = (um: number) => `${(um / 1000).toFixed(2)} mm`;
+const pad = (over: Partial<PadShapeSource> = {}): PadShapeSource => ({ shape: "rect", size: [1000, 600], w: 1000, h: 600, ...over });
+const fmt = (nm: number) => `${(nm / 1e6).toFixed(2)} mm`;
 
 test("the selector has KiCad's nine choices in its order and its words", () => {
   assert.deepEqual(
@@ -49,8 +49,8 @@ test("the selector has KiCad's nine choices in its order and its words", () => {
 
 test("a pad opens on the choice that shows its shape: a chamfered rectangle with a corner ratio is the mixed one, a custom pad has its base", () => {
   assert.equal(choiceOf(pad()), "rect");
-  assert.equal(choiceOf(pad({ shape: undefined, round: true, w: 800_000, h: 800_000 })), "circle", "an older backend says round and square");
-  assert.equal(choiceOf(pad({ shape: undefined, round: true, w: 800_000, h: 400_000 })), "oval");
+  assert.equal(choiceOf(pad({ shape: undefined, round: true, w: 800, h: 800 })), "circle", "an older backend says round and square");
+  assert.equal(choiceOf(pad({ shape: undefined, round: true, w: 800, h: 400 })), "oval");
   assert.equal(choiceOf(pad({ shape: "chamfered_rect", ratio: 0 })), "chamfered_rect");
   assert.equal(choiceOf(pad({ shape: "chamfered_rect", ratio: 0.25 })), "chamfered_round_rect");
   const custom = (anchor: PadCustom["anchor"]): PadCustom => ({ anchor, zone: "outline", primitives: [] });
@@ -60,10 +60,10 @@ test("a pad opens on the choice that shows its shape: a chamfered rectangle with
 });
 
 test("the form reads a trapezoid's axis from the delta that is set and a custom pad's knockout and shapes", () => {
-  assert.deepEqual([shapeFormOf(pad({ shape: "trapezoid", delta: [400_000, 0] })).trapAxis, shapeFormOf(pad({ shape: "trapezoid", delta: [400_000, 0] })).trapDelta], ["horizontal", 400_000]);
-  assert.deepEqual([shapeFormOf(pad({ shape: "trapezoid", delta: [0, 300_000] })).trapAxis, shapeFormOf(pad({ shape: "trapezoid", delta: [0, 300_000] })).trapDelta], ["vertical", 300_000]);
+  assert.deepEqual([shapeFormOf(pad({ shape: "trapezoid", delta: [400, 0] })).trapAxis, shapeFormOf(pad({ shape: "trapezoid", delta: [400, 0] })).trapDelta], ["horizontal", 400]);
+  assert.deepEqual([shapeFormOf(pad({ shape: "trapezoid", delta: [0, 300] })).trapAxis, shapeFormOf(pad({ shape: "trapezoid", delta: [0, 300] })).trapDelta], ["vertical", 300]);
   assert.equal(shapeFormOf(pad({ shape: "trapezoid", delta: null })).trapAxis, "horizontal", "no delta: the first axis, a delta of nothing");
-  const form = shapeFormOf(pad({ shape: "custom", custom: { anchor: "rect", zone: "convex_hull", primitives: [newPrimitive("segment", 1_000_000, 600_000)] } }));
+  const form = shapeFormOf(pad({ shape: "custom", custom: { anchor: "rect", zone: "convex_hull", primitives: [newPrimitive("segment", 1000, 600)] } }));
   assert.equal(form.knockout, "convex_hull");
   assert.equal(form.primitives.length, 1);
   assert.deepEqual(shapeFormOf(pad({ shape: "chamfered_rect", chamfer_ratio: 0.3, chamfer_corners: { ...NO_CORNERS, top_left: true } })).corners, { ...NO_CORNERS, top_left: true });
@@ -88,18 +88,18 @@ test("choosing a chamfered rectangle gives a 20% chamfer and one corner, and the
 test("the spoke angle follows a circle: 45 degrees on the way in, back to 90 on the way out, and anything else is left alone", () => {
   const rect = shapeFormOf(pad());
   assert.equal(chooseShape(rect, "circle", 90).spokeAngleDeg, 45);
-  assert.equal(chooseShape(rect, "circle", 30_000).spokeAngleDeg, 30_000, "an angle the user set stays");
-  const circle = shapeFormOf(pad({ shape: "circle", size: [800_000, 800_000], w: 800_000, h: 800_000 }));
+  assert.equal(chooseShape(rect, "circle", 30).spokeAngleDeg, 30, "an angle the user set stays");
+  const circle = shapeFormOf(pad({ shape: "circle", size: [800, 800], w: 800, h: 800 }));
   assert.equal(chooseShape(circle, "rect", 45).spokeAngleDeg, 90);
-  assert.equal(chooseShape(circle, "rect", 20_000).spokeAngleDeg, 20_000);
+  assert.equal(chooseShape(circle, "rect", 20).spokeAngleDeg, 20);
   assert.equal(chooseShape(rect, "oval", 90).spokeAngleDeg, 90);
 });
 
 test("a circle and a circular base have one size and the others two", () => {
   assert.deepEqual(["circle", "custom_circle"].map((c) => hasSizeY(c as never)), [false, false]);
   assert.deepEqual(["oval", "rect", "trapezoid", "round_rect", "chamfered_rect", "custom_rect"].map((c) => hasSizeY(c as never)), [true, true, true, true, true, true]);
-  assert.deepEqual(sizeOf({ ...shapeFormOf(pad()), choice: "circle" }), [1_000_000, 1_000_000]);
-  assert.deepEqual(sizeOf(shapeFormOf(pad())), [1_000_000, 600_000]);
+  assert.deepEqual(sizeOf({ ...shapeFormOf(pad()), choice: "circle" }), [1000, 1000]);
+  assert.deepEqual(sizeOf(shapeFormOf(pad())), [1000, 600]);
 });
 
 test("the chamfer's limit is what the rounded corners leave, and half the side when two neighbouring corners are cut (getMaxChamferRatio)", () => {
@@ -132,32 +132,32 @@ test("a chamfer over half the side leaves the neighbours of a cut corner uncut (
 });
 
 test("a trapezoid's delta is on one axis and never more than the pad is wide there (transferDataToPad)", () => {
-  const trap = { ...shapeFormOf(pad({ shape: "trapezoid", size: [2_000_000, 1_000_000], w: 2_000_000, h: 1_000_000 })), choice: "trapezoid" as const };
-  assert.deepEqual(trapezoidDelta({ ...trap, trapAxis: "horizontal", trapDelta: 400_000 }), { delta: [400_000, 0], clamped: false });
-  assert.deepEqual(trapezoidDelta({ ...trap, trapAxis: "vertical", trapDelta: -500_000 }), { delta: [0, -500_000], clamped: false });
+  const trap = { ...shapeFormOf(pad({ shape: "trapezoid", size: [2000, 1000], w: 2000, h: 1000 })), choice: "trapezoid" as const };
+  assert.deepEqual(trapezoidDelta({ ...trap, trapAxis: "horizontal", trapDelta: 400 }), { delta: [400, 0], clamped: false });
+  assert.deepEqual(trapezoidDelta({ ...trap, trapAxis: "vertical", trapDelta: -500 }), { delta: [0, -500], clamped: false });
   // delta.x past the height (1000) and delta.y past the width (2000): cut to the size less 2 um.
-  assert.deepEqual(trapezoidDelta({ ...trap, trapAxis: "horizontal", trapDelta: 1_200_000 }), { delta: [998_000, 0], clamped: true });
-  assert.deepEqual(trapezoidDelta({ ...trap, trapAxis: "horizontal", trapDelta: -1_200_000 }), { delta: [-998_000, 0], clamped: true });
-  assert.deepEqual(trapezoidDelta({ ...trap, trapAxis: "vertical", trapDelta: 2_500_000 }), { delta: [0, 1_998_000], clamped: true });
-  assert.equal(checkShape({ ...trap, trapAxis: "horizontal", trapDelta: 1_200_000 }), "Error: (trapezoid delta is too large)");
-  assert.equal(checkShape({ ...trap, trapAxis: "horizontal", trapDelta: 400_000 }), null);
+  assert.deepEqual(trapezoidDelta({ ...trap, trapAxis: "horizontal", trapDelta: 1200 }), { delta: [998, 0], clamped: true });
+  assert.deepEqual(trapezoidDelta({ ...trap, trapAxis: "horizontal", trapDelta: -1200 }), { delta: [-998, 0], clamped: true });
+  assert.deepEqual(trapezoidDelta({ ...trap, trapAxis: "vertical", trapDelta: 2500 }), { delta: [0, 1998], clamped: true });
+  assert.equal(checkShape({ ...trap, trapAxis: "horizontal", trapDelta: 1200 }), "Error: (trapezoid delta is too large)");
+  assert.equal(checkShape({ ...trap, trapAxis: "horizontal", trapDelta: 400 }), null);
 });
 
 test("OK sends the keys the shape needs: a rounded rectangle's ratio, a chamfered one's ratio and corners with no rounding, a trapezoid's delta, a custom pad's whole shape", () => {
   const form = shapeFormOf(pad());
-  assert.deepEqual(shapeEdit({ ...form, choice: "rect" }), { shape: "rect", size: [1_000_000, 600_000] });
-  assert.deepEqual(shapeEdit({ ...form, choice: "circle" }), { shape: "circle", size: [1_000_000, 1_000_000] });
-  assert.deepEqual(shapeEdit({ ...form, choice: "round_rect", ratio: 0.3 }), { shape: "round_rect", size: [1_000_000, 600_000], roundrect_ratio: 0.3 });
+  assert.deepEqual(shapeEdit({ ...form, choice: "rect" }), { shape: "rect", size: [1000, 600] });
+  assert.deepEqual(shapeEdit({ ...form, choice: "circle" }), { shape: "circle", size: [1000, 1000] });
+  assert.deepEqual(shapeEdit({ ...form, choice: "round_rect", ratio: 0.3 }), { shape: "round_rect", size: [1000, 600], roundrect_ratio: 0.3 });
   assert.deepEqual(shapeEdit({ ...form, choice: "chamfered_rect", chamferRatio: 0.25, corners: { ...NO_CORNERS, top_left: true, bottom_right: true } }), {
     shape: "chamfered_rect",
-    size: [1_000_000, 600_000],
+    size: [1000, 600],
     roundrect_ratio: 0,
     chamfer_ratio: 0.25,
     chamfer_corners: { ...NO_CORNERS, top_left: true, bottom_right: true },
   });
   assert.equal(shapeEdit({ ...form, choice: "chamfered_round_rect", ratio: 0.2, chamferRatio: 0.25 }).roundrect_ratio, 0.2);
-  assert.deepEqual(shapeEdit({ ...form, choice: "trapezoid", trapAxis: "vertical", trapDelta: 300_000 }).trapezoid_delta, [0, 300_000]);
-  const prim = newPrimitive("segment", 1_000_000, 600_000);
+  assert.deepEqual(shapeEdit({ ...form, choice: "trapezoid", trapAxis: "vertical", trapDelta: 300 }).trapezoid_delta, [0, 300]);
+  const prim = newPrimitive("segment", 1000, 600);
   assert.deepEqual(shapeEdit({ ...form, choice: "custom_rect", knockout: "convex_hull", primitives: [prim] }).custom, { anchor: "rect", zone: "convex_hull", primitives: [prim] });
   assert.equal(shapeEdit({ ...form, choice: "custom_circle" }).custom?.anchor, "circle");
 });
@@ -169,36 +169,36 @@ test("the patch is only what the form changed: nothing for a pad left as it is, 
   assert.deepEqual(shapePatch({ ...shapeFormOf(was), ratio: 0.4 }, was), { roundrect_ratio: 0.4 });
   // A rectangle made a trapezoid: the shape and its delta.
   const rect = pad();
-  const trap = { ...shapeFormOf(rect), choice: "trapezoid" as const, trapDelta: 300_000 };
-  assert.deepEqual(shapePatch(trap, rect), { shape: "trapezoid", trapezoid_delta: [300_000, 0] });
+  const trap = { ...shapeFormOf(rect), choice: "trapezoid" as const, trapDelta: 300 };
+  assert.deepEqual(shapePatch(trap, rect), { shape: "trapezoid", trapezoid_delta: [300, 0] });
   // A rectangle made a chamfered one: the shape, the explicit no-rounding, the ratio and the corners.
   const chamfered = chooseShape(shapeFormOf(rect), "chamfered_rect", 90).form;
   assert.deepEqual(shapePatch(chamfered, rect), { shape: "chamfered_rect", roundrect_ratio: 0, chamfer_ratio: 0.2, chamfer_corners: { ...NO_CORNERS, top_left: true } });
   // A custom pad whose one basic shape is edited sends the custom shape whole.
-  const custom: PadCustom = { anchor: "circle", zone: "outline", primitives: [newPrimitive("segment", 1_000_000, 600_000)] };
+  const custom: PadCustom = { anchor: "circle", zone: "outline", primitives: [newPrimitive("segment", 1000, 600)] };
   const was2 = pad({ shape: "custom", custom });
   const form2 = shapeFormOf(was2);
   assert.deepEqual(shapePatch(form2, was2), {});
-  const edited = { ...form2, primitives: primitivesWith(form2.primitives, { replace: [0, { shape: setPrimitiveField(form2.primitives[0]!.shape, "end.x", 5_000_000) }] }) };
+  const edited = { ...form2, primitives: primitivesWith(form2.primitives, { replace: [0, { shape: setPrimitiveField(form2.primitives[0]!.shape, "end.x", 5000) }] }) };
   assert.equal(shapePatch(edited, was2).custom?.primitives.length, 1);
-  assert.equal((shapePatch(edited, was2).custom?.primitives[0]?.shape as { end: { x: number } }).end.x, 5_000_000);
+  assert.equal((shapePatch(edited, was2).custom?.primitives[0]?.shape as { end: { x: number } }).end.x, 5000);
   assert.deepEqual(Object.keys(shapePatch({ ...form2, knockout: "convex_hull" }, was2)), ["custom"]);
 });
 
 test("a new basic shape is drawn over the pad and is a shape that can be drawn", () => {
   for (const { value } of PRIMITIVE_KINDS) {
-    const prim = newPrimitive(value, 1_000_000, 600_000);
+    const prim = newPrimitive(value, 1000, 600);
     assert.equal(prim.shape.kind, value);
     assert.equal(checkPrimitive(prim), null, value);
     assert.ok(primitiveFields(prim.shape).length >= 1);
   }
-  assert.equal((newPrimitive("circle", 1_000_000, 600_000).shape as { filled: boolean }).filled, true);
-  assert.equal(newPrimitive("segment", 1_000_000, 600_000).shape.filled, false);
+  assert.equal((newPrimitive("circle", 1000, 600).shape as { filled: boolean }).filled, true);
+  assert.equal(newPrimitive("segment", 1000, 600).shape.filled, false);
   assert.deepEqual(PRIMITIVE_KINDS.map((k) => k.label), ["Line", "Arc", "Circle", "Rectangle", "Polygon", "Bezier"]);
 });
 
 test("the numbers a basic shape is edited by are the dialog's: start, midpoint, end, center, radius, control points and the line width", () => {
-  const labels = (kind: CmdShape["kind"]) => primitiveFields(newPrimitive(kind, 1_000_000, 600_000).shape).map((f) => f.label);
+  const labels = (kind: CmdShape["kind"]) => primitiveFields(newPrimitive(kind, 1000, 600).shape).map((f) => f.label);
   assert.deepEqual(labels("segment"), ["Start X", "Start Y", "End X", "End Y", "Line width"]);
   assert.deepEqual(labels("arc"), ["Start X", "Start Y", "Midpoint X", "Midpoint Y", "End X", "End Y", "Line width"]);
   assert.deepEqual(labels("circle"), ["Center X", "Center Y", "Radius", "Line width"]);
@@ -207,33 +207,33 @@ test("the numbers a basic shape is edited by are the dialog's: start, midpoint, 
 });
 
 test("setting a number moves that point only, the radius moves the circle's end along x, the width cannot go below nothing", () => {
-  const seg = newPrimitive("segment", 1_000_000, 600_000).shape;
+  const seg = newPrimitive("segment", 1000, 600).shape;
   const moved = setPrimitiveField(seg, "end.y", 123.6) as { start: { x: number; y: number }; end: { x: number; y: number } };
-  assert.deepEqual(moved.end, { x: (seg as { end: { x: number } }).end.x, y: 124_000 }, "whole micrometres");
+  assert.deepEqual(moved.end, { x: (seg as { end: { x: number } }).end.x, y: 124 }, "whole micrometres");
   assert.deepEqual(moved.start, { x: 0, y: 0 }, "the other point is as it was");
   assert.equal((seg as { end: { y: number } }).end.y, 0, "the shape it came from is not touched");
-  const circle = newPrimitive("circle", 1_000_000, 600_000).shape as Extract<CmdShape, { kind: "circle" }>;
+  const circle = newPrimitive("circle", 1000, 600).shape as Extract<CmdShape, { kind: "circle" }>;
   const bigger = setPrimitiveField(circle, "radius", 900) as Extract<CmdShape, { kind: "circle" }>;
   assert.equal(radiusOf(bigger), 900);
   assert.deepEqual(bigger.center, circle.center);
-  assert.equal(setPrimitiveField(seg, "stroke_width", -50_000).stroke_width, 0);
+  assert.equal(setPrimitiveField(seg, "stroke_width", -50).stroke_width, 0);
   assert.equal(setFilled(seg, true).filled, false, "a line is never filled");
   assert.equal(setFilled(circle, false).filled, false);
   assert.equal(setFilled({ ...circle, filled: false }, true).filled, true);
 });
 
 test("a polygon keeps at least three points and says what is wrong with a shape that cannot be drawn, in the verb's words", () => {
-  const poly = newPrimitive("polygon", 1_000_000, 600_000).shape as Extract<CmdShape, { kind: "polygon" }>;
+  const poly = newPrimitive("polygon", 1000, 600).shape as Extract<CmdShape, { kind: "polygon" }>;
   assert.equal(poly.pts.length, 3);
   assert.equal((polygonWith(poly, { add: { x: 1, y: 2 } }) as typeof poly).pts.length, 4);
   assert.equal((polygonWith(poly, { remove: 0 }) as typeof poly).pts.length, 3, "three is the least");
-  assert.deepEqual((polygonWith(poly, { set: [1, { x: 9000, y: 9000 }] }) as typeof poly).pts[1], { x: 9000, y: 9000 });
+  assert.deepEqual((polygonWith(poly, { set: [1, { x: 9, y: 9 }] }) as typeof poly).pts[1], { x: 9, y: 9 });
   assert.equal(checkPrimitive({ shape: { ...poly, pts: poly.pts.slice(0, 2) } }), "a polygon needs at least three points");
-  assert.equal(checkPrimitive({ shape: { ...(newPrimitive("circle", 1_000_000, 600_000).shape as CmdShape & { kind: "circle" }), end: { x: 0, y: 0 } } }), "a circle needs a radius");
-  assert.equal(checkPrimitive({ shape: { ...(newPrimitive("segment", 1_000_000, 600_000).shape as CmdShape & { kind: "segment" }), end: { x: 0, y: 0 } } }), "a line needs a length");
-  const arc = newPrimitive("arc", 1_000_000, 600_000).shape as Extract<CmdShape, { kind: "arc" }>;
+  assert.equal(checkPrimitive({ shape: { ...(newPrimitive("circle", 1000, 600).shape as CmdShape & { kind: "circle" }), end: { x: 0, y: 0 } } }), "a circle needs a radius");
+  assert.equal(checkPrimitive({ shape: { ...(newPrimitive("segment", 1000, 600).shape as CmdShape & { kind: "segment" }), end: { x: 0, y: 0 } } }), "a line needs a length");
+  const arc = newPrimitive("arc", 1000, 600).shape as Extract<CmdShape, { kind: "arc" }>;
   assert.equal(checkPrimitive({ shape: { ...arc, mid: arc.start } }), "an arc needs three different points");
-  const form = { ...shapeFormOf(pad()), choice: "custom_circle" as const, primitives: [newPrimitive("segment", 1_000_000, 600_000), { shape: { ...poly, pts: [] } }] };
+  const form = { ...shapeFormOf(pad()), choice: "custom_circle" as const, primitives: [newPrimitive("segment", 1000, 600), { shape: { ...poly, pts: [] } }] };
   assert.equal(checkShape(form), "Error: Basic shape 2: a polygon needs at least three points");
 });
 
@@ -266,41 +266,41 @@ test("a chamfer is checked in the dialog's words: too large for the corners cut,
 test("a custom pad reaches as far as its anchor and its copper shapes, each as wide as its stroke, and not as far as a proxy item", () => {
   const prim = (shape: CmdShape, proxy = false) => ({ shape, proxy });
   const seg = (a: [number, number], b: [number, number], w: number): CmdShape => ({ kind: "segment", layer: "", stroke_width: w, filled: false, start: { x: a[0], y: a[1] }, end: { x: b[0], y: b[1] } });
-  const custom: PadCustom = { anchor: "circle", zone: "outline", primitives: [prim(seg([0, 0], [2_000_000, 0], 200_000)), prim(seg([0, 0], [0, -9_000_000], 200_000), true)] };
+  const custom: PadCustom = { anchor: "circle", zone: "outline", primitives: [prim(seg([0, 0], [2000, 0], 200)), prim(seg([0, 0], [0, -9000], 200), true)] };
   // The anchor is a circle of the pad's width, the line goes 2 mm out and is 0.2 mm wide; the proxy line is not copper.
-  assert.deepEqual(customPadExtent({ size: [800_000, 800_000], custom }), [-400_000, -400_000, 2_100_000, 400_000]);
+  assert.deepEqual(customPadExtent({ size: [800, 800], custom }), [-400, -400, 2100, 400]);
   const rect: PadCustom = { ...custom, anchor: "rect" };
-  assert.deepEqual(customPadExtent({ size: [800_000, 500_000], custom: rect }), [-400_000, -250_000, 2_100_000, 250_000], "a rectangular base is the pad's own size");
-  assert.deepEqual(customPadExtent({ size: [800_000, 500_000], custom: null }), [-400_000, -400_000, 400_000, 400_000], "no data: the circle base");
+  assert.deepEqual(customPadExtent({ size: [800, 500], custom: rect }), [-400, -250, 2100, 250], "a rectangular base is the pad's own size");
+  assert.deepEqual(customPadExtent({ size: [800, 500], custom: null }), [-400, -400, 400, 400], "no data: the circle base");
   // A circle reaches its radius and its stroke; an arc reaches the side of its circle that its sweep passes.
-  const ring: CmdShape = { kind: "circle", layer: "", stroke_width: 100_000, filled: false, center: { x: 1_000_000, y: 0 }, end: { x: 1_500_000, y: 0 } };
-  assert.deepEqual(customPadExtent({ size: [100_000, 100_000], custom: { ...custom, primitives: [prim(ring)] } }), [-50_000, -550_000, 1_550_000, 550_000]);
-  const arc: CmdShape = { kind: "arc", layer: "", stroke_width: 0, filled: false, start: { x: 0, y: 1_000_000 }, mid: { x: 1_000_000, y: 0 }, end: { x: 0, y: -1_000_000 } };
+  const ring: CmdShape = { kind: "circle", layer: "", stroke_width: 100, filled: false, center: { x: 1000, y: 0 }, end: { x: 1500, y: 0 } };
+  assert.deepEqual(customPadExtent({ size: [100, 100], custom: { ...custom, primitives: [prim(ring)] } }), [-50, -550, 1550, 550]);
+  const arc: CmdShape = { kind: "arc", layer: "", stroke_width: 0, filled: false, start: { x: 0, y: 1000 }, mid: { x: 1000, y: 0 }, end: { x: 0, y: -1000 } };
   // Through (1000, 0) between (0, 1000) and (0, -1000): the circle is centred on the origin with radius 1000, and the arc takes its right side.
-  assert.deepEqual(customPadExtent({ size: [100_000, 100_000], custom: { ...custom, primitives: [prim(arc)] } }).map(Math.round), [-50_000, -1_000_000, 1_000_000, 1_000_000]);
-  const opposite: CmdShape = { ...arc, mid: { x: -1_000_000, y: 0 } };
-  assert.deepEqual(customPadExtent({ size: [100_000, 100_000], custom: { ...custom, primitives: [prim(opposite)] } }).map(Math.round), [-1_000_000, -1_000_000, 50_000, 1_000_000], "the other way round, the left side");
+  assert.deepEqual(customPadExtent({ size: [100, 100], custom: { ...custom, primitives: [prim(arc)] } }).map(Math.round), [-50, -1000, 1000, 1000]);
+  const opposite: CmdShape = { ...arc, mid: { x: -1000, y: 0 } };
+  assert.deepEqual(customPadExtent({ size: [100, 100], custom: { ...custom, primitives: [prim(opposite)] } }).map(Math.round), [-1000, -1000, 50, 1000], "the other way round, the left side");
 });
 
 test("a custom pad's box on the footprint is moved by its offset and turned with the pad", () => {
   const custom: PadCustom = {
     anchor: "circle",
     zone: "outline",
-    primitives: [{ shape: { kind: "segment", layer: "", stroke_width: 0, filled: false, start: { x: 0, y: 0 }, end: { x: 2_000_000, y: 0 } } }],
+    primitives: [{ shape: { kind: "segment", layer: "", stroke_width: 0, filled: false, start: { x: 0, y: 0 }, end: { x: 2000, y: 0 } } }],
   };
-  const at = { x: 10_000_000, y: 5_000_000 };
-  const base = { size: [400_000, 400_000] as [number, number], custom, at, offset: { x: 0, y: 0 } };
-  assert.deepEqual(customPadBox({ ...base, rot: 0 }).map(Math.round), [9_800_000, 4_800_000, 12_000_000, 5_200_000]);
+  const at = { x: 10_000, y: 5_000 };
+  const base = { size: [400, 400] as [number, number], custom, at, offset: { x: 0, y: 0 } };
+  assert.deepEqual(customPadBox({ ...base, rot: 0 }).map(Math.round), [9_800, 4_800, 12_000, 5_200]);
   // Turned a quarter: the arm points along +y (the canvas is y-down, so a positive angle runs clockwise on the screen).
-  assert.deepEqual(customPadBox({ ...base, rot: 90_000 }).map(Math.round), [9_800_000, 4_800_000, 10_200_000, 7_000_000]);
-  assert.deepEqual(customPadBox({ ...base, rot: 0, offset: { x: 100_000, y: -100_000 } }).map(Math.round), [9_900_000, 4_700_000, 12_100_000, 5_100_000]);
+  assert.deepEqual(customPadBox({ ...base, rot: 90_000 }).map(Math.round), [9_800, 4_800, 10_200, 7_000]);
+  assert.deepEqual(customPadBox({ ...base, rot: 0, offset: { x: 100, y: -100 } }).map(Math.round), [9_900, 4_700, 12_100, 5_100]);
 });
 
 test("a trapezoid's corners are KiCad's: delta y changes the length of the horizontal sides, delta x the vertical ones", () => {
   // 2 mm by 1 mm, delta (0, 0.8 mm): the bottom side (y +0.5) is 2.8 mm long and the top one 1.2 mm.
-  assert.deepEqual(trapezoidCorners(2_000_000, 1_000_000, [0, 800_000]), [[-1_400_000, 500_000], [1_400_000, 500_000], [600_000, -500_000], [-600_000, -500_000]]);
+  assert.deepEqual(trapezoidCorners(2000, 1000, [0, 800]), [[-1400, 500], [1400, 500], [600, -500], [-600, -500]]);
   // delta (0.4 mm, 0): the left side (x -1) is 1.4 mm long, the right one 0.6 mm.
-  assert.deepEqual(trapezoidCorners(2_000_000, 1_000_000, [400_000, 0]), [[-1_000_000, 700_000], [1_000_000, 300_000], [1_000_000, -300_000], [-1_000_000, -700_000]]);
+  assert.deepEqual(trapezoidCorners(2000, 1000, [400, 0]), [[-1000, 700], [1000, 300], [1000, -300], [-1000, -700]]);
   // No delta: the rectangle.
-  assert.deepEqual(trapezoidCorners(2_000_000, 1_000_000, [0, 0]), [[-1_000_000, 500_000], [1_000_000, 500_000], [1_000_000, -500_000], [-1_000_000, -500_000]]);
+  assert.deepEqual(trapezoidCorners(2000, 1000, [0, 0]), [[-1000, 500], [1000, 500], [1000, -500], [-1000, -500]]);
 });

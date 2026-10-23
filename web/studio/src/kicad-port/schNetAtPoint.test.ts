@@ -5,7 +5,7 @@ import { netAtPoint } from "./schNetAtPoint";
 const wires = [{ net: "VCC", pts: [[0, 0], [1_000_000, 0]] as const }];
 test("netAtPoint: wire hit, anchor hit, miss clears", () => {
   assert.equal(netAtPoint(wires, [], 500_000, 100_000, 200_000), "VCC");
-  assert.equal(netAtPoint(wires, [{ net: "GND", at: [0, 900] }], 10_000, 880_000, 200_000), "GND");
+  assert.equal(netAtPoint(wires, [{ net: "GND", at: [0, 900_000] }], 10_000, 880_000, 200_000), "GND");
   assert.equal(netAtPoint(wires, [], 500_000, 5_000_000, 200_000), null);
 });
 

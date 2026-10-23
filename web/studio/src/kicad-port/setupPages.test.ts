@@ -31,15 +31,15 @@ const COPPER2 = ["F.Cu", "B.Cu"];
 
 // The same cases as crates/model/src/setup_pages.rs: the page checks before Apply what the backend refuses after.
 test("formatting starts at ISO 128-2 and refuses a ratio a dashed line cannot have", () => {
-  assert.deepEqual([DEFAULT_FORMATTING.dash_length_ratio, DEFAULT_FORMATTING.gap_length_ratio], [12_000, 3000]);
+  assert.deepEqual([DEFAULT_FORMATTING.dash_length_ratio, DEFAULT_FORMATTING.gap_length_ratio], [12, 3]);
   assert.deepEqual(formattingProblems(DEFAULT_FORMATTING), {});
   assert.ok(sameFormatting(undefined, DEFAULT_FORMATTING) && sameFormatting({ ...DEFAULT_FORMATTING }, undefined));
   assert.deepEqual(Object.keys(formattingProblems({ ...DEFAULT_FORMATTING, dash_length_ratio: 0 })), ["dash_length_ratio"]);
   assert.deepEqual(Object.keys(formattingProblems({ ...DEFAULT_FORMATTING, gap_length_ratio: -1 })), ["gap_length_ratio"]);
   assert.deepEqual(Object.keys(formattingProblems({ ...DEFAULT_FORMATTING, dash_length_ratio: NaN })), ["dash_length_ratio"]);
   assert.deepEqual(Object.keys(formattingProblems({ ...DEFAULT_FORMATTING, gap_length_ratio: 1000.5 })), ["gap_length_ratio"]);
-  assert.deepEqual(formattingProblems({ ...DEFAULT_FORMATTING, dash_length_ratio: 1_000_000 }), {});
-  assert.deepEqual(formattingOf({ dash_length_ratio: 8000 } as never), { ...DEFAULT_FORMATTING, dash_length_ratio: 8000 }, "what a page leaves out is the default");
+  assert.deepEqual(formattingProblems({ ...DEFAULT_FORMATTING, dash_length_ratio: 1000 }), {});
+  assert.deepEqual(formattingOf({ dash_length_ratio: 8 } as never), { ...DEFAULT_FORMATTING, dash_length_ratio: 8 }, "what a page leaves out is the default");
   assert.ok(!sameFormatting({ ...DEFAULT_FORMATTING, apply_to_fp_text: true }, undefined));
 });
 
@@ -51,7 +51,7 @@ test("the hatch offsets are a row for each copper layer and a layer at 0, 0 is n
   rows[1]!.x_nm = 2_000_000_000;
   rows[2]!.y_nm = NaN;
   assert.deepEqual(Object.keys(hatchProblems(rows)), ["In1.Cu", "In2.Cu"]);
-  assert.ok(sameHatchOffsets({ "F.Cu": { x_nm: 0, y_nm: 0 } }, undefined) && sameHatchOffsets({ "B.Cu": { x_nm: 1, y_nm: 0 }, "F.Cu": { x_nm: 2000, y_nm: 0 } }, { "F.Cu": { x_nm: 2000, y_nm: 0 }, "B.Cu": { x_nm: 1, y_nm: 0 } }));
+  assert.ok(sameHatchOffsets({ "F.Cu": { x_nm: 0, y_nm: 0 } }, undefined) && sameHatchOffsets({ "B.Cu": { x_nm: 1, y_nm: 0 }, "F.Cu": { x_nm: 2, y_nm: 0 } }, { "F.Cu": { x_nm: 2, y_nm: 0 }, "B.Cu": { x_nm: 1, y_nm: 0 } }));
   assert.ok(!sameHatchOffsets({ "F.Cu": { x_nm: 1, y_nm: 0 } }, undefined));
 });
 
@@ -59,7 +59,7 @@ test("the tuning patterns start as MEANDER_SETTINGS and are checked like a meand
   const p = DEFAULT_TUNING_PATTERNS;
   assert.deepEqual(tuningPatternsProblems(p), {});
   assert.deepEqual([p.single_track.spacing_nm, p.diff_pair.spacing_nm, p.diff_pair_skew.spacing_nm], [600_000, 1_000_000, 600_000]);
-  assert.deepEqual([p.single_track.min_amplitude_nm, p.single_track.max_amplitude_nm, p.single_track.corner_style, p.single_track.corner_radius_percentage, p.single_track.single_sided], [200_000, 1_000_000, "round", 80_000, false]);
+  assert.deepEqual([p.single_track.min_amplitude_nm, p.single_track.max_amplitude_nm, p.single_track.corner_style, p.single_track.corner_radius_percentage, p.single_track.single_sided], [200_000, 1_000_000, "round", 80, false]);
   assert.ok(sameTuningPatterns(undefined, p));
   const with_ = (f: (q: ReturnType<typeof tuningPatternsOf>) => void) => {
     const q = tuningPatternsOf(undefined);
@@ -68,13 +68,13 @@ test("the tuning patterns start as MEANDER_SETTINGS and are checked like a meand
   };
   assert.deepEqual(Object.keys(with_((q) => (q.diff_pair.max_amplitude_nm = 0))), ["diff_pair.max_amplitude"]);
   assert.deepEqual(Object.keys(with_((q) => (q.single_track.min_amplitude_nm = 2_000_000))), ["single_track.min_amplitude"], "the minimum is above the maximum");
-  assert.deepEqual(Object.keys(with_((q) => (q.diff_pair_skew.corner_radius_percentage = 101_000))), ["diff_pair_skew.corner_radius_percentage"]);
+  assert.deepEqual(Object.keys(with_((q) => (q.diff_pair_skew.corner_radius_percentage = 101))), ["diff_pair_skew.corner_radius_percentage"]);
   assert.deepEqual(Object.keys(with_((q) => (q.single_track.spacing_nm = 200_000_000))), ["single_track.spacing"]);
   assert.deepEqual(Object.keys(with_((q) => (q.single_track.spacing_nm = NaN))), ["single_track.spacing"]);
 });
 
 function profile(name: string): TuningProfile {
-  return { ...emptyProfile(), name, profile_type: "differential", target_impedance: 90, enable_time_domain_tuning: true, layer_entries: [{ signal_layer: "F.Cu", top_reference_layer: null, bottom_reference_layer: "In1.Cu", width_nm: 130_000, diff_pair_gap_nm: 150_000, delay_as_per_mm: 6_100_000_000 }], via_propagation_delay_as: 25_000_000_000 };
+  return { ...emptyProfile(), name, profile_type: "differential", target_impedance: 90, enable_time_domain_tuning: true, layer_entries: [{ signal_layer: "F.Cu", top_reference_layer: null, bottom_reference_layer: "In1.Cu", width_nm: 130, diff_pair_gap_nm: 150, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000 };
 }
 
 test("a new track row starts as KiCad's does: front layer first, then the next layer down with its neighbours as references, and round again after the back layer", () => {
@@ -121,5 +121,5 @@ test("a class that names a profile the page does not have is what kicad-cli repo
   assert.equal(profilesToSend({ profiles: [], classProfiles: { A: "" } }).class_profiles, undefined);
   assert.ok(sameProfiles({ profiles: [profile("a")], class_profiles: { X: "" } }, { profiles: [profile("a")] }));
   assert.ok(!sameProfiles({ profiles: [profile("a")] }, { profiles: [profile("b")] }));
-  assert.deepEqual([psToAs(5.6), asToPs(6_100_000_000), psToAs(0.0000004)], [5_600_000_000, 6.1, 0]);
+  assert.deepEqual([psToAs(5.6), asToPs(6_100_000), psToAs(0.0000004)], [5_600_000, 6.1, 0]);
 });

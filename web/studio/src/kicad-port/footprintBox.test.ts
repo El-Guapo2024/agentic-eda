@@ -19,7 +19,7 @@ test("an unplaced footprint has no box; a placed one with nothing else is the 0.
 
 test("the box joins the courtyard, the F.Fab body and every pad: a pad outside the courtyard widens it", () => {
   const p = part({ at: [0, 0], courtyard: [-2_000_000, -1_000_000, 2_000_000, 1_000_000], body: [-1_500_000, -800_000, 1_500_000, 800_000], pads: [pad("1", -1_000_000, 0), pad("2", 3_000_000, 0, 1_000_000, 600_000)] });
-  assert.deepEqual(footprintBox(p, false), [-2000, -1000, 3500, 1000], "the courtyard stood in for it before; a connector pin past it counts");
+  assert.deepEqual(footprintBox(p, false), [-2_000_000, -1_000_000, 3_500_000, 1_000_000], "the courtyard stood in for it before; a connector pin past it counts");
   // without a courtyard the pads are the box (and the position's square)
   const bare = part({ at: [0, 0], pads: [pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)] });
   assert.deepEqual(footprintBox(bare, false), [-1_300_000, -300_000, 1_300_000, 300_000], "pads at +-1000 of 600 wide: out to 1300");

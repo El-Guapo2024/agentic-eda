@@ -74,7 +74,7 @@ test("toCmdDimension keeps the id so the caller can still send edit_dimension wi
 });
 
 test("defaultDimensionPayload pulls format/style fields from DimensionSettings", () => {
-  const cmd = defaultDimensionPayload("aligned", [0, 0], [1000, 0], "Dwgs.User", SETTINGS);
+  const cmd = defaultDimensionPayload("aligned", [0, 0], [1_000_000, 0], "Dwgs.User", SETTINGS);
   assert.equal(cmd.layer, "Dwgs.User");
   assert.equal(cmd.arrow_length, 1_270_000);
   assert.equal(cmd.precision, 4000);
@@ -83,24 +83,24 @@ test("defaultDimensionPayload pulls format/style fields from DimensionSettings",
 });
 
 test("defaultDimensionPayload guesses orthogonal's orientation from the gesture's dominant axis", () => {
-  const horizontalDrag = defaultDimensionPayload("orthogonal", [0, 0], [5000, 100], "Dwgs.User", SETTINGS);
+  const horizontalDrag = defaultDimensionPayload("orthogonal", [0, 0], [5_000_000, 100_000], "Dwgs.User", SETTINGS);
   assert.deepEqual(horizontalDrag.kind, { kind: "orthogonal", height: 5_000_000, horizontal: true });
-  const verticalDrag = defaultDimensionPayload("orthogonal", [0, 0], [100, 5000], "Dwgs.User", SETTINGS);
+  const verticalDrag = defaultDimensionPayload("orthogonal", [0, 0], [100_000, 5_000_000], "Dwgs.User", SETTINGS);
   assert.deepEqual(verticalDrag.kind, { kind: "orthogonal", height: 5_000_000, horizontal: false });
 });
 
 test("defaultDimensionPayload builds a bare kind object for leader/center (no extra fields)", () => {
-  assert.deepEqual(defaultDimensionPayload("leader", [0, 0], [1000, 0], "Dwgs.User", SETTINGS).kind, { kind: "leader" });
-  assert.deepEqual(defaultDimensionPayload("center", [0, 0], [1000, 0], "Dwgs.User", SETTINGS).kind, { kind: "center" });
+  assert.deepEqual(defaultDimensionPayload("leader", [0, 0], [1_000_000, 0], "Dwgs.User", SETTINGS).kind, { kind: "leader" });
+  assert.deepEqual(defaultDimensionPayload("center", [0, 0], [1_000_000, 0], "Dwgs.User", SETTINGS).kind, { kind: "center" });
 });
 
 test("defaultDimensionPayload takes the text size and line thickness of the layer's class when the board has the table", () => {
   const defaults = { silk: { line_width_nm: 120_000, text_width_nm: 1_200_000, text_height_nm: 1_300_000, text_thickness_nm: 180, italic: false, upright: true }, copper: { line_width_nm: 200_000, text_width_nm: 1_500_000, text_height_nm: 1_500_000, text_thickness_nm: 300_000, italic: false, upright: true }, edge_cuts_line_width_nm: 50_000, courtyard_line_width_nm: 50_000, fab: { line_width_nm: 90, text_width_nm: 800_000, text_height_nm: 800_000, text_thickness_nm: 120_000, italic: false, upright: true }, others: { line_width_nm: 110_000, text_width_nm: 900, text_height_nm: 900, text_thickness_nm: 140_000, italic: false, upright: true } };
-  const onSilk = defaultDimensionPayload("aligned", [0, 0], [1000, 0], "F.SilkS", SETTINGS, defaults);
+  const onSilk = defaultDimensionPayload("aligned", [0, 0], [1_000_000, 0], "F.SilkS", SETTINGS, defaults);
   assert.deepEqual([onSilk.text_size_nm, onSilk.stroke_width], [1_300_000, 120_000]);
-  const onFab = defaultDimensionPayload("aligned", [0, 0], [1000, 0], "F.Fab", SETTINGS, defaults);
+  const onFab = defaultDimensionPayload("aligned", [0, 0], [1_000_000, 0], "F.Fab", SETTINGS, defaults);
   assert.deepEqual([onFab.text_size_nm, onFab.stroke_width], [800_000, 90]);
-  const without = defaultDimensionPayload("aligned", [0, 0], [1000, 0], "F.Fab", SETTINGS);
+  const without = defaultDimensionPayload("aligned", [0, 0], [1_000_000, 0], "F.Fab", SETTINGS);
   assert.deepEqual([without.text_size_nm, without.stroke_width], [SETTINGS.text_size_nm, SETTINGS.stroke_width], "no table from the backend: the Dimensions page's own");
   assert.equal(onSilk.arrow_length, SETTINGS.arrow_length, "the arrows and extension lines are still the Dimensions page's");
 });
