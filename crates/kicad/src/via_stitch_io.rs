@@ -13,7 +13,7 @@ use eda_model::via_stitch::{StitchLayout, StitchMode, ViaStitch, ViaTemplate};
 
 use crate::pcb_generated::{fmt_g10, line_prop, point_prop, prop_line, prop_num, prop_point, prop_str};
 use crate::sexpr::{self, Sexpr};
-use crate::{mm, mm_to_um, sexpr_str};
+use crate::{mm, mm_to_nm, sexpr_str};
 
 /// The template via of a generator: `(templates (template (name "via") (via ..)))`.
 fn read_template(g: &[Sexpr]) -> ViaTemplate {
@@ -23,7 +23,7 @@ fn read_template(g: &[Sexpr]) -> ViaTemplate {
         .find(|t| sexpr::find(t, "name").and_then(|n| sexpr::txt(n, 1)) == Some("via"))
         .and_then(|t| sexpr::find(t, "via"));
     let Some(via) = via else { return ViaTemplate::default() };
-    let um = |name: &str| sexpr::find(via, name).and_then(|f| sexpr::num(f, 1)).map(mm_to_um).unwrap_or(0);
+    let um = |name: &str| sexpr::find(via, name).and_then(|f| sexpr::num(f, 1)).map(mm_to_nm).unwrap_or(0);
     let layers = sexpr::find(via, "layers");
     ViaTemplate {
         size_nm: um("size"),
@@ -39,11 +39,11 @@ fn read(g: &[Sexpr], via_ids: &BTreeMap<String, String>) -> ViaStitch {
     let mut v = ViaStitch::new(prop_line(g, "outline"));
     v.layer = prop_str(g, "layer").unwrap_or("F.Cu").to_string();
     v.name = prop_str(g, "name").unwrap_or("Via Stitching").to_string();
-    v.pitch_nm = prop_num(g, "pitch").map(mm_to_um).unwrap_or(0);
+    v.pitch_nm = prop_num(g, "pitch").map(mm_to_nm).unwrap_or(0);
     v.layout = prop_num(g, "layout").map(|n| StitchLayout::from_index(n as i64)).unwrap_or_default();
     v.mode = prop_num(g, "mode").map(|n| StitchMode::from_index(n as i64)).unwrap_or_default();
     v.seed = prop_num(g, "seed").map(|n| n as i64 as u32).unwrap_or(0);
-    v.origin_offset = Point { x: prop_num(g, "origin_offset_x").map(mm_to_um).unwrap_or(0), y: prop_num(g, "origin_offset_y").map(mm_to_um).unwrap_or(0) };
+    v.origin_offset = Point { x: prop_num(g, "origin_offset_x").map(mm_to_nm).unwrap_or(0), y: prop_num(g, "origin_offset_y").map(mm_to_nm).unwrap_or(0) };
     v.origin = prop_point(g, "origin").unwrap_or_default();
     v.net = prop_str(g, "net_name").unwrap_or("").to_string();
     v.guarded_net = prop_str(g, "guarded_net_name").unwrap_or("").to_string();

@@ -5,7 +5,7 @@
 //! primitives, `SquaredDistance`, and a point-in-polygon containment test
 //! for the "one shape swallows the other" case).
 //!
-//! Units are integer micrometers throughout (`eda_model::ir::Nm`), the same
+//! Units are integer nanometres throughout (`eda_model::ir::Nm`), the same
 //! as the rest of this workspace -- KiCad itself works in integer nanometers
 //! internally for exactly the same reason (float coordinates in DRC are a
 //! source of nondeterminism).
@@ -264,7 +264,7 @@ impl Core {
 }
 
 /// Every DRC shape this crate needs, each reducible to a [`Core`] plus a
-/// radius. Board space, integer micrometers.
+/// radius. Board space, integer nanometres.
 #[derive(Debug, Clone)]
 pub enum Shape {
     /// A circular pad, via, or round drilled hole.
@@ -417,7 +417,7 @@ impl Shape {
         (actual, best_pt)
     }
 
-    /// The exact gap to `other`, in µm and not rounded: 0 when the shapes touch or overlap, otherwise the distance between
+    /// The exact gap to `other`, in nm and not rounded: 0 when the shapes touch or overlap, otherwise the distance between
     /// their cores less both radii. [`Shape::clearance_to`] floors the core distance to a whole micron, which is right for
     /// the router's integer geometry but 1 um off for a check that has to agree with KiCad's DRC (which takes
     /// `DRCEpsilon`, 0.5 um, off every clearance) to a fraction of a micron.

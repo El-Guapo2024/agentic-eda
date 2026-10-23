@@ -28,8 +28,8 @@ pub const KICAD_IU_PER_MM: f64 = 1_000_000.0;
 /// `GRAPHICS_IMPORTER::DEFAULT_LINE_WIDTH_DFX`: the line width, in mm, an importer has until a dialog sets another.
 pub const DEFAULT_LINE_WIDTH_MM: f64 = 1.0;
 
-/// `ARC_HIGH_DEF` (0.005 mm) in micrometres: the accuracy `setupSplineOrLine` flattens a curve with to see whether it is one.
-pub const ARC_HIGH_DEF_NM: i64 = 5;
+/// `ARC_HIGH_DEF` (0.005 mm) in nanometres: the accuracy `setupSplineOrLine` flattens a curve with to see whether it is one.
+pub const ARC_HIGH_DEF_NM: i64 = 5_000;
 
 // ------------------------------------------------------------------------------------------------------------------ geometry
 
@@ -551,8 +551,7 @@ fn approx_collinear(a: ((i64, i64), (i64, i64)), b: ((i64, i64), (i64, i64))) ->
 }
 
 /// `GRAPHICS_IMPORTER::setupSplineOrLine`: a curve whose control points lie on its chord, or that flattens to nothing but its two
-/// end points at [`ARC_HIGH_DEF_NM`], is a segment; a segment of no length is dropped. `units_per_um` is how many of the points'
-/// unit make a micrometre (1 for the design's integer micrometres).
+/// end points at [`ARC_HIGH_DEF_NM`], is a segment; a segment shorter than 20 nm is dropped. The points are nanometres.
 pub fn spline_or_line(start: (i64, i64), c1: (i64, i64), c2: (i64, i64), end: (i64, i64)) -> SplineOrLine {
     let s_e = (start, end);
     let mut degenerate = approx_collinear(s_e, (start, c1)) && approx_collinear(s_e, (end, c2));
@@ -561,8 +560,10 @@ pub fn spline_or_line(start: (i64, i64), c1: (i64, i64), c2: (i64, i64), end: (i
         degenerate = eda_model::bezier::bezier_polyline(p(start), p(c1), p(c2), p(end), ARC_HIGH_DEF_NM).len() <= 2;
     }
     if degenerate {
-        // "segment smaller than MIN_SEG_LEN_ACCEPTABLE_NM nanometers are skipped": 20 nm is less than the design's unit.
-        if start == end {
+        // "segment smaller than MIN_SEG_LEN_ACCEPTABLE_NM nanometers are skipped"
+        const MIN_SEG_LEN_ACCEPTABLE_NM: i64 = 20;
+        // `SEG::Length()`: `EuclideanNorm()`, rounded to an integer
+        if eda_model::units::kiround(((end.0 - start.0) as f64).hypot((end.1 - start.1) as f64)) < MIN_SEG_LEN_ACCEPTABLE_NM {
             SplineOrLine::Skip
         } else {
             SplineOrLine::Line
@@ -633,9 +634,9 @@ mod tests {
 
     #[test]
     fn a_curve_on_its_chord_is_a_line_and_a_bent_one_is_a_curve() {
-        assert_eq!(spline_or_line((0, 0), (1000, 0), (2000, 0), (3000, 0)), SplineOrLine::Line);
-        assert_eq!(spline_or_line((0, 0), (0, 1000), (3000, 1000), (3000, 0)), SplineOrLine::Curve);
-        assert_eq!(spline_or_line((5, 5), (5, 5), (5, 5), (5, 5)), SplineOrLine::Skip);
+        assert_eq!(spline_or_line((0, 0), (1_000_000, 0), (2_000_000, 0), (3_000_000, 0)), SplineOrLine::Line);
+        assert_eq!(spline_or_line((0, 0), (0, 1_000_000), (3_000_000, 1_000_000), (3_000_000, 0)), SplineOrLine::Curve);
+        assert_eq!(spline_or_line((5000, 5000), (5000, 5000), (5000, 5000), (5000, 5000)), SplineOrLine::Skip);
     }
 
     #[test]

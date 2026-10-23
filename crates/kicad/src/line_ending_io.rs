@@ -5,20 +5,20 @@
 use eda_model::line_ending::{LineEnding, LineEndingStyle, LineEndings};
 use eda_model::pcb_items::LineStyle;
 
-use crate::mm_to_um;
+use crate::mm_to_nm;
 use crate::sexpr::{self, Sexpr};
 
 /// One `(start_shape <style> [(length ..)] [(width ..)] [(stroke (width ..) (type ..))])`: `parseLineEnding`. A style the parser does not know is no ending (KiCad would
 /// refuse the file: "Expecting arrow, circle, square, arrow_open, or none").
 pub(crate) fn read_one(form: &[Sexpr]) -> LineEnding {
     let Some(style) = sexpr::txt(form, 1).and_then(LineEndingStyle::from_token) else { return LineEnding::default() };
-    let um = |name: &str| sexpr::find(form, name).and_then(|f| sexpr::num(f, 1)).map(mm_to_um).unwrap_or(0);
+    let um = |name: &str| sexpr::find(form, name).and_then(|f| sexpr::num(f, 1)).map(mm_to_nm).unwrap_or(0);
     let stroke = sexpr::find(form, "stroke");
     LineEnding {
         style,
         length_nm: um("length"),
         width_nm: um("width"),
-        stroke_width_nm: stroke.and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0),
+        stroke_width_nm: stroke.and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(0),
         stroke_style: stroke.and_then(|s| sexpr::find(s, "type")).and_then(|t| sexpr::txt(t, 1)).map(LineStyle::from_token).unwrap_or_default(),
     }
 }

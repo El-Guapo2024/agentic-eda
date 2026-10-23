@@ -28,12 +28,12 @@ use eda_model::outline::Arc as GeoArc;
 use eda_model::{ConstraintModel, Footprint};
 
 use crate::fp_fields::{effects_with, parse_layout};
-use crate::import::{legacy_arc, mm_to_um, xy_point};
+use crate::import::{legacy_arc, mm_to_nm, xy_point};
 use crate::sexpr::{self, Sexpr};
 use crate::{duid_for, fmt_mm_f, mm, sexpr_str};
 
 /// `DEFAULT_LINE_WIDTH` (`board_design_settings.h`), 0.1 mm: what a stroke of no width that is not filled is given (`parsePCB_SHAPE`).
-const DEFAULT_LINE_WIDTH_NM: Nm = 100;
+const DEFAULT_LINE_WIDTH_NM: Nm = 100_000;
 
 const SHAPE_TAGS: [&str; 6] = ["fp_line", "fp_arc", "fp_circle", "fp_rect", "fp_poly", "fp_curve"];
 
@@ -120,7 +120,7 @@ fn read_shape(item: &[Sexpr], tag: &str, side: Side) -> Option<FpShape> {
 
     // `(stroke (width w) (type t))`, or the older `(width w)` on the item itself.
     let stroke = sexpr::find(item, "stroke");
-    let mut width = stroke.and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0);
+    let mut width = stroke.and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(0);
     let style = stroke.and_then(|s| sexpr::find(s, "type")).and_then(|t| sexpr::txt(t, 1)).and_then(LineStyle::from_token).unwrap_or(LineStyle::Solid);
 
     // `(fill yes|solid|no|none|hatch|reverse_hatch|cross_hatch)`; `yes` is what a solid fill was first called.
@@ -176,14 +176,14 @@ fn read_shape(item: &[Sexpr], tag: &str, side: Side) -> Option<FpShape> {
             Shape::Bezier { id: String::new(), layer, stroke_width: width, filled: false, start, c1, c2, end }
         }
     };
-    let radius = if tag == "fp_rect" { sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(mm_to_um).unwrap_or(0).max(0) } else { 0 };
+    let radius = if tag == "fp_rect" { sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(mm_to_nm).unwrap_or(0).max(0) } else { 0 };
     Some(FpShape {
         shape,
         style,
         hatch: hatch.filter(|_| matches!(tag, "fp_rect" | "fp_circle" | "fp_poly")),
         radius,
         layers: if layers.len() > 1 { layers } else { Vec::new() },
-        mask_margin: sexpr::find(item, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(mm_to_um),
+        mask_margin: sexpr::find(item, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(mm_to_nm),
         endings: crate::line_ending_io::read(item),
     })
 }

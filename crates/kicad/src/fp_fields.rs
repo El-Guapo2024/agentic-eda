@@ -12,7 +12,7 @@ use eda_model::ir::{FootprintInstance, Millideg, Point, Side, Nm};
 use eda_model::{Footprint, Part};
 
 use crate::sexpr::{self, Sexpr};
-use crate::{duid_for, fmt_mm_f, mm, mm_to_um as mm_to_um_f, sexpr_str};
+use crate::{duid_for, fmt_mm_f, mm, mm_to_nm as mm_to_nm_f, sexpr_str};
 
 /// What a footprint's text needs beyond the footprint itself: its edit, if it has one, and the attributes in effect.
 pub(crate) struct FpExtra<'a> {
@@ -179,7 +179,7 @@ pub(crate) fn parse_layout(item: &[Sexpr], side: Side, fp_rot: Millideg) -> Fiel
     if let Some(at) = sexpr::find(item, "at") {
         let (x, y) = (sexpr::num(at, 1).unwrap_or(0.0), sexpr::num(at, 2).unwrap_or(0.0));
         let angle = sexpr::num(at, 3).unwrap_or(0.0);
-        l.set_from_file(side, fp_rot, mm_to_um_f(x), mm_to_um_f(y), angle);
+        l.set_from_file(side, fp_rot, mm_to_nm_f(x), mm_to_nm_f(y), angle);
         // The legacy `(at x y angle unlocked)`.
         if at.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == "unlocked")) {
             l.keep_upright = false;
@@ -198,9 +198,9 @@ pub(crate) fn parse_layout(item: &[Sexpr], side: Side, fp_rot: Millideg) -> Fiel
         if let Some(font) = sexpr::find(e, "font") {
             if let Some(s) = sexpr::find(font, "size") {
                 // `(size HEIGHT WIDTH)`
-                l.size = (mm_to_um_f(sexpr::num(s, 2).unwrap_or(1.0)), mm_to_um_f(sexpr::num(s, 1).unwrap_or(1.0)));
+                l.size = (mm_to_nm_f(sexpr::num(s, 2).unwrap_or(1.0)), mm_to_nm_f(sexpr::num(s, 1).unwrap_or(1.0)));
             }
-            l.thickness = sexpr::find(font, "thickness").and_then(|t| sexpr::num(t, 1)).map(mm_to_um_f).unwrap_or(0);
+            l.thickness = sexpr::find(font, "thickness").and_then(|t| sexpr::num(t, 1)).map(mm_to_nm_f).unwrap_or(0);
             l.bold = bool_tok(font, "bold").unwrap_or(false);
             l.italic = bool_tok(font, "italic").unwrap_or(false);
         }
@@ -306,14 +306,14 @@ pub(crate) fn parse_pad_extras(pad: &[Sexpr], side: Side, file_version: i64) -> 
     let mut e = PadEdit::default();
     if let Some(d) = sexpr::find(pad, "drill") {
         if let Some(o) = sexpr::find(d, "offset") {
-            let (x, y) = (mm_to_um_f(sexpr::num(o, 1).unwrap_or(0.0)), mm_to_um_f(sexpr::num(o, 2).unwrap_or(0.0)));
+            let (x, y) = (mm_to_nm_f(sexpr::num(o, 1).unwrap_or(0.0)), mm_to_nm_f(sexpr::num(o, 2).unwrap_or(0.0)));
             if x != 0 || y != 0 {
                 e.offset = Some(Point { x: if side == Side::Bottom { -x } else { x }, y });
             }
         }
     }
     let margin = |name: &str| -> Option<Nm> {
-        let m = sexpr::find(pad, name).and_then(|f| sexpr::num(f, 1)).map(mm_to_um_f)?;
+        let m = sexpr::find(pad, name).and_then(|f| sexpr::num(f, 1)).map(mm_to_nm_f)?;
         if file_version <= 20240201 && m == 0 {
             None
         } else {

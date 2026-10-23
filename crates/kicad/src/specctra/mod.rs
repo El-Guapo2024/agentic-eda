@@ -25,7 +25,7 @@ pub mod session;
 #[cfg(test)]
 mod tests;
 
-use eda_model::ir::{Design, Point, Shape};
+use eda_model::ir::{Design, Shape};
 use eda_model::{CheckResult, ConstraintModel};
 
 /// The text of a DSN design and what the export had to say besides: the warnings `FromBOARD` gives (`wxLogWarning`), such as a malformed board outline.
@@ -70,32 +70,30 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
                 }
             }
         }
-        let shapes: Vec<Shape> = shapes.iter().map(shape_in_nm).collect();
-        let max_error = model.board.max_error_nm * 1000;
-        let mut outline = eda_drc::outline::build_board_polygon_outlines(&shapes, max_error as f64, eda_model::outline::CHAINING_EPSILON_NM * 1000, true);
+        let max_error = model.board.max_error_nm;
+        let mut outline = eda_drc::outline::build_board_polygon_outlines(&shapes, max_error as f64, eda_model::outline::CHAINING_EPSILON_NM, true);
         // "Make polygon strictly simple to avoid issues (especially in 3D viewer)".
         outline.polys.simplify();
         outline
     };
 
     let b = &model.board;
-    let um = |v: i64| v * 1000;
     let facts_of = |net: &str| -> export::ClassFacts {
         export::ClassFacts {
             name: b.effective_class(net).name,
-            track_width: um(b.width_of(net)),
-            clearance: um(b.clearance_of(net)),
-            via_diameter: um(b.via_diameter_of(net)),
-            via_drill: um(b.via_drill_of(net)),
+            track_width: b.width_of(net),
+            clearance: b.clearance_of(net),
+            via_diameter: b.via_diameter_of(net),
+            via_drill: b.via_drill_of(net),
         }
     };
-    let default_class = export::ClassFacts { name: "Default".into(), track_width: um(b.track_width), clearance: um(b.clearance), via_diameter: um(b.via_diameter), via_drill: um(b.via_drill) };
+    let default_class = export::ClassFacts { name: "Default".into(), track_width: b.track_width, clearance: b.clearance, via_diameter: b.via_diameter, via_drill: b.via_drill };
     let settings = export::Settings {
         pcb_name: pcb_name.to_string(),
         host_version: HOST_VERSION.to_string(),
         outline: &outline,
-        hole_clearance: um(b.hole_clearance_nm),
-        max_error: um(b.max_error_nm),
+        hole_clearance: b.hole_clearance_nm,
+        max_error: b.max_error_nm,
         default_class,
         class_of_net: &facts_of,
     };
@@ -103,21 +101,3 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
     Ok(DsnExport { text: pcb.to_text(), warnings })
 }
 
-/// A shape of the design (micrometres) in the nanometres of the board KiCad reads: the derived file writes every coordinate and width of it exactly.
-fn shape_in_nm(s: &Shape) -> Shape {
-    let n = |p: &Point| Point { x: p.x * 1000, y: p.y * 1000 };
-    let mut s = s.clone();
-    match &mut s {
-        Shape::Segment { start, end, stroke_width, .. } | Shape::Rect { start, end, stroke_width, .. } => {
-            (*start, *end, *stroke_width) = (n(start), n(end), *stroke_width * 1000);
-        }
-        Shape::Circle { center, end, stroke_width, .. } => (*center, *end, *stroke_width) = (n(center), n(end), *stroke_width * 1000),
-        Shape::Arc { start, mid, end, stroke_width, .. } => (*start, *mid, *end, *stroke_width) = (n(start), n(mid), n(end), *stroke_width * 1000),
-        Shape::Polygon { pts, stroke_width, .. } => {
-            pts.iter_mut().for_each(|p| *p = n(p));
-            *stroke_width *= 1000;
-        }
-        Shape::Bezier { start, c1, c2, end, stroke_width, .. } => (*start, *c1, *c2, *end, *stroke_width) = (n(start), n(c1), n(c2), n(end), *stroke_width * 1000),
-    }
-    s
-}

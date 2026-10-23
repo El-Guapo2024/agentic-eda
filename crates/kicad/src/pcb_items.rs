@@ -174,7 +174,8 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
     write!(out, " (island_removal_mode {island_code})").unwrap();
     if island_mode == IslandRemovalMode::Area {
         // `GetMinIslandArea() / IU_PER_MM`: nm^2 over nm per mm, which is the number of mm^2 once printed as a length.
-        write!(out, " (island_area_min {})", fmt_mm_f(z.min_island_area as f64 / 1_000_000.0)).unwrap();
+        // `formatInternalUnits( GetMinIslandArea() / pcbIUScale.IU_PER_MM )`: the nm^2 over 1e6, cut to an integer, written as millimetres (mm^2)
+        write!(out, " (island_area_min {})", mm((z.min_island_area as f64 / 1e6) as i64)).unwrap();
     }
     if hatch_fill {
         write!(out, " (hatch_thickness {}) (hatch_gap {}) (hatch_orientation {})", mm(z.hatch_thickness), mm(z.hatch_gap), fmt_mm_f(z.hatch_orientation_mdeg as f64 / 1000.0)).unwrap();

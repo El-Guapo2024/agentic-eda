@@ -17,10 +17,10 @@ use eda_model::table::{Table, TableBorder, TableCell, TableLineStyle, TableSepar
 
 use crate::pcb_table::{effects_str, read_color, read_effects, read_stroke, stroke_str};
 use crate::sexpr::{self, Sexpr};
-use crate::{duid_for, fmt_mm_f, mm, mm_to_um, note_uuid, sexpr_str};
+use crate::{duid_for, fmt_mm_f, sch_mm, sch_mm_to_nm, note_uuid, sexpr_str};
 
 /// The width of a stroke the file does not write: `DEFAULT_LINE_WIDTH_MILS` (6 mils), which the constructor of the table gives it.
-const DEFAULT_STROKE_NM: Nm = 152;
+const DEFAULT_STROKE_NM: Nm = 152_400;
 
 /// A table read from a sheet, with what a `(group ..)` and a lock need to know of it.
 pub(crate) struct ReadTable {
@@ -31,7 +31,7 @@ pub(crate) struct ReadTable {
 }
 
 fn um(v: f64) -> Nm {
-    mm_to_um(v)
+    sch_mm_to_nm(v)
 }
 
 fn yes(b: bool) -> &'static str {
@@ -220,7 +220,7 @@ pub(crate) fn write(out: &mut String, t: &Table, locked: bool) -> String {
     if t.separators.rows || t.separators.cols {
         let _ = write!(out, " {}", stroke_str(&t.separators.stroke));
     }
-    let _ = write!(out, ")\n\t\t(column_widths {})\n\t\t(row_heights {})\n\t\t(uuid \"{uuid}\")", t.col_widths.iter().map(|w| mm(*w)).collect::<Vec<_>>().join(" "), t.row_heights.iter().map(|h| mm(*h)).collect::<Vec<_>>().join(" "));
+    let _ = write!(out, ")\n\t\t(column_widths {})\n\t\t(row_heights {})\n\t\t(uuid \"{uuid}\")", t.col_widths.iter().map(|w| sch_mm(*w)).collect::<Vec<_>>().join(" "), t.row_heights.iter().map(|h| sch_mm(*h)).collect::<Vec<_>>().join(" "));
     if locked {
         out.push_str("\n\t\t(locked yes)");
     }
@@ -235,15 +235,15 @@ pub(crate) fn write(out: &mut String, t: &Table, locked: bool) -> String {
             "\n\t\t\t(table_cell {}\n\t\t\t\t(exclude_from_sim {})\n\t\t\t\t(at {} {} {})\n\t\t\t\t(size {} {})\n\t\t\t\t(margins {} {} {} {})\n\t\t\t\t(span {} {})\n\t\t\t\t{}\n\t\t\t\t{}\n\t\t\t\t(uuid \"{}\")\n\t\t\t)",
             sexpr_str(&c.text),
             yes(c.exclude_from_sim),
-            mm(start.x),
-            mm(start.y),
+            sch_mm(start.x),
+            sch_mm(start.y),
             angle_str(t.angle),
-            mm(end.x - start.x),
-            mm(end.y - start.y),
-            mm(c.margins[0]),
-            mm(c.margins[1]),
-            mm(c.margins[2]),
-            mm(c.margins[3]),
+            sch_mm(end.x - start.x),
+            sch_mm(end.y - start.y),
+            sch_mm(c.margins[0]),
+            sch_mm(c.margins[1]),
+            sch_mm(c.margins[2]),
+            sch_mm(c.margins[3]),
             c.col_span,
             c.row_span,
             fill_str(c),

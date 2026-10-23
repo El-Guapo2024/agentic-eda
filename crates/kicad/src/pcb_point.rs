@@ -8,12 +8,12 @@ use eda_model::ir::Point;
 use eda_model::pcb_items::{PcbPoint, DEFAULT_POINT_SIZE_NM};
 
 use crate::sexpr::{self, Sexpr};
-use crate::{mm, mm_to_um, sexpr_str};
+use crate::{mm, mm_to_nm, sexpr_str};
 
 /// One `(point ..)` of a board. A token the item leaves out keeps what `PCB_POINT( nullptr )` starts with: the origin, 1 mm, `F.Cu`.
 pub(crate) fn read(item: &[Sexpr]) -> PcbPoint {
-    let at = sexpr::find(item, "at").and_then(|a| Some(Point { x: mm_to_um(sexpr::num(a, 1)?), y: mm_to_um(sexpr::num(a, 2)?) })).unwrap_or_default();
-    let size_nm = sexpr::find(item, "size").and_then(|s| sexpr::num(s, 1)).map_or(DEFAULT_POINT_SIZE_NM, mm_to_um);
+    let at = sexpr::find(item, "at").and_then(|a| Some(Point { x: mm_to_nm(sexpr::num(a, 1)?), y: mm_to_nm(sexpr::num(a, 2)?) })).unwrap_or_default();
+    let size_nm = sexpr::find(item, "size").and_then(|s| sexpr::num(s, 1)).map_or(DEFAULT_POINT_SIZE_NM, mm_to_nm);
     let layer = sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
     PcbPoint { id: String::new(), layer, at, size_nm }
 }

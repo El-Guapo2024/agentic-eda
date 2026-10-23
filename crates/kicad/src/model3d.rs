@@ -112,9 +112,9 @@ pub struct Fit {
     pub dy_nm: f64,
 }
 
-/// The largest root-mean-square distance (µm) between the library's pad centres and the part's, after the fit, for the fit to count. A built-in 0603 and
+/// The largest root-mean-square distance (nm) between the library's pad centres and the part's, after the fit, for the fit to count. A built-in 0603 and
 /// KiCad's `R_0603_1608Metric` differ by tenths of a millimetre; a different package that happens to share pad numbers differs by millimetres.
-const FIT_TOLERANCE_NM: f64 = 600.0;
+const FIT_TOLERANCE_NM: f64 = 600_000.0;
 
 /// Where the library footprint's pads would have to move, by a turn and a shift, to sit on the part's: pads are matched by number (the mean centre when
 /// several pads share one), the turn is the least-squares one (snapped to a quarter turn when it is within 5 degrees of one) and the shift puts the centroids
@@ -168,7 +168,7 @@ pub fn fit_pads(lib: &[(String, (f64, f64))], part: &[(String, (f64, f64))]) -> 
     }
     let fit = Fit { rot_deg: rot, dx_nm: dx, dy_nm: dy };
     // Less than a hundredth of a degree and of a millimetre is the identity.
-    (fit.rot_deg.abs() > 0.01 || fit.dx_nm.abs() > 10.0 || fit.dy_nm.abs() > 10.0).then_some(fit)
+    (fit.rot_deg.abs() > 0.01 || fit.dx_nm.abs() > 10_000.0 || fit.dy_nm.abs() > 10_000.0).then_some(fit)
 }
 
 fn round6(v: f64) -> f64 {
@@ -187,7 +187,7 @@ impl Fit {
     pub fn apply(&self, m: &Model3d) -> Model3d {
         let (sin, cos) = self.rot_deg.to_radians().sin_cos();
         let [ox, oy, oz] = m.offset;
-        let offset = [round6(self.dx_nm / 1000.0 + ox * cos + oy * sin), round6(-self.dy_nm / 1000.0 - ox * sin + oy * cos), oz];
+        let offset = [round6(self.dx_nm / 1e6 + ox * cos + oy * sin), round6(-self.dy_nm / 1e6 - ox * sin + oy * cos), oz];
         let mut z = (m.rotate[2] + self.rot_deg).rem_euclid(360.0);
         if z > 180.0 {
             z -= 360.0;

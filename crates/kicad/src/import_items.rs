@@ -240,11 +240,11 @@ pub(crate) fn import_groups(root: &[Sexpr]) -> Vec<RawGroup> {
 
 fn xy(list: &[Sexpr]) -> Option<Point> {
     let (x, y) = (sexpr::num(list, 1)?, sexpr::num(list, 2)?);
-    Some(Point { x: crate::mm_to_um(x), y: crate::mm_to_um(y) })
+    Some(Point { x: crate::mm_to_nm(x), y: crate::mm_to_nm(y) })
 }
 
 fn um_of(item: &[Sexpr], key: &str) -> Option<Nm> {
-    sexpr::find(item, key).and_then(|v| sexpr::num(v, 1)).map(crate::mm_to_um)
+    sexpr::find(item, key).and_then(|v| sexpr::num(v, 1)).map(crate::mm_to_nm)
 }
 
 /// A flag that is present as `(key yes)`, a bare `key`, or absent (`parseMaybeAbsentBool( true )`).
@@ -321,7 +321,7 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
         // The text: its size and pen, and (when the label is not kept aligned) its angle.
         let text = sexpr::find(d, "gr_text");
         let font = text.and_then(|t| sexpr::find(t, "effects")).and_then(|e| sexpr::find(e, "font"));
-        let text_size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::mm_to_um).unwrap_or(defaults.text_size_nm);
+        let text_size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::mm_to_nm).unwrap_or(defaults.text_size_nm);
         let text_thickness_nm = font.and_then(|f| um_of(f, "thickness"));
         let text_angle = text
             .and_then(|t| sexpr::find(t, "at"))

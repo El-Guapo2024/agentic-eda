@@ -67,7 +67,7 @@ fn flag_anchors(model: &ConstraintModel, parts_by_ref: &HashMap<&str, &Part>, po
 }
 
 fn thin(a: Point, b: Point) -> Rect {
-    Rect::new(a.x.min(b.x) - 100, a.y.min(b.y) - 100, a.x.max(b.x) + 100, a.y.max(b.y) + 100)
+    Rect::new(a.x.min(b.x) - 100_000, a.y.min(b.y) - 100_000, a.x.max(b.x) + 100_000, a.y.max(b.y) + 100_000)
 }
 
 /// Draw the rails and the labelled nets of a flat schematic: returns the labels and the power symbols (power symbols numbered `#PWR..`, the

@@ -2,7 +2,7 @@
 //! the properties an expression can read (the names and the labels of the Properties panel's registry, `kicad-port/pcbProperties.ts`), the shapes it occupies
 //! and the facts of the footprint it belongs to. [`crate::rule_board`] builds them from a design.
 //!
-//! Lengths are nanometres here, as in KiCad (a property shown in micrometres by the studio is read x 1000): `A.Width > 0.25mm` compares nanometres.
+//! Lengths are nanometres here, as in KiCad and the studio: `A.Width > 0.25mm` compares nanometres.
 
 use crate::kimath::Shape;
 use eda_model::ir::Point;

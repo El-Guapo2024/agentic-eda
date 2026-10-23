@@ -69,7 +69,7 @@ pub fn shape_polygons(shape: &eda_model::ir::Shape, max_error: Nm) -> eda_shape_
     crate::shape_poly::union_polyset(&Shape::Compound { parts }, max_error)
 }
 
-/// [`pad_polygons`] as the list of its contours, the outline of each polygon first and then its holes, in micrometres.
+/// [`pad_polygons`] as the list of its contours, the outline of each polygon first and then its holes, in nanometres.
 pub fn pad_outline(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: Nm) -> Vec<Vec<Point>> {
     pad_polygons(fp, pad, center, max_error).polys.iter().flat_map(|poly| poly.iter().map(|chain| chain.iter().map(|p| Point { x: p.x, y: p.y }).collect::<Vec<_>>())).collect()
 }
@@ -90,51 +90,51 @@ mod tests {
 
     #[test]
     fn a_trapezoids_polygon_has_the_area_of_its_two_sides_and_turns_with_the_footprint() {
-        let t = pad(PadShape::Trapezoid, (2000, 1000), PadShapeExt { trapezoid_delta: Some((0, 800)), ..Default::default() });
+        let t = pad(PadShape::Trapezoid, (2_000_000, 1_000_000), PadShapeExt { trapezoid_delta: Some((0, 800_000)), ..Default::default() });
         // Parallel sides 2.8 and 1.2 mm, 1 mm apart: (2.8 + 1.2) / 2 = 2 mm^2.
         for rot in [0, 90_000, 45_000] {
-            let area = pad_polygons(&instance((10_000, 10_000), rot, Side::Top), &t, Point { x: 10_000, y: 10_000 }, 5).area();
-            assert!((area - 2_000_000.0).abs() < 2_000.0, "rot {rot}: {area}");
+            let area = pad_polygons(&instance((10_000_000, 10_000_000), rot, Side::Top), &t, Point { x: 10_000_000, y: 10_000_000 }, 5000).area();
+            assert!((area - 2_000_000_000_000.0).abs() < 2_000_000_000.0, "rot {rot}: {area}");
         }
         // Copper never leaves the pad's own bounding box turned the same way.
         let shapes = pad_effective_shapes(&instance((0, 0), 0, Side::Top), &t, Point { x: 0, y: 0 });
         assert_eq!(shapes.len(), 1);
-        assert_eq!(shapes[0].bbox(0), (-1400, -500, 1400, 500));
+        assert_eq!(shapes[0].bbox(0), (-1_400_000, -500_000, 1_400_000, 500_000));
     }
 
     #[test]
     fn a_custom_pads_copper_is_a_compound_with_a_hole_where_a_ring_leaves_one() {
-        let ring = PadPrimitive { shape: eda_model::ir::Shape::Circle { id: String::new(), layer: String::new(), stroke_width: 600, filled: false, center: Point { x: 0, y: 0 }, end: Point { x: 1500, y: 0 } }, proxy: false };
-        let p = pad(PadShape::Custom, (500, 500), PadShapeExt { custom: Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![ring] }), ..Default::default() });
+        let ring = PadPrimitive { shape: eda_model::ir::Shape::Circle { id: String::new(), layer: String::new(), stroke_width: 600_000, filled: false, center: Point { x: 0, y: 0 }, end: Point { x: 1_500_000, y: 0 } }, proxy: false };
+        let p = pad(PadShape::Custom, (500_000, 500_000), PadShapeExt { custom: Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![ring] }), ..Default::default() });
         let fp = instance((0, 0), 0, Side::Top);
         let copper = pad_copper(&fp, &p, Point { x: 0, y: 0 });
         assert!(matches!(copper, Shape::Compound { ref parts } if parts.len() == 2), "{copper:?}");
         // A ring 1.2 to 1.8 mm out of the centre: the polygon has an outline and a hole, and its area is the ring's plus the anchor's disc inside it.
-        let polys = pad_polygons(&fp, &p, Point { x: 0, y: 0 }, 5);
-        let ring_area = std::f64::consts::PI * (1800.0f64.powi(2) - 1200.0f64.powi(2));
-        let disc_area = std::f64::consts::PI * 250.0f64.powi(2);
+        let polys = pad_polygons(&fp, &p, Point { x: 0, y: 0 }, 5000);
+        let ring_area = std::f64::consts::PI * (1_800_000.0f64.powi(2) - 1_200_000.0f64.powi(2));
+        let disc_area = std::f64::consts::PI * 250_000.0f64.powi(2);
         assert!((polys.area() - (ring_area + disc_area)).abs() / (ring_area + disc_area) < 0.01, "{}", polys.area());
         assert_eq!(polys.polys.len(), 2, "the ring (with its hole) and the anchor inside it");
         assert_eq!(polys.polys.iter().map(|p| p.len()).max(), Some(2), "one outline has a hole");
         // Clearance is measured to the ring's copper, not to the middle of it.
-        let probe = Shape::Circle { c: Point { x: 0, y: 0 }, r: 100 };
+        let probe = Shape::Circle { c: Point { x: 0, y: 0 }, r: 100_000 };
         let (gap, _) = copper.clearance_to(&probe);
         assert_eq!(gap, 0, "the anchor is under the probe");
-        let outside = Shape::Circle { c: Point { x: 2100, y: 0 }, r: 100 };
+        let outside = Shape::Circle { c: Point { x: 2_100_000, y: 0 }, r: 100_000 };
         let (gap, _) = copper.clearance_to(&outside);
-        assert!((gap - 200).abs() <= 1, "the ring's outer edge is at 1800: {gap}");
-        let inside = Shape::Circle { c: Point { x: 700, y: 0 }, r: 100 };
+        assert!((gap - 200_000).abs() <= 1, "the ring's outer edge is at 1800: {gap}");
+        let inside = Shape::Circle { c: Point { x: 700_000, y: 0 }, r: 100_000 };
         let (gap, _) = copper.clearance_to(&inside);
-        assert!((gap - 350).abs() <= 6, "the anchor's edge is at 250 and the ring's inner edge at 1200: 700 is 450 from the first and 500 from the second, less the probe's 100: {gap}");
+        assert!((gap - 350_000).abs() <= 6000, "the anchor's edge is at 250 and the ring's inner edge at 1200: 700 is 450 from the first and 500 from the second, less the probe's 100: {gap}");
     }
 
     #[test]
     fn the_copper_of_a_pad_with_an_offset_sits_where_the_offset_puts_it_on_either_side() {
-        let p = pad(PadShape::Rect, (1000, 600), PadShapeExt { offset: Some((400, 0)), ..Default::default() });
+        let p = pad(PadShape::Rect, (1_000_000, 600_000), PadShapeExt { offset: Some((400_000, 0)), ..Default::default() });
         // On top: 0.4 mm to the right of the pad's position; on the bottom the frame is mirrored: 0.4 mm to the left.
-        let top = pad_copper(&instance((5000, 5000), 0, Side::Top), &p, Point { x: 5000, y: 5000 });
-        assert_eq!(top.bbox(0), (4900, 4700, 5900, 5300));
-        let bottom = pad_copper(&instance((5000, 5000), 0, Side::Bottom), &p, Point { x: 5000, y: 5000 });
-        assert_eq!(bottom.bbox(0), (4100, 4700, 5100, 5300));
+        let top = pad_copper(&instance((5_000_000, 5_000_000), 0, Side::Top), &p, Point { x: 5_000_000, y: 5_000_000 });
+        assert_eq!(top.bbox(0), (4_900_000, 4_700_000, 5_900_000, 5_300_000));
+        let bottom = pad_copper(&instance((5_000_000, 5_000_000), 0, Side::Bottom), &p, Point { x: 5_000_000, y: 5_000_000 });
+        assert_eq!(bottom.bbox(0), (4_100_000, 4_700_000, 5_100_000, 5_300_000));
     }
 }

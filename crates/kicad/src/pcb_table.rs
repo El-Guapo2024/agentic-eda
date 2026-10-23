@@ -13,7 +13,7 @@ use eda_model::sch_extras::{SchColor, SchFill};
 use eda_model::table::{Table, TableBorder, TableCell, TableLineStyle, TableSeparators, TableStroke, TableText};
 
 use crate::sexpr::{self, Sexpr};
-use crate::{duid_for, fmt_mm_f, mm, mm_to_um, note_uuid, sexpr_str};
+use crate::{duid_for, fmt_mm_f, mm, mm_to_nm, note_uuid, sexpr_str};
 
 /// A flag as the file writes it: `(name yes)`, `(name no)`, `(name)` (yes) or the bare word in the item itself.
 fn flag(item: &[Sexpr], name: &str) -> Option<bool> {
@@ -24,7 +24,7 @@ fn flag(item: &[Sexpr], name: &str) -> Option<bool> {
 }
 
 fn um(v: f64) -> Nm {
-    mm_to_um(v)
+    mm_to_nm(v)
 }
 
 /// A colour as `(color r g b a)` writes it: the channels 0..255 and an alpha of 0..1.
@@ -89,8 +89,8 @@ pub(crate) fn read_effects(item: &[Sexpr]) -> TableText {
     }
     if !found_size {
         // "Text size was not specified in file, force legacy default units: 60 mils is 1.524 mm".
-        t.height_nm = 1_524;
-        t.width_nm = 1_524;
+        t.height_nm = 1_524_000;
+        t.width_nm = 1_524_000;
     }
     if let Some(j) = sexpr::find(e, "justify") {
         for tok in j.iter().skip(1).filter_map(Sexpr::text) {
@@ -352,7 +352,7 @@ pub(crate) fn write_body(out: &mut String, t: &Table, knockout: bool) {
             let _ = write!(out, " (pts {})", corners.iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect::<Vec<_>>().join(" "));
         }
         // A new cell's legacy margin as KiCad writes it (1.0025, `TableCell::margin_nm`), any other to the micrometre.
-        let m = |i: usize| crate::fmt_mm_f(c.margin_nm(i) as f64 / 1_000_000.0);
+        let m = |i: usize| mm(c.margin_nm(i));
         let _ = write!(out, " (margins {} {} {} {}) (span {} {})", m(0), m(1), m(2), m(3), c.col_span, c.row_span);
         if t.angle != 0 {
             let _ = write!(out, " (angle {})", fmt_mm_f(t.angle as f64 / 1000.0));

@@ -4,7 +4,7 @@
 //! `saveText`) writes them and read back from the same tokens.
 
 use crate::sexpr::{self, Sexpr};
-use crate::{duid_for, mm, sexpr_str};
+use crate::{duid_for, sch_mm, sexpr_str};
 use eda_model::ir::{Millideg, Point, SchematicSection, Nm};
 use eda_model::sch_extras::{DirectiveShape, JunctionLook, SchColor, SchFill, SchGraphic, SchGraphicKind, SchHAlign, SchLineStyle, SchStroke, SchVAlign};
 use std::fmt::Write;
@@ -39,7 +39,7 @@ fn stroke_str(g: &SchGraphic) -> String {
 
 /// `(stroke (width w) (type t) [(color ...)])` (`STROKE_PARAMS::Format`).
 fn stroke_params(width_nm: Nm, style: SchLineStyle, color: Option<SchColor>) -> String {
-    let mut s = format!("(stroke (width {}) (type {})", mm(width_nm), style.token());
+    let mut s = format!("(stroke (width {}) (type {})", sch_mm(width_nm), style.token());
     if let Some(c) = color {
         let _ = write!(s, " (color {})", color_str(c));
     }
@@ -57,7 +57,7 @@ pub(crate) fn line_stroke_str(width_nm: Nm, stroke: Option<&SchStroke>) -> Strin
 /// `(diameter d) (color r g b a)` of a junction (`SCH_IO_KICAD_SEXPR::saveJunction`): zero diameter and a colour of all zeroes are the defaults.
 pub(crate) fn junction_attrs(look: Option<&JunctionLook>) -> String {
     let look = look.copied().unwrap_or_default();
-    format!("(diameter {}) (color {})", mm(look.diameter_nm), look.color.map(color_str).unwrap_or_else(|| "0 0 0 0".to_string()))
+    format!("(diameter {}) (color {})", sch_mm(look.diameter_nm), look.color.map(color_str).unwrap_or_else(|| "0 0 0 0".to_string()))
 }
 
 fn fill_str(g: &SchGraphic) -> String {
@@ -68,7 +68,7 @@ fn fill_str(g: &SchGraphic) -> String {
 }
 
 fn pts_str(pts: &[Point]) -> String {
-    pts.iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect::<Vec<_>>().join(" ")
+    pts.iter().map(|p| format!("(xy {} {})", sch_mm(p.x), sch_mm(p.y))).collect::<Vec<_>>().join(" ")
 }
 
 fn angle_str(m: Millideg) -> String {
@@ -123,7 +123,7 @@ pub(crate) fn read_text_lie(item: &[Sexpr], look: &EffectsLook) -> (Millideg, ed
 
 /// The `(effects ...)` of a text box: font size, bold/italic and the justification (a box defaults to left/top).
 fn effects_str(size_nm: Nm, bold: bool, italic: bool, h: SchHAlign, v: SchVAlign) -> String {
-    let mut f = format!("(font (size {0} {0})", mm(size_nm));
+    let mut f = format!("(font (size {0} {0})", sch_mm(size_nm));
     if bold {
         f.push_str(" (bold yes)");
     }
@@ -177,14 +177,14 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
         let locked = if sch.extras.is_locked(&g.id) { "\n\t\t(locked yes)" } else { "" };
         match &g.shape {
             SchGraphicKind::Rectangle { start, end, corner_radius_nm } => {
-                let radius = if *corner_radius_nm > 0 { format!("\n\t\t(radius {})", mm(*corner_radius_nm)) } else { String::new() };
-                let _ = writeln!(out, "\t(rectangle\n\t\t(start {} {})\n\t\t(end {} {}){radius}\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)", mm(start.x), mm(start.y), mm(end.x), mm(end.y), stroke_str(g), fill_str(g));
+                let radius = if *corner_radius_nm > 0 { format!("\n\t\t(radius {})", sch_mm(*corner_radius_nm)) } else { String::new() };
+                let _ = writeln!(out, "\t(rectangle\n\t\t(start {} {})\n\t\t(end {} {}){radius}\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)", sch_mm(start.x), sch_mm(start.y), sch_mm(end.x), sch_mm(end.y), stroke_str(g), fill_str(g));
             }
             SchGraphicKind::Circle { center, radius_nm } => {
-                let _ = writeln!(out, "\t(circle\n\t\t(center {} {})\n\t\t(radius {})\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)", mm(center.x), mm(center.y), mm(*radius_nm), stroke_str(g), fill_str(g));
+                let _ = writeln!(out, "\t(circle\n\t\t(center {} {})\n\t\t(radius {})\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)", sch_mm(center.x), sch_mm(center.y), sch_mm(*radius_nm), stroke_str(g), fill_str(g));
             }
             SchGraphicKind::Arc { start, mid, end } => {
-                let _ = writeln!(out, "\t(arc\n\t\t(start {} {})\n\t\t(mid {} {})\n\t\t(end {} {})\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)", mm(start.x), mm(start.y), mm(mid.x), mm(mid.y), mm(end.x), mm(end.y), stroke_str(g), fill_str(g));
+                let _ = writeln!(out, "\t(arc\n\t\t(start {} {})\n\t\t(mid {} {})\n\t\t(end {} {})\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)", sch_mm(start.x), sch_mm(start.y), sch_mm(mid.x), sch_mm(mid.y), sch_mm(end.x), sch_mm(end.y), stroke_str(g), fill_str(g));
             }
             SchGraphicKind::Bezier { start, c1, c2, end } => {
                 let _ = writeln!(out, "\t(bezier\n\t\t(pts {})\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)", pts_str(&[*start, *c1, *c2, *end]), stroke_str(g), fill_str(g));
@@ -213,32 +213,33 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                     out,
                     "\t(text_box {}\n\t\t(exclude_from_sim no)\n\t\t(at {} {} {})\n\t\t(size {} {})\n\t\t(margins {m} {m} {m} {m})\n\t\t{}\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)",
                     sexpr_str(text),
-                    mm(start.x),
-                    mm(start.y),
+                    sch_mm(start.x),
+                    sch_mm(start.y),
                     angle_str(*angle),
-                    mm(w),
-                    mm(h),
+                    sch_mm(w),
+                    sch_mm(h),
                     stroke_str(g),
                     fill_str(g),
                     effects_str(*size_nm, *bold, *italic, *h_align, *v_align),
-                    m = mm(margin)
+                    m = sch_mm(margin)
                 );
             }
             SchGraphicKind::Image { at, scale_ppm, data } => {
                 // `SCH_IO_KICAD_SEXPR::saveBitmap`: the position, the scale when it is not 1, the uuid, the lock and the file in lines of 76 characters.
                 let scale = if *scale_ppm != eda_model::image_info::SCALE_PPM { format!("\n\t\t(scale {})", scale_str(*scale_ppm)) } else { String::new() };
-                let _ = writeln!(out, "\t(image\n\t\t(at {} {}){scale}\n\t\t(uuid \"{uuid}\"){locked}\n{}\t)", mm(at.x), mm(at.y), data_str(data, "\t\t"));
+                let _ = writeln!(out, "\t(image\n\t\t(at {} {}){scale}\n\t\t(uuid \"{uuid}\"){locked}\n{}\t)", sch_mm(at.x), sch_mm(at.y), data_str(data, "\t\t"));
             }
             SchGraphicKind::Directive { at, orientation, shape, pin_length_nm, netclass, component_class } => {
                 // `SCH_DIRECTIVE_LABEL::AutoplaceFields`: the fields stack along the flag's pole.
-                let size = 1270;
-                let symbol = 508 * if matches!(shape, DirectiveShape::Diamond | DirectiveShape::Rectangle) { 2 } else { 1 };
-                let margin = 191;
+                // the field's 1.27 mm text, `m_symbolSize` (`MilsToIU( 20 )`, twice for a diamond or a rectangle) and `GetTextOffset()` (0.15 of the text: 1905 IU)
+                let size = 1_270_000;
+                let symbol = 508_000 * if matches!(shape, DirectiveShape::Diamond | DirectiveShape::Rectangle) { 2 } else { 1 };
+                let margin = 190_500;
                 let mut origin = *pin_length_nm;
                 let mut props = String::new();
                 for (name, value, italic) in [("Netclass", netclass, false), ("Component Class", component_class, true)] {
                     if value.is_empty() {
-                        let _ = write!(props, "\n\t\t(property {} \"\" (at {} {} 0) (effects (font (size 1.27 1.27){}) (justify left)))", sexpr_str(name), mm(at.x), mm(at.y), if italic { " (italic yes)" } else { "" });
+                        let _ = write!(props, "\n\t\t(property {} \"\" (at {} {} 0) (effects (font (size 1.27 1.27){}) (justify left)))", sexpr_str(name), sch_mm(at.x), sch_mm(at.y), if italic { " (italic yes)" } else { "" });
                         continue;
                     }
                     let (dx, dy, vertical) = match orientation % 360_000 {
@@ -247,16 +248,16 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                         270_000 => (origin, -(symbol + margin), true),
                         _ => (symbol + margin, -origin, false),
                     };
-                    let _ = write!(props, "\n\t\t(property {} {} (at {} {} {}) (effects (font (size 1.27 1.27){}) (justify left)))", sexpr_str(name), sexpr_str(value), mm(at.x + dx), mm(at.y + dy), if vertical { 90 } else { 0 }, if italic { " (italic yes)" } else { "" });
+                    let _ = write!(props, "\n\t\t(property {} {} (at {} {} {}) (effects (font (size 1.27 1.27){}) (justify left)))", sexpr_str(name), sexpr_str(value), sch_mm(at.x + dx), sch_mm(at.y + dy), if vertical { 90 } else { 0 }, if italic { " (italic yes)" } else { "" });
                     origin -= size + margin;
                 }
                 let _ = writeln!(
                     out,
                     "\t(netclass_flag \"\"\n\t\t(length {})\n\t\t(shape {})\n\t\t(at {} {} {})\n\t\t(fields_autoplaced yes)\n\t\t(effects (font (size 1.27 1.27)) (justify left bottom))\n\t\t(uuid \"{uuid}\"){locked}{props}\n\t)",
-                    mm(*pin_length_nm),
+                    sch_mm(*pin_length_nm),
                     shape.token(),
-                    mm(at.x),
-                    mm(at.y),
+                    sch_mm(at.x),
+                    sch_mm(at.y),
                     angle_str(*orientation)
                 );
             }
@@ -307,14 +308,14 @@ pub(crate) struct EffectsLook {
 pub(crate) fn read_effects(item: &[Sexpr]) -> EffectsLook {
     let effects = sexpr::find(item, "effects");
     let font = effects.and_then(|e| sexpr::find(e, "font"));
-    let size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::import::mm_to_um).unwrap_or(1270);
+    let size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(1_270_000);
     let flag = |tag: &str| font.is_some_and(|f| parse_bool(f, tag).unwrap_or(false) || f.iter().skip(1).any(|c| c.text() == Some(tag)));
     let justify: Vec<String> = effects.and_then(|e| sexpr::find(e, "justify")).map(|j| j.iter().skip(1).filter_map(Sexpr::text).map(String::from).collect()).unwrap_or_default();
     EffectsLook { size_nm, bold: flag("bold"), italic: flag("italic"), justify }
 }
 
 fn pt(node: &[Sexpr]) -> Option<Point> {
-    Some(Point { x: crate::import::mm_to_um(sexpr::num(node, 1)?), y: crate::import::mm_to_um(sexpr::num(node, 2)?) })
+    Some(Point { x: crate::import::sch_mm_to_nm(sexpr::num(node, 1)?), y: crate::import::sch_mm_to_nm(sexpr::num(node, 2)?) })
 }
 
 fn pts_of(node: &[Sexpr]) -> Vec<Point> {
@@ -330,7 +331,7 @@ pub(crate) fn parse_color(node: &[Sexpr]) -> Option<SchColor> {
 /// `(stroke (width w) (type t) (color ...))` -> width (um), style, colour.
 pub(crate) fn parse_stroke(node: &[Sexpr]) -> (Nm, SchLineStyle, Option<SchColor>) {
     let Some(s) = sexpr::find(node, "stroke") else { return (0, SchLineStyle::Default, None) };
-    let width = sexpr::find(s, "width").and_then(|w| sexpr::num(w, 1)).map(crate::import::mm_to_um).unwrap_or(0);
+    let width = sexpr::find(s, "width").and_then(|w| sexpr::num(w, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(0);
     let style = sexpr::find(s, "type").and_then(|t| sexpr::txt(t, 1)).map(SchLineStyle::from_token).unwrap_or_default();
     let color = sexpr::find(s, "color").and_then(parse_color);
     // KiCad writes a colour of all zeroes for "unspecified" (`COLOR4D::UNSPECIFIED`).
@@ -364,12 +365,12 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
         match sexpr::tag(item) {
             Some("rectangle") => {
                 let (Some(start), Some(end)) = (sexpr::find(item, "start").and_then(pt), sexpr::find(item, "end").and_then(pt)) else { continue };
-                let corner_radius_nm = sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::mm_to_um).unwrap_or(0);
+                let corner_radius_nm = sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(0);
                 out.push(ReadGraphic::new(styled(SchGraphicKind::Rectangle { start, end, corner_radius_nm }, item), locked_of(item)));
             }
             Some("circle") => {
                 let (Some(center), Some(r)) = (sexpr::find(item, "center").and_then(pt), sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1))) else { continue };
-                out.push(ReadGraphic::new(styled(SchGraphicKind::Circle { center, radius_nm: crate::import::mm_to_um(r) }, item), locked_of(item)));
+                out.push(ReadGraphic::new(styled(SchGraphicKind::Circle { center, radius_nm: crate::import::sch_mm_to_nm(r) }, item), locked_of(item)));
             }
             Some("arc") => {
                 let (Some(start), Some(mid), Some(end)) = (sexpr::find(item, "start").and_then(pt), sexpr::find(item, "mid").and_then(pt), sexpr::find(item, "end").and_then(pt)) else { continue };
@@ -409,12 +410,12 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
                 let angle = (sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round().rem_euclid(360_000.0) as Millideg;
                 let Some(size) = sexpr::find(item, "size").and_then(|s| Some((sexpr::num(s, 1)?, sexpr::num(s, 2)?))) else { continue };
-                let start = Point { x: crate::import::mm_to_um(x), y: crate::import::mm_to_um(y) };
-                let end = Point { x: start.x + crate::import::mm_to_um(size.0), y: start.y + crate::import::mm_to_um(size.1) };
-                let margin_nm = sexpr::find(item, "margins").and_then(|m| sexpr::num(m, 1)).map(crate::import::mm_to_um).unwrap_or(0);
+                let start = Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) };
+                let end = Point { x: start.x + crate::import::sch_mm_to_nm(size.0), y: start.y + crate::import::sch_mm_to_nm(size.1) };
+                let margin_nm = sexpr::find(item, "margins").and_then(|m| sexpr::num(m, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(0);
                 let effects = sexpr::find(item, "effects");
                 let font = effects.and_then(|e| sexpr::find(e, "font"));
-                let size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::import::mm_to_um).unwrap_or(1270);
+                let size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(1_270_000);
                 let flag = |tag: &str| font.and_then(|f| parse_bool(f, tag)).unwrap_or(false);
                 let justify: Vec<&str> = effects.and_then(|e| sexpr::find(e, "justify")).map(|j| j.iter().skip(1).filter_map(Sexpr::text).collect()).unwrap_or_default();
                 let h_align = if justify.contains(&"left") {
@@ -453,10 +454,10 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 let Some(at) = sexpr::find(item, "at") else { continue };
                 let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
                 let orientation = (sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round().rem_euclid(360_000.0) as Millideg;
-                let pin_length_nm = sexpr::find(item, "length").and_then(|l| sexpr::num(l, 1)).map(crate::import::mm_to_um).unwrap_or(2540);
+                let pin_length_nm = sexpr::find(item, "length").and_then(|l| sexpr::num(l, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(2_540_000);
                 let shape = sexpr::find(item, "shape").and_then(|s| sexpr::txt(s, 1)).map(DirectiveShape::from_token).unwrap_or_default();
                 let field = |name: &str| sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).unwrap_or("").to_string();
-                let kind = SchGraphicKind::Directive { at: Point { x: crate::import::mm_to_um(x), y: crate::import::mm_to_um(y) }, orientation, shape, pin_length_nm, netclass: field("Netclass"), component_class: field("Component Class") };
+                let kind = SchGraphicKind::Directive { at: Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) }, orientation, shape, pin_length_nm, netclass: field("Netclass"), component_class: field("Component Class") };
                 out.push(ReadGraphic::new(SchGraphic::new(kind), locked_of(item)));
             }
             _ => {}

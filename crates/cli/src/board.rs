@@ -496,7 +496,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             let mut placed: Vec<(String, Point)> = Vec::new();
             for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
                 let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
-                placed.push((p.number.clone(), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) }));
+                placed.push((p.number.clone(), Point { x: sym.at.x + eda_kicad::mm_to_nm(world.x), y: sym.at.y + eda_kicad::mm_to_nm(world.y) }));
             }
             // the places Swap Pins traded
             if let Some(swaps) = sch.extras.pin_swaps_of(&eda_model::ir::field_key(&sym.id, sym.unit)) {

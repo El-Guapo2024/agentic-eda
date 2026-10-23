@@ -12,12 +12,12 @@ use eda_model::ir::Point;
 use eda_model::pcb_items::RefImage;
 
 use crate::sexpr::{self, Sexpr};
-use crate::{mm, mm_to_um, sexpr_str};
+use crate::{mm, mm_to_nm, sexpr_str};
 
 /// One `(image ..)` of a board; `None` when it has no position or its data is not an image of a kind known (KiCad stops reading the board at "Failed to read image data").
 pub(crate) fn read(item: &[Sexpr]) -> Option<RefImage> {
     let at = sexpr::find(item, "at")?;
-    let at = Point { x: mm_to_um(sexpr::num(at, 1)?), y: mm_to_um(sexpr::num(at, 2)?) };
+    let at = Point { x: mm_to_nm(sexpr::num(at, 1)?), y: mm_to_nm(sexpr::num(at, 2)?) };
     let data: String = sexpr::find(item, "data").map(|d| d.iter().skip(1).filter_map(Sexpr::text).collect()).unwrap_or_default();
     let data = image_info::compact(&data);
     image_info::header_of_base64(&data)?;

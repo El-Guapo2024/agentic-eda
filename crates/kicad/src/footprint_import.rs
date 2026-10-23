@@ -18,7 +18,7 @@ use eda_model::fp_edit::{FieldLayout, LIBRARY_REFERENCE_TEXT};
 use eda_model::footprint::{PadKind, PadShape};
 use eda_model::ir::{FootprintAttributes, FootprintField, LibraryFootprint, LibraryPad, LibraryPadShape, Point, Shape, Side, Text, TextJustify};
 
-use crate::import::mm_to_um;
+use crate::import::mm_to_nm;
 use crate::sexpr::{self, Sexpr};
 
 /// What [`parse_library_footprint`] found.
@@ -34,7 +34,7 @@ pub struct ParsedFootprint {
 
 fn point(list: &[Sexpr], tag: &str) -> Option<Point> {
     let p = sexpr::find(list, tag)?;
-    Some(Point { x: mm_to_um(sexpr::num(p, 1)?), y: mm_to_um(sexpr::num(p, 2)?) })
+    Some(Point { x: mm_to_nm(sexpr::num(p, 1)?), y: mm_to_nm(sexpr::num(p, 2)?) })
 }
 
 /// `(hide yes)` or a bare `hide`.
@@ -48,7 +48,7 @@ fn hidden(list: &[Sexpr]) -> bool {
 /// A stroke width in um: `(stroke (width w))`, else the older `(width w)`, else KiCad's 0.12 mm default.
 fn stroke_width(item: &[Sexpr]) -> i64 {
     let w = sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1));
-    mm_to_um(w.unwrap_or(0.12))
+    mm_to_nm(w.unwrap_or(0.12))
 }
 
 /// `(fill yes|solid)` / `(fill (type solid|outline|...))`.
@@ -267,7 +267,7 @@ fn with_text(mut l: FieldLayout, text: &str, own: &str) -> FieldLayout {
 }
 
 fn xy_points(item: &[Sexpr]) -> Vec<Point> {
-    sexpr::find(item, "pts").map(|pts| sexpr::find_all(pts, "xy").filter_map(|xy| Some(Point { x: mm_to_um(sexpr::num(xy, 1)?), y: mm_to_um(sexpr::num(xy, 2)?) })).collect()).unwrap_or_default()
+    sexpr::find(item, "pts").map(|pts| sexpr::find_all(pts, "xy").filter_map(|xy| Some(Point { x: mm_to_nm(sexpr::num(xy, 1)?), y: mm_to_nm(sexpr::num(xy, 2)?) })).collect()).unwrap_or_default()
 }
 
 /// `(attr smd through_hole board_only exclude_from_pos_files exclude_from_bom allow_missing_courtyard
@@ -304,11 +304,11 @@ fn parse_text(item: &[Sexpr], content: &str) -> Option<Text> {
     Some(Text {
         id: String::new(),
         content: content.to_string(),
-        at: Point { x: mm_to_um(x), y: mm_to_um(y) },
+        at: Point { x: mm_to_nm(x), y: mm_to_nm(y) },
         angle: ((sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32,
         layer: layer_of(item),
-        size_nm: mm_to_um(size_mm).max(1),
-        stroke_width: mm_to_um(thickness_mm),
+        size_nm: mm_to_nm(size_mm).max(1),
+        stroke_width: mm_to_nm(thickness_mm),
         justify: if has("left") {
             TextJustify::Left
         } else if has("right") {
@@ -337,15 +337,15 @@ fn parse_pad(pad: &[Sexpr], version: i64) -> Option<LibraryPad> {
             if toks.first() == Some(&"oval") {
                 let nums: Vec<f64> = toks[1..].iter().filter_map(|s| s.parse::<f64>().ok()).collect();
                 let dw = nums.first().copied().unwrap_or(0.0);
-                (None, Some((mm_to_um(dw), mm_to_um(nums.get(1).copied().unwrap_or(dw)))))
+                (None, Some((mm_to_nm(dw), mm_to_nm(nums.get(1).copied().unwrap_or(dw)))))
             } else {
-                (toks.iter().find_map(|s| s.parse::<f64>().ok()).map(mm_to_um), None)
+                (toks.iter().find_map(|s| s.parse::<f64>().ok()).map(mm_to_nm), None)
             }
         }
         None => (None, None),
     };
-    let um = |tag: &str| sexpr::find(pad, tag).and_then(|c| sexpr::num(c, 1)).map(mm_to_um);
-    let size_nm = (mm_to_um(sexpr::num(size, 1)?), mm_to_um(sexpr::num(size, 2)?));
+    let um = |tag: &str| sexpr::find(pad, tag).and_then(|c| sexpr::num(c, 1)).map(mm_to_nm);
+    let size_nm = (mm_to_nm(sexpr::num(size, 1)?), mm_to_nm(sexpr::num(size, 2)?));
     // The padstack (`(padstack ..)`, `(remove_unused_layers ..)`, `(keep_end_layers ..)`): a `.kicad_mod` is a footprint on the top, and the library has no board, so a custom
     // stack has every copper layer KiCad's file can name.
     let main = eda_model::padstack::PadLayerShape {
@@ -375,8 +375,8 @@ fn parse_pad(pad: &[Sexpr], version: i64) -> Option<LibraryPad> {
     // What the editor does not edit (`LibraryPadKeep`): an edge connector, the fabrication property, the margins (a 0 of a file before KiCad 9 is "inherit"), the rest as written.
     let mut keep = eda_model::lib_keep::LibraryPadKeep { connector: sexpr::txt(pad, 2) == Some("connect"), ..Default::default() };
     let margin = |tag: &str| sexpr::find(pad, tag).and_then(|c| sexpr::num(c, 1)).filter(|v| !(version <= 20240201 && *v == 0.0));
-    keep.solder_mask_margin = margin("solder_mask_margin").map(mm_to_um);
-    keep.solder_paste_margin = margin("solder_paste_margin").map(mm_to_um);
+    keep.solder_mask_margin = margin("solder_mask_margin").map(mm_to_nm);
+    keep.solder_paste_margin = margin("solder_paste_margin").map(mm_to_nm);
     keep.solder_paste_margin_ratio = margin("solder_paste_margin_ratio").or_else(|| margin("solder_paste_ratio"));
     for item in pad.iter().skip(1).filter_map(Sexpr::as_list) {
         match sexpr::tag(item) {
@@ -388,7 +388,7 @@ fn parse_pad(pad: &[Sexpr], version: i64) -> Option<LibraryPad> {
     Some(LibraryPad {
         id: String::new(),
         number,
-        at: Point { x: mm_to_um(sexpr::num(at, 1)?), y: mm_to_um(sexpr::num(at, 2)?) },
+        at: Point { x: mm_to_nm(sexpr::num(at, 1)?), y: mm_to_nm(sexpr::num(at, 2)?) },
         size: main.size,
         // The offset lives inside `(drill ..)`; an older export of this app wrote it as a token of the pad.
         offset: main.offset.map(|(x, y)| Point { x, y }).or_else(|| point(pad, "offset")).unwrap_or_default(),

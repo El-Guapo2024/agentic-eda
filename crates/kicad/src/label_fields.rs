@@ -53,7 +53,7 @@ pub fn label_fields_placed(sch: &SchematicSection, l: &NetLabel, show_intersheet
     }
     fields.extend(own.iter().cloned().map(|f| (f, false)));
     let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
-    let size_iu = look.text_size_nm() * 10;
+    let size_iu = look.text_size_nm() / eda_model::units::SCH_IU_NM;
     let fx = TextStyle { size_iu, thickness_iu: if look.bold { eda_model::kicad_font::kiround(size_iu as f64 / 5.0) } else { 0 }, h: HJustify::Left, v: eda_model::kicad_font::VJustify::Center };
     let spin = spin_of(crate::label_spin_of(sch, l));
     let at = (l.at.x as f64, l.at.y as f64);

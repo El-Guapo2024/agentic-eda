@@ -7,7 +7,7 @@
 //! chamfered corners swap sides and every primitive's x is negated. The engine keeps the footprint as seen from the top, so reading
 //! and writing both apply the same mirror.
 
-use crate::import::{graphic_shape, mm_to_um};
+use crate::import::{graphic_shape, mm_to_nm};
 use crate::sexpr::{self, Sexpr};
 use crate::mm;
 use eda_model::footprint::{CustomZoneMode, PadAnchor, PadCustom, PadPrimitive, PadShape, PadShapeExt};
@@ -33,7 +33,7 @@ fn mirror_x(p: Point, side: Side) -> Point {
 /// The `(offset x y)` inside a pad's `(drill ..)`, in the engine's frame (`PAD::SetOffset`).
 pub(crate) fn read_offset(pad: &[Sexpr], side: Side) -> Option<(Nm, Nm)> {
     let o = sexpr::find(pad, "drill").and_then(|d| sexpr::find(d, "offset"))?;
-    let p = mirror_x(Point { x: mm_to_um(sexpr::num(o, 1)?), y: mm_to_um(sexpr::num(o, 2)?) }, side);
+    let p = mirror_x(Point { x: mm_to_nm(sexpr::num(o, 1)?), y: mm_to_nm(sexpr::num(o, 2)?) }, side);
     (p.x != 0 || p.y != 0).then_some((p.x, p.y))
 }
 
@@ -58,8 +58,8 @@ pub(crate) fn read_shape_node(pad: &[Sexpr], shape_token: &str, offset: Option<(
 
     // `(rect_delta dx dy)`, `PAD::SetDelta`; the delta's x is mirrored with the pad.
     if let Some(d) = sexpr::find(pad, "rect_delta") {
-        let dx = mm_to_um(sexpr::num(d, 1).unwrap_or(0.0));
-        let dy = mm_to_um(sexpr::num(d, 2).unwrap_or(0.0));
+        let dx = mm_to_nm(sexpr::num(d, 1).unwrap_or(0.0));
+        let dy = mm_to_nm(sexpr::num(d, 2).unwrap_or(0.0));
         let dx = if side == Side::Bottom { -dx } else { dx };
         if dx != 0 || dy != 0 {
             ext.trapezoid_delta = Some((dx, dy));
@@ -131,7 +131,7 @@ fn read_primitives(prims: &[Sexpr], side: Side) -> Vec<PadPrimitive> {
                 shape.set_filled(true);
             }
             if shape.stroke_width() <= 0 && !shape.is_filled() {
-                shape.set_stroke_width(100);
+                shape.set_stroke_width(100_000);
             }
         }
         out.push(PadPrimitive { shape, proxy });

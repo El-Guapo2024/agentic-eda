@@ -9,7 +9,7 @@
 //! vias out, and the fill of another net's zone near it outside that zone's own outline. A plain or staggered grid then samples the region at the pitch from the anchor; the
 //! Poisson layout tiles a baked Poisson pattern; a guard walks the clearance envelope of the guarded net's tracks.
 //!
-//! Everything is in nanometres, as in KiCad; the design's micrometres are multiplied out. Where this differs from KiCad: a pad whose copper is on a layer only when something is
+//! Everything is in nanometres, as in KiCad and the design. Where this differs from KiCad: a pad whose copper is on a layer only when something is
 //! connected there (`UNCONNECTED_LAYER_MODE`'s `IfConnected`) counts as flashed; text on copper is no obstacle; zone fills are the ones kicad-cli made last (the canvas's).
 
 use std::collections::{BTreeSet, HashMap};
@@ -32,15 +32,8 @@ pub const POISSON_TILE_PITCHES: i64 = 8;
 /// `POISSON_TILE_SEED`: "This is an arbitrary value but must never be changed (it'll break the patterns used in designs)."
 pub const POISSON_TILE_SEED: u32 = 0x542c_21fc;
 
-fn nm(um: Nm) -> i64 {
-    um * 1000
-}
-/// Nanometres to the nearest micrometre.
-fn um_of(nm: i64) -> Nm {
-    (nm as f64 / 1000.0).round() as Nm
-}
 fn p64(p: Point) -> Point64 {
-    Point64::new(nm(p.x), nm(p.y))
+    Point64::new(p.x, p.y)
 }
 
 /// The fills of the board's zones, nanometres, by `(zone id, layer)`: what kicad-cli made last (`ZONE::GetFill( layer )`).
@@ -64,7 +57,7 @@ pub fn cell_for_position(v: &ViaStitch, pitch: i64, pos: (i64, i64)) -> (i64, i6
     let pitch = if pitch > 0 { pitch } else { 1 };
     // `roundDiv`: half away from zero, in integers.
     let round_div = |a: i64, b: i64| if a >= 0 { (a + b / 2) / b } else { -((-a + b / 2) / b) };
-    let (ox, oy) = (nm(v.origin_offset.x), nm(v.origin_offset.y));
+    let (ox, oy) = (v.origin_offset.x, v.origin_offset.y);
     let row = round_div(pos.1 - oy, pitch);
     let shift = if v.layout == StitchLayout::Staggered && (row % 2 + 2) % 2 != 0 { pitch / 2 } else { 0 };
     let col = round_div(pos.0 - ox - shift, pitch);
@@ -77,7 +70,7 @@ pub fn position_for_cell(v: &ViaStitch, pitch: i64, cell: (i64, i64)) -> (i64, i
         return cell;
     }
     let shift = if v.layout == StitchLayout::Staggered && (cell.1 % 2 + 2) % 2 != 0 { pitch / 2 } else { 0 };
-    (cell.0 * pitch + nm(v.origin_offset.x) + shift, cell.1 * pitch + nm(v.origin_offset.y))
+    (cell.0 * pitch + v.origin_offset.x + shift, cell.1 * pitch + v.origin_offset.y)
 }
 
 /// `Update`'s "Try to detect origin offset change due to moved via": on a grid the vias were made on (`childrenAreOnThisGrid`), the first member via off its cell defines
@@ -93,8 +86,7 @@ pub fn detect_origin_offset(v: &ViaStitch, pitch: i64, members: &[(i64, i64)]) -
             let row = (p.1 - offset_y) / pitch;
             let shift = if v.layout == StitchLayout::Staggered && (row % 2 + 2) % 2 != 0 { pitch / 2 } else { 0 };
             let offset_x = (((p.0 - shift) % pitch) + pitch) % pitch;
-            // The design keeps micrometres.
-            return Some(Point { x: offset_x / 1000, y: offset_y / 1000 });
+            return Some(Point { x: offset_x, y: offset_y });
         }
     }
     None
@@ -296,13 +288,13 @@ fn add_text_hull(out: &mut ShapePolySet, segs: &[crate::kimath::Seg], r: Nm, at:
     let (sin, cos) = rot_deg.to_radians().sin_cos();
     // `RotatePoint( p, centre, angle )`, y down: x' = x cos + y sin, y' = -x sin + y cos, relative to the centre.
     let turn = |p: (f64, f64), s: f64| (p.0 * cos + p.1 * s, -p.0 * s + p.1 * cos);
-    let (ax, ay) = (nm(at.x) as f64, nm(at.y) as f64);
+    let (ax, ay) = (at.x as f64, at.y as f64);
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in segs.iter().flat_map(|s| [s.a, s.b]) {
-        let q = turn((nm(p.x) as f64 - ax, nm(p.y) as f64 - ay), -sin);
+        let q = turn((p.x as f64 - ax, p.y as f64 - ay), -sin);
         (x0, y0, x1, y1) = (x0.min(q.0), y0.min(q.1), x1.max(q.0), y1.max(q.1));
     }
-    let grow = (nm(r) + margin) as f64;
+    let grow = (r + margin) as f64;
     let corners = [(x0 - grow, y0 - grow), (x1 + grow, y0 - grow), (x1 + grow, y1 + grow), (x0 - grow, y1 + grow)];
     let pts: Vec<Point64> = corners.iter().map(|&c| turn(c, sin)).map(|(x, y)| Point64::new((x + ax).round() as i64, (y + ay).round() as i64)).collect();
     let (bx0, by0) = (pts.iter().map(|p| p.x).min().unwrap_or(0), pts.iter().map(|p| p.y).min().unwrap_or(0));
@@ -337,20 +329,20 @@ fn boxes_overlap(a: (i64, i64, i64, i64), b: (i64, i64, i64, i64)) -> bool {
 fn shape_to_polygon(out: &mut ShapePolySet, s: &Shape, margin: i64) {
     match s {
         Shape::Circle { c, r } => {
-            out.add_outline(circle_polygon(p64(*c), nm(*r) + margin, POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
+            out.add_outline(circle_polygon(p64(*c), (*r) + margin, POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
         }
         Shape::Stadium { a, b, r } => {
-            out.add_outline(oval_polygon(p64(*a), p64(*b), 2 * (nm(*r) + margin), POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
+            out.add_outline(oval_polygon(p64(*a), p64(*b), 2 * ((*r) + margin), POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
         }
         Shape::Rect { x0, y0, x1, y1 } => {
-            let mut r = rect_set(nm(*x0), nm(*y0), nm(*x1), nm(*y1));
+            let mut r = rect_set(*x0, *y0, *x1, *y1);
             if margin > 0 {
                 r.inflate(margin, CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
             }
             out.polys.extend(r.polys);
         }
         Shape::RoundRect { x0, y0, x1, y1, r } => {
-            let (rr, x0, y0, x1, y1) = (nm(*r), nm(*x0), nm(*y0), nm(*x1), nm(*y1));
+            let (rr, x0, y0, x1, y1) = ((*r), (*x0), (*y0), (*x1), (*y1));
             let mut core = rect_set(x0 + rr, y0 + rr, x1 - rr, y1 - rr);
             core.inflate(rr + margin, CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
             out.polys.extend(core.polys);
@@ -364,7 +356,7 @@ fn shape_to_polygon(out: &mut ShapePolySet, s: &Shape, margin: i64) {
         }
         Shape::Strokes { segs, r } => {
             for seg in segs {
-                out.add_outline(oval_polygon(p64(seg.a), p64(seg.b), 2 * (nm(*r) + margin), POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
+                out.add_outline(oval_polygon(p64(seg.a), p64(seg.b), 2 * ((*r) + margin), POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
             }
         }
         Shape::Compound { parts } => {
@@ -468,7 +460,7 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
     if v.pitch_nm <= 0 {
         v.pitch_nm = default_pitch(v.via.size_nm);
     }
-    let pitch = nm(v.pitch_nm);
+    let pitch = v.pitch_nm;
     // `childrenAreOnThisGrid = m_childGridConfig == currentConfig`: the vias were made on the layout, mode and pitch the board's stitching of this id has (the settings of
     // its last `Update`; a Properties edit has not reached the board yet). On a new grid every via is off it, and the first one is no dragged via.
     let effective_pitch = |s: &ViaStitch| -> Nm {
@@ -495,7 +487,7 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
         .routing
         .iter()
         .flat_map(|rt| v.member_ids.iter().filter_map(move |id| rt.vias.iter().find(|x| &x.id == id)))
-        .map(|x| (nm(x.at.x), nm(x.at.y)))
+        .map(|x| (x.at.x, x.at.y))
         .collect()
     };
     if let Some(offset) = detect_origin_offset(&v, pitch, &members) {
@@ -510,15 +502,15 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
     let excluded = |cell: (i64, i64)| -> bool {
         if v.mode == StitchMode::Guard {
             return v.excluded_positions.iter().any(|e| {
-                let (dx, dy) = ((nm(e.x) - cell.0) as i128, (nm(e.y) - cell.1) as i128);
+                let (dx, dy) = ((e.x - cell.0) as i128, (e.y - cell.1) as i128);
                 dx * dx + dy * dy < guard_exclude_sq
             });
         }
         if v.uses_grid_cells() {
             v.excluded_cells.contains(&cell)
         } else {
-            // The design keeps micrometres: a position is matched as the via was put there, to the micrometre.
-            v.excluded_positions.iter().any(|e| (e.x, e.y) == (um_of(cell.0), um_of(cell.1)))
+            // The design keeps nanometres: a position is matched as the via was put there, to the nanometre.
+            v.excluded_positions.iter().any(|e| (e.x, e.y) == (cell.0, cell.1))
         }
     };
     let vias = cells
@@ -526,9 +518,9 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
         .filter(|c| !excluded(*c))
         .map(|c| {
             let (x, y) = position_for_cell(&v, pitch, c);
-            // The design keeps micrometres: the position rounded to one -- and where the layout has no grid, the position is the via's key, as rounded.
-            let at = Point { x: um_of(x), y: um_of(y) };
-            (if v.uses_grid_cells() { c } else { (nm(at.x), nm(at.y)) }, at)
+            // The design keeps nanometres: the position rounded to one -- and where the layout has no grid, the position is the via's key, as rounded.
+            let at = Point { x: x, y: y };
+            (if v.uses_grid_cells() { c } else { (at.x, at.y) }, at)
         })
         .collect();
     StitchPlan { stitch: v, vias }
@@ -539,9 +531,9 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
     let mut cells = BTreeSet::new();
     let design = inputs.design;
     let rules = &inputs.model.board;
-    let pitch = nm(if v.pitch_nm > 0 { v.pitch_nm } else { eda_model::via_stitch::default_pitch(v.via.size_nm) });
-    let via_size = nm(v.via.size_nm);
-    let via_drill = nm(v.via.drill_nm);
+    let pitch = if v.pitch_nm > 0 { v.pitch_nm } else { eda_model::via_stitch::default_pitch(v.via.size_nm) };
+    let via_size = v.via.size_nm;
+    let via_drill = v.via.drill_nm;
     // `GetNetCode() == 0`: a stitching of no net, or of a net the board does not have, makes nothing.
     if v.net.is_empty() || !inputs.model.nets.iter().any(|n| n.name == v.net) {
         return cells;
@@ -623,13 +615,13 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
     let rb = crate::rule_board::RuleBoard::new(design, inputs.model, &board, crate::constraints::Units::Mm, rules.custom_rules_text.as_deref());
     let probe = rb.probe_via(&v.net, Point { x: 0, y: 0 }, v.via.size_nm, v.via.drill_nm, &v.via.from_layer, &v.via.to_layer);
     let eval = |t: CType, other: &std::rc::Rc<crate::rule_item::RuleItem>, layer: Option<&str>| -> i64 { rb.engine().eval_rules(t, Some(&probe), Some(other), layer, None).value.min() };
-    let worst = nm(crate::constraints::worst_case_clearance(rules));
+    let worst = crate::constraints::worst_case_clearance(rules);
     let query_box = (stitch_box.0 - worst - via_size, stitch_box.1 - worst - via_size, stitch_box.2 + worst + via_size, stitch_box.3 + worst + via_size);
     let query_clip = rect_set(query_box.0, query_box.1, query_box.2, query_box.3);
     let near = |b: (i64, i64, i64, i64)| boxes_overlap((b.0 - worst, b.1 - worst, b.2 + worst, b.3 + worst), query_box);
     let shape_box = |s: &Shape| {
         let (x0, y0, x1, y1) = s.bbox(0);
-        (nm(x0), nm(y0), nm(x1), nm(y1))
+        (x0, y0, x1, y1)
     };
 
     let mut obstacles = ShapePolySet::default();
@@ -867,7 +859,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
     }
 
     // The plain and staggered grids, anchored to (0, 0) plus the offset.
-    let (ox, oy) = (nm(v.origin_offset.x), nm(v.origin_offset.y));
+    let (ox, oy) = (v.origin_offset.x, v.origin_offset.y);
     let start_row = ((bbox.1 - oy) as f64 / pitch as f64).floor() as i64;
     let start_col = ((bbox.0 - ox) as f64 / pitch as f64).floor() as i64;
     let origin = (start_col * pitch + ox, start_row * pitch + oy);
@@ -940,7 +932,7 @@ mod tests {
     #[test]
     fn cells_and_positions_follow_the_anchor_and_the_stagger() {
         let mut v = ViaStitch::new(vec![]);
-        v.origin_offset = Point { x: 250, y: 0 };
+        v.origin_offset = Point { x: 250_000, y: 0 };
         let pitch = 1_000_000;
         assert_eq!(position_for_cell(&v, pitch, (3, 2)), (3_250_000, 2_000_000));
         assert_eq!(cell_for_position(&v, pitch, (3_250_000, 2_000_000)), (3, 2));
@@ -950,7 +942,7 @@ mod tests {
         // A via dragged to (10.1, 5.3) mm on a plain grid anchors it at (0.1, 0.3).
         let mut plain = ViaStitch::new(vec![]);
         plain.member_ids = vec!["a".into()];
-        assert_eq!(detect_origin_offset(&plain, pitch, &[(10_100_000, 5_300_000)]), Some(Point { x: 100, y: 300 }));
+        assert_eq!(detect_origin_offset(&plain, pitch, &[(10_100_000, 5_300_000)]), Some(Point { x: 100_000, y: 300_000 }));
         assert_eq!(detect_origin_offset(&plain, pitch, &[(10_000_000, 5_000_000)]), None, "on its cell");
     }
 }

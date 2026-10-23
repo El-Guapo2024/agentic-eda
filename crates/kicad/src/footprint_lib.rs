@@ -178,7 +178,7 @@ pub fn footprint_attributes(text: &str) -> Vec<String> {
 /// pad-bounding-box derivation the same as any other footprint with none.
 pub(crate) fn courtyard_from(root: &[Sexpr]) -> Option<(Nm, Nm)> {
     let on_crtyd = |item: &[Sexpr]| matches!(sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd"));
-    let mm_to_um = crate::import::mm_to_um;
+    let mm_to_nm = crate::import::mm_to_nm;
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     let mut extend = |x: f64, y: f64| {
         x0 = x0.min(x);
@@ -232,8 +232,8 @@ pub(crate) fn courtyard_from(root: &[Sexpr]) -> Option<(Nm, Nm)> {
     if !seen {
         return None;
     }
-    let half_w = mm_to_um(x0.abs().max(x1.abs()));
-    let half_h = mm_to_um(y0.abs().max(y1.abs()));
+    let half_w = mm_to_nm(x0.abs().max(x1.abs()));
+    let half_h = mm_to_nm(y0.abs().max(y1.abs()));
     Some((half_w.max(1), half_h.max(1)))
 }
 

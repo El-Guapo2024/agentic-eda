@@ -4,7 +4,7 @@
 //! What a layout promises ("no overlapping text") is only worth what its measuring is: a symbol's pin names and numbers, its fields,
 //! a label with its flag and a power symbol with its value are measured here with eeschema's own rules (`eda_model::kicad_geom`, the
 //! stroke font's widths, `crate::fields` for where Autoplace Fields puts the fields), the same ones the overlap checker
-//! (`eda_kicad::sch_overlap`) holds the written `.kicad_sch` files to. Everything is micrometres, rounded outward to whole ones.
+//! (`eda_kicad::sch_overlap`) holds the written `.kicad_sch` files to. Everything is nanometres, rounded outward to whole ones.
 
 use eda_layout::{Point as LPoint, Side};
 use eda_model::ir::{Point, PowerSymbol, SymbolInstance};
@@ -26,7 +26,7 @@ pub fn snap_down(v: i64) -> i64 {
     v.div_euclid(G) * G
 }
 
-/// An axis-aligned rectangle, micrometres, `x0 <= x1`, `y0 <= y1`.
+/// An axis-aligned rectangle, nanometres, `x0 <= x1`, `y0 <= y1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
     pub x0: i64,
@@ -70,12 +70,12 @@ pub fn union_all(rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
 // ------------------------------------------------------------------------------------------------------- text
 
 /// Every schematic text is 50 mils.
-pub const TEXT_FONT: i64 = 1270;
+pub const TEXT_FONT: i64 = 1_270_000;
 pub const SHEET_NAME_FONT: i64 = TEXT_FONT;
 pub const SHEET_FILE_FONT: i64 = TEXT_FONT;
 pub const SHEET_PIN_FONT: i64 = TEXT_FONT;
 
-/// KiCad's box (floating point) as a whole-micrometre one that holds it.
+/// KiCad's box (floating point) as a whole-nanometre one that holds it.
 pub fn outward(r: kg::Rect) -> Rect {
     Rect { x0: r.x0.floor() as i64, y0: r.y0.floor() as i64, x1: r.x1.ceil() as i64, y1: r.y1.ceil() as i64 }
 }
@@ -101,7 +101,7 @@ pub fn text_w(_font: i64, s: &str) -> i64 {
 
 // ------------------------------------------------------------------------------------------------------ frame
 
-/// A paper size: KiCad's names, landscape, micrometres.
+/// A paper size: KiCad's names, landscape, nanometres.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Paper {
     pub name: &'static str,
@@ -110,11 +110,11 @@ pub struct Paper {
 }
 
 pub const PAPERS: [Paper; 5] = [
-    Paper { name: "A4", w: 297_000, h: 210_000 },
-    Paper { name: "A3", w: 420_000, h: 297_000 },
-    Paper { name: "A2", w: 594_000, h: 420_000 },
-    Paper { name: "A1", w: 841_000, h: 594_000 },
-    Paper { name: "A0", w: 1_189_000, h: 841_000 },
+    Paper { name: "A4", w: 297_000_000, h: 210_000_000 },
+    Paper { name: "A3", w: 420_000_000, h: 297_000_000 },
+    Paper { name: "A2", w: 594_000_000, h: 420_000_000 },
+    Paper { name: "A1", w: 841_000_000, h: 594_000_000 },
+    Paper { name: "A0", w: 1_189_000_000, h: 841_000_000 },
 ];
 
 pub fn paper_named(name: &str) -> Paper {
@@ -123,12 +123,12 @@ pub fn paper_named(name: &str) -> Paper {
 
 /// KiCad's default drawing sheet: a frame 10 mm in from the paper, a second line 2 mm inside it, and the title block flush with
 /// the inner frame's bottom-right corner (108 x 32 mm).
-pub const FRAME_OUTER: i64 = 10_000;
-pub const FRAME_INNER: i64 = 12_000;
-pub const TITLE_W: i64 = 108_000;
-pub const TITLE_H: i64 = 32_000;
+pub const FRAME_OUTER: i64 = 10_000_000;
+pub const FRAME_INNER: i64 = 12_000_000;
+pub const TITLE_W: i64 = 108_000_000;
+pub const TITLE_H: i64 = 32_000_000;
 /// Clear space kept between anything drawn and the inner frame line or the title block.
-pub const FRAME_CLEAR: i64 = 5_000;
+pub const FRAME_CLEAR: i64 = 5_000_000;
 
 impl Paper {
     /// Where content may go: inside the inner frame with `FRAME_CLEAR` to spare, above the title block, on the grid.
@@ -426,10 +426,10 @@ mod tests {
                 assert_eq!(v % G, 0, "{} {u:?}", p.name);
             }
             assert!(p.inner_frame().contains(&u));
-            assert!(u.x1 - u.x0 > 100_000 && u.y1 - u.y0 > 80_000, "{} {u:?}", p.name);
+            assert!(u.x1 - u.x0 > 100_000_000 && u.y1 - u.y0 > 80_000_000, "{} {u:?}", p.name);
         }
-        assert_eq!(smallest_paper(200_000, 100_000).name, "A4");
-        assert_eq!(smallest_paper(300_000, 100_000).name, "A3");
+        assert_eq!(smallest_paper(200_000_000, 100_000_000).name, "A4");
+        assert_eq!(smallest_paper(300_000_000, 100_000_000).name, "A3");
     }
 
     #[test]

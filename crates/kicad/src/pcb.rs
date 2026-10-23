@@ -597,7 +597,7 @@ fn write_stackup(out: &mut String, model: &ConstraintModel) {
             }
         }
         if let Some(t) = l.thickness_mm {
-            write!(out, " (thickness {})", fmt_mm_f(t)).unwrap();
+            write!(out, " (thickness {})", crate::mm_f(t)).unwrap();
         }
         if let Some(m) = &l.material {
             write!(out, " (material {})", sexpr_str(m)).unwrap();
@@ -649,7 +649,7 @@ fn write_stackup(out: &mut String, model: &ConstraintModel) {
 /// something narrowing a signal net's clearance has any bearing on.
 pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     let b = &model.board;
-    let mm_f = |um: Nm| um as f64 / 1000.0;
+    let mm_f = |nm: Nm| eda_model::units::to_mm(nm);
     let rules = if b.constraints_explicit {
         // The constraints were stated -- by the project the board came from or by Board Setup -- so they are written
         // exactly (`BOARD_DESIGN_SETTINGS`'s `rules.*` keys, `pcbnew/board_design_settings.cpp`).
@@ -774,8 +774,8 @@ fn project_tuning_profile(p: &eda_model::setup_pages::TuningProfile) -> serde_js
             "signal_layer": e.signal_layer,
             "top_reference_layer": e.top_reference_layer.as_deref().unwrap_or("UNDEFINED"),
             "bottom_reference_layer": e.bottom_reference_layer.as_deref().unwrap_or("UNDEFINED"),
-            "width": e.width_nm * 1000,
-            "diff_pair_gap": e.diff_pair_gap_nm * 1000,
+            "width": e.width_nm,
+            "diff_pair_gap": e.diff_pair_gap_nm,
             "delay": e.delay_as_per_mm,
         })).collect::<Vec<_>>(),
         "via_prop_delay": p.via_propagation_delay_as,
@@ -793,7 +793,7 @@ fn project_tuning_profile(p: &eda_model::setup_pages::TuningProfile) -> serde_js
 /// has a class (the nets a class's patterns match, as the board file's `add_net` lists name them). A class that only exists because a profile is named for it is a class of its own.
 fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
     let b = &model.board;
-    let mm_f = |um: Nm| um as f64 / 1000.0;
+    let mm_f = |nm: Nm| eda_model::units::to_mm(nm);
     let profile_of = |class: &str| b.tuning_profiles.class_profiles.get(class).cloned().unwrap_or_default();
     let mut classes = Vec::new();
     let mut default = serde_json::json!({ "name": "Default", "priority": i32::MAX, "tuning_profile": profile_of("Default"), "clearance": mm_f(b.clearance), "track_width": mm_f(b.track_width), "via_diameter": mm_f(b.via_diameter), "via_drill": mm_f(b.via_drill) });

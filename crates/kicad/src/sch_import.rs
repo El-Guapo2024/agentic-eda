@@ -172,7 +172,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
         // `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`: `case T_convert` (legacy) and `case T_body_style` both read `SetBodyStyle`
         let body_style = sexpr::find(item, "body_style").or_else(|| sexpr::find(item, "convert")).and_then(|b| sexpr::num(b, 1)).unwrap_or(1.0).max(1.0) as u32;
-        let at_nm = Point { x: crate::import::mm_to_um(x_mm), y: crate::import::mm_to_um(y_mm) };
+        let at_nm = Point { x: crate::import::sch_mm_to_nm(x_mm), y: crate::import::sch_mm_to_nm(y_mm) };
         let rot = import_rot_millideg_sch(angle_deg);
         // `(lib_name "<cache>")`: the symbol's own copy of its library symbol in the sheet's cache, which Swap Pins gave other places for some of its pins
         let swaps = sexpr::find(item, "lib_name").and_then(|l| sexpr::txt(l, 1)).filter(|name| *name != lib_id).and_then(|name| lib_table.get(name)).map(|cached| pin_swaps_between(resolved, cached, unit, body_style)).unwrap_or_default();
@@ -192,7 +192,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         if resolved.power {
             let pin_local = resolved.pins.first().map(|p| p.at).unwrap_or(SPoint::new(0.0, 0.0));
             let world = transform_local_point(pin_local, angle_deg, mirrored, mirror_y);
-            let at_pin = Point { x: at_nm.x + crate::import::mm_to_um(world.x), y: at_nm.y + crate::import::mm_to_um(world.y) };
+            let at_pin = Point { x: at_nm.x + crate::import::sch_mm_to_nm(world.x), y: at_nm.y + crate::import::sch_mm_to_nm(world.y) };
             power_symbols.push(PowerSymbol { id: reference, lib_id: lib_id.to_string(), at: at_pin, rot, net: value, pin: String::new() });
             power_uuid.push(uuid_of(item));
             continue;
@@ -295,7 +295,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
                             place_pins.iter().find(|q| q.number == source && (q.unit == 0 || q.unit == owner.unit)).map_or(p.at, |q| q.at)
                         };
                         let world = transform_local_point(local, owner.angle_deg, owner.mirrored, owner.mirror_y);
-                        let at_pin = Point { x: owner.at_nm.x + crate::import::mm_to_um(world.x), y: owner.at_nm.y + crate::import::mm_to_um(world.y) };
+                        let at_pin = Point { x: owner.at_nm.x + crate::import::sch_mm_to_nm(world.x), y: owner.at_nm.y + crate::import::sch_mm_to_nm(world.y) };
                         pin_world.insert(format!("{reference}.{}", p.number), at_pin);
                         if nc_points.contains(&at_pin) {
                             eda_model::PinKind::Nc
@@ -392,7 +392,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let Some(at) = sexpr::find(be, "at").and_then(point_mm) else { continue };
         let Some(size) = sexpr::find(be, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))) else { continue };
         let id = sexpr::find(be, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
-        bus_entries.push(eda_model::ir::BusEntry { id, at: mm_point_to_um(at), size: Point { x: crate::import::mm_to_um(size.0), y: crate::import::mm_to_um(size.1) } });
+        bus_entries.push(eda_model::ir::BusEntry { id, at: mm_point_to_um(at), size: Point { x: crate::import::sch_mm_to_nm(size.0), y: crate::import::sch_mm_to_nm(size.1) } });
         be_locked.push(is_locked(be));
         be_stroke.push(stroke_of(be));
     }
@@ -429,7 +429,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             continue;
         }
         if let Some(pts) = import_pts(pl).filter(|p| p.len() >= 2) {
-            let width_nm = sexpr::find(pl, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(crate::import::mm_to_um).unwrap_or(0);
+            let width_nm = sexpr::find(pl, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(0);
             lines.push(eda_model::ir::SchLine { id: String::new(), pts, width_nm });
             line_locked.push(is_locked(pl));
             line_uuid.push(uuid_of(pl));
@@ -511,7 +511,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let size_mm = sexpr::find(t, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).unwrap_or(1.27);
         // `parseSchText`: the angle is kept upright (`KeepUpright`); `parseEDA_TEXT`: the justification is centre, centre unless the file says otherwise
         let (angle, justify) = crate::sch_extras_io::read_text_lie(t, &crate::sch_extras_io::read_effects(t));
-        texts.push(SchematicText { id: String::new(), content, at: mm_point_to_um(SPoint::new(x_mm, y_mm)), angle, size_nm: crate::import::mm_to_um(size_mm) });
+        texts.push(SchematicText { id: String::new(), content, at: mm_point_to_um(SPoint::new(x_mm, y_mm)), angle, size_nm: crate::import::sch_mm_to_nm(size_mm) });
         text_locked.push(is_locked(t));
         text_uuid.push(uuid_of(t));
         text_lie.push(justify);
@@ -552,7 +552,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             .filter(|pg| !pg.is_empty() && *pg != "1")
             .unwrap_or_default()
             .to_string();
-        sheets.push(SheetInstance { id, name, file, at: mm_point_to_um(at), size: (crate::import::mm_to_um(size.0), crate::import::mm_to_um(size.1)), pins, page });
+        sheets.push(SheetInstance { id, name, file, at: mm_point_to_um(at), size: (crate::import::sch_mm_to_nm(size.0), crate::import::sch_mm_to_nm(size.1)), pins, page });
         sheet_locked.push(is_locked(s));
         notes.sheets_not_descended += 1;
     }
@@ -811,7 +811,7 @@ fn symbol_places_of(text: &str) -> BTreeMap<String, (Point, Option<u32>)> {
         let (Some(uuid), Some(at)) = (uuid_of(item), sexpr::find(item, "at")) else { continue };
         let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
         let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).map(|u| u.max(1.0) as u32);
-        out.insert(uuid, (Point { x: crate::import::mm_to_um(x), y: crate::import::mm_to_um(y) }, unit));
+        out.insert(uuid, (Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) }, unit));
     }
     out
 }
@@ -887,7 +887,7 @@ fn pin_swaps_between(lib: &LibSymbol, cached: &LibSymbol, unit: u32, body_style:
     let styled = |s: &LibSymbol| if body_style > 1 && s.has_alternate_body() { s.in_style(body_style).into_owned() } else { s.clone() };
     let (lib, cached) = (styled(lib), styled(cached));
     let on_unit = |p: &&LibPin| p.unit == 0 || p.unit == unit;
-    let place = |p: &LibPin| ((p.at.x * 1000.0).round() as i64, (p.at.y * 1000.0).round() as i64, p.angle_deg.rem_euclid(360.0).round() as i64, (p.length_mm * 1000.0).round() as i64);
+    let place = |p: &LibPin| (crate::import::sch_mm_to_nm(p.at.x), crate::import::sch_mm_to_nm(p.at.y), p.angle_deg.rem_euclid(360.0).round() as i64, crate::import::sch_mm_to_nm(p.length_mm));
     let (lib_pins, cached_pins): (Vec<&LibPin>, Vec<&LibPin>) = (lib.pins.iter().filter(on_unit).collect(), cached.pins.iter().filter(on_unit).collect());
     let mut swaps: BTreeMap<String, String> = BTreeMap::new();
     for cp in &cached_pins {
@@ -967,7 +967,7 @@ fn user_fields_of(item: &[Sexpr]) -> Vec<RawUserField> {
             continue;
         }
         let at = sexpr::find(p, "at");
-        let at_nm = at.and_then(|a| Some(Point { x: crate::import::mm_to_um(sexpr::num(a, 1)?), y: crate::import::mm_to_um(sexpr::num(a, 2)?) })).unwrap_or(Point { x: 0, y: 0 });
+        let at_nm = at.and_then(|a| Some(Point { x: crate::import::sch_mm_to_nm(sexpr::num(a, 1)?), y: crate::import::sch_mm_to_nm(sexpr::num(a, 2)?) })).unwrap_or(Point { x: 0, y: 0 });
         let effects = sexpr::find(p, "effects");
         // `(hide yes)`: KiCad 9 writes it in the property, before `(effects ...)`, and in it for a file we wrote; a bare `hide` is older still
         let hidden = parse_bool(p, "hide").unwrap_or(false) || effects.is_some_and(|e| parse_bool(e, "hide").unwrap_or(false) || e.iter().skip(1).any(|c| c.text() == Some("hide")));
@@ -1040,7 +1040,7 @@ fn stroke_of(node: &[Sexpr]) -> SchStroke {
 
 /// A junction's `(diameter d) (color r g b a)`; a colour of all zeroes is KiCad's "unspecified".
 fn look_of(node: &[Sexpr]) -> JunctionLook {
-    let diameter_nm = sexpr::find(node, "diameter").and_then(|d| sexpr::num(d, 1)).map(crate::import::mm_to_um).unwrap_or(0);
+    let diameter_nm = sexpr::find(node, "diameter").and_then(|d| sexpr::num(d, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(0);
     let color = sexpr::find(node, "color").and_then(crate::sch_extras_io::parse_color).filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0));
     JunctionLook { diameter_nm, color }
 }
@@ -1050,7 +1050,7 @@ fn point_mm(at: &[Sexpr]) -> Option<SPoint> {
 }
 
 fn mm_point_to_um(p: SPoint) -> Point {
-    Point { x: crate::import::mm_to_um(p.x), y: crate::import::mm_to_um(p.y) }
+    Point { x: crate::import::sch_mm_to_nm(p.x), y: crate::import::sch_mm_to_nm(p.y) }
 }
 
 fn import_pts(item: &[Sexpr]) -> Option<Vec<Point>> {

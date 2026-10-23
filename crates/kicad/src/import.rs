@@ -245,7 +245,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
     if let Some(aux) = sexpr::find(root, "setup").and_then(|s| sexpr::find(s, "aux_axis_origin")) {
         if let (Some(x), Some(y)) = (sexpr::num(aux, 1), sexpr::num(aux, 2)) {
-            let at = Point { x: mm_to_um(x), y: mm_to_um(y) };
+            let at = Point { x: mm_to_nm(x), y: mm_to_nm(y) };
             if at.x != 0 || at.y != 0 {
                 design.drawings.get_or_insert_with(Default::default).aux_origin = Some(at);
             }
@@ -254,7 +254,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // `(setup (grid_origin x y))`: the point the editing grid was anchored at.
     if let Some(grid) = sexpr::find(root, "setup").and_then(|s| sexpr::find(s, "grid_origin")) {
         if let (Some(x), Some(y)) = (sexpr::num(grid, 1), sexpr::num(grid, 2)) {
-            let at = Point { x: mm_to_um(x), y: mm_to_um(y) };
+            let at = Point { x: mm_to_nm(x), y: mm_to_nm(y) };
             if at.x != 0 || at.y != 0 {
                 design.drawings.get_or_insert_with(Default::default).grid_origin = Some(at);
             }
@@ -356,8 +356,15 @@ fn unread_items(root: &[Sexpr]) -> BTreeMap<String, usize> {
     out
 }
 
-pub fn mm_to_um(mm: f64) -> i64 {
-    (mm * 1000.0).round() as i64
+/// A board length in the file's millimetres to nanometres, as KiCad reads it (`PCB_IO_KICAD_SEXPR_PARSER::parseBoardUnits`: [`eda_model::units::from_mm`]).
+pub fn mm_to_nm(mm: f64) -> eda_model::ir::Nm {
+    eda_model::units::from_mm(mm)
+}
+
+/// A schematic length in the file's millimetres to nanometres on KiCad's 100 nm schematic unit (`SCH_IO_KICAD_SEXPR_PARSER::parseInternalUnits`:
+/// [`eda_model::units::sch_from_mm`]).
+pub fn sch_mm_to_nm(mm: f64) -> eda_model::ir::Nm {
+    eda_model::units::sch_from_mm(mm)
 }
 
 /// KiCad's `(at x y angle)` rotates footprints clockwise for positive
@@ -372,7 +379,7 @@ pub(crate) fn import_rot_millideg(file_deg: f64) -> u32 {
 
 pub(crate) fn xy_point(list: &[Sexpr]) -> Option<Point> {
     let (x, y) = (sexpr::num(list, 1)?, sexpr::num(list, 2)?);
-    Some(Point { x: mm_to_um(x), y: mm_to_um(y) })
+    Some(Point { x: mm_to_nm(x), y: mm_to_nm(y) })
 }
 
 // ---------------------------------------------------------------- layers
@@ -513,7 +520,7 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
     let mut board = BoardRules { layers: layers.to_vec(), constraints_explicit: true, layer_setup: import_layer_setup(root), ..BoardRules::default() };
     // Legacy boards keep the copper-to-edge clearance in `(setup (edge_clearance ..))`.
     if let Some(v) = sexpr::find(root, "setup").and_then(|st| sexpr::find(st, "edge_clearance")).and_then(|e| sexpr::num(e, 1)) {
-        board.copper_edge_clearance_nm = Some(mm_to_um(v));
+        board.copper_edge_clearance_nm = Some(mm_to_nm(v));
     }
     let classes: Vec<&[Sexpr]> = sexpr::find_all(root, "net_class").collect();
     let default_idx = classes.iter().position(|nc| sexpr::txt(nc, 1) == Some("Default")).or(if classes.len() == 1 { Some(0) } else { None });
@@ -521,16 +528,16 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
     if let Some(i) = default_idx {
         let nc = classes[i];
         if let Some(v) = sexpr::find(nc, "trace_width").and_then(|f| sexpr::num(f, 1)) {
-            board.track_width = mm_to_um(v);
+            board.track_width = mm_to_nm(v);
         }
         if let Some(v) = sexpr::find(nc, "clearance").and_then(|f| sexpr::num(f, 1)) {
-            board.clearance = mm_to_um(v);
+            board.clearance = mm_to_nm(v);
         }
         if let Some(v) = sexpr::find(nc, "via_dia").and_then(|f| sexpr::num(f, 1)) {
-            board.via_diameter = mm_to_um(v);
+            board.via_diameter = mm_to_nm(v);
         }
         if let Some(v) = sexpr::find(nc, "via_drill").and_then(|f| sexpr::num(f, 1)) {
-            board.via_drill = mm_to_um(v);
+            board.via_drill = mm_to_nm(v);
         }
         board.default_class = default_class_extras(nc);
     }
@@ -545,10 +552,10 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
             if nets.is_empty() {
                 return None; // an unused class matches nothing; not worth carrying
             }
-            let track_width = sexpr::find(nc, "trace_width").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
-            let clearance = sexpr::find(nc, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
-            let via_diameter = sexpr::find(nc, "via_dia").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
-            let via_drill = sexpr::find(nc, "via_drill").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
+            let track_width = sexpr::find(nc, "trace_width").and_then(|f| sexpr::num(f, 1)).map(mm_to_nm);
+            let clearance = sexpr::find(nc, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_nm);
+            let via_diameter = sexpr::find(nc, "via_dia").and_then(|f| sexpr::num(f, 1)).map(mm_to_nm);
+            let via_drill = sexpr::find(nc, "via_drill").and_then(|f| sexpr::num(f, 1)).map(mm_to_nm);
             let extras = default_class_extras(nc);
             let (microvia_diameter, microvia_drill, diff_pair_width, diff_pair_gap) = extras.map_or((None, None, None, None), |e| (e.microvia_diameter, e.microvia_drill, e.diff_pair_width, e.diff_pair_gap));
             Some(NetClass { name, nets, track_width, clearance, via_diameter, via_drill, microvia_diameter, microvia_drill, diff_pair_width, diff_pair_gap, diff_pair_via_gap: None, priority: 0 })
@@ -577,7 +584,7 @@ fn import_formatting_and_hatch_offsets(root: &[Sexpr], board: &mut BoardRules) {
         for prop in sexpr::find_all(defaults, "property") {
             let (Some(layer), Some(xy)) = (sexpr::find(prop, "layer").and_then(|l| sexpr::txt(l, 1)), sexpr::find(prop, "hatch_position").and_then(|h| sexpr::find(h, "xy"))) else { continue };
             let (Some(x), Some(y)) = (sexpr::num(xy, 1), sexpr::num(xy, 2)) else { continue };
-            let offset = eda_model::setup_pages::HatchOffset { x_nm: mm_to_um(x), y_nm: mm_to_um(y) };
+            let offset = eda_model::setup_pages::HatchOffset { x_nm: mm_to_nm(x), y_nm: mm_to_nm(y) };
             if !offset.is_zero() && board.layers.iter().any(|l| l == layer) && offset.x_nm.abs() <= eda_model::setup_pages::MAX_HATCH_OFFSET_NM && offset.y_nm.abs() <= eda_model::setup_pages::MAX_HATCH_OFFSET_NM {
                 board.hatch_offsets.insert(layer.to_string(), offset);
             }
@@ -617,7 +624,7 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
         let read = |entry: Option<&serde_json::Value>, current: &MeanderSettings| -> MeanderSettings {
             let Some(e) = entry else { return current.clone() };
             let mut m = MeanderSettings::single_track();
-            let um = |key: &str| e.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
+            let um = |key: &str| e.get(key).and_then(|v| v.as_f64()).map(mm_to_nm);
             if let Some(v) = um("min_amplitude") {
                 m.min_amplitude_nm = v;
             }
@@ -663,8 +670,8 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
                                 signal_layer: layer_of(r, "signal_layer")?,
                                 top_reference_layer: layer_of(r, "top_reference_layer"),
                                 bottom_reference_layer: layer_of(r, "bottom_reference_layer"),
-                                width_nm: int(r, "width") / 1000,
-                                diff_pair_gap_nm: int(r, "diff_pair_gap") / 1000,
+                                width_nm: int(r, "width"),
+                                diff_pair_gap_nm: int(r, "diff_pair_gap"),
                                 delay_as_per_mm: int(r, "delay"),
                             })
                         })
@@ -718,10 +725,10 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
 /// `diff_pair_gap`), as a class with only those set -- `None` when the class has none. KiCad's own 0.3 / 0.1 mm microvia
 /// (what the writer gives a class that sets none) reads back as unset, so a board that never set one round-trips unchanged.
 fn default_class_extras(nc: &[Sexpr]) -> Option<NetClass> {
-    let um = |key: &str| sexpr::find(nc, key).and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
-    let microvia_diameter = um("uvia_dia").filter(|v| *v != 300);
-    let microvia_drill = um("uvia_drill").filter(|v| *v != 100);
-    let (diff_pair_width, diff_pair_gap) = (um("diff_pair_width"), um("diff_pair_gap"));
+    let nm = |key: &str| sexpr::find(nc, key).and_then(|f| sexpr::num(f, 1)).map(mm_to_nm);
+    let microvia_diameter = nm("uvia_dia").filter(|v| *v != 300_000);
+    let microvia_drill = nm("uvia_drill").filter(|v| *v != 100_000);
+    let (diff_pair_width, diff_pair_gap) = (nm("diff_pair_width"), nm("diff_pair_gap"));
     if microvia_diameter.is_none() && microvia_drill.is_none() && diff_pair_width.is_none() && diff_pair_gap.is_none() {
         return None;
     }
@@ -771,10 +778,10 @@ fn front_back_opt_bool(list: &[Sexpr]) -> (Option<bool>, Option<bool>) {
 fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
     let Some(setup) = sexpr::find(root, "setup") else { return };
     if let Some(v) = sexpr::find(setup, "pad_to_mask_clearance").and_then(|f| sexpr::num(f, 1)) {
-        board.solder_mask.expansion_nm = mm_to_um(v);
+        board.solder_mask.expansion_nm = mm_to_nm(v);
     }
     if let Some(v) = sexpr::find(setup, "solder_mask_min_width").and_then(|f| sexpr::num(f, 1)) {
-        board.solder_mask.min_width_nm = mm_to_um(v);
+        board.solder_mask.min_width_nm = mm_to_nm(v);
     }
     if let Some(v) = sexpr::find(setup, "allow_soldermask_bridges_in_footprints").and_then(|f| sexpr::txt(f, 1)) {
         board.solder_mask.allow_bridges_in_footprints = v == "yes";
@@ -786,14 +793,14 @@ fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
     }
     // `m_SolderPasteMargin` / `m_SolderPasteMarginRatio`.
     if let Some(v) = sexpr::find(setup, "pad_to_paste_clearance").and_then(|f| sexpr::num(f, 1)) {
-        board.solder_mask.paste_margin_nm = mm_to_um(v);
+        board.solder_mask.paste_margin_nm = mm_to_nm(v);
     }
     if let Some(v) = sexpr::find(setup, "pad_to_paste_clearance_ratio").and_then(|f| sexpr::num(f, 1)) {
         board.solder_mask.paste_margin_ratio = v;
     }
     // `(general (thickness ..))`: `BOARD_DESIGN_SETTINGS::SetBoardThickness`.
     if let Some(v) = sexpr::find(root, "general").and_then(|g| sexpr::find(g, "thickness")).and_then(|f| sexpr::num(f, 1)) {
-        board.board_thickness_nm = mm_to_um(v);
+        board.board_thickness_nm = mm_to_nm(v);
     }
 }
 
@@ -851,23 +858,23 @@ fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
 fn import_legacy_setup_minimums(root: &[Sexpr], board: &mut BoardRules) {
     let Some(setup) = sexpr::find(root, "setup") else { return };
     if let Some(v) = sexpr::find(setup, "trace_min").and_then(|f| sexpr::num(f, 1)) {
-        board.track_width_min_nm = mm_to_um(v);
+        board.track_width_min_nm = mm_to_nm(v);
     }
     if let Some(v) = sexpr::find(setup, "clearance_min").and_then(|f| sexpr::num(f, 1)) {
-        board.min_clearance_nm = mm_to_um(v);
+        board.min_clearance_nm = mm_to_nm(v);
     }
     if let Some(v) = sexpr::find(setup, "via_min_size").and_then(|f| sexpr::num(f, 1)) {
-        board.via_diameter_min_nm = mm_to_um(v);
+        board.via_diameter_min_nm = mm_to_nm(v);
     }
     let through_hole_min = sexpr::find(setup, "through_hole_min").or_else(|| sexpr::find(setup, "via_min_drill"));
     if let Some(v) = through_hole_min.and_then(|f| sexpr::num(f, 1)) {
-        board.via_drill_min_nm = mm_to_um(v);
+        board.via_drill_min_nm = mm_to_nm(v);
     }
     if let Some(v) = sexpr::find(setup, "hole_to_hole_min").and_then(|f| sexpr::num(f, 1)) {
-        board.hole_to_hole_min_nm = mm_to_um(v);
+        board.hole_to_hole_min_nm = mm_to_nm(v);
     }
     if let Some(v) = sexpr::find(setup, "via_min_annulus").and_then(|f| sexpr::num(f, 1)) {
-        board.annular_width_min_nm = mm_to_um(v);
+        board.annular_width_min_nm = mm_to_nm(v);
     }
 }
 
@@ -916,7 +923,7 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
         .map(|m| m.iter().flat_map(|(net, cs)| cs.as_array().into_iter().flatten().filter_map(|c| c.as_str()).map(move |c| (c.to_string(), crate::pcb::exact_pattern(net)))).collect())
         .unwrap_or_default();
 
-    let num_mm = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_f64()).map(mm_to_um);
+    let num_mm = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_f64()).map(mm_to_nm);
 
     let mut out = Vec::new();
     let mut seen: Vec<String> = Vec::new();
@@ -1001,7 +1008,7 @@ pub fn merge_project_net_classes(model: &mut eda_model::ConstraintModel, project
     };
     let classes = root.get("net_settings").and_then(|ns| ns.get("classes")).and_then(|v| v.as_array());
     if let Some(default) = classes.and_then(|cs| cs.iter().find(|c| c.get("name").and_then(|v| v.as_str()) == Some("Default"))) {
-        let mm = |key: &str| default.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
+        let mm = |key: &str| default.get(key).and_then(|v| v.as_f64()).map(mm_to_nm);
         if let Some(v) = mm("clearance") {
             model.board.clearance = v;
         }
@@ -1052,7 +1059,7 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     let Some(rules) = design_settings.get("rules") else {
         return;
     };
-    let mm = |key: &str| rules.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
+    let mm = |key: &str| rules.get(key).and_then(|v| v.as_f64()).map(mm_to_nm);
     let b = &mut model.board;
     // The project stated its minimums: they are exact, and written back exactly (`BoardRules::constraints_explicit`).
     b.constraints_explicit = true;
@@ -1120,7 +1127,7 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     }
     // Text & Graphics > Defaults (`defaults.<class>_line_width`, `_text_size_h/_v`, `_text_thickness`, `_text_italic`, `_text_upright`).
     if let Some(def) = design_settings.get("defaults") {
-        let num = |key: &str| def.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
+        let num = |key: &str| def.get(key).and_then(|v| v.as_f64()).map(mm_to_nm);
         let flag = |key: &str| def.get(key).and_then(|v| v.as_bool());
         let class = |prefix: &str, c: &mut eda_model::rules::LayerClassDefaults| {
             if let Some(v) = num(&format!("{prefix}_line_width")) {
@@ -1320,16 +1327,16 @@ pub(crate) fn parse_pad_geometry_in(pad: &[Sexpr], fp_side: Side, fp_rot: u32, n
                 let nums: Vec<f64> = toks[1..].iter().filter_map(|s| s.parse::<f64>().ok()).collect();
                 let dw = nums.first().copied().unwrap_or(0.0);
                 let dh = nums.get(1).copied().unwrap_or(dw);
-                (None, Some((mm_to_um(dw), mm_to_um(dh))))
+                (None, Some((mm_to_nm(dw), mm_to_nm(dh))))
             } else {
                 let d0 = toks.iter().find_map(|s| s.parse::<f64>().ok());
-                (d0.map(mm_to_um), None)
+                (d0.map(mm_to_nm), None)
             }
         }
         None => (None, None),
     };
 
-    let mut out = Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: read.shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio: read.roundrect_ratio, opposite_side, ext: read.ext };
+    let mut out = Pad { number, at: (mm_to_nm(px), mm_to_nm(py)), size: (mm_to_nm(w), mm_to_nm(h)), shape: read.shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio: read.roundrect_ratio, opposite_side, ext: read.ext };
     // The padstack (`(padstack ..)`, `(remove_unused_layers ..)`, `(keep_end_layers ..)`): the other layers' shapes and what becomes of the layers nothing connects to.
     // The main fields are the shape on `F.Cu`; the pad's own shape is the footprint's side, which on the bottom is the file's `B.Cu`.
     let main = eda_model::padstack::PadLayerShape::of(&out);
@@ -1527,7 +1534,7 @@ fn import_footprints(
             continue;
         };
         let file_rot = sexpr::num(at, 3).unwrap_or(0.0);
-        let (x, y) = (mm_to_um(fx), mm_to_um(fy));
+        let (x, y) = (mm_to_nm(fx), mm_to_nm(fy));
         let rot = import_rot_millideg(file_rot);
 
         let base_ref = footprint_field(fp, "Reference").filter(|s| !s.is_empty()).unwrap_or_else(|| format!("FP{}", idx + 1));
@@ -1699,7 +1706,7 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
         .collect();
     e.courtyard_bottom = sexpr::find(fp, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("B.Cu");
     if let Some(m) = sexpr::find(fp, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
-        let m = mm_to_um(m);
+        let m = mm_to_nm(m);
         e.solder_mask_margin = if file_version <= 20240201 && m == 0 { None } else { Some(m) };
     }
     if let Some(attr) = sexpr::find(fp, "attr") {
@@ -1713,7 +1720,7 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     e.zone_connection = sexpr::find(fp, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64));
     // `(clearance C)` (`FOOTPRINT::SetLocalClearance`); in pre-9.0 files 0 meant "inherit".
     if let Some(c) = sexpr::find(fp, "clearance").and_then(|f| sexpr::num(f, 1)) {
-        let c = mm_to_um(c);
+        let c = mm_to_nm(c);
         e.clearance = if file_version <= 20240201 && c == 0 { None } else { Some(c) };
     }
     e
@@ -1757,7 +1764,7 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
         info.no_mask = !info.layers.iter().any(|l| l.ends_with(".Mask"));
     }
     if let Some(m) = sexpr::find(pad, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
-        let m = mm_to_um(m);
+        let m = mm_to_nm(m);
         info.solder_mask_margin = if file_version <= 20240201 && m == 0 { None } else { Some(m) };
     }
     if let Some(t) = sexpr::find(pad, "tenting") {
@@ -1781,13 +1788,13 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
     info.tokens = pad.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| OWN.contains(&t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
     // `parsePAD`: `(zone_connect N)`, `(thermal_bridge_width ..)` (legacy `(thermal_width ..)`), `(thermal_bridge_angle ..)`, `(thermal_gap ..)`.
     if let Some(c) = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)) {
-        let c = mm_to_um(c);
+        let c = mm_to_nm(c);
         info.clearance = if file_version <= 20240201 && c == 0 { None } else { Some(c) };
     }
     info.zone_connection = sexpr::find(pad, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64));
-    info.thermal_spoke_width = sexpr::find(pad, "thermal_bridge_width").or_else(|| sexpr::find(pad, "thermal_width")).and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
+    info.thermal_spoke_width = sexpr::find(pad, "thermal_bridge_width").or_else(|| sexpr::find(pad, "thermal_width")).and_then(|f| sexpr::num(f, 1)).map(mm_to_nm);
     info.thermal_spoke_angle_mdeg = sexpr::find(pad, "thermal_bridge_angle").and_then(|f| sexpr::num(f, 1)).map(|d| ((d * 1000.0).round() as i64).rem_euclid(360_000) as eda_model::ir::Millideg);
-    info.thermal_gap = sexpr::find(pad, "thermal_gap").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
+    info.thermal_gap = sexpr::find(pad, "thermal_gap").and_then(|f| sexpr::num(f, 1)).map(mm_to_nm);
     info
 }
 
@@ -1809,7 +1816,7 @@ fn layerless_hole(pad: &[Sexpr], fp_side: Side, fp_rot: u32, file_version: i64, 
         return None;
     }
     // `(clearance C)` on the pad (`PAD::SetLocalClearance`); in pre-9.0 files 0 meant "inherit".
-    let clearance = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_um).filter(|&c| !(file_version <= 20240201 && c == 0));
+    let clearance = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_nm).filter(|&c| !(file_version <= 20240201 && c == 0));
     Some(eda_model::ir::FootprintHole { pad: p, clearance })
 }
 
@@ -1934,8 +1941,8 @@ fn parse_text_on(item: &[Sexpr], text: &str, tf: &dyn Fn(Point) -> Point, keep_u
     let unlocked = unlocked_legacy || sexpr::find(item, "unlocked").is_some_and(|u| sexpr::txt(u, 1).map_or(true, |v| v == "yes"));
     let effects = sexpr::find(item, "effects");
     let font = effects.and_then(|e| sexpr::find(e, "font"));
-    let size = font.and_then(|f| sexpr::find(f, "size")).map(|s| (mm_to_um(sexpr::num(s, 1).unwrap_or(1.0)), mm_to_um(sexpr::num(s, 2).unwrap_or(1.0)))).unwrap_or((1000, 1000));
-    let thickness = font.and_then(|f| sexpr::find(f, "thickness")).and_then(|t| sexpr::num(t, 1)).map(mm_to_um).unwrap_or(0);
+    let size = font.and_then(|f| sexpr::find(f, "size")).map(|s| (mm_to_nm(sexpr::num(s, 1).unwrap_or(1.0)), mm_to_nm(sexpr::num(s, 2).unwrap_or(1.0)))).unwrap_or((1_000_000, 1_000_000));
+    let thickness = font.and_then(|f| sexpr::find(f, "thickness")).and_then(|t| sexpr::num(t, 1)).map(mm_to_nm).unwrap_or(0);
     let bold = font.is_some_and(|f| f.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == "bold")) || sexpr::find(f, "bold").is_some_and(|b| sexpr::txt(b, 1).map_or(true, |v| v == "yes")));
     let (mut halign, mut valign, mut mirror) = (0i8, 0i8, false);
     if let Some(j) = effects.and_then(|e| sexpr::find(e, "justify")) {
@@ -1953,7 +1960,7 @@ fn parse_text_on(item: &[Sexpr], text: &str, tf: &dyn Fn(Point) -> Point, keep_u
     Some(FootprintText {
         text,
         layer: layer.to_string(),
-        at: tf(Point { x: mm_to_um(x), y: mm_to_um(y) }),
+        at: tf(Point { x: mm_to_nm(x), y: mm_to_nm(y) }),
         angle_file_mdeg: (angle * 1000.0).round() as i64,
         size,
         thickness,
@@ -1975,7 +1982,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let net = net_ref(sexpr::find(seg, "net"), net_names);
         // Net 0 (no net) stays as an empty `net`: KiCad still checks a
         // netless track (clearance, shorting, dangling) like any other.
-        let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
+        let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(200_000);
         let layer = sexpr::find(seg, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: vec![s, e], arc_mid_offset: None });
         refs.tracks.push(ItemRef::of(seg));
@@ -1988,7 +1995,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
             continue;
         };
         let net = net_ref(sexpr::find(arc, "net"), net_names);
-        let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
+        let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(200_000);
         let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         notes.track_arcs_kept += 1;
         tracks.push(Track::new_arc(net, layer, width, s, m, e));
@@ -2002,8 +2009,8 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
     for via in sexpr::find_all(root, "via") {
         let Some(at) = sexpr::find(via, "at").and_then(xy_point) else { continue };
         let net = net_ref(sexpr::find(via, "net"), net_names);
-        let dia = sexpr::find(via, "size").and_then(|s| sexpr::num(s, 1)).map(mm_to_um).unwrap_or(600);
-        let drill = sexpr::find(via, "drill").and_then(|d| sexpr::num(d, 1)).map(mm_to_um).unwrap_or(300);
+        let dia = sexpr::find(via, "size").and_then(|s| sexpr::num(s, 1)).map(mm_to_nm).unwrap_or(600_000);
+        let drill = sexpr::find(via, "drill").and_then(|d| sexpr::num(d, 1)).map(mm_to_nm).unwrap_or(300_000);
         let (from_layer, to_layer) = sexpr::find(via, "layers")
             .map(|l| (sexpr::txt(l, 1).unwrap_or("F.Cu").to_string(), sexpr::txt(l, 2).unwrap_or("B.Cu").to_string()))
             .unwrap_or_else(|| ("F.Cu".into(), "B.Cu".into()));
@@ -2063,7 +2070,7 @@ fn import_drawings(root: &[Sexpr], net_names: &BTreeMap<i64, String>, refs: &mut
         let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
         let angle = ((sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32;
         let style = crate::board_text_io::read_style(item);
-        texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_um(x), y: mm_to_um(y) }, angle, layer: layer_of(item), size_nm: style.size_nm, stroke_width: style.stroke_width, justify: style.justify, mirror: style.mirror });
+        texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_nm(x), y: mm_to_nm(y) }, angle, layer: layer_of(item), size_nm: style.size_nm, stroke_width: style.stroke_width, justify: style.justify, mirror: style.mirror });
         extras.push(style.extra);
         refs.texts.push(ItemRef::of(item));
     }
@@ -2073,7 +2080,7 @@ fn import_drawings(root: &[Sexpr], net_names: &BTreeMap<i64, String>, refs: &mut
 
 /// An item's `(stroke (width ..))`, or the `(width ..)` of the files before it (KiCad 6 and older), micrometres.
 fn stroke_width_of(item: &[Sexpr]) -> i64 {
-    sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0)
+    sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(0)
 }
 
 /// The arc of a file written before `LEGACY_ARC_FORMATTING` (20210925), `(start CENTER) (end ARC_START) (angle A)` in degrees, as the
@@ -2143,7 +2150,7 @@ fn footprint_edge_cuts(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs)
         let (Some(fx), Some(fy)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
         let angle = sexpr::num(at, 3).unwrap_or(0.0);
         let (sin, cos) = angle.to_radians().sin_cos();
-        let (ox, oy) = (mm_to_um(fx), mm_to_um(fy));
+        let (ox, oy) = (mm_to_nm(fx), mm_to_nm(fy));
         let to_board = |p: Point| -> Point {
             let (x, y) = (p.x as f64, p.y as f64);
             Point { x: ox + (x * cos + y * sin).round() as i64, y: oy + (-x * sin + y * cos).round() as i64 }
@@ -2207,7 +2214,7 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
     notes.outline_source = "shapes";
     notes.outline_open = !built.valid;
     notes.outline_shapes = items.len();
-    notes.outline_errors = eda_drc::outline::check_edge_cuts(&items).iter().map(|e| format!("{} at ({:.3}, {:.3}) mm", e.describe(), e.at.x as f64 / 1000.0, e.at.y as f64 / 1000.0)).collect();
+    notes.outline_errors = eda_drc::outline::check_edge_cuts(&items).iter().map(|e| format!("{} at ({:.3}, {:.3}) mm", e.describe(), eda_model::units::to_mm(e.at.x), eda_model::units::to_mm(e.at.y))).collect();
     (built.main_ring(), true, None)
 }
 
@@ -2284,11 +2291,11 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
                 _ => {}
             }
             if let Some(c) = sexpr::find(cp, "clearance").and_then(|c| sexpr::num(c, 1)) {
-                zone.clearance = mm_to_um(c);
+                zone.clearance = mm_to_nm(c);
             }
         }
         if let Some(t) = sexpr::find(z, "min_thickness").and_then(|t| sexpr::num(t, 1)) {
-            zone.min_thickness = mm_to_um(t);
+            zone.min_thickness = mm_to_nm(t);
         }
         if let Some(f) = sexpr::find(z, "fill") {
             if let Some(m) = sexpr::find(f, "mode") {
@@ -2296,7 +2303,7 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
                     zone.fill_mode = FillMode::HatchPattern;
                 }
             }
-            let um = |k: &str| sexpr::find(f, k).and_then(|v| sexpr::num(v, 1)).map(mm_to_um);
+            let um = |k: &str| sexpr::find(f, k).and_then(|v| sexpr::num(v, 1)).map(mm_to_nm);
             let raw = |k: &str| sexpr::find(f, k).and_then(|v| sexpr::num(v, 1));
             if let Some(v) = um("hatch_thickness") {
                 zone.hatch_thickness = v;
@@ -2335,9 +2342,9 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
                     _ => IslandRemovalMode::Always,
                 };
             }
-            // `area * pcbIUScale.IU_PER_MM` after `parseBoardUnits`: mm^2 in the file.
+            // `parseBoardUnits( T_island_area_min ) * pcbIUScale.IU_PER_MM`: mm^2 in the file, nm^2 here.
             if let Some(v) = raw("island_area_min") {
-                zone.min_island_area = (v * 1e6).round() as i64;
+                zone.min_island_area = mm_to_nm(v) * eda_model::units::NM_PER_MM;
             }
             // `(smoothing none|chamfer|fillet)` and `(radius r)`; both are ignored for a rule area (`parseZONE`).
             let smoothing = sexpr::find(f, "smoothing").and_then(|v| sexpr::txt(v, 1));

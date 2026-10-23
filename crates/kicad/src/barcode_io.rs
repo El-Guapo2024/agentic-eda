@@ -7,7 +7,7 @@ use eda_model::barcode::{Barcode, BarcodeKind, EccLevel};
 use eda_model::ir::Point;
 
 use crate::sexpr::{self, Sexpr};
-use crate::{fmt_mm_f, mm, mm_to_um, sexpr_str};
+use crate::{fmt_mm_f, mm, mm_to_nm, sexpr_str};
 
 /// `PCB_BARCODE`'s own defaults: 40 mm square, a QR code of error correction level L on `Dwgs.User`, the text printed.
 const DEFAULT_SIZE_NM: i64 = 40_000;
@@ -25,7 +25,7 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Barcode> {
     let angle = ((sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32;
     let mut b = Barcode {
         id: String::new(),
-        at: Point { x: mm_to_um(x), y: mm_to_um(y) },
+        at: Point { x: mm_to_nm(x), y: mm_to_nm(y) },
         angle,
         layer: sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Dwgs.User").to_string(),
         width_nm: DEFAULT_SIZE_NM,
@@ -40,11 +40,11 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Barcode> {
         margin_y_nm: 0,
     };
     if let Some(s) = sexpr::find(item, "size") {
-        b.width_nm = sexpr::num(s, 1).map_or(b.width_nm, mm_to_um);
-        b.height_nm = sexpr::num(s, 2).map_or(b.height_nm, mm_to_um);
+        b.width_nm = sexpr::num(s, 1).map_or(b.width_nm, mm_to_nm);
+        b.height_nm = sexpr::num(s, 2).map_or(b.height_nm, mm_to_nm);
     }
     if let Some(h) = sexpr::find(item, "text_height").and_then(|h| sexpr::num(h, 1)) {
-        b.text_height_nm = mm_to_um(h);
+        b.text_height_nm = mm_to_nm(h);
     }
     if let Some(t) = sexpr::find(item, "type") {
         b.kind = BarcodeKind::from_file_name(sexpr::txt(t, 1)?)?;
@@ -56,8 +56,8 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Barcode> {
     b.show_text = !yes(item, "hide").unwrap_or(false);
     b.knockout = yes(item, "knockout").unwrap_or(false);
     if let Some(m) = sexpr::find(item, "margins") {
-        b.margin_x_nm = sexpr::num(m, 1).map_or(0, mm_to_um);
-        b.margin_y_nm = sexpr::num(m, 2).map_or(0, mm_to_um);
+        b.margin_x_nm = sexpr::num(m, 1).map_or(0, mm_to_nm);
+        b.margin_y_nm = sexpr::num(m, 2).map_or(0, mm_to_nm);
     }
     Some(b)
 }

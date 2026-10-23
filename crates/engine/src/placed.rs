@@ -7,7 +7,7 @@
 //! Everything else that has to know where a pin is -- the studio's symbol drawing, the net tracer after a schematic edit, the
 //! layout of a module sheet -- asks here, so there is one answer. A symbol turned half a turn (`rot` 180) is the box mirrored
 //! through the corner `at`; a quarter turn is the same rotation about the corner; `mirrored` flips the box about its own vertical
-//! axis first. That is `eda_kicad`'s `baked_local`, which this file reproduces for the integer-micrometre world.
+//! axis first. That is `eda_kicad`'s `baked_local`, which this file reproduces for the integer-nanometre world.
 
 use eda_layout::{Node, Point as LPoint, Side};
 use eda_model::ir::{field_key, Point, SchematicSection, SymbolInstance};
@@ -43,8 +43,8 @@ pub fn part_box(part: &Part, resolved: Option<&LibSymbol>, unit: u32) -> PartBox
     PartBox { node: Node { id: 0, width, height, ports }, pin_port }
 }
 
-/// Where a box-local point lands after the instance's turn and mirror, as an offset from `at` (um): KiCad's `TRANSFORM` of the orientation, the
-/// turn (counter-clockwise on the sheet) and then the mirror about `at` -- [`crate::symgeom::bake`] in whole micrometres, and `eda_kicad`'s
+/// Where a box-local point lands after the instance's turn and mirror, as an offset from `at` (nm): KiCad's `TRANSFORM` of the orientation, the
+/// turn (counter-clockwise on the sheet) and then the mirror about `at` -- [`crate::symgeom::bake`] in whole nanometres, and `eda_kicad`'s
 /// `baked_local`. `width` is not used (KiCad mirrors about the symbol's origin, not its box).
 pub fn bake_offset(rot_millideg: u32, mirrored: bool, width: i64, lx: i64, ly: i64) -> (i64, i64) {
     let _ = width;
@@ -104,8 +104,8 @@ fn electrical_type(kind: PinKind, name: &str) -> &'static str {
     }
 }
 
-fn mm(um: i64) -> f64 {
-    um as f64 / 1000.0
+fn mm(nm: i64) -> f64 {
+    nm as f64 / 1e6
 }
 
 /// KiCad pin angle for a pin whose box side is `side`: the direction from the pin's outer end toward the body.
@@ -243,8 +243,8 @@ mod tests {
             let drawn = corner_symbol(lib_id, part, resolved, 1);
             for (number, p) in &pts {
                 let lp = drawn.pin_by_number(number).unwrap_or_else(|| panic!("{} has no pin {number}", part.reference));
-                // library frame (mm, y up) -> sheet frame (um, y down), from the corner
-                let sheet = Point { x: at.x + (lp.at.x * 1000.0).round() as i64, y: at.y - (lp.at.y * 1000.0).round() as i64 };
+                // library frame (mm, y up) -> sheet frame (nm, y down), from the corner
+                let sheet = Point { x: at.x + eda_model::units::sch_from_mm(lp.at.x), y: at.y - eda_model::units::sch_from_mm(lp.at.y) };
                 assert_eq!(*p, sheet, "{} pin {number}", part.reference);
             }
             assert_eq!(pts.len(), part.pins.len(), "every pin of {} has a point", part.reference);

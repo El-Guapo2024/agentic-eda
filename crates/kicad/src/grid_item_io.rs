@@ -7,13 +7,13 @@ use eda_model::grid_item::{GridAffects, GridItem, GridKind};
 use eda_model::ir::Point;
 
 use crate::sexpr::{self, Sexpr};
-use crate::{fmt_double_2_str, mm, mm_to_um, sexpr_str};
+use crate::{fmt_double_2_str, mm, mm_to_nm, sexpr_str};
 
 /// `parsePCB_GRID_ITEM`: the children in the file's order -- the type word first, as the writer puts it, because `extent` and `spacing` mean a length and an angle on a polar grid
 /// and two lengths on a cartesian one. What the item leaves out keeps what `PCB_GRID_ITEM( nullptr )` starts with; every value goes through the item's setters.
 pub(crate) fn read(item: &[Sexpr]) -> GridItem {
     let mut g = GridItem::new(Point { x: 0, y: 0 });
-    let um = |l: &[Sexpr], i: usize| sexpr::num(l, i).map(mm_to_um).unwrap_or(0);
+    let um = |l: &[Sexpr], i: usize| sexpr::num(l, i).map(mm_to_nm).unwrap_or(0);
     for child in item.iter().skip(1) {
         match child {
             Sexpr::Atom(a) if a == "xy" => g.kind = GridKind::Cartesian,

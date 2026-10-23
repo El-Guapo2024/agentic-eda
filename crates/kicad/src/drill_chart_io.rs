@@ -15,7 +15,7 @@ use eda_model::table::Table;
 
 use crate::import_items::ItemRef;
 use crate::sexpr::{self, Sexpr};
-use crate::{mm, mm_to_um, sexpr_str};
+use crate::{mm, mm_to_nm, sexpr_str};
 
 fn yes(b: bool) -> &'static str {
     if b {
@@ -49,8 +49,8 @@ pub(crate) fn read_profile(root: &[Sexpr]) -> Option<DrillSymbolProfile> {
                     p.mark_policy = policy;
                 }
             }
-            Some("size") => p.size_nm = sexpr::num(l, 1).map(mm_to_um).unwrap_or(p.size_nm),
-            Some("width") => p.width_nm = sexpr::num(l, 1).map(mm_to_um).unwrap_or(p.width_nm),
+            Some("size") => p.size_nm = sexpr::num(l, 1).map(mm_to_nm).unwrap_or(p.size_nm),
+            Some("width") => p.width_nm = sexpr::num(l, 1).map(mm_to_nm).unwrap_or(p.width_nm),
             Some("freeze_assignments") => p.freeze_assignments = bool_of(l),
             Some("assignment") => {
                 let mut key = String::new();
@@ -145,7 +145,7 @@ pub(crate) fn read_chart(item: &[Sexpr]) -> Option<(Table, DrillChart)> {
                         Some("id") => col = sexpr::txt(f, 1).and_then(DrillChartColumnId::from_token).map(DrillChartColumn::default_of),
                         Some("name") => name = sexpr::txt(f, 1).map(str::to_string),
                         Some("justify") => align = sexpr::txt(f, 1).and_then(TableAlign::from_token),
-                        Some("width") => width = sexpr::num(f, 1).map(mm_to_um).unwrap_or(0),
+                        Some("width") => width = sexpr::num(f, 1).map(mm_to_nm).unwrap_or(0),
                         _ => {}
                     }
                 }
@@ -156,7 +156,7 @@ pub(crate) fn read_chart(item: &[Sexpr]) -> Option<(Table, DrillChart)> {
                     if let Some(a) = align {
                         col.align = a;
                     }
-                    col.width_nm = width.clamp(0, 1_000_000);
+                    col.width_nm = width.clamp(0, 1_000_000_000); // `GENERATED_TABLE_MAX_COLUMN_WIDTH`: 1000 mm
                     if !c.columns.iter().any(|x| x.id == col.id) {
                         c.columns.push(col);
                     }
@@ -299,9 +299,9 @@ pub(crate) fn read_map(item: &[Sexpr], profile_size_nm: i64) -> Option<(DrillMap
     for l in item.iter().skip(1).filter_map(Sexpr::as_list) {
         match sexpr::tag(l) {
             Some("layer") => m.layer = sexpr::txt(l, 1).unwrap_or_default().to_string(),
-            Some("offset") => m.offset = Point { x: sexpr::num(l, 1).map(mm_to_um).unwrap_or(0), y: sexpr::num(l, 2).map(mm_to_um).unwrap_or(0) },
+            Some("offset") => m.offset = Point { x: sexpr::num(l, 1).map(mm_to_nm).unwrap_or(0), y: sexpr::num(l, 2).map(mm_to_nm).unwrap_or(0) },
             // `SetSymbolSize`: at least one.
-            Some("size") => m.size_nm = sexpr::num(l, 1).map(mm_to_um).unwrap_or(m.size_nm).max(1),
+            Some("size") => m.size_nm = sexpr::num(l, 1).map(mm_to_nm).unwrap_or(m.size_nm).max(1),
             Some("span") => {
                 m.span = match sexpr::txt(l, 1) {
                     Some("all") | None => None,

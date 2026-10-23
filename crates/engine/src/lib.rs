@@ -34,7 +34,7 @@ pub fn derive_schematic_modules(model: &ConstraintModel, opts: &EngineOptions) -
 /// multiples of this so everything lands on-grid. (Used by tests below;
 /// production code now goes through `geometry::GRID`.)
 #[cfg(test)]
-const GRID: i64 = eda_layout::DEFAULT_GRID; // 1270 um
+const GRID: i64 = eda_layout::DEFAULT_GRID; // 1.27 mm
 
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
@@ -60,7 +60,7 @@ impl EngineOptions {
 /// named net label instead (see the crate design note). Deliberately under
 /// `eda-gates`' 80 mm `schematic_wire_length` limit, so any wire that
 /// survives layout passes the gate with margin.
-pub const WIRE_BUDGET_NM: i64 = 76_000;
+pub const WIRE_BUDGET_NM: i64 = 76_000_000;
 
 /// A same-part run of adjacent same-net pins (see the net-label loop below)
 /// is joined by one bus stub only up to this length/bend count. Mirrors
@@ -74,10 +74,10 @@ pub const WIRE_BUDGET_NM: i64 = 76_000;
 /// sheet-spanning rail the gate exists to catch. Past this size each pin in
 /// the run gets its own independent flag instead, which is how a real
 /// schematic draws a connector's several ground pins anyway.
-const MAX_MERGED_STUB_LEN_NM: i64 = 24_000;
+const MAX_MERGED_STUB_LEN_NM: i64 = 24_000_000;
 const MAX_MERGED_STUB_BENDS: usize = 2;
 
-/// Gap left between packed cluster blocks (um), and the slack around a
+/// Gap left between packed cluster blocks (nm), and the slack around a
 /// block's drawn extent for its net-label glyphs/text. Two settings: blocks
 /// *inside* one cluster (an IC and its decoupling caps) are packed tight,
 /// because "next to its IC" is the whole point of a functional block, while
@@ -91,9 +91,9 @@ const TIGHT_MARGIN_NM: i64 = 2 * eda_layout::DEFAULT_GRID;
 /// anchor that passives and connectors hang off.
 const ANCHOR_MIN_PINS: usize = 5;
 
-/// `um` rounded down to a whole number of grid cells.
-fn on_grid(um: i64) -> i64 {
-    um / eda_layout::DEFAULT_GRID * eda_layout::DEFAULT_GRID
+/// `nm` rounded down to a whole number of grid cells.
+fn on_grid(nm: i64) -> i64 {
+    nm / eda_layout::DEFAULT_GRID * eda_layout::DEFAULT_GRID
 }
 
 /// The extra room (grid cells) between parts, block by block, a flat layout is tried with, in turn.
@@ -839,8 +839,8 @@ fn block_flow_bias(b: &Laid) -> i32 {
 /// area left under it between that height and the segments it covers.
 /// Ties on `(y, waste)` are broken by `bias`: a left-tending block prefers
 /// the smallest tied x, a right-tending block the largest.
-fn skyline_best_x(segs: &[(i64, i64, i64)], w: i64, width: i64, bias: i32) -> (i64, i64, i64) {
-    let mut best: Option<(i64, i64, i64)> = None; // (y, waste, x)
+fn skyline_best_x(segs: &[(i64, i64, i64)], w: i64, width: i64, bias: i32) -> (i64, i128, i64) {
+    let mut best: Option<(i64, i128, i64)> = None; // (y, waste, x)
     for &(sx0, _, _) in segs {
         let x = sx0;
         if x + w > width {
@@ -853,12 +853,13 @@ fn skyline_best_x(segs: &[(i64, i64, i64)], w: i64, width: i64, bias: i32) -> (i
             }
             y = y.max(h);
         }
-        let mut waste = 0i64;
+        // square nanometres: i128, as a sum of areas can pass an i64
+        let mut waste = 0i128;
         for &(a, b, h) in segs {
             let ox0 = a.max(x);
             let ox1 = b.min(x + w);
             if ox1 > ox0 {
-                waste += (y - h) * (ox1 - ox0);
+                waste += (y - h) as i128 * (ox1 - ox0) as i128;
             }
         }
         best = Some(match best {
@@ -990,7 +991,7 @@ fn pack_blocks(blocks: &[Laid], node_of: &BTreeMap<String, Node>, gap: i64, marg
         area_b.cmp(&area_a).then(a.cmp(&b))
     });
 
-    let total_area: i64 = foot.iter().map(|(w, h)| w * h).sum();
+    let total_area: i128 = foot.iter().map(|(w, h)| *w as i128 * *h as i128).sum();
     let sqrt_w = (total_area as f64).sqrt().max(widest as f64) as i64;
 
     // Try a spread of candidate widths around the "square" width, plus the

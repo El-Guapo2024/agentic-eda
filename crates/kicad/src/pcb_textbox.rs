@@ -10,7 +10,7 @@ use eda_model::ir::{Point, Text, TextJustify, TextVAlign};
 use eda_model::pcb_items::{legacy_text_margin_nm, LineStyle, TextBox};
 
 use crate::sexpr::{self, Sexpr};
-use crate::{fmt_mm_f, mm, mm_to_um, sexpr_str};
+use crate::{fmt_mm_f, mm, mm_to_nm, sexpr_str};
 
 /// `STROKE_PARAMS`' width of a text box that says nothing: KiCad's `STROKE_PARAMS stroke( -1, LINE_STYLE::SOLID )` before the file's `(stroke ..)`.
 const NO_STROKE: i64 = -1;
@@ -24,7 +24,7 @@ fn yes(item: &[Sexpr], name: &str) -> Option<bool> {
 }
 
 fn point(l: &[Sexpr]) -> Option<Point> {
-    Some(Point { x: mm_to_um(sexpr::num(l, 1)?), y: mm_to_um(sexpr::num(l, 2)?) })
+    Some(Point { x: mm_to_nm(sexpr::num(l, 1)?), y: mm_to_nm(sexpr::num(l, 2)?) })
 }
 
 /// The `text`, `start`, `end` and `pts` of a text box item, and whether it says it is locked the old way (a bare `locked` after the tag).
@@ -53,7 +53,7 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
 
     // `(stroke (width W) (type T) [(color r g b a)])`: a box with no stroke token has `STROKE_PARAMS( -1, SOLID )`.
     let stroke = sexpr::find(item, "stroke");
-    let width = stroke.and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(NO_STROKE);
+    let width = stroke.and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(NO_STROKE);
     let line_style = stroke.and_then(|s| sexpr::find(s, "type")).and_then(|t| sexpr::txt(t, 1)).map(LineStyle::from_token).unwrap_or(LineStyle::Solid);
     let stroke_color = stroke.and_then(|s| sexpr::find(s, "color")).map(|c| c.iter().skip(1).filter_map(Sexpr::text).collect::<Vec<_>>().join(" ")).filter(|c| !c.is_empty());
     // `if( m_requiredVersion < 20230825 ) aTextBox->SetBorderEnabled( stroke.GetWidth() >= 0 );`
@@ -100,7 +100,7 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
     // `(margins L T R B)`, or `GetLegacyTextMargin` for all four.
     match sexpr::find(item, "margins") {
         Some(m) => {
-            let n = |i| sexpr::num(m, i).map_or(0, mm_to_um);
+            let n = |i| sexpr::num(m, i).map_or(0, mm_to_nm);
             (t.margin_left_nm, t.margin_top_nm, t.margin_right_nm, t.margin_bottom_nm) = (n(1), n(2), n(3), n(4));
         }
         None => {

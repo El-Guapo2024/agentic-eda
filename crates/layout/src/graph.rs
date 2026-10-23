@@ -3,12 +3,12 @@
 
 pub type NodeId = usize;
 
-/// Fixed pin-stub length (um): how far a wire extends beyond the box
+/// Fixed pin-stub length (nm): how far a wire extends beyond the box
 /// boundary, on the port's side, before it may bend. Canonical for the
 /// whole workspace — engine/render/gates all call through
 /// [`Node::stub_tip`] (directly or via `eda_engine::geometry::stub_tip`) so
 /// this single value never drifts.
-pub const STUB_LEN: i64 = 1_270;
+pub const STUB_LEN: i64 = 1_270_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Point {
@@ -24,7 +24,7 @@ pub enum Side {
     Right,
 }
 
-/// A connection point on a node's boundary, given as an offset (um) from the
+/// A connection point on a node's boundary, given as an offset (nm) from the
 /// node's top-left corner, measured along the named side.
 #[derive(Debug, Clone, Copy)]
 pub struct Port {

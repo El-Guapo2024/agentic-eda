@@ -411,15 +411,15 @@ fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &e
     let footprint = model.footprint_of(part)?;
     let (hw, hh) = footprint.courtyard_half();
     // `eda_kicad::pcb`'s own constants, kept exactly for the *anchor
-    // position* (so this item sits where the real label really is): 300 µm
-    // per character of half-width for the Left/Right offset, a 700 µm gap
-    // above/below the courtyard (200 µm beside it).
-    let half_w_offset = 300 * fp.id.chars().count() as Nm;
+    // position* (so this item sits where the real label really is): 0.3 mm
+    // per character of half-width for the Left/Right offset, a 0.7 mm gap
+    // above/below the courtyard (0.2 mm beside it).
+    let half_w_offset = 300_000 * fp.id.chars().count() as Nm;
     let local = match fp.label {
-        LabelSide::Above => (0, -(hh + 700)),
-        LabelSide::Below => (0, hh + 700),
-        LabelSide::Left => (-(hw + 200 + half_w_offset), 0),
-        LabelSide::Right => (hw + 200 + half_w_offset, 0),
+        LabelSide::Above => (0, -(hh + 700_000)),
+        LabelSide::Below => (0, hh + 700_000),
+        LabelSide::Left => (-(hw + 200_000 + half_w_offset), 0),
+        LabelSide::Right => (hw + 200_000 + half_w_offset, 0),
     };
     let center = pad_center(fp, local);
     // The label's own *rendered* extent, for collision purposes, is a
@@ -755,11 +755,11 @@ impl DrcVia {
     }
 }
 
-/// `ARC_HIGH_DEF` (0.005 mm), in µm -- the chord error a DRC arc's
+/// `ARC_HIGH_DEF` (0.005 mm), in nm -- the chord error a DRC arc's
 /// polyline is held to (`SHAPE_ARC::ConvertToPolyline`'s default).
-pub const ARC_HIGH_DEF: f64 = 5.0;
+pub const ARC_HIGH_DEF: f64 = 5_000.0;
 
-/// An arc's polyline at most `max_error` µm from the true curve:
+/// An arc's polyline at most `max_error` nm from the true curve:
 /// `GetArcToSegmentCount` (360 / (2 * acos(1 - err/r)) segments per turn),
 /// over the arc's own sweep. A near-straight or degenerate arc gives its
 /// chord.

@@ -156,11 +156,11 @@ fn preset_json(p: &Value) -> Option<Value> {
     }))
 }
 
-/// One saved viewport as `PARAM_VIEWPORT::viewportsToJson` writes it: the rectangle in nanometres (the studio keeps micrometres).
+/// One saved viewport as `PARAM_VIEWPORT::viewportsToJson` writes it: the rectangle in nanometres, as the studio keeps it.
 fn viewport_json(v: &Value) -> Option<Value> {
     let name = v.get("name").and_then(Value::as_str).filter(|n| !n.is_empty())?;
-    let um = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0) * 1000.0;
-    Some(json!({ "name": name, "x": um("x"), "y": um("y"), "w": um("w"), "h": um("h") }))
+    let nm = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+    Some(json!({ "name": name, "x": nm("x"), "y": nm("y"), "w": nm("w"), "h": nm("h") }))
 }
 
 /// Puts the studio's `project` section into a derived `.kicad_pro`: the net colours (`net_settings.net_colors`), the layer presets and the viewports
@@ -452,7 +452,7 @@ mod tests {
                     { "name": "", "layers": [] },
                     { "name": "Bare" }
                 ],
-                "viewports": [ { "name": "Home", "x": 1.5, "y": 2, "w": 30, "h": 40 }, { "x": 1 } ]
+                "viewports": [ { "name": "Home", "x": 1500, "y": 2000, "w": 30000, "h": 40000 }, { "x": 1000 } ]
             }
         })
     }
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(presets.len(), 2, "the nameless preset is skipped");
         assert_eq!(presets[0], json!({ "name": "Front", "activeLayer": 5, "flipBoard": false, "layers": [0, 5, 25], "renderLayers": ["tracks", "grid"] }));
         assert_eq!(presets[1]["activeLayer"], -2, "no active layer is UNSELECTED_LAYER");
-        assert_eq!(pro["board"]["viewports"], json!([{ "name": "Home", "x": 1500.0, "y": 2000.0, "w": 30000.0, "h": 40000.0 }]), "micrometres become nanometres");
+        assert_eq!(pro["board"]["viewports"], json!([{ "name": "Home", "x": 1500.0, "y": 2000.0, "w": 30000.0, "h": 40000.0 }]), "nanometres, as the studio keeps them");
         assert!(pro["board"]["design_settings"]["rules"].is_object(), "what was there stays");
     }
 

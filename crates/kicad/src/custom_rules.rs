@@ -30,7 +30,7 @@
 use eda_model::ir::Nm;
 use eda_model::CustomRule;
 
-use crate::import::mm_to_um;
+use crate::import::mm_to_nm;
 use crate::sexpr::{self, Sexpr};
 
 /// Strip `#`-to-end-of-line comments, respecting `"..."` quoting (a `#`
@@ -94,7 +94,7 @@ fn parse_length(s: &str) -> Option<Nm> {
         "in" => n * 25.4,
         _ => return None,
     };
-    Some(mm_to_um(mm))
+    Some(mm_to_nm(mm))
 }
 
 /// `(constraint TYPE (min V) (max V) (opt V))` -- `TYPE` is always present

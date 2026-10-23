@@ -40,9 +40,9 @@ const LAYER_SHAPE_TOKENS: &[&str] = &["shape", "size", "offset", "rect_delta", "
 /// missing size nothing (`SHAPE_PROPS()`).
 fn read_layer_shape(layer: &[Sexpr], side: Side) -> PadLayerShape {
     let token = sexpr::find(layer, "shape").and_then(|s| sexpr::txt(s, 1)).unwrap_or("circle");
-    let offset = sexpr::find(layer, "offset").and_then(|o| Some((crate::import::mm_to_um(sexpr::num(o, 1)?), crate::import::mm_to_um(sexpr::num(o, 2)?)))).map(|(x, y)| if side == Side::Bottom { (-x, y) } else { (x, y) });
+    let offset = sexpr::find(layer, "offset").and_then(|o| Some((crate::import::mm_to_nm(sexpr::num(o, 1)?), crate::import::mm_to_nm(sexpr::num(o, 2)?)))).map(|(x, y)| if side == Side::Bottom { (-x, y) } else { (x, y) });
     let read = read_shape_node(layer, token, offset.filter(|o| *o != (0, 0)), side);
-    let size = sexpr::find(layer, "size").and_then(|s| Some((crate::import::mm_to_um(sexpr::num(s, 1)?).max(0), crate::import::mm_to_um(sexpr::num(s, 2)?).max(0)))).unwrap_or((0, 0));
+    let size = sexpr::find(layer, "size").and_then(|s| Some((crate::import::mm_to_nm(sexpr::num(s, 1)?).max(0), crate::import::mm_to_nm(sexpr::num(s, 2)?).max(0)))).unwrap_or((0, 0));
     let tokens = layer.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| LAYER_SHAPE_TOKENS.contains(&t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
     PadLayerShape {
         shape: read.shape,

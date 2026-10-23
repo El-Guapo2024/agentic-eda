@@ -11,7 +11,7 @@
 //! length is recomputed the next time the pattern is tuned.
 
 use crate::sexpr::{self, Sexpr};
-use crate::{mm, mm_to_um, sexpr_str};
+use crate::{mm, mm_to_nm, sexpr_str};
 use eda_model::ir::{Design, Point, Nm};
 use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern, DELAY_UNCONSTRAINED_AS, LENGTH_UNCONSTRAINED_NM};
 use std::collections::BTreeMap;
@@ -139,7 +139,7 @@ pub(crate) fn prop_num(list: &[Sexpr], key: &str) -> Option<f64> {
 
 /// A length property in micrometres.
 fn prop_nm(list: &[Sexpr], key: &str) -> Option<Nm> {
-    prop_num(list, key).map(mm_to_um)
+    prop_num(list, key).map(mm_to_nm)
 }
 
 pub(crate) fn prop_str<'a>(list: &'a [Sexpr], key: &str) -> Option<&'a str> {
@@ -153,7 +153,7 @@ fn prop_bool(list: &[Sexpr], key: &str) -> Option<bool> {
 pub(crate) fn prop_point(list: &[Sexpr], key: &str) -> Option<Point> {
     let v = sexpr::find(list, key)?;
     let xy = sexpr::find(v, "xy")?;
-    Some(Point { x: mm_to_um(sexpr::num(xy, 1)?), y: mm_to_um(sexpr::num(xy, 2)?) })
+    Some(Point { x: mm_to_nm(sexpr::num(xy, 1)?), y: mm_to_nm(sexpr::num(xy, 2)?) })
 }
 
 /// `(key (pts (xy x y) .. [(arc (start ..) (mid ..) (end ..))]))`: the points of a line, an arc by its ends.
@@ -165,12 +165,12 @@ pub(crate) fn prop_line(list: &[Sexpr], key: &str) -> Vec<Point> {
         match sexpr::tag(item) {
             Some("xy") => {
                 if let (Some(x), Some(y)) = (sexpr::num(item, 1), sexpr::num(item, 2)) {
-                    out.push(Point { x: mm_to_um(x), y: mm_to_um(y) });
+                    out.push(Point { x: mm_to_nm(x), y: mm_to_nm(y) });
                 }
             }
             Some("arc") => {
                 for part in ["start", "end"] {
-                    if let Some(p) = sexpr::find(item, part).and_then(|s| Some(Point { x: mm_to_um(sexpr::num(s, 1)?), y: mm_to_um(sexpr::num(s, 2)?) })) {
+                    if let Some(p) = sexpr::find(item, part).and_then(|s| Some(Point { x: mm_to_nm(sexpr::num(s, 1)?), y: mm_to_nm(sexpr::num(s, 2)?) })) {
                         out.push(p);
                     }
                 }
@@ -230,7 +230,7 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
         let mode = prop_str(g, "tuning_mode").and_then(TuningMode::from_token).unwrap_or_default();
         let origin = prop_point(g, "origin").unwrap_or_default();
         let end = prop_point(g, "end").unwrap_or(origin);
-        let mut skew = TargetRange { min: -100, opt: 0, max: 100 };
+        let mut skew = TargetRange { min: -100_000, opt: 0, max: 100_000 };
         skew = prop_range(g, "target_skew", skew);
         out.push(TuningPattern {
             id: String::new(),
@@ -239,9 +239,9 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
             origin,
             end,
             initial_side: prop_str(g, "initial_side").and_then(PatternSide::from_token).unwrap_or(PatternSide::Left),
-            min_amplitude: prop_nm(g, "min_amplitude").unwrap_or(200),
-            max_amplitude: prop_nm(g, "max_amplitude").unwrap_or(1_000),
-            spacing: prop_nm(g, "min_spacing").unwrap_or(600),
+            min_amplitude: prop_nm(g, "min_amplitude").unwrap_or(200_000),
+            max_amplitude: prop_nm(g, "max_amplitude").unwrap_or(1_000_000),
+            spacing: prop_nm(g, "min_spacing").unwrap_or(600_000),
             corner_radius_percent: prop_num(g, "corner_radius_percent").map(|v| v.round().clamp(0.0, 100.0) as u32).unwrap_or(80),
             rounded: prop_bool(g, "rounded").unwrap_or(true),
             single_sided: prop_bool(g, "single_sided").unwrap_or(false),
