@@ -1,16 +1,19 @@
-//! `/api/fab/{3d,vrml,gencad,ipcd356,ipc2581,odb,pcb_bom}`: the backend for pcbnew's Export and Fabrication
+//! `/api/fab/{3d,vrml,gencad,idf,ipcd356,ipc2581,odb,pcb_bom}`: the backend for pcbnew's Export and Fabrication
 //! Outputs dialogs that kicad-cli has a command for (`web/studio/src/components/BoardExportDialog.tsx`).
 //!
 //! Same rule as `crate::fab_api`: the export is kicad-cli's, run on the current design revision through
 //! `crate::kicad_engine` (and, in the studio, through `offload` and its one-at-a-time lane). Each dialog's JSON
 //! becomes kicad-cli arguments in the `*_args` builders below -- the arguments KiCad's own dialog builds, in its
 //! order: `DIALOG_EXPORT_STEP::onExportButton` itself runs `kicad-cli pcb export <format> ...`, and
-//! `BOARD_EDITOR_CONTROL::ExportVRML`, `ExportGenCAD`, `GenIPC2581File`, `GenerateODBPPFiles` and
+//! `BOARD_EDITOR_CONTROL::ExportVRML`, `ExportGenCAD`, `ExportIDF`, `GenIPC2581File`, `GenerateODBPPFiles` and
 //! `GenD356File` map one to one onto the commands of the same name. Output lands in
 //! `<dir>/export/kicad/<kind>/`; the reply names the files, relative to `dir`.
 //!
-//! Not here, because kicad-cli has no command for them: IDF, Hyperlynx, the footprint report (`.rpt`),
-//! Specctra DSN/SES (`web/studio/tools/ui-parity-missing.json` says why).
+//! IDF and GenCAD are newer kicad-cli commands than the rest: `GET /api/fab/exporters` ([`exporters`]) says whether the kicad-cli in use
+//! has them, and the studio greys out their menu entries with its reason when it has not.
+//!
+//! Not here, because kicad-cli has no command for them: Hyperlynx and the footprint report (`.rpt`)
+//! (`web/studio/tools/ui-parity-missing.json` says why). Specctra DSN/SES is our own exporter (`crate::specctra_api`).
 
 use crate::{board, fab_api, kicad_engine};
 use serde_json::Value;
@@ -149,6 +152,36 @@ pub(crate) fn gencad_args(req: &Value) -> Vec<String> {
     a
 }
 
+/// `BOARD_EDITOR_CONTROL::ExportIDF` with `DIALOG_EXPORT_IDF3`'s fields: `{ units: "mm"|"mils" (Output units: Millimeters, Mils),
+/// set_reference_point ("Set board reference point:"), x_ref, y_ref (mm), no_dnp ("Ignore 'Do not populate' components"), no_unspecified
+/// ("Ignore 'Unspecified' components") }`, every one unset or Millimeters by default (`dialog_export_idf_base.cpp`).
+///
+/// Without a reference point KiCad's handler takes the centre of `BOARD::GetBoardEdgesBoundingBox`, which is kicad-cli's `--origin center`;
+/// with one, `--origin user` and the point. kicad-cli (nightly 25ec2335f2) reads `--user-origin-x/-y` in nanometres with `--units mm` and in
+/// 1/25400 mm with `--units mils` (it turns the nanometres into mils and hands those to `Export_IDF3` as millimetres), so the point is given in
+/// whichever of the two makes it the millimetres the dialog was given; `crates/cli/tests/cli_exports.rs` holds kicad-cli to that. The values
+/// are `--flag=value`, so a negative one is not read as a flag. The file name is the studio's (`export/kicad/idf/<board>.emn`, with the
+/// `.emp` beside it). kicad-cli's `--origin drill|grid`, `--explicit-height` and `--part-number-field` have no control in KiCad 8303b2ad's
+/// dialog and are not passed.
+pub(crate) fn idf_args(req: &Value) -> Vec<String> {
+    let mils = choice(req, "units", &["mm", "mils"], "mm") == "mils";
+    let mut a: Vec<String> = vec!["--units".into(), if mils { "mils" } else { "mm" }.into()];
+    if flag(req, "set_reference_point", false) {
+        let per_mm = if mils { 25_400.0 } else { 1_000_000.0 };
+        let at = |key: &str| (req.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0) * per_mm).round() as i64;
+        a.extend(["--origin".into(), "user".into(), format!("--user-origin-x={}", at("x_ref")), format!("--user-origin-y={}", at("y_ref"))]);
+    } else {
+        a.extend(["--origin".into(), "center".into()]);
+    }
+    if flag(req, "no_unspecified", false) {
+        a.push("--no-unspecified".into());
+    }
+    if flag(req, "no_dnp", false) {
+        a.push("--no-dnp".into());
+    }
+    a
+}
+
 /// `DIALOG_EXPORT_2581`: `{ units: "mm"|"in", precision (4..10), version: "B"|"C", compress, bom_rev, col_id,
 /// col_mpn, col_mfg, col_dist_pn, col_dist }` -- the BOM columns are field names, passed only when named.
 pub(crate) fn ipc2581_args(req: &Value) -> Vec<String> {
@@ -235,9 +268,38 @@ pub fn vrml(dir: &Path, body: &[u8]) -> Value {
     fab_api::reply(kicad_engine::export(dir, "vrml", &vrml_args(&req, center)))
 }
 
+/// An IDF or GenCAD export's reply: a kicad-cli without the command says so (`kicad_engine::missing_pcb_export`); a run that fails is
+/// KiCad's "Failed to create file '%s'." (`ExportIDF`, `ExportGenCAD`), the file relative to the board, with what kicad-cli said after it.
+fn optional_export(dir: &Path, kind: &str, ext: &str, args: &[String]) -> Value {
+    if let Some(why) = kicad_engine::missing_pcb_export(kind) {
+        return fab_api::err(why);
+    }
+    match kicad_engine::export(dir, kind, args) {
+        Ok(v) => v,
+        Err(e) => {
+            let file = format!("export/kicad/{kind}/{}.{ext}", eda_kicad_engine::file_stem(&kicad_engine::project_name(dir)));
+            fab_api::err(format!("Failed to create file '{file}'.\n{}", board::reasons(&e)))
+        }
+    }
+}
+
 /// `POST /api/fab/gencad` -- see [`gencad_args`].
 pub fn gencad(dir: &Path, body: &[u8]) -> Value {
-    fab_api::reply(kicad_engine::export(dir, "gencad", &gencad_args(&request(body))))
+    optional_export(dir, "gencad", "cad", &gencad_args(&request(body)))
+}
+
+/// `POST /api/fab/idf` -- see [`idf_args`]. Writes `<board>.emn` and `<board>.emp`.
+pub fn idf(dir: &Path, body: &[u8]) -> Value {
+    optional_export(dir, "idf", "emn", &idf_args(&request(body)))
+}
+
+/// `GET /api/fab/exporters`: `{ engine, unavailable: { <kind>: <reason> } }` for the exporters a kicad-cli may lack
+/// (`kicad_engine::OPTIONAL_PCB_EXPORTS`), each probed once per process (`eda_kicad_engine::cli_export_kinds`); a kind it has, or one the
+/// probe cannot tell about, is not listed.
+pub fn exporters() -> Value {
+    let engine = eda_kicad_engine::find_cli().map(|c| format!("kicad-cli {}", eda_kicad_engine::cli_version(&c)));
+    let unavailable: serde_json::Map<String, Value> = kicad_engine::OPTIONAL_PCB_EXPORTS.iter().filter_map(|(kind, _)| kicad_engine::missing_pcb_export(kind).map(|why| (kind.to_string(), Value::String(why)))).collect();
+    serde_json::json!({ "engine": engine, "unavailable": unavailable })
 }
 
 /// `POST /api/fab/ipcd356`: no options.
@@ -342,6 +404,23 @@ mod tests {
     fn gencad_options_are_flags_and_nothing_else_is_passed() {
         assert_eq!(args(gencad_args(&Value::Null)), "");
         assert_eq!(args(gencad_args(&json!({ "flip_bottom_pads": true, "unique_pins": true, "unique_footprints": true, "use_drill_origin": true, "store_origin": true }))), "--flip-bottom-pads --unique-pins --unique-footprints --use-drill-origin --store-origin-coord");
+    }
+
+    #[test]
+    fn idf_defaults_to_millimetres_the_board_centre_and_every_component() {
+        assert_eq!(args(idf_args(&Value::Null)), "--units mm --origin center");
+        // The reference point is only read while "Set board reference point:" is checked.
+        assert_eq!(args(idf_args(&json!({ "x_ref": 5.0, "y_ref": 6.0 }))), "--units mm --origin center");
+    }
+
+    #[test]
+    fn every_idf_option_becomes_its_kicad_cli_flag() {
+        let a = idf_args(&json!({ "units": "mm", "set_reference_point": true, "x_ref": 12.5, "y_ref": -3.25, "no_unspecified": true, "no_dnp": true }));
+        assert_eq!(args(a), "--units mm --origin user --user-origin-x=12500000 --user-origin-y=-3250000 --no-unspecified --no-dnp", "the point in nanometres, as kicad-cli reads it with mm");
+        let a = idf_args(&json!({ "units": "mils", "set_reference_point": true, "x_ref": 1.0, "y_ref": -0.5 }));
+        assert_eq!(args(a), "--units mils --origin user --user-origin-x=25400 --user-origin-y=-12700", "with mils kicad-cli reads the point in 1/25400 mm");
+        assert_eq!(args(idf_args(&json!({ "units": "inches", "no_dnp": true }))), "--units mm --origin center --no-dnp", "an unknown unit is Millimeters");
+        assert!(args(idf_args(&json!({ "set_reference_point": true, "x_ref": "far" }))).contains("--user-origin-x=0 --user-origin-y=0"));
     }
 
     #[test]

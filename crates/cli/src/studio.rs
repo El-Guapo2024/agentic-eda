@@ -1013,6 +1013,9 @@ fn handle(
         ("POST", "/api/fab/3d") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::three_d),
         ("POST", "/api/fab/vrml") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::vrml),
         ("POST", "/api/fab/gencad") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::gencad),
+        ("POST", "/api/fab/idf") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::idf),
+        // Which of the exporters a kicad-cli may lack (IDF, GenCAD) this one has: one `kicad-cli pcb export --help` per process, so off the loop.
+        ("GET", "/api/fab/exporters") => offload(stream, lane, dir, job, path, &body, |_, _| crate::board_output_api::exporters()),
         ("POST", "/api/fab/ipcd356") => offload(stream, lane, dir, job, path, &body, |dir, _| crate::board_output_api::ipcd356(dir)),
         ("POST", "/api/fab/ipc2581") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::ipc2581),
         ("POST", "/api/fab/odb") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::odb),
