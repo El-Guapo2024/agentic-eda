@@ -281,6 +281,44 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         *n += 1;
         cache_names.insert((sym.id.clone(), sym.unit), format!("{bare}_{n}"));
     }
+    // Every symbol is written at angle 0 with its library symbol baked through its own turn and mirror, and the cache holds one entry per
+    // `lib_id`, baked through the first reference that uses it: another reference of that `lib_id` turned or mirrored otherwise would be drawn
+    // (and connected, by kicad-cli) the first one's way. Such a reference gets a copy of its own in the cache, baked through its own units, as a
+    // symbol whose pins Swap Pins moved does (KiCad's `SCH_SCREEN::Append` names a cache copy `<symbol>_<n>` and points the instance at it with
+    // `(lib_name ...)`); references that are turned alike share one copy.
+    let transform = |s: &SymbolInstance| (s.rot % 360_000, s.mirrored, s.mirror_y);
+    let mut representative_of: BTreeMap<String, &str> = BTreeMap::new();
+    for sym in &symbols {
+        representative_of.entry(sym_lib_id(sym)).or_insert(sym.id.as_str());
+    }
+    let mut shared_copies: BTreeMap<(String, Vec<(u32, (u32, bool, bool))>), String> = BTreeMap::new();
+    let mut references: Vec<&str> = symbols.iter().map(|s| s.id.as_str()).collect();
+    references.dedup();
+    for reference in references {
+        let units: Vec<&SymbolInstance> = symbols.iter().filter(|s| s.id == reference).copied().collect();
+        let lib_id = sym_lib_id(units[0]);
+        let rep = representative_of[&lib_id];
+        if rep == reference || units.iter().any(|u| cache_names.contains_key(&(u.id.clone(), u.unit))) {
+            continue;
+        }
+        let rep_units: Vec<&SymbolInstance> = symbols.iter().filter(|s| s.id == rep).copied().collect();
+        let default_baker = rep_units.iter().find(|s| s.unit == 1).copied().unwrap_or(rep_units[0]);
+        let baker = |unit: u32| rep_units.iter().find(|s| s.unit == unit).copied().unwrap_or(default_baker);
+        if units.iter().all(|u| transform(u) == transform(baker(u.unit))) {
+            continue;
+        }
+        let mut signature: Vec<(u32, (u32, bool, bool))> = units.iter().map(|u| (u.unit, transform(u))).collect();
+        signature.sort();
+        let name = shared_copies.entry((lib_id.clone(), signature)).or_insert_with(|| {
+            let bare = lib_id.rsplit(':').next().unwrap_or(&lib_id).to_string();
+            let n = cache_counts.entry(bare.clone()).or_insert(0);
+            *n += 1;
+            format!("{bare}_{n}")
+        });
+        for u in &units {
+            cache_names.insert((u.id.clone(), u.unit), name.clone());
+        }
+    }
 
     // ---- lib_symbols ----
     writeln!(out, "\t(lib_symbols").unwrap();
@@ -305,8 +343,12 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             write_power_lib_symbol(&mut out, lib_id, &resolved);
         }
     }
+    let mut written_copies: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for sym in &symbols {
         let Some(name) = cache_names.get(&(sym.id.clone(), sym.unit)) else { continue };
+        if !written_copies.insert(name.as_str()) {
+            continue; // a copy references turned alike share, or one a multi-unit reference's other unit wrote
+        }
         let instances: Vec<&SymbolInstance> = symbols.iter().filter(|s| s.id == sym.id).copied().collect();
         write_lib_symbol_entry(&mut out, name, &sym_lib_id(sym), &instances, parts_by_ref[sym.id.as_str()], model, Some((sch, sym.id.as_str())));
     }
