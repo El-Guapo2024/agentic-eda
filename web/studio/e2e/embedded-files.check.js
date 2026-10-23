@@ -1,5 +1,5 @@
 // The embedded files (GAPS.md items 24 and 30, package P26; PARITY-common.md): the Embedded Files panel (`PANEL_EMBEDDED_FILES`) in Board Setup > Board Data, in Schematic Setup >
-// Schematic Data and on the Embedded Files tab of Footprint Properties -- Add Files by upload, the conflict question ("Replace" / "Reuse Existing"), Remove (and its refusal of a file
+// Schematic Data and on the Embedded Files tab of Footprint Properties -- Add Files by upload, the conflict question ("Replace" / "Reuse Existing" / "Cancel"; none for the same content), Remove (and its refusal of a file
 // only a footprint holds), Export (the extract route), Embed fonts -- each one undo step; the actions `common.Embed.embededFile`, `removeFile` and `extractFile`; Collect and Embed 3D
 // Models (`pcbnew.EditorControl.collect3DModels`): the board's models embedded, named `kicad-embed://`, served from the board by the 3D model route, and one undo takes it back.
 //
@@ -116,10 +116,19 @@
     await upload([["dup.txt", "first"]]);
     await upload([["dup.txt", "second"]]);
     const q = tid("embedded-files-question", panel());
-    t(!!q && /already embedded/.test(q.textContent), `the question is asked: ${q?.textContent}`);
+    t(!!q && q.textContent.includes("A file named 'dup.txt' is already embedded, but the file on disk has different content.") && q.textContent.includes("Do you want to replace the embedded file with the new version?"), `KiCad's question, word for word: ${q?.textContent}`);
+    t(q?.getAttribute("aria-label") === "Embedded File Conflict" && !!button(q, "Cancel"), "its title, and Replace / Reuse Existing / Cancel");
     button(q, "Reuse Existing").click();
     await sleep(700);
     t((await extracted("owner=board", "dup.txt")) === "first", "Reuse Existing keeps the file that is there");
+    // the same content again: the file that is there is reused without a question (`existingFile->data_hash == newFileHash`)
+    await upload([["dup.txt", "first"]]);
+    t(!tid("embedded-files-question", panel()), "the same content asks nothing");
+    t(!/fail|refused|already/i.test(tid("embedded-files-message", panel())?.textContent ?? ""), "and says nothing");
+    // an empty file is not embedded (`EMBEDDED_FILES::AddFile` fails on it)
+    await upload([["empty.txt", ""]]);
+    t((tid("embedded-files-message", panel())?.textContent ?? "") === "Failed to add file 'empty.txt'.", `an empty file: ${tid("embedded-files-message", panel())?.textContent}`);
+    t(!(await names("owner=board")).includes("empty.txt"), "is not added");
     await upload([["dup.txt", "second"]]);
     button(tid("embedded-files-question", panel()), "Replace").click();
     await sleep(900);

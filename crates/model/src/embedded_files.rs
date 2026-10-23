@@ -320,7 +320,7 @@ pub fn of_footprint<'a>(design: &'a crate::ir::Design, id: &str) -> Option<&'a E
 
 /// The one list a board file holds for the board and its footprints (`PCB_IO_KICAD_SEXPR::format( const BOARD* )`: "consolidate the embedded models in footprints into a single map"):
 /// the board's own files, then the files of the footprints in the order they are placed, a name taken by the first that has it. Only the files with data are in it, and the
-/// fonts are dropped when the board does not embed them. Its `fonts` is the board's.
+/// board's own fonts are dropped when the board does not embed them (`FormatBoardToFormatter` clears the board's list only: a footprint's fonts stay). Its `fonts` is the board's.
 pub fn board_file_list(design: &crate::ir::Design) -> EmbeddedFiles {
     let own = design.drawings.as_ref().map(|d| d.embedded.clone()).unwrap_or_default();
     let mut out = EmbeddedFiles { fonts: own.fonts, files: own.to_write(true).into_iter().cloned().collect() };
@@ -335,14 +335,15 @@ pub fn board_file_list(design: &crate::ir::Design) -> EmbeddedFiles {
 }
 
 /// The files a footprint on the board lists inside its `(footprint ..)`: its own that have data -- its own, else the board's (`BOARD::FixupEmbeddedData`) -- which the footprint's
-/// block names without their data (`EMBEDDED_FILES::WriteEmbeddedFiles( .., aWriteData = false )`).
+/// block names without their data (`EMBEDDED_FILES::WriteEmbeddedFiles( .., aWriteData = false )`). Its fonts are listed whatever its fonts flag says: the board's save clears
+/// the fonts of the board's own list only (`PCB_IO_KICAD_SEXPR::FormatBoardToFormatter`), a footprint's are cleared when a library saves it.
 pub fn footprint_listed_files(design: &crate::ir::Design, id: &str) -> Vec<EmbeddedFile> {
     let Some(list) = of_footprint(design, id) else { return Vec::new() };
     let fixed = match design.drawings.as_ref() {
         Some(d) => list.fixed_up_from(&d.embedded),
         None => list.clone(),
     };
-    fixed.to_write(true).into_iter().cloned().collect()
+    fixed.files.into_iter().filter(|f| !f.data.is_empty()).collect()
 }
 
 #[cfg(test)]
