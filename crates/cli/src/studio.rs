@@ -1259,6 +1259,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     // What the via does with the layers nothing connects it on (`remove_unused_layers`, Remove Unused Pads): `remove_all`,
                     // `remove_except_start_and_end` or `start_end_only` -- absent when it keeps every layer -- and the layers it then has copper on.
                     "unconnected": extra.map(|e| e.unconnected_layers()).filter(|m| m.removes()),
+                    // `VIATYPE` when it is not a through via (`blind`, `buried`, `micro`; `DrawingsSection::via_extras`).
+                    "type": extra.map(|e| e.kind).filter(|k| *k != eda_model::via_extra::ViaKind::Through),
                     "flashed": flashed.vias.get(&v.id),
                 })
             }).collect::<Vec<_>>(),

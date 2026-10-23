@@ -180,6 +180,11 @@ pub struct LinePlacer {
     /// The layer the route goes on to after the pending via (`m_sizes.GetLayerBottom()`, what `makeVia` spans to): the via collides on
     /// every layer between the current one and this. `None`: the via is taken as being on the current layer alone.
     pub via_to_layer: Option<i32>,
+    /// The layers the pending via itself spans, when they are not "from the current layer to [`Self::via_to_layer`]" (`LINE_PLACER::makeVia`:
+    /// a `VIATYPE::THROUGH` via spans `F_Cu` .. `B_Cu`, a blind/buried or micro via the sizes' layer pair, `m_sizes.GetLayerTop()` ..
+    /// `GetLayerBottom()`, which need not include the layer the route is on -- `ROUTER_TOOL::handleLayerSwitch` puts the pair there). `None`:
+    /// from the current layer to `via_to_layer`, what `V` (`layerToggle`) has always placed.
+    pub via_span: Option<LayerRange>,
     pub runs: Vec<Line>,
     pub current_layer: i32,
     pub idle: bool,
@@ -221,7 +226,7 @@ impl LinePlacer {
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: 0, via_drill: 0, via_to_layer: None, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), stages: Vec::new() }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: 0, via_drill: 0, via_to_layer: None, via_span: None, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), stages: Vec::new() }
     }
 
     pub fn fixed_start(&self) -> Point {
@@ -372,9 +377,14 @@ impl LinePlacer {
         *self.last_move.borrow_mut() = None;
     }
 
-    /// `makeVia( pos )`: a via of the pending size on the layers from the current one to the one the route goes on to.
+    /// The layers of the pending via: [`Self::via_span`], else from the current layer to `to_layer`.
+    fn via_layers(&self, to_layer: i32) -> LayerRange {
+        self.via_span.unwrap_or_else(|| LayerRange::new(self.current_layer, to_layer))
+    }
+
+    /// `makeVia( pos )`: a via of the pending size on the layers from the current one to the one the route goes on to (or the span [`Self::via_span`] names).
     fn make_via(&self, pos: Point) -> crate::item::Via {
-        crate::item::Via { net: self.net.clone(), layers: LayerRange::new(self.current_layer, self.via_to_layer.unwrap_or(self.current_layer)), pos, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, is_virtual: false }
+        crate::item::Via { net: self.net.clone(), layers: self.via_layers(self.via_to_layer.unwrap_or(self.current_layer)), pos, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, is_virtual: false }
     }
 
     /// Via placement for the pending via at the head's end (`LINE_PLACER::buildInitialLine`'s via part): put it at `at` and,
@@ -388,7 +398,7 @@ impl LinePlacer {
             Mode::Walkaround => crate::node::kind_mask::ANY,
             Mode::Shove => crate::node::kind_mask::SOLID,
         };
-        let via = crate::item::Via { net: self.net.clone(), layers: LayerRange::new(self.current_layer, to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, is_virtual: false };
+        let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers(to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, is_virtual: false };
         let start = self.fixed_start();
         let lead = (at.x - start.x, at.y - start.y);
         match crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
@@ -436,7 +446,7 @@ impl LinePlacer {
                 let to_layer = self.via_to_layer.unwrap_or(self.current_layer);
                 let placed = self.place_via(node, rules, settings, via_pos, to_layer);
                 let shape = Shape::Circle { c: placed, r: self.via_diameter / 2 };
-                if node.first_colliding(&shape, &self.net, LayerRange::new(self.current_layer, to_layer), rules, &[]).is_some() {
+                if node.first_colliding(&shape, &self.net, self.via_layers(to_layer), rules, &[]).is_some() {
                     colliding = true;
                 }
                 Some((placed, self.via_diameter, self.via_drill))
@@ -584,7 +594,7 @@ impl LinePlacer {
             Some(_) => head.last().unwrap_or(p),
             None => self.place_via(node, rules, settings, head.last().unwrap_or(p), new_layer),
         };
-        let via = crate::item::Via { layers: LayerRange::new(self.current_layer, new_layer), ..self.make_via(via_pos) };
+        let via = crate::item::Via { layers: self.via_layers(new_layer), ..self.make_via(via_pos) };
         let via = crate::item::Via { diameter, drill, ..via };
         if head.point_count() >= 2 {
             self.stages.push(self.springback.borrow().len());
@@ -599,6 +609,7 @@ impl LinePlacer {
         self.origin = via_pos; // the next run (if `runs` was empty) starts here
         self.placing_via = false;
         self.via_to_layer = None;
+        self.via_span = None;
         self.placement_correct = true;
         // `FixRoute` after a via: "lastSegDir = pl.EndsWithVia() ? DIRECTION_45::UNDEFINED : d_last"
         self.restart_trail(via_pos, Direction45::Undefined);
@@ -663,6 +674,7 @@ impl LinePlacer {
         self.via_drill = drill;
         if !enabled {
             self.via_to_layer = None;
+            self.via_span = None;
         }
     }
 

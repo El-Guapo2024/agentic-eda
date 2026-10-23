@@ -328,7 +328,7 @@ mod tests {
                 continue;
             };
             pushed += commit.remove_track_ids.len().min(1);
-            let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks };
+            let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
             board::step(&dir, cmd, false, "test").expect("the commit applies");
             let after = edge_and_copper_counts(&dir);
             eprintln!("tip {tip_y}: {} copper_edge_clearance, {} copper clearance violations after", after.0, after.1);
@@ -801,5 +801,91 @@ mod tests {
         }
         eprintln!("{judged} junction drags judged by kicad-cli");
         assert!(judged >= 6, "{judged} junction drags judged");
+    }
+
+    /// The router's blind/buried via and microvia (`ROUTER_TOOL::handleLayerSwitch` with `VIA_ACTION_FLAGS::BLIND_VIA` / `MICROVIA`, the studio's
+    /// `pcbnew.InteractiveRouter.PlaceBlindVia` / `PlaceMicroVia`) against kicad-cli (slow tier): on a 4-layer scratch board, SIG is routed from a stub on
+    /// F.Cu through a blind via (F.Cu .. In1.Cu, the net class's via size) to a stub on In1.Cu, and GND from a stub on B.Cu through a microvia
+    /// (In2.Cu .. B.Cu, the net class's microvia size) to a stub on In2.Cu, each through the route API and committed as one `Cmd::CommitRoute`. The
+    /// board file has `(via blind ..)` and `(via micro ..)` on those layers, and kicad-cli's DRC finds nothing on the board but the stubs' outer ends,
+    /// which lead nowhere.
+    #[test]
+    fn a_route_with_a_blind_via_and_one_with_a_microvia_are_clean_for_kicad_clis_drc_on_four_layers() {
+        use eda_model::ir::{PlacementSection, Point, Provenance, RoutingSection, Track};
+        use serde_json::json;
+        if !kicad_available() {
+            return;
+        }
+        let dir = scratch("typed_vias");
+        let p = |x, y| Point { x, y };
+        let mut model = ConstraintModel { nets: ["SIG", "GND"].iter().map(|n| eda_model::Net { name: n.to_string(), pins: vec![] }).collect(), ..ConstraintModel::default() };
+        model.board.layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"].iter().map(|l| l.to_string()).collect();
+        // a build-up stackup: prepreg under each outer layer, the core in the middle -- a microvia goes through one prepreg (kicad-cli's
+        // `microvia_crosses_core`, a check newer than 8303b2ad, refuses one through a core, and KiCad's default stackup has a core under F.Cu and B.Cu)
+        let mut stackup = eda_model::rules::default_stackup(4, 1_600);
+        for l in stackup.layers.iter_mut().filter(|l| matches!(l.kind.as_deref(), Some("core" | "prepreg"))) {
+            l.kind = Some(if l.name == "dielectric 2" { "core" } else { "prepreg" }.into());
+        }
+        model.stackup = Some(stackup);
+        let intent_path = dir.join("intent.yaml");
+        std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let stub = |id: &str, net: &str, layer: &str, a: Point, b: Point| Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: 250, pts: vec![a, b], arc_mid_offset: None };
+        let tracks = vec![
+            stub("sig_f", "SIG", "F.Cu", p(2_000, 6_000), p(4_000, 6_000)),
+            stub("sig_in1", "SIG", "In1.Cu", p(16_000, 6_000), p(18_000, 6_000)),
+            stub("gnd_b", "GND", "B.Cu", p(2_000, 14_000), p(4_000, 14_000)),
+            stub("gnd_in2", "GND", "In2.Cu", p(16_000, 14_000), p(18_000, 14_000)),
+        ];
+        let design = Design {
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+            schema: 1,
+            provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            placement: Some(PlacementSection { outline: vec![p(0, 0), p(20_000, 0), p(20_000, 20_000), p(0, 20_000)], footprints: vec![], modules: vec![] }),
+            routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            drawings: None,
+        };
+        board::save(&dir, &design).unwrap();
+        let meta = board::Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+        let body = |v: serde_json::Value| v.to_string().into_bytes();
+        // (from, layer, the via's type, its span, the layer the route goes on on, its size, the far stub)
+        let routes = [
+            (p(4_000, 6_000), "F.Cu", "blind", ["F.Cu", "In1.Cu"], "In1.Cu", (model.board.via_diameter, model.board.via_drill), p(16_000, 6_000)),
+            (p(4_000, 14_000), "B.Cu", "micro", ["In2.Cu", "B.Cu"], "In2.Cu", (300, 100), p(16_000, 14_000)),
+        ];
+        for (from, layer, kind, span, to_layer, (diameter, drill), to) in routes {
+            let cell: crate::route_api::RouteCell = std::sync::Mutex::new(None);
+            let started = crate::route_api::start(&dir, &cell, &body(json!({ "x": from.x, "y": from.y, "layer": layer, "width": 250, "settings": { "mode": "walkaround" } })));
+            assert_eq!(started["ok"], json!(true), "{started}");
+            let armed = crate::route_api::via(&cell, &body(json!({ "enabled": true, "diameter": diameter, "drill": drill, "to_layer": to_layer, "via_type": kind, "span": span })));
+            assert_eq!(armed["ok"], json!(true), "{armed}");
+            let fixed = crate::route_api::fix(&cell, &body(json!({ "x": 9_000, "y": from.y })));
+            assert_eq!(fixed["blocked"], json!(false), "{fixed}");
+            let finished = crate::route_api::finish(&dir, &cell, &body(json!({ "x": to.x, "y": to.y })));
+            assert_eq!(finished["ok"], json!(true), "{finished}");
+        }
+        let (_, design, model) = board::load(&dir).unwrap();
+        let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).expect("the board file");
+        let vias: Vec<&str> = text.lines().map(str::trim_start).filter(|l| l.starts_with("(via ")).collect();
+        eprintln!("{vias:#?}");
+        assert_eq!(vias.len(), 2, "{vias:?}");
+        assert!(vias.iter().any(|l| l.starts_with("(via blind") && l.contains("(layers \"F.Cu\" \"In1.Cu\")")), "{vias:?}");
+        assert!(vias.iter().any(|l| l.starts_with("(via micro") && l.contains("(layers \"In2.Cu\" \"B.Cu\")") && l.contains("(size 0.3)") && l.contains("(drill 0.1)")), "{vias:?}");
+        let work = dir.join("drc");
+        std::fs::create_dir_all(&work).unwrap();
+        let report = eda_kicad_engine::drc(&design, &model, &work, false).unwrap_or_else(|e| panic!("kicad-cli: {e:?}"));
+        let found: Vec<(String, String)> = report.violations.iter().filter(|v| !v.excluded).map(|v| (v.kind.clone(), v.description.clone())).collect();
+        eprintln!("kicad-cli: {found:?}");
+        // the four stubs' outer ends lead nowhere (`track_dangling`); a route that did not reach its stub would leave two more, and the via one
+        let dangling = found.iter().filter(|(k, _)| k == "track_dangling").count();
+        assert_eq!(dangling, 4, "only the stubs' outer ends dangle: {found:?}");
+        let other: Vec<&(String, String)> = found.iter().filter(|(k, _)| k != "track_dangling").collect();
+        assert!(other.is_empty(), "kicad-cli finds {other:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

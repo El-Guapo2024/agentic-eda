@@ -29,6 +29,10 @@
 //                follows, no via is drawn or committed, one Undo puts it back; in the middle the segment slides;
 //   springback   (Stage 10) in Shove mode a track the head pushed stays pushed, is pushed on from where it was left, and springs back once the head draws back off it; a click keeps the
 //                push and the next leg pushes on from it, Backspace takes the leg and its push back, and the finished route commits the track where the session left it in one undo step;
+//   via actions  (task-router-actions) on the board made 4-layer for the scenario (`set_stackup`, undone after): `/` (Switch Track Posture) flips the head, Ctrl+V (Place Microvia) arms a
+//                microvia and takes it back, `<` opens the layer picker and arms a through via to the picked layer, Select Layer and Place Micro Via picks among the layers but the one
+//                being routed, Q (Custom Track/Via Size) refuses a hole as big as the via in KiCad's words and its sizes go with the route, Alt+< and Alt+Shift+V arm blind vias; the
+//                finished route has the microvia and the two blind vias with their types, layers and sizes, as one undo step; outside the router tool the actions do nothing;
 //
 // It answers through `window.__routerLeftoversCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. Read it with `await __routerLeftoversCheck.wait(60000)` until
 // `.done`. In a hidden pane the browser stops timers; the script waits with a fetch loop. A run takes four or five minutes (a debug build of the server), longer than the Browser pane's javascript
@@ -764,6 +768,126 @@
     await E.run("pcbnew.InteractiveRouter.Drag45Degree");
     const s = await waitReply("drag_start", n);
     t(s && s.body.ok === true && s.body.drag === "segment" && s.body.virtual_via === false, `the middle of a segment is a segment drag: ${s && JSON.stringify([s.body.drag, s.body.virtual_via])}`);
+  });
+
+  await scenario("the router's via actions, Switch Track Posture and Custom Track/Via Size: typed vias on the picked layers, one undo step", async (t) => {
+    // four copper layers, prepreg under the outer ones (`set_stackup`; undone at the end -- the snapshot does not look at the stackup)
+    const cu = (name) => ({ name, kind: "copper", thickness_mm: 0.035 });
+    const di = (name, kind) => ({ name, kind, material: "FR4", thickness_mm: 0.5, epsilon_r: 4.5, loss_tangent: 0.02 });
+    const stackup = { layers: [cu("F.Cu"), di("dielectric 1", "prepreg"), cu("In1.Cu"), di("dielectric 2", "core"), cu("In2.Cu"), di("dielectric 3", "prepreg"), cu("B.Cu")] };
+    const set = await cmd({ op: "set_stackup", settings: { copper_layers: 4, stackup } });
+    t(set && set.ok !== false, `the board is made 4-layer: ${JSON.stringify(set && (set.message ?? set.ok))}`);
+    const layersNow = async () => (await state()).layers ?? [];
+    for (let i = 0; i < 40 && (await layersNow()).length !== 4; i++) await sleep(250);
+    t((await layersNow()).length === 4, `the board has the four layers: ${JSON.stringify(await layersNow())}`);
+    await sleep(1500); // the studio's board follows by polling (the layer picker below shows what it has)
+    try {
+      await commit([line("PA7", "F.Cu", [[5000, 5000], [6000, 5000]])]);
+      await E.run("pcbnew.InteractiveRouter.SingleTrack");
+      await E.run("pcbnew.InteractiveRouter.WalkaroundMode");
+      await sleep(300);
+      const host = () => document.querySelector(".pcb-canvas-container");
+      const canvasKey = async (k, code, mods = {}) => { host().focus(); host().dispatchEvent(new KeyboardEvent("keydown", { key: k, code, bubbles: true, cancelable: true, ctrlKey: !!mods.ctrl, altKey: !!mods.alt, shiftKey: !!mods.shift })); await sleep(300); await quiet(); };
+      let n = replies.length;
+      await clickAt(6000, 5000);
+      const s = await waitReply("start", n);
+      t(s && s.body.ok === true && s.body.net === "PA7", `the route starts on the PA7 stub: ${s && JSON.stringify([s.body.ok, s.body.net])}`);
+      await moveTo(7000, 5000);
+      await moveTo(8000, 6000);
+      // `/`: ACT_SwitchPosture -- `FlipPosture()` and a refreshing Move
+      n = replies.length;
+      await canvasKey("/", "Slash");
+      const flip = replies.slice(n).find((r) => r.name === "move" && r.req && r.req.flip_posture === true);
+      t(!!flip && flip.body.ok === true, `/ flips the posture of the head: ${flip && JSON.stringify(flip.req)}`);
+      const via = async (fn) => { const k = replies.length; await fn(); return replies.slice(k).filter((r) => r.name === "via").pop() ?? null; };
+      // Ctrl+V: Place Microvia, implicit target on the F.Cu / B.Cu pair -- and Ctrl+V again takes it back (`onViaCommand`: `ToggleViaPlacement()`)
+      let v = await via(() => canvasKey("v", "KeyV", { ctrl: true }));
+      t(v && v.req.enabled === true && v.req.via_type === "micro" && JSON.stringify(v.req.span) === JSON.stringify(["F.Cu", "B.Cu"]) && v.req.diameter === 300 && v.req.drill === 100, `Ctrl+V arms a microvia of the net class's microvia size on the pair: ${v && JSON.stringify(v.req)}`);
+      v = await via(() => canvasKey("v", "KeyV", { ctrl: true }));
+      t(v && v.req.enabled === false, `Ctrl+V again takes it back: ${v && JSON.stringify(v.req)}`);
+      t(tracksOf(await state()).length === 1 && E.state().tool === "route", `Ctrl+V did not paste: ${tracksOf(await state()).length} track(s), tool ${E.state().tool}`);
+      // `<`: Select Layer and Place Through Via -- the picker lists the copper layers, the current one too
+      await canvasKey("<", "Comma", { shift: true });
+      t(dialogTitle() === "Select Layer", `< opens the layer picker: ${dialogTitle()}`);
+      const rows = () => [...document.querySelectorAll("[data-testid=select-layer-grid] tr")].map((r) => r.getAttribute("data-layer"));
+      t(JSON.stringify(rows()) === JSON.stringify(["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]), `with every copper layer: ${JSON.stringify(rows())}`);
+      v = await via(async () => { document.querySelector("[data-testid=select-layer-grid] tr[data-layer='In2.Cu']").click(); await sleep(300); await quiet(); });
+      t(v && v.req.enabled === true && v.req.via_type === "through" && JSON.stringify(v.req.span) === JSON.stringify(["F.Cu", "B.Cu"]) && v.req.to_layer === "In2.Cu", `a click on In2.Cu arms a through via, the route to go on on In2.Cu: ${v && JSON.stringify(v.req)}`);
+      t(!dialog(), "and closes the picker");
+      v = await via(() => canvasKey("<", "Comma", { shift: true }));
+      t(v && v.req.enabled === false && !dialog(), `< again takes the via back, no picker: ${v && JSON.stringify(v.req)}`);
+      // Select Layer and Place Micro Via: every layer but the one being routed
+      await E.run("pcbnew.InteractiveRouter.SelLayerAndPlaceMicroVia");
+      await sleep(300);
+      t(JSON.stringify(rows()) === JSON.stringify(["In1.Cu", "In2.Cu", "B.Cu"]), `the micro via's picker leaves out F.Cu: ${JSON.stringify(rows())}`);
+      v = await via(async () => { document.querySelector("[data-testid=select-layer-grid] tr[data-layer='In1.Cu']").click(); await sleep(300); await quiet(); });
+      t(v && v.req.via_type === "micro" && JSON.stringify(v.req.span) === JSON.stringify(["F.Cu", "In1.Cu"]) && v.req.to_layer === "In1.Cu", `a microvia F.Cu .. In1.Cu: ${v && JSON.stringify(v.req)}`);
+      await moveTo(9000, 5000);
+      n = replies.length;
+      await clickAt(9000, 5000);
+      let fx = await waitReply("fix", n);
+      t(fx && fx.body.blocked === false && fx.body.preview.layer === "In1.Cu", `a click places it and the route goes on on In1.Cu: ${fx && JSON.stringify([fx.body.blocked, fx.body.preview && fx.body.preview.layer])}`);
+      // Q: Custom Track/Via Size -- KiCad's refusal of a hole as big as the via, then 0.3 mm tracks and 0.7 / 0.35 mm vias
+      await canvasKey("q", "KeyQ");
+      t(dialogTitle() === "Track and Via Dimensions", `Q opens the dialog: ${dialogTitle()}`);
+      const field = (label) => dialog()?.querySelector(`input[aria-label='${label}']`);
+      setVal(field("Track width:"), "0.3");
+      setVal(field("Via diameter:"), "0.7");
+      setVal(field("Via hole:"), "0.7");
+      await press("OK");
+      t(dialogText().includes("Via hole size must be smaller than via diameter"), `a hole as big as the via is refused in KiCad's words: ${dialogText().slice(0, 160)}`);
+      setVal(field("Via hole:"), "0.35");
+      n = replies.length;
+      await press("OK");
+      t(!dialog(), "OK with a good via closes it");
+      const w = replies.slice(n).find((r) => r.name === "move" && r.req && r.req.width === 300);
+      t(!!w, `the head takes the custom width at once: ${JSON.stringify(replies.slice(n).map((r) => [r.name, r.req && r.req.width]))}`);
+      // Alt+<: Select Layer and Place Blind/Buried Via, from In1.Cu: In1.Cu is not offered
+      await canvasKey("<", "Comma", { alt: true, shift: true });
+      t(JSON.stringify(rows()) === JSON.stringify(["F.Cu", "In2.Cu", "B.Cu"]), `Alt+< offers every layer but In1.Cu: ${JSON.stringify(rows())}`);
+      v = await via(async () => { document.querySelector("[data-testid=select-layer-grid] tr[data-layer='In2.Cu']").click(); await sleep(300); await quiet(); });
+      t(v && v.req.via_type === "blind" && JSON.stringify(v.req.span) === JSON.stringify(["In1.Cu", "In2.Cu"]) && v.req.diameter === 700 && v.req.drill === 350, `a blind via In1.Cu .. In2.Cu of the custom size: ${v && JSON.stringify(v.req)}`);
+      await moveTo(12000, 5000);
+      n = replies.length;
+      await clickAt(12000, 5000);
+      fx = await waitReply("fix", n);
+      t(fx && fx.body.blocked === false && fx.body.preview.layer === "In2.Cu", `the route goes on on In2.Cu: ${fx && fx.body.preview && fx.body.preview.layer}`);
+      // Alt+Shift+V: Place Blind/Buried Via -- In2.Cu is off the F.Cu / B.Cu pair, so the via goes to the pair's top, F.Cu
+      v = await via(() => canvasKey("V", "KeyV", { alt: true, shift: true }));
+      t(v && v.req.via_type === "blind" && JSON.stringify(v.req.span) === JSON.stringify(["F.Cu", "In2.Cu"]) && v.req.to_layer === "F.Cu", `Alt+Shift+V arms a blind via In2.Cu .. F.Cu: ${v && JSON.stringify(v.req)}`);
+      await moveTo(15000, 5000);
+      n = replies.length;
+      await clickAt(15000, 5000);
+      fx = await waitReply("fix", n);
+      t(fx && fx.body.blocked === false && fx.body.preview.layer === "F.Cu", `the route goes on on F.Cu: ${fx && fx.body.preview && fx.body.preview.layer}`);
+      await moveTo(18000, 5000);
+      n = replies.length;
+      await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+      await waitReply("finish", n);
+      await sleep(700);
+      const st = await state();
+      const got = viasOf(st).filter((q) => q.net === "PA7").sort((a, b) => a.x - b.x).map((q) => [q.x, q.from, q.to, q.d, q.drill, q.type ?? "through"]);
+      t(JSON.stringify(got) === JSON.stringify([[9000, "F.Cu", "In1.Cu", 300, 100, "micro"], [12000, "In1.Cu", "In2.Cu", 700, 350, "blind"], [15000, "F.Cu", "In2.Cu", 700, 350, "blind"]]), `the route commits the three vias with their types, layers and sizes: ${JSON.stringify(got)}`);
+      t(["In1.Cu", "In2.Cu"].every((l) => tracksOf(st).some((q) => q.net === "PA7" && q.layer === l)), "and copper on the inner layers between them");
+      await E.run("common.Interactive.undo");
+      await sleep(600);
+      t(viasOf(await state()).length === 0 && tracksOf(await state()).length === 1, "one Undo takes the route and its vias away");
+      // `AS_CONTEXT`: outside the router tool they do nothing
+      await leaveTool();
+      const outside = await E.run("pcbnew.InteractiveRouter.PlaceBlindVia");
+      t(!!outside && outside.ok === false, `not in the selection tool: ${JSON.stringify(outside)}`);
+    } finally {
+      // the sizes back to the net class's, and the board back to two layers
+      await E.run("pcbnew.InteractiveRouter.SingleTrack");
+      await sleep(200);
+      await E.run("studio.Router.useNetclassSizes");
+      await leaveTool();
+      await restore();
+      await E.run("common.Interactive.undo");
+      for (let i = 0; i < 40 && (await layersNow()).length !== 2; i++) await sleep(250);
+      t((await layersNow()).length === 2, `the board is 2-layer again: ${JSON.stringify(await layersNow())}`);
+      await sleep(1500);
+    }
   });
 
   await scenario("the board is as it was, and the studio reported no error", async (t) => {

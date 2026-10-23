@@ -54,6 +54,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-router-actions` | The router tool's 7 "referenced" actions wired (`AS_CONTEXT`): blind/buried and micro vias with their type, layers and size committed (`via_kinds`), the layer picker, Switch Track Posture, Custom Track/Via Size; `crates/pns/PARITY.md` Stage 11 | Done, gated | The via commands in the pair tool; V's nearest-ratsnest-anchor layer |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
