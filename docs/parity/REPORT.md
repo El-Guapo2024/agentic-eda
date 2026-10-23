@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-20T16:52:54.280188+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-23T08:54:45.064824+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -10,14 +10,14 @@ cargo test -p eda-kicad --test parity_roundtrip -- --ignored --nocapture
 python3 tools/parity_report.py   # runs both above, then rewrites this file + scores.json
 ```
 
-Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips cleanly (prints a line, exits 0) if it's absent. The KiCad QA-corpus portions additionally skip cleanly if their corpus directory isn't present (`KICAD_QA_DATA`, default `qa/data` of the KiCad sources at `~/ws/kicad-src-8303b2ad`; `EDA_KICAD_QA_BOARDS` still wins when set) -- the examples/ladder/work-based measurements still run either way. `EDA_PARITY_PARTS=own,corpus,reexport` (a comma list) runs part of the round-trip harness and keeps the other parts' last results. `cargo test` (no `--ignored`) runs `crates/kicad/tests/parity_ratchet.rs`, which reads the committed `docs/parity/scores.json` below and fails if `current` has dropped below its recorded `floor` for any metric -- that test needs neither kicad-cli nor the QA corpus.
+Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips cleanly (prints a line, exits 0) if it's absent. The KiCad QA-corpus portions additionally skip cleanly if their corpus directory isn't present (`KICAD_QA_DATA`, default `qa/data` of the KiCad sources at `~/ws/kicad-src-8303b2ad`, else `$KICAD_SRC_DIR/qa/data` for the connectivity; `EDA_KICAD_QA_BOARDS` still wins when set) -- the examples/ladder-based measurements still run either way. `EDA_PARITY_PARTS=own,corpus,reexport` (a comma list) runs part of the round-trip harness and keeps the other parts' last results. `cargo test` (no `--ignored`) runs `crates/kicad/tests/parity_ratchet.rs`, which reads the committed `docs/parity/scores.json` below and fails if `current` has dropped below its recorded `floor` for any metric -- that test needs neither kicad-cli nor the QA corpus.
 
 ## Headline numbers
 
 | metric | current | floor |
 |---|---:|---:|
-| `connectivity_boards_evaluated` | 58 | 58 |
-| `connectivity_exact_match_rate` | 83.9% | 83.9% |
+| `connectivity_boards_evaluated` | 186 | 186 |
+| `connectivity_exact_match_rate` | 97.8% | 97.8% |
 | `roundtrip_own_footprint_pose_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_own_segment_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_own_via_survival_rate` | 100.0% | 100.0% |
@@ -27,18 +27,229 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 
 ## 1. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`
 
-_Measurement date not recorded._
+_Measured 2026-10-23._
 
-Boards evaluated: 58 (of 59 attempted).
+Boards evaluated: 186 (of 188 attempted).
 
-Totals -- ours: {'unconnected': 527, 'track_dangling': 77, 'via_dangling': 405}, oracle: {'unconnected': 76, 'track_dangling': 7, 'via_dangling': 316}.
+Totals -- ours: {'unconnected': 288, 'track_dangling': 468, 'via_dangling': 529}, oracle: {'unconnected': 289, 'track_dangling': 254, 'via_dangling': 528}.
 
-**Exact per-board-per-field match rate: 146/174 (83.9%).**
+**Exact per-board-per-field match rate: 546/558 (97.8%).**
 
 
-### Boards that errored (1)
+The boards are a fixed set: every `examples/*.yaml` and `examples/ladder/*.yaml` board (placed and routed best-effort, then exported), and every
+`qa/data/pcbnew/*.kicad_pcb` of the KiCad sources (8303b2ad) plus the first board of each `qa/data/pcbnew/*/` directory, imported. Never the user's
+`work/` boards. kicad-cli runs on a copy of each board in a directory of its own; a check the board's project sets to `ignore` is turned back on there
+(the board's `unignored`), and our count is capped at kicad-cli's error limit for the check (199, and 499 for `unconnected_items`), past which
+kicad-cli reports nothing more.
+
+Why the floor changed (2026-10-23). The old floor, 58 boards and 83.9%, was set on the Mac on a set that counted the user's `work/l1-order` and
+`work/mcu30`, which only some checkouts have (a box without them evaluated 56 and failed the ratchet), and a 40-board sample of the QA corpus. Those
+two boards are gone, the sample is the whole fixed set above, and two fields that measured nothing are measured now: a check the project ignores was
+compared with kicad-cli's zero, and a count past kicad-cli's error limit with the limit. On the new set the port matched 539 of 558 (96.6%, 186
+boards); the floor was reset to that, then raised with the fixes of `task-connectivity-parity` (an arc is one item, a pad turned off a multiple of
+90 degrees is measured by its copper, a pad or via that removes its unused copper is its hole on those layers) to 546 of 558 (97.8%).
+`web/studio/PARITY-pcb.md` section 50 lists the 12 differences left, board by board, with their reasons.
+
+
+### Boards that errored (2)
 
 - unroutable_tiny_outline [example]: place: [CheckResult { check: "place_legalize", status: Fail, location: Some("design"), hint: Some("could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C1"), hint: Some("14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C2"), hint: Some("14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("U1"), hint: Some("78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }]
+- plugins/fakeboard.kicad_pcb [qa]: import_kicad_pcb failed: [CheckResult { check: "kicad_import.parse", status: Fail, location: Some("file"), hint: Some("not a valid s-expression file: expected '(' at byte 0"), detail: None }]
+
+### The boards (188)
+
+Each cell is ours / kicad-cli's; a **bold** cell differs. `unignored` names a check the board's project ignores, which the harness turns back on for kicad-cli.
+
+| board | source | unconnected | track_dangling | via_dangling | unignored |
+|---|---|---:|---:|---:|---|
+| `all_power_ground_net` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `dense_small_outline` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `l1_usb_mcu` | ladder | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `l2_sensor_hub` | ladder | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `l3_motor_hub` | ladder | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `l4_control_hub` | ladder | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `ldo` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `ldo_proximity_heavy` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `mcu_board_30plus` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `mixed_track_widths` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `nc_pins` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `opamp_filter` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `passive_divider_ladder` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `star_net` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `through_hole_headers` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `two_pin_nets` | example | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `unroutable_tiny_outline` | example | error | | | |
+| `pcbnew/api_kitchen_sink.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/bad_triangulation_case.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/complex_hierarchy.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/component_classes.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/component_classes_drc.kicad_pcb` | qa | 0 / 0 | 4 / 4 | 0 / 0 |  |
+| `pcbnew/connection_width_rules.kicad_pcb` | qa | 0 / 0 | 8 / 8 | 0 / 0 | track_dangling |
+| `pcbnew/custom_fields.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/custom_pads.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/drc_missing_tuning_profile.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/fill_bad.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/footprints_load_save.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/graphics_load_save_v20240108.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/groups_load_save.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/groups_load_save_v20231212.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/incorrect_text_mirroring_drc.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/intersectingzones.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue10906.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue10916.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 1 / 1 |  |
+| `pcbnew/issue11814.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue12109.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 1 / 1 |  |
+| `pcbnew/issue12609.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue12831.kicad_pcb` | qa | 2 / 2 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue1358.kicad_pcb` | qa | 2 / 2 | 5 / 5 | 0 / 0 | track_dangling |
+| `pcbnew/issue14008.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 1 / 1 |  |
+| `pcbnew/issue14130.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue14294.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue14334.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue14412.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue14449.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue14549.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 | via_dangling |
+| `pcbnew/issue14549_2.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue14559.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue15280.kicad_pcb` | qa | 4 / 4 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue16182.kicad_pcb` | qa | 16 / 16 | 20 / 20 | 0 / 0 |  |
+| `pcbnew/issue16566.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
+| `pcbnew/issue17429.kicad_pcb` | qa | 35 / 35 | 91 / 91 | 2 / 2 |  |
+| `pcbnew/issue17559.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue18.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
+| `pcbnew/issue18142.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 | track_dangling, via_dangling |
+| `pcbnew/issue18203.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue18839.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 | unconnected_items |
+| `pcbnew/issue18878.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue19405_roundrect_teardrop.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `pcbnew/issue19574.kicad_pcb` | qa | 3 / 3 | 3 / 3 | 0 / 0 |  |
+| `pcbnew/issue22102.kicad_pcb` | qa | **0 / 2** | 1 / 1 | 0 / 0 |  |
+| `pcbnew/issue22536.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue22794.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue22798.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue23123_minimal.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue23339_zone_layer_rules.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue23690_via_in_pad.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue2512.kicad_pcb` | qa | 3 / 3 | 0 / 0 | 4 / 4 | unconnected_items, via_dangling |
+| `pcbnew/issue2528.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue2568.kicad_pcb` | qa | 1 / 1 | 0 / 0 | 17 / 17 |  |
+| `pcbnew/issue2904.kicad_pcb` | qa | 50 / 50 | 4 / 4 | 3 / 3 |  |
+| `pcbnew/issue3812.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
+| `pcbnew/issue4139.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `pcbnew/issue4257.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 3 / 3 |  |
+| `pcbnew/issue4774.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue5093.kicad_pcb` | qa | 0 / 0 | 15 / 15 | 0 / 0 |  |
+| `pcbnew/issue5102.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 1 / 1 |  |
+| `pcbnew/issue5313.kicad_pcb` | qa | 1 / 1 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue5320.kicad_pcb` | qa | 3 / 3 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue5567.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue5750.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue5830.kicad_pcb` | qa | 1 / 1 | 3 / 3 | 0 / 0 | track_dangling |
+| `pcbnew/issue5854.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue5978.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue5990.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue6039.kicad_pcb` | qa | 3 / 3 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue6260.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue6284.kicad_pcb` | qa | 0 / 0 | **2 / 1** | 7 / 7 |  |
+| `pcbnew/issue6443.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue6879.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue6945.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue7004.kicad_pcb` | qa | 10 / 10 | 0 / 0 | 25 / 25 |  |
+| `pcbnew/issue7086.kicad_pcb` | qa | 4 / 4 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue7241.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue7267.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 | track_dangling |
+| `pcbnew/issue7325.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 | track_dangling, via_dangling |
+| `pcbnew/issue7567.kicad_pcb` | qa | 1 / 1 | 0 / 0 | 0 / 0 | track_dangling, via_dangling |
+| `pcbnew/issue7975.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue8003.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue832.kicad_pcb` | qa | 0 / 0 | 19 / 19 | 0 / 0 |  |
+| `pcbnew/issue8407.kicad_pcb` | qa | 7 / 7 | 6 / 6 | 0 / 0 |  |
+| `pcbnew/issue8883.kicad_pcb` | qa | 7 / 7 | 9 / 9 | 0 / 0 |  |
+| `pcbnew/issue8909.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 1 / 1 |  |
+| `pcbnew/issue9081.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/issue9870.kicad_pcb` | qa | **4 / 3** | 5 / 5 | 2 / 2 |  |
+| `pcbnew/large_circle_teardrop.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `pcbnew/length_calculations.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 1 / 1 |  |
+| `pcbnew/multinetclasses_drc.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/net_tie_drc.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/notched_zones.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/off_center_teardrop.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `pcbnew/orientation_drc.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/oval_teardrop.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `pcbnew/padstacks.kicad_pcb` | qa | 10 / 10 | 0 / 0 | 12 / 12 |  |
+| `pcbnew/padstacks_complex.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/padstacks_normal.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/reference_images_load_save.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/reverse_via.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 1 / 1 |  |
+| `pcbnew/severities.kicad_pcb` | qa | 0 / 0 | 3 / 3 | 0 / 0 | track_dangling |
+| `pcbnew/skew_group_matched_drc.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/skew_within_diff_pairs_drc.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/sliver.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/solder_mask_bridge_test.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/soldermask_bridge_all_tracks.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
+| `pcbnew/soldermask_track_to_pad.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `pcbnew/stonehenge.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 39 / 39 |  |
+| `pcbnew/teardrop_elongated_pad.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `pcbnew/teardrop_issue_JPC2.kicad_pcb` | qa | **1 / 3** | 5 / 5 | 0 / 0 |  |
+| `pcbnew/teardrop_multi_inside_via.kicad_pcb` | qa | 0 / 0 | **6 / 4** | 1 / 1 |  |
+| `pcbnew/teardrop_offcenter_two_segment.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 1 / 1 |  |
+| `pcbnew/test_copper_graphics.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/test_starved_thermal.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/time_calculations.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/tracks_arcs_vias.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
+| `pcbnew/tuning_generators_load_save.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
+| `pcbnew/tuning_generators_load_save_v20231212.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
+| `pcbnew/two_segment_teardrop.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 1 / 1 |  |
+| `pcbnew/via_dangling.kicad_pcb` | qa | 0 / 0 | 0 / 0 | **2 / 1** |  |
+| `pcbnew/via_off_center.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `pcbnew/vme-wren.kicad_pcb` | qa | 57 / 57 | **199 / 1** | 92 / 92 |  |
+| `pcbnew/zone_filler.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
+| `connect/connect.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `creepage/creepage.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `creepage_slots/creepage_slots.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `hatch_thermal_connectivity/hatch_thermal_connectivity.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `issue12964/issue12964.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 30 / 30 |  |
+| `issue16658/issue16658.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue17967/issue17967.kicad_pcb` | qa | 0 / 0 | **8 / 0** | 0 / 0 |  |
+| `issue18045/test_proj.kicad_pcb` | qa | 0 / 0 | **3 / 0** | 0 / 0 |  |
+| `issue19090/issue19090.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue19325/issue19325.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue19956/issue19956.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue20480/issue20480.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue21184/issue21184.kicad_pcb` | qa | 1 / 1 | 0 / 0 | 2 / 2 |  |
+| `issue21482/issue21482.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 199 / 199 |  |
+| `issue21564/issue21564.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `issue21739/topology_mismatch.kicad_pcb` | qa | 7 / 7 | 0 / 0 | 0 / 0 |  |
+| `issue21746/issue21746.kicad_pcb` | qa | 16 / 16 | 0 / 0 | 0 / 0 |  |
+| `issue22010/issue22010.kicad_pcb` | qa | 19 / 19 | 0 / 0 | 80 / 80 |  |
+| `issue22475/issue22475.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue22548/issue22548.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue22597/issue22597.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue22751/issue22751.kicad_pcb` | qa | 2 / 2 | 0 / 0 | 0 / 0 |  |
+| `issue22809/issue22809.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
+| `issue22826/issue22826.kicad_pcb` | qa | 0 / 0 | **2 / 0** | 0 / 0 |  |
+| `issue22983/issue22983.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue23053/issue23053.kicad_pcb` | qa | 2 / 2 | 10 / 10 | 0 / 0 |  |
+| `issue23332_min_width/issue23332_min_width.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue23389/issue23389.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue23418/testing.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue23418_diffnet/testing.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue23451/3Rs_bv.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue23467/issue23467.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue23469/issue23469.kicad_pcb` | qa | **5 / 4** | 0 / 0 | 0 / 0 |  |
+| `issue23515/issue23515.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue23535_minimal/issue23535_minimal.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue23658/issue23658.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue23851/issue23851.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue24078/issue24078.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue8629/issue8629.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `keepout_disallow/keepout_disallow.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `keepout_no_clearance/keepout_no_clearance.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
+| `plugins/fakeboard.kicad_pcb` | qa | error | | | |
+| `prettifier/group_and_image.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `stacked/stacked.kicad_pcb` | qa | 8 / 8 | 0 / 0 | 0 / 0 |  |
+| `unconnected-netnames/unconnected-netnames.kicad_pcb` | qa | **1 / 0** | 0 / 0 | 0 / 0 |  |
+| `variant_test/variant_test.kicad_pcb` | qa | 2 / 2 | 0 / 0 | 0 / 0 |  |
 
 ## 2. Round-trips
 
@@ -155,9 +366,9 @@ Every KiCad action in `web/studio/src/kicad/actions.json` is classified against 
 
 | editor | actions | handled | referenced | missing | missing with a reason | hotkeyed & not handled |
 |---|---:|---:|---:|---:|---:|---:|
-| pcbnew | 350 | 300 | 0 | 0 | 50 | 3 |
-| eeschema | 233 | 193 | 0 | 0 | 40 | 7 |
-| common | 183 | 151 | 0 | 0 | 32 | 2 |
+| pcbnew | 363 | 340 | 0 | 0 | 23 | 0 |
+| eeschema | 233 | 220 | 0 | 0 | 13 | 0 |
+| common | 183 | 172 | 0 | 0 | 11 | 2 |
 
 Behavior (not just the presence of an action) is tracked per feature in `web/studio/PARITY-pcb.md` and the ranked, actionable gaps in `docs/parity/GAPS.md`.
 

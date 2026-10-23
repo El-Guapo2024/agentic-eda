@@ -55,6 +55,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-connectivity-parity` | The connectivity measure of `tools/parity_report.py` on a fixed set (no `work/` boards), kicad-cli on a copy with ignored checks turned on, counts capped at its error limits; arcs as one item, turned pads by their copper, unflashed pads and vias as their hole | Done: 546/558 (97.8%), floors reset to 186 boards and 97.8% | Sub-micrometre geometry (the IR is in micrometres), pads that share a number but not a net, copper graphics with a net, teardrops rebuilt by kicad-cli's Fill All (PARITY-pcb.md section 50) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -74,7 +75,7 @@ Gates for any of them:
    - the schematic: copying and pasting whole sheets, buses across sheets, a label's own fields;
    - KiCad 10 items the reader skips: line endings, grid items, via stitching, drill charts;
    - browser checks for the older areas (P20);
-   - re-running `tools/parity_report.py` (connectivity is at 84%). On the box (2026-10-23) it needs `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data`, and its connectivity part evaluates 56 boards, against a floor of 58 set on the Mac, which fails the ratchet. The two boards are the user's `work/` boards that exist only on the Mac (`work/l1-order`; a worktree has no `work/mcu30` either), so the floor counts boards the box does not have. That is a machine difference, not a regression. A floor that counts only `qa/data` and `examples/` would fix it.
+   - ~~re-running `tools/parity_report.py`~~ on `task-connectivity-parity`: the connectivity set is fixed (the examples and every `qa/data/pcbnew` board, never `work/`; 186 boards), and the port matches kicad-cli on 546 of 558 counts (97.8%; 96.6% on the new set before the fixes). It needs `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data` (or `KICAD_SRC_DIR`). `PARITY-pcb.md` section 50 lists the 12 left.
 
 Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Python plugins, the autoplacer and the viewer windows (see `STALE-REASONS.md`); Hyperlynx and footprint-report export (no kicad-cli exporter, not even in the box's nightly; ask the user before porting them as was done for Specctra). IDFv3 and GenCAD are kicad-cli's (user, 2026-10-23: `task-cli-exports`), offered where the kicad-cli in use has the command and disabled with the reason where it has not.
 

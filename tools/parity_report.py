@@ -211,8 +211,10 @@ kicad-cli reports nothing more.
 Why the floor changed (2026-10-23). The old floor, 58 boards and 83.9%, was set on the Mac on a set that counted the user's `work/l1-order` and
 `work/mcu30`, which only some checkouts have (a box without them evaluated 56 and failed the ratchet), and a 40-board sample of the QA corpus. Those
 two boards are gone, the sample is the whole fixed set above, and two fields that measured nothing are measured now: a check the project ignores was
-compared with kicad-cli's zero, and a count past kicad-cli's error limit with the limit. The floor was reset to the new set's numbers, then raised
-with the fixes (`web/studio/PARITY-pcb.md` section 50 lists what is left, board by board).
+compared with kicad-cli's zero, and a count past kicad-cli's error limit with the limit. On the new set the port matched 539 of 558 (96.6%, 186
+boards); the floor was reset to that, then raised with the fixes of `task-connectivity-parity` (an arc is one item, a pad turned off a multiple of
+90 degrees is measured by its copper, a pad or via that removes its unused copper is its hole on those layers) to 546 of 558 (97.8%).
+`web/studio/PARITY-pcb.md` section 50 lists the 12 differences left, board by board, with their reasons.
 """
 
 
@@ -253,8 +255,8 @@ def render_report(conn, rt, scores):
         "\nNeeds `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips cleanly "
         "(prints a line, exits 0) if it's absent. The KiCad QA-corpus portions additionally skip "
         "cleanly if their corpus directory isn't present (`KICAD_QA_DATA`, default `qa/data` of the KiCad "
-        "sources at `~/ws/kicad-src-8303b2ad`; `EDA_KICAD_QA_BOARDS` still wins when set) -- the "
-        "examples/ladder/work-based measurements still run either way. `EDA_PARITY_PARTS=own,corpus,reexport` "
+        "sources at `~/ws/kicad-src-8303b2ad`, else `$KICAD_SRC_DIR/qa/data` for the connectivity; `EDA_KICAD_QA_BOARDS` still wins when set) -- the "
+        "examples/ladder-based measurements still run either way. `EDA_PARITY_PARTS=own,corpus,reexport` "
         "(a comma list) runs part of the round-trip harness and keeps the other parts' last results. "
         "`cargo test` (no `--ignored`) runs `crates/kicad/tests/parity_ratchet.rs`, which "
         "reads the committed `docs/parity/scores.json` below and fails if `current` has dropped below "
