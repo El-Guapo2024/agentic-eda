@@ -1065,6 +1065,24 @@ Tests: `crates/cli/src/sheet_drop_api.rs` (6: a file alone, the file nobody plac
 `kicad-port/{sheetDrop,fileDrops}.test.ts` (3, `node --test`), and the last scenario of `e2e/microwave.check.js` through `window.__eda`: a drop of two files on the schematic opens Choose Schematic on the one nobody places whatever the order, names the sheet that is missing in the dialog and in the toast, Open arms the tool, two clicks and Import add the sheet, one undo removes it, and a drop whose files do not place each other
 says which is imported.
 
+## 38. Schematic details, part 2: a screen shown by two sheets, buses across sheets, a label's own fields (`sch_editor_control.cpp::Paste`, `updatePastedSheet`, `updatePastedSymbol`, `connection_graph.cpp`, `sch_label.cpp`, `sch_field.cpp`, `sch_io_kicad_sexpr.cpp`; GAPS.md items 4, 12 and 20, package P10; 2026-10-23)
+
+Added on `task-sch-details`.
+
+### A screen shown by two sheets
+
+| Behaviour | Status | KiCad file:function |
+|---|---|---|
+| Paste / Duplicate of a sheet whose file the design shows | **ported**: the new sheet symbol names the same file and shows the same screen; the screen in the clipboard is not used. A screen pasted into itself, a screen no sheet shows (a Cut), and a screen with sheets of its own come in as a copy, as before (the last **differs**: KiCad shares it too, but an override here is filed under the placement just above the symbol, which nested placements share) | `SCH_EDITOR_CONTROL::Paste` (`SearchHierarchy`, `loadedScreens`, `SetScreen( existingScreen )`, `TestForRecursion`) |
+| The new placement's references | **ported**: each symbol of the screen gets an instance for the new path, numbered from the reference under the copied placement by Paste's `ReannotateDuplicates` against every reference of every placement (Paste Special's Keep keeps it); a reference that is the symbol's own needs no entry. Kept in `SchematicSection::instance_overrides`; the power symbols keep theirs | `updatePastedSheet`, `updatePastedSymbol`, `SCH_REFERENCE_LIST::ReannotateDuplicates` |
+| The file | **ported**: one `.kicad_sch` for the screen, each symbol with an `(instances (project (path ..) (reference ..)))` entry per placement | `SCH_IO_KICAD_SEXPR::saveSymbol` |
+| The nets | **ported**: `trace_design` traces every placement, a screen shown twice twice, its pins under the references the placement gives (`CONNECTION_GRAPH::Recalculate` over the `SCH_SHEET_LIST`); a sheet pin joins the hierarchical labels of its own placement; a local label's net is one per placement, named apart by its sheet path. A PWR_FLAG names no net and joins nothing by name (its pin is a power output: `SCH_PIN::IsGlobalPower`) | `CONNECTION_GRAPH::Recalculate`, `propagateToNeighbors` |
+| The parts | **ported**: a part per reference of a placement (a copy of the screen's own part), so its pins are on the net list and its footprint on the board | |
+| The sheet in view | **ported**: `GET /api/schematic?sheet=` gives each symbol the `reference` the placement gives it, in its Reference field, and its pins' nets under it; the painter draws it. The verbs still name a symbol by its id | `SCH_SYMBOL::GetRef( &GetCurrentSheet() )` |
+| Left | Annotate numbers the screen's own references, not the other placements'; Delete of a placement leaves its overrides in the screen (unused: the writer, the tracer and the model read only the placements there are; KiCad's `PruneOrphanedSymbolInstances` removes them) | |
+
+Tests: `crates/engine/src/nets.rs` (`a_screen_shown_twice_is_a_net_per_placement`), `crates/cli/src/sch_hierarchy_tests.rs` (`a_copied_sheet_is_pasted_as_a_second_placement_of_its_screen`; slow: `slow_a_pasted_sheet_shares_its_screen_and_kicad_cli_makes_a_net_per_placement`: kicad-cli's netlist of the two placements is the studio's net list, its ERC finds no `duplicate_reference`, one undo takes the placement back), and the first scenario of `e2e/sch-details-2.check.js` (Duplicate of a sheet: the same file, references of its own, nets of its own, one undo).
+
 ## Manual click-through needed
 
 The in-app browser pane could not be used this session (hidden pane, per

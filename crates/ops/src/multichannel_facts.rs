@@ -414,10 +414,7 @@ fn sheets_of_schematic(design: &Design) -> BTreeMap<String, PartSheet> {
         }
         let parent = entry.path.last();
         for sym in &screen.symbols {
-            let reference = parent
-                .and_then(|p| screen.instance_overrides.iter().find(|o| &o.parent_sheet_instance_id == p && o.at == sym.at && o.unit == sym.unit))
-                .map(|o| o.reference.clone())
-                .unwrap_or_else(|| sym.id.clone());
+            let reference = eda_model::sheet_list::reference_under(screen, sym, parent.map(String::as_str));
             out.entry(reference).or_insert_with(|| PartSheet { name: name.clone(), file: entry.file.clone(), symbol: Some(format!("{}|{},{}", entry.file, sym.at.x, sym.at.y)) });
         }
     }

@@ -300,6 +300,21 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
             edge: None,
         });
     }
+    // A screen shown twice has a part for each reference a placement gives its symbols (`SCH_SYMBOL_INSTANCE`): the same part under the
+    // other name, so its pins are on the nets of that placement and its footprint is on the board.
+    for e in eda_model::sheet_list::walk(design).into_iter().skip(1) {
+        let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        for sym in &sec.symbols {
+            let reference = eda_model::sheet_list::reference_under(sec, sym, e.path.last().map(String::as_str));
+            if reference == sym.id || model.part(&reference).is_some() {
+                continue;
+            }
+            if let Some(mut part) = model.part(&sym.id).cloned() {
+                part.reference = reference;
+                model.parts.push(part);
+            }
+        }
+    }
 }
 
 /// A `Part` in `model` for every footprint that lives only on the board (`DrawingsSection::board_parts`): the copies Duplicate and
@@ -373,9 +388,13 @@ fn shown_pin_names(model: &ConstraintModel) -> std::collections::BTreeMap<String
 /// Trace the nets of the whole schematic tree of `design` (`eda_engine::nets`): a sheet pin and the hierarchical label of the same name,
 /// global labels and power symbols are one net across sheets. Writes what the drawing says back into the design's wires (their net and
 /// pins), power symbols and no-connect flags, and returns the nets read.
+///
+/// Every placement is traced, not every file (`CONNECTION_GRAPH::Recalculate` over the `SCH_SHEET_LIST`): a screen two sheet symbols show is
+/// traced twice, its pins named by the references each placement gives its symbols (`SchematicSection::instance_overrides`), so each placement
+/// has nets of its own. What is written back into the screen is what its first placement reads.
 fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, naming: &eda_engine::nets::Naming) -> Vec<eda_engine::nets::TracedNet> {
-    // a screen no sheet shows any more (its sheet was deleted) is not part of the schematic: its pins are on no net
-    let reachable = eda_model::sheet_list::reachable_files(design);
+    // the sheets of the hierarchy: a screen no sheet shows any more (its sheet was deleted) is not part of the schematic, its pins are on no net
+    let entries = eda_model::sheet_list::walk(design);
     let Some(mut root) = design.schematic.take() else { return Vec::new() };
     // Where each pin is, sheet by sheet. A schematic read from a KiCad file keeps its symbols at their library origin; one this
     // project drew places them by the corner of their box (`eda_engine::placed`), which is where the writer bakes the pins.
@@ -414,12 +433,29 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
     };
     let mut contents = design.sheet_contents.take();
     let root_pins = pins_of(&root);
-    let mut child_pins: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Point>> = contents.iter().flatten().filter(|(f, _)| reachable.contains(*f)).map(|(f, s)| (f.clone(), pins_of(s))).collect();
+    // (path, file, pins, the first placement of its file); a later placement of a file traces a copy of the screen
+    let mut plan: Vec<(Vec<String>, String, std::collections::BTreeMap<String, Point>, bool)> = Vec::new();
+    let mut copies: Vec<eda_model::ir::SchematicSection> = Vec::new();
+    {
+        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for e in entries.iter().skip(1) {
+            let Some(sec) = contents.as_ref().and_then(|c| c.get(&e.file)) else { continue };
+            let pins = pins_under_placement(pins_of(sec), sec, e.path.last().map(String::as_str));
+            let first = seen.insert(e.file.as_str());
+            if !first {
+                copies.push(sec.clone());
+            }
+            plan.push((e.path.clone(), e.file.clone(), pins, first));
+        }
+    }
     let traced = {
-        let mut screens = vec![eda_engine::nets::ScreenIn { sch: &mut root, file: String::new(), pins: root_pins }];
-        if let Some(c) = contents.as_mut() {
-            for (file, sec) in c.iter_mut().filter(|(f, _)| reachable.contains(*f)) {
-                screens.push(eda_engine::nets::ScreenIn { sch: sec, file: file.clone(), pins: child_pins.remove(file).unwrap_or_default() });
+        let mut screens = vec![eda_engine::nets::ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: root_pins }];
+        let mut firsts: std::collections::BTreeMap<&String, &mut eda_model::ir::SchematicSection> = contents.iter_mut().flatten().collect();
+        let mut later = copies.iter_mut();
+        for (path, file, pins, first) in plan {
+            let sch = if first { firsts.remove(&file) } else { later.next() };
+            if let Some(sch) = sch {
+                screens.push(eda_engine::nets::ScreenIn { path, sch, file, pins });
             }
         }
         eda_engine::nets::trace_nets_with(&mut screens, naming)
@@ -427,6 +463,27 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
     design.schematic = Some(root);
     design.sheet_contents = contents;
     traced
+}
+
+/// `pins` ("REF.PIN" -> point) of `sec` under the references the placement `placement` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
+fn pins_under_placement(pins: std::collections::BTreeMap<String, Point>, sec: &eda_model::ir::SchematicSection, placement: Option<&str>) -> std::collections::BTreeMap<String, Point> {
+    let renamed: std::collections::BTreeMap<&str, String> = sec
+        .symbols
+        .iter()
+        .filter_map(|sym| {
+            let r = eda_model::sheet_list::reference_under(sec, sym, placement);
+            (r != sym.id).then_some((sym.id.as_str(), r))
+        })
+        .collect();
+    if renamed.is_empty() {
+        return pins;
+    }
+    pins.into_iter()
+        .map(|(key, at)| match key.split_once('.').and_then(|(r, n)| renamed.get(r).map(|new| format!("{new}.{n}"))) {
+            Some(k) => (k, at),
+            None => (key, at),
+        })
+        .collect()
 }
 
 /// Recompute what the drawing says about connectivity after a schematic edit (`Wire::net`/`pins`, `PowerSymbol::pin`, `NoConnect::pin`) and

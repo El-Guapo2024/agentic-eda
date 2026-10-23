@@ -4,10 +4,14 @@
 //! `DrawSheet` (`eeschema/tools/sch_drawing_tools.cpp`) and the sheet branch of `SCH_EDITOR_CONTROL::Paste`
 //! (`eeschema/tools/sch_editor_control.cpp`):
 //!
-//! * A sheet comes in as a **copy**: its screen goes into the design under a file of its own, and so does the screen of every sheet inside
-//!   it. KiCad would let a pasted sheet share the screen of the sheet it was copied from; a design here names a part by its reference
-//!   (the model, the PCB and the net list know it by that name), so one screen cannot be placed twice -- the copy is a new sheet with
-//!   new references, which is what a user gets from the shared screen after annotating it anyway.
+//! * A pasted sheet whose file the design already shows **shares that screen** (`Paste`: `SearchHierarchy` / `loadedScreens` find the
+//!   screen, `sheet->SetScreen( existingScreen )`): the new sheet symbol names the same file, and its symbols get references of their own
+//!   for that placement (`updatePastedSheet` -> `updatePastedSymbol` adds a `SCH_SYMBOL_INSTANCE` for the new path, numbered by
+//!   `ReannotateDuplicates`), kept in `SchematicSection::instance_overrides`. The screen in the clipboard is not used, as KiCad does not
+//!   use it. Unlike KiCad, a screen that has sheets of its own is not shared (an override is filed under the placement just above the
+//!   symbol, which would be the same for both placements of a nested screen): it comes in as a copy, as below.
+//! * Any other sheet comes in as a **copy** (Import Sheet, and a paste of a sheet whose file the design does not show: KiCad's
+//!   `LoadSheetFromFile`): its screen goes into the design under a file of its own, and so does the screen of every sheet inside it.
 //! * The new sheet has a name no sheet on the page has: the pasted name, its trailing number counted up until it is free
 //!   (`Paste`: `wxIsdigit( baseName.Last() )` ... `existingSheetNames`).
 //! * The library symbols its symbols name are merged with the design's: the design's own win, the sheet's come in under their own names
@@ -331,10 +335,69 @@ impl<'a> Board<'a> {
         for sh in sheets {
             let name = unique_sheet_name(&names, &sh.name);
             names.insert(name.clone());
+            if self.share_pasted_sheet(sh, (dx, dy), &name, mode)? {
+                continue;
+            }
             let inc = Incoming { placement: sh.clone(), screens: &fragment.sheet_screens, lib_symbols: &fragment.lib_symbols };
             self.add_sheet_tree(inc, (dx, dy), &name, None, &Numbering::Paste(mode))?;
         }
         Ok(())
+    }
+
+    /// The pasted sheet `sh` as a second placement of the screen the design already shows under its file (see the module doc): `false`, and nothing done,
+    /// when the design shows no such screen or the screen has sheets of its own.
+    ///
+    /// `SCH_EDITOR_CONTROL::Paste`: the sheet gets a new KIID and its pins new ones, and `updatePastedSheet` gives every symbol of the screen an instance for
+    /// the new path, its reference the one the clipboard carried (the reference under the placement that was copied) -- kept by Paste Special's "Keep
+    /// existing annotations", numbered by `ReannotateDuplicates` against every reference of the schematic otherwise. The power symbols keep theirs.
+    fn share_pasted_sheet(&mut self, sh: &SheetInstance, shift: (Um, Um), name: &str, mode: PasteMode) -> Result<bool, Vec<CheckResult>> {
+        // a screen pasted into itself would place itself (`TestForRecursion`): the copy does not
+        if !eda_model::sheet_list::reachable_files(&self.design).contains(&sh.file) || self.focus.as_deref() == Some(sh.file.as_str()) {
+            return Ok(false);
+        }
+        let Some(screen) = self.design.sheet_contents.as_ref().and_then(|c| c.get(&sh.file)).cloned() else { return Ok(false) };
+        if !screen.sheets.is_empty() {
+            return Ok(false);
+        }
+        // the references the clipboard carried: the ones the copied placement gives (`setPastedSymbolInstances`)
+        // (the clipboard names the copied sheet by its uuid, which is the placement's id or made from it: `eda_kicad::sheet_uuid`)
+        let copied_from: Option<String> = eda_model::sheet_list::walk(&self.design)
+            .iter()
+            .skip(1)
+            .filter_map(|e| eda_model::sheet_list::placement_at(&self.design, &e.path))
+            .find(|p| p.file == sh.file && !sh.id.is_empty() && (p.id == sh.id || eda_kicad::sheet_uuid(p) == sh.id))
+            .map(|p| p.id.clone());
+        let copied_from = copied_from.as_deref();
+        let units_of = |board: &Self, lib_id: &str| -> u32 { board.design_symbol(lib_id).map_or(1, |l| l.unit_count.max(1)) };
+        let pasted: Vec<PastedRef> = screen
+            .symbols
+            .iter()
+            .map(|s| PastedRef { reference: eda_model::sheet_list::reference_under(&screen, s, copied_from), unit: s.unit, unit_count: units_of(self, &s.lib_id), lib_id: s.lib_id.clone(), value: s.value.clone(), at: (s.at.x, s.at.y), power: false })
+            .collect();
+        let numbered = annotate_paste(&self.used_references(), &pasted, mode);
+
+        let mut placement = sh.clone();
+        placement.id.clear();
+        placement.name = name.to_string();
+        placement.page.clear();
+        placement.at = Point { x: placement.at.x + shift.0, y: placement.at.y + shift.1 };
+        for p in placement.pins.iter_mut() {
+            p.id.clear();
+            p.at = Point { x: p.at.x + shift.0, y: p.at.y + shift.1 };
+        }
+        let id = {
+            let sch = self.schematic_mut_or_create();
+            sch.sheets.push(placement);
+            sch.assign_missing_ids();
+            sch.sheets.last().map(|s| s.id.clone()).unwrap_or_default()
+        };
+        let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&sh.file)) else { return Ok(false) };
+        for (s, reference) in screen.symbols.iter().zip(numbered) {
+            if reference != s.id {
+                sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, parent_sheet_instance_id: id.clone(), reference, unit: s.unit });
+            }
+        }
+        Ok(true)
     }
 
     /// `Cmd::ImportSheet`: see the module doc.

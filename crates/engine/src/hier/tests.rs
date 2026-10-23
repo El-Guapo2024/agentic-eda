@@ -51,7 +51,7 @@ pub(super) fn traced(model: &ConstraintModel, d: &Design) -> BTreeMap<String, Ve
     let pins: Vec<BTreeMap<String, Point>> = all.iter().map(|(_, s)| pins_of(model, s)).collect();
     let mut view: Vec<ScreenIn> = Vec::new();
     for ((file, sch), p) in all.iter_mut().zip(pins) {
-        view.push(ScreenIn { sch, file: file.clone(), pins: p });
+        view.push(ScreenIn { path: Vec::new(), sch, file: file.clone(), pins: p });
     }
     trace_nets(&mut view).into_iter().filter(|n| n.pins.len() >= 2).map(|n| (n.name, n.pins)).collect()
 }

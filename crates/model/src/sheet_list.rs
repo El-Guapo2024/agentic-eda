@@ -185,6 +185,25 @@ pub fn sort_by_page_numbers(entries: &[SheetEntry]) -> Vec<SheetEntry> {
     sorted
 }
 
+/// The reference `sym` of `screen` has on the sheet whose last placement is `placement` (`SCH_SYMBOL::GetRef( &sheetPath )`): the
+/// [`crate::ir::SymbolPathOverride`] that placement keeps for it, else the symbol's own id. A screen placed once has no overrides, and a symbol
+/// the placement did not renumber keeps its id; `None` (the root) is always the id.
+pub fn reference_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstance, placement: Option<&str>) -> String {
+    placement
+        .and_then(|p| screen.instance_overrides.iter().find(|o| o.parent_sheet_instance_id == p && o.at == sym.at && o.unit == sym.unit))
+        .map(|o| o.reference.clone())
+        .unwrap_or_else(|| sym.id.clone())
+}
+
+/// How many placements show each screen: a file two sheet symbols name is one screen shown twice (`SCH_SCREEN::GetRefCount`).
+pub fn placement_counts(design: &Design) -> std::collections::BTreeMap<String, usize> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in walk(design).into_iter().skip(1) {
+        *out.entry(e.file).or_insert(0) += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

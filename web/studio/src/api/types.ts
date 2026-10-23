@@ -2415,6 +2415,8 @@ export type FieldsAutoplaced = "auto" | "manual" | null;
 export interface SchematicSymbol {
   /** Reference designator ("U1") -- the same id PCB parts use. */
   id: string;
+  /** The reference this sheet's placement gives the symbol (`SCH_SYMBOL::GetRef( &sheetPath )`): `id` unless the screen is shown by more than one sheet. */
+  reference?: string;
   /** Key into `Schematic.lib_symbols` ("Device:R"). Null, or present but missing from `lib_symbols`, both mean "no real graphics for this instance yet" -- painter.ts falls back to the generic box either way. */
   lib_id: string | null;
   at: [Um, Um];

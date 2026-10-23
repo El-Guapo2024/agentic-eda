@@ -135,6 +135,9 @@ pub fn export_kicad_sch_mapped(design: &Design, model: &ConstraintModel, meta: &
 pub struct ScreenCtx {
     pub file_uuid: String,
     pub instance_paths: Vec<String>,
+    /// The [`eda_model::ir::SheetInstance::id`] of the placement each of `instance_paths` ends in (empty for the root's), which a symbol's
+    /// per-placement reference is filed under (`SchematicSection::instance_overrides`).
+    pub instance_parents: Vec<String>,
     pub seed: String,
     /// Sheet uuid -> page number.
     pub sheet_pages: BTreeMap<String, usize>,
@@ -144,7 +147,7 @@ impl ScreenCtx {
     /// The root screen of an ordinary single-sheet design (what `export_kicad_sch` has always written).
     pub fn root() -> ScreenCtx {
         let file_uuid = duid_plain("sheet:/");
-        ScreenCtx { instance_paths: vec![format!("/{file_uuid}")], file_uuid, seed: String::new(), sheet_pages: BTreeMap::new() }
+        ScreenCtx { instance_paths: vec![format!("/{file_uuid}")], instance_parents: vec![String::new()], file_uuid, seed: String::new(), sheet_pages: BTreeMap::new() }
     }
 }
 
@@ -377,9 +380,11 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         }
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
-        for path in &ctx.instance_paths {
+        // `SCH_SYMBOL_INSTANCE`: the reference this symbol has on each sheet that shows the screen -- a screen placed twice keeps one per placement
+        for (k, path) in ctx.instance_paths.iter().enumerate() {
+            let reference = eda_model::sheet_list::reference_under(sch, sym, ctx.instance_parents.get(k).map(String::as_str).filter(|p| !p.is_empty()));
             writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
-            writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&sym.id)).unwrap();
+            writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&reference)).unwrap();
             writeln!(out, "\t\t\t\t\t(unit {})", sym.unit).unwrap();
             writeln!(out, "\t\t\t\t)").unwrap();
         }
@@ -714,10 +719,10 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
 
     // The hierarchy, depth first: where every screen is placed (its path of sheet uuids) and the page each sheet gets (the root is
     // page 1, then 2, 3, ... in the order the sheets are met).
-    let mut placements: BTreeMap<String, Vec<String>> = BTreeMap::new(); // file -> instance paths
+    let mut placements: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new(); // file -> (instance path, placement id)
     let mut pages: BTreeMap<String, usize> = BTreeMap::new(); // sheet uuid -> page
     let mut sheet_pages_of: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new(); // file ("" = root) -> sheets drawn on it
-    fn walk(design: &Design, sch: &eda_model::ir::SchematicSection, here: &str, file: &str, in_progress: &mut Vec<String>, placements: &mut BTreeMap<String, Vec<String>>, pages: &mut BTreeMap<String, usize>, sheet_pages_of: &mut BTreeMap<String, BTreeMap<String, usize>>) {
+    fn walk(design: &Design, sch: &eda_model::ir::SchematicSection, here: &str, file: &str, in_progress: &mut Vec<String>, placements: &mut BTreeMap<String, Vec<(String, String)>>, pages: &mut BTreeMap<String, usize>, sheet_pages_of: &mut BTreeMap<String, BTreeMap<String, usize>>) {
         for s in &sch.sheets {
             let uuid = sheet_uuid(s);
             let page = pages.len() + 2;
@@ -725,7 +730,7 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
             sheet_pages_of.entry(file.to_string()).or_default().insert(uuid.clone(), page);
             let Some(child) = design.sheet_contents.as_ref().and_then(|c| c.get(&s.file)) else { continue };
             let path = format!("{here}/{uuid}");
-            placements.entry(s.file.clone()).or_default().push(path.clone());
+            placements.entry(s.file.clone()).or_default().push((path.clone(), s.id.clone()));
             if in_progress.contains(&s.file) {
                 continue; // a sheet placed inside itself: not followed again
             }
@@ -746,7 +751,8 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
             let ctx = ScreenCtx {
                 file_uuid: duid_plain(&format!("screen:{file}")),
                 // a screen no sheet places still gets one path, so its symbols are annotated
-                instance_paths: placements.get(file).cloned().unwrap_or_else(|| vec![format!("{root_path}/{}", duid_plain(&format!("unplaced:{file}")))]),
+                instance_paths: placements.get(file).map(|v| v.iter().map(|(p, _)| p.clone()).collect()).unwrap_or_else(|| vec![format!("{root_path}/{}", duid_plain(&format!("unplaced:{file}")))]),
+                instance_parents: placements.get(file).map(|v| v.iter().map(|(_, id)| id.clone()).collect()).unwrap_or_default(),
                 seed: format!("{file}|"),
                 sheet_pages: sheet_pages_of.get(file).cloned().unwrap_or_default(),
             };

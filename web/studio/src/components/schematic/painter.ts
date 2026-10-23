@@ -412,7 +412,7 @@ function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol,
   // "above and below"), above and below and centred for everything else.
   const at = fieldAnchors(bbox, verticalTwoPin);
   const refSizeUm = REF_FONT * 1000;
-  drawStrokeText(ctx, symbol.id + unitSuffix, at.ref[0], at.ref[1], { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, justify: at.justify, color: layerColor("LAYER_REFERENCEPART") });
+  drawStrokeText(ctx, (symbol.reference ?? symbol.id) + unitSuffix, at.ref[0], at.ref[1], { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, justify: at.justify, color: layerColor("LAYER_REFERENCEPART") });
   if (symbol.value || symbol.mpn) {
     const sizeUm = VALUE_FONT * 1000;
     drawStrokeText(ctx, symbol.shown?.value ?? symbol.value ?? symbol.mpn ?? "", at.value[0], at.value[1], { sizeUm, justify: at.justify, color: layerColor("LAYER_VALUEPART") });

@@ -1673,12 +1673,15 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             // them by number, same "can't tell, so don't filter" fallback
             // `eda_engine::geometry`'s own unit-aware functions use.
             let resolved = part.and_then(|p| model.real_symbol_of_instance(&sch, s, p));
+            // A screen two sheets show: the reference this placement gives the symbol (`SCH_SYMBOL::GetRef( &GetCurrentSheet() )`), which its Reference
+            // field shows and its pins' nets are filed under; the symbol's `id` stays what the verbs name it by.
+            let reference = eda_model::sheet_list::reference_under(&sch, s, breadcrumb.last().map(|(id, _)| id.as_str()));
             let pins: Vec<Value> = part
                 .map(|p| {
                     p.pins
                         .iter()
                         .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == s.unit))
-                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": pin_net.get(format!("{}.{}", s.id, pin.number).as_str()) }))
+                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": pin_net.get(format!("{reference}.{}", pin.number).as_str()) }))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -1689,8 +1692,17 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(sh) = &shown {
                 sh.annotate_symbol_fields(&owner, &mut fields);
             }
+            if reference != s.id {
+                for f in fields.iter_mut().filter(|f| f["name"] == "Reference") {
+                    f["text"] = json!(reference);
+                    if f.get("shown").is_some() {
+                        f["shown"] = json!(reference);
+                    }
+                }
+            }
             let mut symbol = json!({
                 "id": s.id,
+                "reference": reference,
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &owner),
                 "at": [s.at.x, s.at.y],

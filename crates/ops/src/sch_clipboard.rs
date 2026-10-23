@@ -32,6 +32,16 @@ impl<'a> Board<'a> {
                 out.push(UsedRef { reference: p.id.clone(), unit: 1, lib_id: p.lib_id.clone(), value: p.net.clone() });
             }
         }
+        // a screen shown twice holds the references its other placements give its symbols too (`SCH_SHEET_LIST::GetSymbols` walks every path)
+        for e in eda_model::sheet_list::walk(&self.design).into_iter().skip(1) {
+            let Some(sec) = eda_model::sheet_list::screen_of(&self.design, &e.path) else { continue };
+            for s in &sec.symbols {
+                let reference = eda_model::sheet_list::reference_under(sec, s, e.path.last().map(String::as_str));
+                if reference != s.id {
+                    out.push(UsedRef { reference, unit: s.unit, lib_id: s.lib_id.clone(), value: s.value.clone() });
+                }
+            }
+        }
         out
     }
 

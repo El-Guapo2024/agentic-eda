@@ -19,8 +19,12 @@
 //! A subgraph with no driver keeps the name its wires already carry (a derived schematic names every wire after its net), so a
 //! retrace after an edit does not rename nets under a routed board; otherwise it is `NET_<n>`.
 //!
-//! Not ported: buses (a bus wire is traced as an ordinary wire, as `eda_kicad::reconcile` always has), and one screen placed by
-//! more than one sheet symbol (traced once; KiCad would make a net per placement).
+//! - **A net per placement** (`CONNECTION_GRAPH::Recalculate` walks the `SCH_SHEET_LIST`, a subgraph per item *per sheet path*): a
+//!   screen two sheet symbols show is traced once for each, as [`ScreenIn`]s with their own [`ScreenIn::path`], its pins under the
+//!   references that placement gives its symbols, so the same drawing makes two sets of nets. A sheet pin joins the hierarchical labels
+//!   of the one placement it is on.
+//!
+//! Not ported: buses (a bus wire is traced as an ordinary wire, as `eda_kicad::reconcile` always has).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,6 +44,10 @@ pub struct ScreenIn<'a> {
     pub sch: &'a mut SchematicSection,
     /// The file name the parent's `SheetInstance::file` calls it; empty for the root.
     pub file: String,
+    /// The placement this is the screen of: the `SheetInstance::id`s from the root down (`SCH_SHEET_PATH`); empty for the root. When
+    /// any screen has one, a sheet symbol leads to the screen whose path is its own path plus the sheet's id (a screen shown twice is
+    /// two [`ScreenIn`]s); when none has, to the screen of its file (one [`ScreenIn`] per file).
+    pub path: Vec<String>,
     /// "REF.PIN" -> the point a wire connects to, for every pin on this screen.
     pub pins: BTreeMap<String, Point>,
 }
@@ -101,6 +109,16 @@ struct Group {
     global_names: Vec<String>,
 }
 
+/// The screen sheet `sh` of screen `si` shows: by placement path when the screens have paths, else by file.
+fn child_of(screens: &[ScreenIn], si: usize, sh: &eda_model::ir::SheetInstance) -> Option<usize> {
+    if screens.iter().any(|s| !s.path.is_empty()) {
+        let mut want = screens[si].path.clone();
+        want.push(sh.id.clone());
+        return screens.iter().position(|x| x.path == want);
+    }
+    screens.iter().position(|x| !x.file.is_empty() && x.file == sh.file)
+}
+
 /// Each screen's depth from the root through `sheets` / `file`, and the sheet-name path to it.
 fn depths(screens: &[ScreenIn]) -> (Vec<usize>, Vec<String>) {
     let mut depth = vec![usize::MAX; screens.len()];
@@ -113,7 +131,7 @@ fn depths(screens: &[ScreenIn]) -> (Vec<usize>, Vec<String>) {
         let s = queue[head];
         head += 1;
         for sh in &screens[s].sch.sheets {
-            let Some(c) = screens.iter().position(|x| !x.file.is_empty() && x.file == sh.file) else { continue };
+            let Some(c) = child_of(screens, s, sh) else { continue };
             if depth[c] == usize::MAX {
                 depth[c] = depth[s] + 1;
                 path[c] = format!("{}/{}", path[s], sh.name);
@@ -256,6 +274,11 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             }
         }
         for ps in &sch.power_symbols {
+            // `SCH_PIN::IsGlobalPower`: a power-input pin. PWR_FLAG's one pin is a power output: the flag names no net and joins nothing by name (its
+            // `net` is only the net it was put on).
+            if ps.lib_id == "power:PWR_FLAG" {
+                continue;
+            }
             let g = &mut groups[at[&ps.at]];
             g.drivers.push(Driver { prio: GLOBAL_POWER_PIN, name: ps.net.clone(), depth: depth[si] });
             g.global_names.push(ps.net.clone());
@@ -321,7 +344,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     // Sheet pin <-> the hierarchical labels of its sheet's content.
     for (si, screen) in screens.iter().enumerate() {
         for sh in &screen.sch.sheets {
-            let Some(ci) = screens.iter().position(|x| !x.file.is_empty() && x.file == sh.file) else { continue };
+            let Some(ci) = child_of(screens, si, sh) else { continue };
             for p in &sh.pins {
                 let Some(&gp) = group_at[si].get(&p.at) else { continue };
                 if let Some(labels) = hier.get(&(ci, p.name.clone())) {
@@ -616,7 +639,7 @@ mod tests {
     fn a_wire_joins_its_pins_and_keeps_its_name() {
         let mut root = section();
         root.wires.push(wire("LED1", &[p(0, 0), p(1000, 0)]));
-        let mut screens = vec![ScreenIn { sch: &mut root, file: String::new(), pins: pins(&[("R1.2", p(0, 0)), ("D1.1", p(1000, 0)), ("R2.1", p(5000, 5000))]) }];
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.2", p(0, 0)), ("D1.1", p(1000, 0)), ("R2.1", p(5000, 5000))]) }];
         let nets = trace_nets(&mut screens);
         assert_eq!(pins_of(&nets, "LED1"), vec!["D1.1", "R1.2"]);
         assert_eq!(nets.len(), 2, "the lone pin is a net of its own: {nets:?}");
@@ -635,8 +658,8 @@ mod tests {
         child.wires.push(wire("", &[p(10, 10), p(40, 10)]));
         child.labels.push(label("SIG", p(10, 10), LabelKind::Hierarchical { shape: LabelShape::Bidirectional }));
         let mut screens = vec![
-            ScreenIn { sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 50))]) },
-            ScreenIn { sch: &mut child, file: "child.kicad_sch".into(), pins: pins(&[("U1.3", p(40, 10))]) },
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 50))]) },
+            ScreenIn { path: Vec::new(), sch: &mut child, file: "child.kicad_sch".into(), pins: pins(&[("U1.3", p(40, 10))]) },
         ];
         let nets = trace_nets(&mut screens);
         assert_eq!(nets.len(), 1, "{nets:?}");
@@ -645,6 +668,38 @@ mod tests {
         // And both wires carry the name.
         assert_eq!(root.wires[0].net, "SIG");
         assert_eq!(child.wires[0].net, "SIG");
+    }
+
+    /// One screen shown by two sheet symbols is traced once per placement (`CONNECTION_GRAPH::Recalculate` over the sheet paths): its local label makes
+    /// a net on each, the second under the references that placement gives its symbols, and each sheet pin joins the hierarchical label of its own placement.
+    #[test]
+    fn a_screen_shown_twice_is_a_net_per_placement() {
+        let mut root = section();
+        let pin = |at: Point| vec![SheetPin { id: String::new(), name: "IN".into(), shape: LabelShape::Input, at }];
+        root.sheets.push(SheetInstance { id: "s1".into(), name: "a".into(), file: "ch.kicad_sch".into(), at: p(0, 0), size: (100, 100), pins: pin(p(100, 50)), page: String::new() });
+        root.sheets.push(SheetInstance { id: "s2".into(), name: "b".into(), file: "ch.kicad_sch".into(), at: p(0, 200), size: (100, 100), pins: pin(p(100, 250)), page: String::new() });
+        root.wires.push(wire("", &[p(100, 50), p(300, 50)]));
+        root.wires.push(wire("", &[p(100, 250), p(300, 250)]));
+        let mut ch = section();
+        ch.labels.push(label("X", p(0, 0), LabelKind::Local));
+        ch.labels.push(label("X", p(50, 50), LabelKind::Local));
+        ch.labels.push(label("IN", p(80, 80), LabelKind::Hierarchical { shape: LabelShape::Input }));
+        // a PWR_FLAG on the net names nothing and joins nothing by its name
+        ch.power_symbols.push(PowerSymbol { id: "#FLG01".into(), lib_id: "power:PWR_FLAG".into(), at: p(0, 0), rot: 0, net: "X".into(), pin: String::new() });
+        let mut copy = ch.clone();
+        let first = pins(&[("R1.1", p(0, 0)), ("R2.1", p(50, 50)), ("R1.2", p(80, 80))]);
+        let second = pins(&[("R3.1", p(0, 0)), ("R4.1", p(50, 50)), ("R3.2", p(80, 80))]);
+        let mut screens = vec![
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("J1.1", p(300, 50)), ("J1.2", p(300, 250))]) },
+            ScreenIn { path: vec!["s1".into()], sch: &mut ch, file: "ch.kicad_sch".into(), pins: first },
+            ScreenIn { path: vec!["s2".into()], sch: &mut copy, file: "ch.kicad_sch".into(), pins: second },
+        ];
+        let nets = trace_nets(&mut screens);
+        let groups: BTreeSet<Vec<String>> = nets.iter().map(|n| n.pins.clone()).collect();
+        assert!(groups.contains(&vec!["R1.1".to_string(), "R2.1".into()]) && groups.contains(&vec!["R3.1".to_string(), "R4.1".into()]), "{nets:?}");
+        assert!(groups.contains(&vec!["J1.1".to_string(), "R1.2".into()]) && groups.contains(&vec!["J1.2".to_string(), "R3.2".into()]), "each pin its own placement's label: {nets:?}");
+        let names: BTreeSet<&str> = nets.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names.len(), nets.len(), "the names stay unique: {nets:?}");
     }
 
     #[test]
@@ -658,9 +713,9 @@ mod tests {
         let mut b = section();
         b.power_symbols.push(gnd(p(7, 7)));
         let mut screens = vec![
-            ScreenIn { sch: &mut root, file: String::new(), pins: BTreeMap::new() },
-            ScreenIn { sch: &mut a, file: "a.kicad_sch".into(), pins: pins(&[("C1.2", p(5, 5))]) },
-            ScreenIn { sch: &mut b, file: "b.kicad_sch".into(), pins: pins(&[("C2.2", p(7, 7))]) },
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: BTreeMap::new() },
+            ScreenIn { path: Vec::new(), sch: &mut a, file: "a.kicad_sch".into(), pins: pins(&[("C1.2", p(5, 5))]) },
+            ScreenIn { path: Vec::new(), sch: &mut b, file: "b.kicad_sch".into(), pins: pins(&[("C2.2", p(7, 7))]) },
         ];
         let nets = trace_nets(&mut screens);
         assert_eq!(pins_of(&nets, "GND"), vec!["C1.2", "C2.2"]);
@@ -678,9 +733,9 @@ mod tests {
         let mut b = section();
         b.labels.push(label("X", p(0, 0), LabelKind::Local));
         let mut screens = vec![
-            ScreenIn { sch: &mut root, file: String::new(), pins: BTreeMap::new() },
-            ScreenIn { sch: &mut a, file: "a.kicad_sch".into(), pins: pins(&[("R1.1", p(0, 0)), ("R2.1", p(50, 50))]) },
-            ScreenIn { sch: &mut b, file: "b.kicad_sch".into(), pins: pins(&[("R3.1", p(0, 0))]) },
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: BTreeMap::new() },
+            ScreenIn { path: Vec::new(), sch: &mut a, file: "a.kicad_sch".into(), pins: pins(&[("R1.1", p(0, 0)), ("R2.1", p(50, 50))]) },
+            ScreenIn { path: Vec::new(), sch: &mut b, file: "b.kicad_sch".into(), pins: pins(&[("R3.1", p(0, 0))]) },
         ];
         let nets = trace_nets(&mut screens);
         assert_eq!(pins_of(&nets, "X"), vec!["R1.1", "R2.1"], "two labels on one sheet are one net");
@@ -697,8 +752,8 @@ mod tests {
         let mut child = section();
         child.labels.push(label("IN", p(10, 10), LabelKind::Hierarchical { shape: LabelShape::Input }));
         let mut screens = vec![
-            ScreenIn { sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 50))]) },
-            ScreenIn { sch: &mut child, file: "child.kicad_sch".into(), pins: pins(&[("U1.1", p(10, 10))]) },
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 50))]) },
+            ScreenIn { path: Vec::new(), sch: &mut child, file: "child.kicad_sch".into(), pins: pins(&[("U1.1", p(10, 10))]) },
         ];
         let nets = trace_nets(&mut screens);
         assert_eq!(pins_of(&nets, "MAINBUS"), vec!["R1.1", "U1.1"]);
@@ -752,7 +807,7 @@ mod tests {
             let Ok(design) = crate::derive_schematic(&model, &crate::EngineOptions::new(1, "t")) else { continue };
             let mut sch = design.schematic.unwrap();
             let pins = world_pins(&sch, &model);
-            let mut screens = vec![ScreenIn { sch: &mut sch, file: String::new(), pins }];
+            let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut sch, file: String::new(), pins }];
             let got = trace_nets(&mut screens);
             let got: BTreeMap<String, Vec<String>> = got.into_iter().filter(|n| n.pins.len() >= 2).map(|n| (n.name, n.pins)).collect();
             let want = drawn_nets(&model);
@@ -769,7 +824,7 @@ mod tests {
     fn a_no_connect_flag_keeps_its_pin_out_of_every_net() {
         let mut root = section();
         root.no_connects.push(eda_model::ir::NoConnect { id: String::new(), at: p(7, 7), pin: String::new() });
-        let mut screens = vec![ScreenIn { sch: &mut root, file: String::new(), pins: pins(&[("U1.5", p(7, 7))]) }];
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("U1.5", p(7, 7))]) }];
         let nets = trace_nets(&mut screens);
         assert!(nets.is_empty(), "{nets:?}");
         assert_eq!(root.no_connects[0].pin, "U1.5");
@@ -809,7 +864,7 @@ mod tests {
     fn without_wire_hints_a_wire_does_not_name_its_net() {
         let mut root = section();
         root.wires.push(wire("OLD_NAME", &[p(0, 0), p(1000, 0)]));
-        let mut screens = vec![ScreenIn { sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R2.1", p(1000, 0))]) }];
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R2.1", p(1000, 0))]) }];
         let named = trace_nets_with(&mut screens, &Naming { wire_hints: false, pin_names: None });
         assert_eq!(named.len(), 1);
         assert_eq!((named[0].name.as_str(), named[0].driven), ("Net-(R1-Pad1)", false));
@@ -817,7 +872,7 @@ mod tests {
         // and a stray wire on no pin is no net, and keeps the name it had
         let mut stray = section();
         stray.wires.push(wire("KEPT", &[p(0, 0), p(10, 0)]));
-        let mut screens = vec![ScreenIn { sch: &mut stray, file: String::new(), pins: BTreeMap::new() }];
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut stray, file: String::new(), pins: BTreeMap::new() }];
         assert!(trace_nets_with(&mut screens, &Naming::default()).is_empty());
         assert_eq!(stray.wires[0].net, "KEPT");
     }
