@@ -113,11 +113,16 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
       void routeSetSettings(settings).then(() => draw.kind === "route" && cur && routeMove(cur.x, cur.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) })));
     }
   };
-  m.set("pcbnew.InteractiveRouter.SwitchRoundingToNext", pcbOnly(() => setCornerMode(nextCornerMode(state.routerSettings.cornerMode ?? "mitered_45"))));
-  m.set("pcbnew.InteractiveRouter.SwitchRounding45", pcbOnly(() => setCornerMode("mitered_45")));
-  m.set("pcbnew.InteractiveRouter.SwitchRoundingArc45", pcbOnly(() => setCornerMode("rounded_45")));
-  m.set("pcbnew.InteractiveRouter.SwitchRounding90", pcbOnly(() => setCornerMode("mitered_90")));
-  m.set("pcbnew.InteractiveRouter.SwitchRoundingArc90", pcbOnly(() => setCornerMode("rounded_90")));
+  // They are `AS_CONTEXT` actions of the router tool (`Go( &ROUTER_TOOL::handlePnSCornerModeChange, ACT_SwitchCornerMode*.MakeEvent() )`): live
+  // only while it is the active tool (single track or pair, idle or routing), so their hotkeys (Ctrl+/, Ctrl+W, ...) do nothing elsewhere.
+  const inRouterTool = state.activeTool === "route" || state.activeTool === "diffpair" || state.drawState?.kind === "route" || state.drawState?.kind === "diffpair";
+  if (inRouterTool) {
+    m.set("pcbnew.InteractiveRouter.SwitchRoundingToNext", pcbOnly(() => setCornerMode(nextCornerMode(state.routerSettings.cornerMode ?? "mitered_45"))));
+    m.set("pcbnew.InteractiveRouter.SwitchRounding45", pcbOnly(() => setCornerMode("mitered_45")));
+    m.set("pcbnew.InteractiveRouter.SwitchRoundingArc45", pcbOnly(() => setCornerMode("rounded_45")));
+    m.set("pcbnew.InteractiveRouter.SwitchRounding90", pcbOnly(() => setCornerMode("mitered_90")));
+    m.set("pcbnew.InteractiveRouter.SwitchRoundingArc90", pcbOnly(() => setCornerMode("rounded_90")));
+  }
 
   // ------------------------------------------------------------ selection by net
   // PCB_SELECTION_TOOL::selectNet / deselectNet: `selectCursor()`, then SelectAllItemsOnNet for the net of every selected

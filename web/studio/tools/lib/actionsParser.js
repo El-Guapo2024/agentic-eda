@@ -110,16 +110,22 @@ export function normalizeHotkey(raw) {
 
 /**
  * Every `TOOL_ACTION <Qualifier>::<func>( TOOL_ACTION_ARGS() ... );` in
- * `fileText`. `symbol` is "<Qualifier>::<func>" as toolbar/menu source
- * would reference it; `func` is the bare name, for files that reference
- * actions unqualified.
+ * `fileText`, and every file-local `static const TOOL_ACTION <func>(
+ * TOOL_ACTION_ARGS() ... );` (router_tool.cpp defines its context-menu
+ * actions this way: ACT_PlaceThroughVia, ACT_SwitchPosture, the Track
+ * Corner Mode ones ACT_SwitchCornerMode*, ...). `symbol` is
+ * "<Qualifier>::<func>" as toolbar/menu source would reference it (the bare
+ * name for a static one, which has no qualifier); `func` is the bare name,
+ * for files that reference actions unqualified.
  */
 export function parseActionsFromFile(fileText) {
   const actions = [];
-  const re = /TOOL_ACTION\s+(\w+)::(\w+)\s*\(\s*TOOL_ACTION_ARGS\(\)([\s\S]*?)\)\s*;/g;
+  // (a plain local `TOOL_ACTION x( TOOL_ACTION_ARGS() ... )`, like hotkey_store.cpp's "common.Control.Fake", is not an action)
+  const re = /(?:\bstatic\s+const\s+TOOL_ACTION\s+(\w+)|TOOL_ACTION\s+(\w+)::(\w+))\s*\(\s*TOOL_ACTION_ARGS\(\)([\s\S]*?)\)\s*;/g;
   let m;
   while ((m = re.exec(fileText))) {
-    const [, qualifier, func, body] = m;
+    const [, staticFunc, qualifier, qualifiedFunc, body] = m;
+    const func = staticFunc ?? qualifiedFunc;
     const name = extractString(body, "Name");
     if (!name) continue;
     const hotkeySplit = extractPlatformRaw(body, "DefaultHotkey");
@@ -138,7 +144,7 @@ export function parseActionsFromFile(fileText) {
           .filter(Boolean)
       );
     actions.push({
-      symbol: `${qualifier}::${func}`,
+      symbol: qualifier ? `${qualifier}::${func}` : func,
       func,
       name,
       label: extractString(body, "FriendlyName") ?? extractString(body, "MenuText") ?? name,

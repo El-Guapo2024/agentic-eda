@@ -1403,10 +1403,11 @@ export function Canvas() {
         dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) });
       });
     }
-    // The Track Corner Mode hotkeys (router_tool.cpp's `ACT_SwitchCornerMode*`, static TOOL_ACTIONs of the router tool that the action
-    // catalog does not list): Ctrl+/ the next mode, Ctrl+W 45, Ctrl+Shift+W arc 45, Ctrl+Alt+W 90, Alt+W arc 90 -- in the router tool only
-    // (`AS_CONTEXT`). (A browser keeps Ctrl+W for itself; the menu has the same five.)
-    if (state.activeTool === "route" || state.drawState?.kind === "route") {
+    // The Track Corner Mode hotkeys (router_tool.cpp's `ACT_SwitchCornerMode*`, static TOOL_ACTIONs of the router tool): Ctrl+/ the next
+    // mode, Ctrl+W 45, Ctrl+Shift+W arc 45, Ctrl+Alt+W 90, Alt+W arc 90 -- in the router tool only (`AS_CONTEXT`), the pair router's too.
+    // Matched here by the physical key so that a layout's Alt+W character does not hide it. (A browser keeps Ctrl+W for itself; the
+    // menu has the same five.)
+    if (state.activeTool === "route" || state.activeTool === "diffpair" || state.drawState?.kind === "route" || state.drawState?.kind === "diffpair") {
       const ctrl = e.ctrlKey || e.metaKey;
       const w = e.code === "KeyW";
       const action =

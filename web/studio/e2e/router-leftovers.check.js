@@ -672,9 +672,10 @@
     await E.run("pcbnew.InteractiveRouter.WalkaroundMode");
     await sleep(300);
     const route = async (corner, to) => {
+      // the Track Corner Mode actions are the router tool's (`AS_CONTEXT`): live only while it is active
+      if (E.state().tool !== "route") { await E.run("pcbnew.InteractiveRouter.SingleTrack"); await sleep(300); }
       await E.run(corner);
       await sleep(300);
-      if (E.state().tool !== "route") { await E.run("pcbnew.InteractiveRouter.SingleTrack"); await sleep(300); }
       const n = replies.length;
       await clickAt(6000, 30000);
       const s = await waitReply("start", n);
