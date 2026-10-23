@@ -386,7 +386,12 @@ impl<'a> Board<'a> {
             SchCmd::AddGraphic { graphic } => add_graphic(self.schematic_mut_or_create(), graphic.clone()),
             SchCmd::DeleteGraphic { id } => delete_graphic(self.schematic_mut()?, id),
             SchCmd::EditGraphic { id, graphic } => edit_graphic(self.schematic_mut()?, id, graphic.clone()),
-            SchCmd::DeleteSheet { id } => delete_sheet(self.schematic_mut()?, id),
+            SchCmd::DeleteSheet { id } => {
+                delete_sheet(self.schematic_mut()?, id)?;
+                // the references its placement gave a screen another sheet still shows go with it (`PruneOrphanedSymbolInstances`)
+                eda_model::sheet_list::prune_orphaned_overrides(&mut self.design);
+                Ok(())
+            }
             SchCmd::AddSheetPin { sheet, name, shape, at } => add_sheet_pin(self.schematic_mut()?, sheet, name, *shape, *at),
             SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id),
             SchCmd::EditSheetPin { id, name, shape, at, size_um, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_um: *size_um, bold: *bold, italic: *italic }),

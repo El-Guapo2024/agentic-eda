@@ -1262,7 +1262,9 @@ fn write_power_lib_symbol(out: &mut String, lib_id: &str, resolved: &eda_model::
     writeln!(out, "\t\t\t(pin_numbers (hide yes))").unwrap();
     writeln!(out, "\t\t\t(pin_names (offset 0) (hide yes))").unwrap();
     writeln!(out, "\t\t\t(exclude_from_sim no) (in_bom yes) (on_board yes)").unwrap();
-    let value = lib_id.strip_prefix("power:").unwrap_or(lib_id);
+    // the library symbol's own name, the part of `lib_id` after its library nickname, whichever library it is (`power:`, or a project's own
+    // `complex_hierarchy_schlib:`): a unit named after the whole `lib_id` is a name/prefix mismatch and KiCad refuses the file
+    let value = lib_id.rsplit(':').next().unwrap_or(lib_id);
     write_property(out, "Reference", "#PWR", 0.0, -2.0, true);
     write_property(out, "Value", value, 0.0, 2.0, false);
     write_property(out, "Footprint", "", 0.0, 0.0, true);

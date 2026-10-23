@@ -105,7 +105,7 @@ fn nets(d: &Design) -> BTreeMap<String, String> {
         eda_engine::nets::ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: BTreeMap::new() },
         eda_engine::nets::ScreenIn { path: Vec::new(), sch: &mut child, file: "sub.kicad_sch".into(), pins: child_pins },
     ];
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: None, bus_members: None };
+    let naming = eda_engine::nets::Naming { wire_hints: false, ..Default::default() };
     let mut out = BTreeMap::new();
     for net in eda_engine::nets::trace_nets_with(&mut screens, &naming) {
         for pin in &net.pins {

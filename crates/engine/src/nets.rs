@@ -156,6 +156,15 @@ fn depths(screens: &[ScreenIn]) -> (Vec<usize>, Vec<String>) {
     (depth, path)
 }
 
+/// A group bus member's local name (`SCH_CONNECTION::LocalName`): `ConfigureFromLabel` names the members of a named group `prefix{..}` `prefix.<member>`, and
+/// matches them across buses without the prefix.
+fn group_local_name<'a>(bus: &str, member: &'a str) -> &'a str {
+    match bus.split_once('{') {
+        Some((prefix, _)) if !prefix.is_empty() => member.strip_prefix(prefix).and_then(|r| r.strip_prefix('.')).unwrap_or(member),
+        _ => member,
+    }
+}
+
 /// KiCad's order of the drivers of a net (`propagateToNeighbors`, "find the best driver for this chain of subgraphs"): a global power pin or global
 /// label first, then a strong driver by priority, then the one closest to the root, then the alphabetically first name.
 fn driver_order(a: &Driver, b: &Driver) -> std::cmp::Ordering {
@@ -174,6 +183,17 @@ pub struct Naming<'a> {
     /// The member nets of a bus name (`SCH_CONNECTION::ConfigureFromLabel`: a vector `D[0..7]`, a group `{A B}`, an alias), `None` for a name that is
     /// not a bus (`eda_kicad::expand_bus_members` with the design's bus aliases). Without it a bus has no members and joins nothing.
     pub bus_members: Option<&'a dyn Fn(&str) -> Option<Vec<String>>>,
+    /// Whether the power symbol of a `lib_id` names its net and joins the others of its name (`SCH_PIN::IsGlobalPower`: its pin is a power input),
+    /// from its library symbol; `None` for a symbol the library does not give. Without an answer, a symbol called `PWR_FLAG` in any library does not
+    /// and every other does.
+    pub global_power: Option<&'a dyn Fn(&str) -> Option<bool>>,
+}
+
+impl Naming<'_> {
+    /// Whether a power symbol of `lib_id` is a global power pin (see [`Naming::global_power`]).
+    fn is_global_power(&self, lib_id: &str) -> bool {
+        self.global_power.and_then(|f| f(lib_id)).unwrap_or_else(|| lib_id.rsplit(':').next() != Some("PWR_FLAG"))
+    }
 }
 
 /// One traced net: its name, its pins (sorted), and whether a driver -- a label, a power symbol, a sheet pin -- named it.
@@ -186,7 +206,7 @@ pub struct TracedNet {
 
 /// [`trace_nets_with`] naming a net nothing drives after the wires that carry its name, as a derived schematic does.
 pub fn trace_nets(screens: &mut [ScreenIn]) -> Vec<Net> {
-    trace_nets_with(screens, &Naming { wire_hints: true, pin_names: None, bus_members: None }).into_iter().map(|t| Net { name: t.name, pins: t.pins }).collect()
+    trace_nets_with(screens, &Naming { wire_hints: true, ..Naming::default() }).into_iter().map(|t| Net { name: t.name, pins: t.pins }).collect()
 }
 
 /// Trace the nets of every screen, write each wire's `net`/`pins`, each power symbol's and no-connect flag's `pin` back, and
@@ -316,9 +336,10 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             }
         }
         for ps in &sch.power_symbols {
-            // `SCH_PIN::IsGlobalPower`: a power-input pin. PWR_FLAG's one pin is a power output: the flag names no net and joins nothing by name (its
-            // `net` is only the net it was put on).
-            if ps.lib_id == "power:PWR_FLAG" {
+            // `SCH_PIN::IsGlobalPower`: a power-input pin. PWR_FLAG's one pin is a power output (and its `#FLG` reference keeps it out of the netlist:
+            // `GetDriverPriority` gives it `NONE`): the flag names no net and joins nothing by name, its `net` is only the net it was put on. Told by the
+            // pin, not by the library's name for it: a project's own `PWR_FLAG` (`complex_hierarchy_schlib:PWR_FLAG`) is one too.
+            if !naming.is_global_power(&ps.lib_id) {
                 continue;
             }
             let g = &mut groups[at[&ps.at]];
@@ -439,7 +460,16 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 for name in names {
                     let Some(members) = bus_members(&name) else { continue };
                     for (i, m) in members.iter().enumerate() {
-                        let k = if vector { (i < best_members.len()).then_some(i) } else { best_members.iter().position(|b| b == m).or((i < best_members.len()).then_some(i)) };
+                        // `matchBusMember`: a vector's member by its place; a group's by its local name (the member's name without the group's `prefix.`),
+                        // else the member of the group's flattened list at the searched member's `VectorIndex` -- its place in a vector this bus is (a
+                        // vector sheet pin on a group bus, `qa/data/eeschema/issue23840`). **Differs**: a member of a group this bus is has a `VectorIndex` too
+                        // (0, or its place in a vector inside the group), which KiCad falls back to and this does not: such a member is matched by name only.
+                        let child_vector = !name.contains('{');
+                        let k = if vector {
+                            (i < best_members.len()).then_some(i)
+                        } else {
+                            best_members.iter().position(|b| group_local_name(&best.name, b) == group_local_name(&name, m)).or_else(|| (child_vector && i < best_members.len()).then_some(i))
+                        };
                         let Some(k) = k else { continue };
                         let node = first + k;
                         for &n in local.get(&(screen, false, m.clone())).into_iter().flatten().chain(global_here.get(&(screen, m.clone())).into_iter().flatten()) {
@@ -778,7 +808,7 @@ mod tests {
     #[test]
     fn a_bus_across_sheets_joins_its_members_nets_on_both_sides() {
         let members = |n: &str| test_members(n);
-        let naming = Naming { wire_hints: false, pin_names: None, bus_members: Some(&members) };
+        let naming = Naming { wire_hints: false, bus_members: Some(&members), ..Naming::default() };
         for root_bus_label in ["D[0..1]", "X[0..1]"] {
             let mut root = section();
             root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(1000, 0), size: (1000, 1000), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: p(1000, 500) }], page: String::new() });
@@ -821,6 +851,45 @@ mod tests {
             ScreenIn { path: Vec::new(), sch: &mut child, file: "child.kicad_sch".into(), pins: pins(&[("U1.1", p(200, 100))]) },
         ];
         assert_eq!(trace_nets_with(&mut screens, &Naming::default()).len(), 2);
+    }
+
+    /// A group bus across sheets (`matchBusMember`): its members are matched by local name -- the member's name without the group's `prefix.` -- not by place, so
+    /// the child's `{B A}` joins its A to the root's `pre.A` of `pre{A B}`; and a member the parent group does not have joins nothing (no place to fall back to).
+    #[test]
+    fn a_group_bus_across_sheets_matches_its_members_by_local_name() {
+        let members = |n: &str| -> Option<Vec<String>> {
+            let (prefix, rest) = n.split_once('{')?;
+            let inner = rest.strip_suffix('}')?;
+            Some(inner.split_whitespace().map(|m| if prefix.is_empty() { m.to_string() } else { format!("{prefix}.{m}") }).collect())
+        };
+        let naming = Naming { wire_hints: false, bus_members: Some(&members), ..Naming::default() };
+        for child_bus in ["{B A}", "{B C}"] {
+            let mut root = section();
+            root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(1000, 0), size: (1000, 1000), pins: vec![SheetPin { id: String::new(), name: child_bus.into(), shape: LabelShape::Bidirectional, at: p(1000, 500) }], page: String::new() });
+            root.wires.push(bus(&[p(500, 500), p(1000, 500)]));
+            root.labels.push(label("pre{A B}", p(700, 500), LabelKind::Local));
+            root.labels.push(label("pre.A", p(0, 0), LabelKind::Local));
+            root.labels.push(label("pre.B", p(0, 100), LabelKind::Local));
+            let mut child = section();
+            child.wires.push(bus(&[p(10, 10), p(10, 400)]));
+            child.labels.push(label(child_bus, p(10, 10), LabelKind::Hierarchical { shape: LabelShape::Bidirectional }));
+            let second = if child_bus.contains('C') { "C" } else { "A" };
+            child.labels.push(label("B", p(200, 100), LabelKind::Local));
+            child.labels.push(label(second, p(200, 200), LabelKind::Local));
+            let mut screens = vec![
+                ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R2.1", p(0, 100))]) },
+                ScreenIn { path: Vec::new(), sch: &mut child, file: "child.kicad_sch".into(), pins: pins(&[("U1.1", p(200, 100)), ("U1.2", p(200, 200))]) },
+            ];
+            let nets = trace_nets_with(&mut screens, &naming);
+            let net = |pin: &str| nets.iter().find(|n| n.pins.iter().any(|x| x == pin)).unwrap_or_else(|| panic!("{pin} in {nets:?}")).pins.clone();
+            assert_eq!(net("U1.1"), vec!["R2.1", "U1.1"], "{child_bus}: B is pre.B, by name: {nets:?}");
+            if second == "A" {
+                assert_eq!(net("U1.2"), vec!["R1.1", "U1.2"], "A is pre.A: {nets:?}");
+            } else {
+                assert_eq!(net("U1.2"), vec!["U1.2"], "C is no member of the root's bus: {nets:?}");
+                assert_eq!(net("R1.1"), vec!["R1.1"], "{nets:?}");
+            }
+        }
     }
 
     /// One screen shown by two sheet symbols is traced once per placement (`CONNECTION_GRAPH::Recalculate` over the sheet paths): its local label makes
@@ -873,6 +942,27 @@ mod tests {
         let nets = trace_nets(&mut screens);
         assert_eq!(pins_of(&nets, "GND"), vec!["C1.2", "C2.2"]);
         assert_eq!(a.power_symbols[0].pin, "C1.2");
+    }
+
+    /// A PWR_FLAG joins no net by its name whatever library it comes from (`SCH_PIN::IsGlobalPower`: a power-input pin; the flag's is a power output): two
+    /// project-library flags (`complex_hierarchy_schlib:PWR_FLAG`, as KiCad's QA `complex_hierarchy` has them) on two rails leave the rails apart. The
+    /// library symbol decides when it is known: a power-output symbol of another name joins nothing either, a power-input one of that name does.
+    #[test]
+    fn a_power_flag_of_any_library_names_no_net() {
+        let flag = |lib_id: &str, at: Point| PowerSymbol { id: "#FLG01".into(), lib_id: lib_id.into(), at, rot: 0, net: lib_id.rsplit(':').next().unwrap().into(), pin: String::new() };
+        let trace = |lib_id: &str, naming: &Naming| -> Vec<Vec<String>> {
+            let mut root = section();
+            root.power_symbols.push(flag(lib_id, p(0, 0)));
+            root.power_symbols.push(flag(lib_id, p(100, 0)));
+            let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("C1.1", p(0, 0)), ("C2.1", p(100, 0))]) }];
+            trace_nets_with(&mut screens, naming).into_iter().map(|n| n.pins).collect()
+        };
+        let apart = vec![vec!["C1.1".to_string()], vec!["C2.1".to_string()]];
+        assert_eq!(trace("complex_hierarchy_schlib:PWR_FLAG", &Naming::default()), apart, "a project library's PWR_FLAG");
+        let output = |_: &str| Some(false);
+        assert_eq!(trace("mylib:SOURCE", &Naming { global_power: Some(&output), ..Naming::default() }), apart, "a power-output symbol");
+        let input = |_: &str| Some(true);
+        assert_eq!(trace("mylib:PWR_FLAG", &Naming { global_power: Some(&input), ..Naming::default() }), vec![vec!["C1.1".to_string(), "C2.1".into()]], "a power-input pin joins by name");
     }
 
     #[test]
@@ -1018,7 +1108,7 @@ mod tests {
         let mut root = section();
         root.wires.push(wire("OLD_NAME", &[p(0, 0), p(1000, 0)]));
         let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R2.1", p(1000, 0))]) }];
-        let named = trace_nets_with(&mut screens, &Naming { wire_hints: false, pin_names: None, bus_members: None });
+        let named = trace_nets_with(&mut screens, &Naming { wire_hints: false, ..Naming::default() });
         assert_eq!(named.len(), 1);
         assert_eq!((named[0].name.as_str(), named[0].driven), ("Net-(R1-Pad1)", false));
         assert_eq!(root.wires[0].net, "Net-(R1-Pad1)");

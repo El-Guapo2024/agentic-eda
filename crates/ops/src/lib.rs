@@ -2656,7 +2656,9 @@ impl<'a> Board<'a> {
         let sch_groups_before = self.sch_group_universe();
         let patterns_before = self.tuning_universe();
         let edge_before = outline::snapshot(&self.design);
+        let shared_before = self.shared_screens_before();
         self.apply_cmd(cmd)?;
+        self.tidy_shared_screens(shared_before);
         self.tidy_groups(groups_before);
         self.tidy_sch_groups(sch_groups_before);
         self.tidy_tuning_patterns(patterns_before);

@@ -100,3 +100,20 @@ fn kicad_loads_the_labels_fields_and_writes_them_back() {
     assert_eq!(read_back(&kicads), want, "what KiCad kept of the labels' fields");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `parseSchField` on a global label knows its Sheet References by the canonical name without regard to case and by KiCad 6's "Intersheet References"
+/// (`qa/data/eeschema/NoConnectOnLineWithGlobalLabel.kicad_sch` writes it so): it is the label's mandatory field, not a field of its own -- read as one it
+/// would be written back beside the Sheet References, twice. On a local label the same name is a field like any other.
+#[test]
+fn a_kicad_6_global_labels_sheet_references_is_not_a_field_of_its_own() {
+    let (design, model) = drawn();
+    let text = export_kicad_sch(&design, &model, &META).expect("the sheet exports");
+    let legacy = text.replace("(property \"Intersheetrefs\"", "(property \"Intersheet References\"");
+    assert_ne!(legacy, text);
+    let want: Vec<Vec<LabelField>> = cases().into_iter().map(|(_, _, f)| f).collect();
+    assert_eq!(read_back(&legacy), want, "KiCad 6's name is the Sheet References");
+    assert_eq!(read_back(&text.replace("(property \"Intersheetrefs\"", "(property \"INTERSHEETREFS\"")), want, "the canonical name in any case");
+    // on a local label the name is the user's own
+    let local = text.replacen("(property \"Netclass\" \"Power\"", "(property \"Intersheet References\" \"Power\"", 1);
+    assert_eq!(read_back(&local)[0], vec![field("Intersheet References", "Power", true, true)]);
+}

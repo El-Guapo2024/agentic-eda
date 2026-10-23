@@ -492,7 +492,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             label_locked.push(is_locked(l));
             label_uuid.push(uuid_of(l));
             label_geometry.push((spin, look));
-            label_fields_read.push(crate::label_fields::read_label_fields(l));
+            label_fields_read.push(crate::label_fields::read_label_fields(l, tag == "global_label"));
         }
     }
 
@@ -735,6 +735,8 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
 
     let mut sheet_contents: BTreeMap<String, SchematicSection> = BTreeMap::new();
     let mut read_files: BTreeSet<String> = BTreeSet::new();
+    // each file's symbols by uuid: where they are and their unit, for the root's `(symbol_instances ..)`
+    let mut symbol_places: BTreeMap<String, BTreeMap<String, (Point, Option<u32>)>> = BTreeMap::new();
     let root_sheets: Vec<(String, std::path::PathBuf)> = design.schematic.as_ref().map(|s| s.sheets.iter().map(|sh| (sh.file.clone(), dir.to_path_buf())).collect()).unwrap_or_default();
     let mut queue: Vec<(String, std::path::PathBuf)> = root_sheets;
 
@@ -745,6 +747,7 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
         let child_path = resolve_dir.join(&file);
         let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
         let Ok((child_design, child_model, child_notes)) = import_kicad_sch_with(&child_text, opts) else { continue };
+        symbol_places.insert(file.clone(), symbol_places_of(&child_text));
         notes.unresolved_symbols += child_notes.unresolved_symbols;
         model.parts.extend(child_model.parts);
         model.symbols.extend(child_model.symbols);
@@ -792,9 +795,62 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
         }
     }
     notes.sheets_not_descended = still_not_descended;
+    legacy_symbol_instances(&text, &design, &mut sheet_contents, &symbol_places);
     design.sheet_contents = (!sheet_contents.is_empty()).then_some(sheet_contents);
 
     Ok((design, model, notes))
+}
+
+/// A file's symbols by their `(uuid ..)`: where each is (its library origin, as the reader keeps it) and its `(unit ..)`, `None` when the file gives none (KiCad 6
+/// keeps a shared screen's units in the root's `symbol_instances` only). Power symbols are not among them.
+fn symbol_places_of(text: &str) -> BTreeMap<String, (Point, Option<u32>)> {
+    let mut out = BTreeMap::new();
+    let Ok(tree) = sexpr::parse(text) else { return out };
+    let Some(root) = tree.as_list() else { return out };
+    for item in sexpr::find_all(root, "symbol") {
+        let (Some(uuid), Some(at)) = (uuid_of(item), sexpr::find(item, "at")) else { continue };
+        let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
+        let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).map(|u| u.max(1.0) as u32);
+        out.insert(uuid, (Point { x: crate::import::mm_to_um(x), y: crate::import::mm_to_um(y) }, unit));
+    }
+    out
+}
+
+/// The root's `(symbol_instances (path "/<sheet>/../<symbol>" (reference ..) (unit ..)) ..)` of a file older than the per-symbol `(instances ..)` (KiCad 6 and
+/// early 7: `SCH_IO_KICAD_SEXPR_PARSER::parseSchSymbolInstances`, which `SCH_SHEET_LIST::UpdateSymbolInstanceData` hands to each symbol): the reference each
+/// placement of a screen gives its symbols, as `SchematicSection::instance_overrides` under the sheet the path ends in. A symbol whose own `(instances ..)`
+/// already says it for that placement keeps that.
+fn legacy_symbol_instances(root_text: &str, design: &Design, sheet_contents: &mut BTreeMap<String, SchematicSection>, symbol_places: &BTreeMap<String, BTreeMap<String, (Point, Option<u32>)>>) {
+    let Ok(tree) = sexpr::parse(root_text) else { return };
+    let Some(root) = tree.as_list() else { return };
+    let Some(instances) = sexpr::find(root, "symbol_instances") else { return };
+    // sheet uuid -> the file it shows
+    let mut file_of: BTreeMap<String, String> = BTreeMap::new();
+    for sch in design.schematic.iter().chain(sheet_contents.values()) {
+        for sh in &sch.sheets {
+            file_of.insert(sh.id.clone(), sh.file.clone());
+        }
+    }
+    for path in sexpr::find_all(instances, "path") {
+        let Some(path_str) = sexpr::txt(path, 1) else { continue };
+        let parts: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
+        let [.., sheet, symbol] = parts.as_slice() else { continue };
+        let Some(reference) = sexpr::find(path, "reference").and_then(|r| sexpr::txt(r, 1)) else { continue };
+        let Some(file) = file_of.get(*sheet) else { continue };
+        let Some(&(at, own_unit)) = symbol_places.get(file).and_then(|m| m.get(*symbol)) else { continue };
+        let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).map(|u| u.max(1.0) as u32).or(own_unit).unwrap_or(1);
+        let Some(sec) = sheet_contents.get_mut(file) else { continue };
+        // a symbol the file gives no unit is drawn as the unit its instances say (`UpdateSymbolInstanceData` -> `SetUnit`)
+        if own_unit.is_none() && unit != 1 {
+            if let Some(sym) = sec.symbols.iter_mut().find(|s| s.at == at && s.unit == 1) {
+                sym.unit = unit;
+            }
+        }
+        if sec.instance_overrides.iter().any(|o| o.parent_sheet_instance_id == *sheet && o.at == at && o.unit == unit) {
+            continue;
+        }
+        sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at, parent_sheet_instance_id: sheet.to_string(), reference: reference.to_string(), unit });
+    }
 }
 
 pub(crate) fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
@@ -962,7 +1018,18 @@ fn parse_instance_overrides(item: &[Sexpr], at: Point) -> Vec<eda_model::ir::Sym
 }
 
 fn sheet_property_text(item: &[Sexpr], name: &str) -> Option<String> {
-    sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).map(String::from)
+    sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1).is_some_and(|n| is_sheet_field(n, name))).and_then(|p| sexpr::txt(p, 2)).map(String::from)
+}
+
+/// Whether a sheet's `(property "<n>" ..)` is its mandatory field `canonical` ("Sheetname" or "Sheetfile"): `SCH_IO_KICAD_SEXPR_PARSER::parseSchField` compares
+/// the canonical name without regard to case, and takes the names older files wrote ("Sheet name", "Sheet file", KiCad 6) for the same fields.
+pub(crate) fn is_sheet_field(n: &str, canonical: &str) -> bool {
+    let legacy = match canonical {
+        "Sheetname" => "Sheet name",
+        "Sheetfile" => "Sheet file",
+        _ => canonical,
+    };
+    n.eq_ignore_ascii_case(canonical) || n.eq_ignore_ascii_case(legacy)
 }
 
 /// A wire's, bus's, bus entry's or polyline's `(stroke (width w) (type t) (color ...))` (`SCH_IO_KICAD_SEXPR_PARSER::parseStroke`).
@@ -1694,6 +1761,14 @@ mod tests {
         assert_eq!(child.symbols.len(), 1);
         assert_eq!(child.symbols[0].id, "R1");
         assert!(model.parts.iter().any(|p| p.reference == "R1"), "child's own Part folded into the combined model");
+
+        // KiCad 6's names for the two fields ("Sheet name", "Sheet file": `parseSchField`'s legacy names, the QA corpus's `complex_hierarchy`) are the same fields
+        std::fs::write(dir.join("root.kicad_sch"), root_text.replace("\"Sheetname\"", "\"Sheet name\"").replace("\"Sheetfile\"", "\"Sheet file\"")).unwrap();
+        let (design, _, notes) = import_kicad_sch_tree(&dir.join("root.kicad_sch")).expect("tree import succeeds");
+        assert_eq!(notes.sheets_not_descended, 0);
+        let sheet = &design.schematic.as_ref().unwrap().sheets[0];
+        assert_eq!((sheet.name.as_str(), sheet.file.as_str()), ("child", "child.kicad_sch"));
+        assert_eq!(design.sheet_contents.as_ref().and_then(|c| c.get("child.kicad_sch")).map(|c| c.symbols.len()), Some(1));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

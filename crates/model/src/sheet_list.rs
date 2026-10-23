@@ -207,6 +207,25 @@ pub fn global_label_pages(design: &Design) -> std::collections::BTreeMap<String,
     out
 }
 
+/// `SCH_SCREENS::PruneOrphanedSymbolInstances`: drop every per-placement reference ([`crate::ir::SymbolPathOverride`]) whose placement no longer shows its
+/// screen -- a sheet symbol deleted, or its file changed -- so that a placement made later under the same id (an id is made from the sheet's file and
+/// place) does not take the references the old one had. Returns how many were dropped.
+pub fn prune_orphaned_overrides(design: &mut Design) -> usize {
+    let mut live: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    for e in walk(design).into_iter().skip(1) {
+        if let Some(last) = e.path.last() {
+            live.insert((e.file.clone(), last.clone()));
+        }
+    }
+    let mut dropped = 0;
+    for (file, sec) in design.sheet_contents.iter_mut().flat_map(|c| c.iter_mut()) {
+        let before = sec.instance_overrides.len();
+        sec.instance_overrides.retain(|o| live.contains(&(file.clone(), o.parent_sheet_instance_id.clone())));
+        dropped += before - sec.instance_overrides.len();
+    }
+    dropped
+}
+
 /// How many placements show each screen: a file two sheet symbols name is one screen shown twice (`SCH_SCREEN::GetRefCount`).
 pub fn placement_counts(design: &Design) -> std::collections::BTreeMap<String, usize> {
     let mut out = std::collections::BTreeMap::new();

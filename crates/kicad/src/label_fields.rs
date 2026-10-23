@@ -98,12 +98,14 @@ pub(crate) fn write_label_fields(out: &mut String, sch: &SchematicSection, l: &N
 }
 
 /// `parseSchText`'s `(property ..)`s of a label: its own fields, in order (`parseSchField`). A global label's Sheet References is not one of them: it is the label's
-/// mandatory field, shown as Schematic Setup says. A field's place is not kept (see the module doc).
-pub(crate) fn read_label_fields(item: &[Sexpr]) -> Vec<LabelField> {
+/// mandatory field, shown as Schematic Setup says -- `parseSchField` knows it by its canonical name without regard to case, or by the name KiCad 6 wrote
+/// ("Intersheet References"), and only on a global label (on another label a field of that name is a field like any other). A field's place is not kept (see
+/// the module doc).
+pub(crate) fn read_label_fields(item: &[Sexpr], global: bool) -> Vec<LabelField> {
     let mut out = Vec::new();
     for p in sexpr::find_all(item, "property") {
         let Some(name) = sexpr::txt(p, 1) else { continue };
-        if name.is_empty() || name == INTERSHEET_REFS_FIELD {
+        if name.is_empty() || (global && (name.eq_ignore_ascii_case(INTERSHEET_REFS_FIELD) || name.eq_ignore_ascii_case("Intersheet References"))) {
             continue;
         }
         // `GetCanonicalName`: "Net Class" is the net class field
