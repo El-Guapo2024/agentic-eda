@@ -126,6 +126,23 @@ fn a_pasted_sheet_is_a_copy_with_a_new_name_a_file_of_its_own_and_new_references
     assert_eq!(before.sheet_contents.as_ref().unwrap().len() + 2, b.design().sheet_contents.as_ref().unwrap().len());
 }
 
+/// A pasted sheet's pins keep their text's size, bold and italic (`SCH_SHEET_PIN` is an `EDA_TEXT`, copied whole with its sheet).
+#[test]
+fn a_pasted_sheet_s_pins_keep_their_text_look() {
+    let m = ConstraintModel::default();
+    let d = power_design();
+    let mut fragment = power_fragment(&d);
+    let pin_id = fragment.section.sheets[0].pins[0].id.clone();
+    assert!(!pin_id.is_empty());
+    let look = eda_model::sch_extras::LabelLook { size_um: 2_540, bold: true, ..Default::default() };
+    fragment.section.extras.sheet_pin_looks.insert(pin_id, look);
+    let mut b = Board::new(d, &m, 100, 300);
+    b.apply(&Cmd::PasteSch { fragment, dx: 60_000, dy: 0, mode: PasteMode::Unique }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let copy = sch.sheets.iter().find(|s| s.name == "Power1").unwrap();
+    assert_eq!(sch.extras.sheet_pin_looks.get(&copy.pins[0].id), Some(&look), "{:?}", sch.extras.sheet_pin_looks);
+}
+
 #[test]
 fn a_cut_and_paste_of_a_sheet_keeps_its_name_its_file_and_its_numbers() {
     let m = ConstraintModel::default();

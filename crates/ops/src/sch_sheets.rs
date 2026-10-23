@@ -478,11 +478,22 @@ impl<'a> Board<'a> {
         for sh in sheets {
             let name = unique_sheet_name(&names, &sh.name);
             names.insert(name.clone());
-            if self.share_pasted_sheet(sh, (dx, dy), &name, mode)? {
-                continue;
+            if !self.share_pasted_sheet(sh, (dx, dy), &name, mode)? {
+                let inc = Incoming { placement: sh.clone(), screens: &fragment.sheet_screens, lib_symbols: &fragment.lib_symbols };
+                self.add_sheet_tree(inc, (dx, dy), &name, None, &Numbering::Paste(mode))?;
             }
-            let inc = Incoming { placement: sh.clone(), screens: &fragment.sheet_screens, lib_symbols: &fragment.lib_symbols };
-            self.add_sheet_tree(inc, (dx, dy), &name, None, &Numbering::Paste(mode))?;
+            // the pins come with the sheet whole (`SCH_SHEET_PIN` is an `EDA_TEXT`): their text's size, bold and italic too
+            let looks: Vec<Option<eda_model::sch_extras::LabelLook>> = sh.pins.iter().map(|p| fragment.section.extras.sheet_pin_looks.get(&p.id).copied()).collect();
+            if looks.iter().any(Option::is_some) {
+                let sch = self.schematic_mut()?;
+                sch.assign_missing_ids();
+                let new_pins: Vec<String> = sch.sheets.iter().rev().find(|s| s.name == name).map(|s| s.pins.iter().map(|p| p.id.clone()).collect()).unwrap_or_default();
+                for (id, look) in new_pins.into_iter().zip(looks) {
+                    if let Some(look) = look {
+                        sch.extras.sheet_pin_looks.insert(id, look);
+                    }
+                }
+            }
         }
         Ok(())
     }
