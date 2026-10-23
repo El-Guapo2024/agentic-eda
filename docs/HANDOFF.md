@@ -39,6 +39,8 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | P25 fix (10-23) | Remove Unused Pads uses `BOARD::LayerDepth` as KiCad computes it. |
 | Reviews (10-23) | P19b and P26 reviewed function by function against KiCad 8303b2ad, with failing tests first: Specctra got 7 fixes (geometry in nm, arcs, custom pads, keepouts, messages), embedded files 12 (the board's font block, Collect's order, the panel's questions word for word). kicad-cli re-saves our `embedded_files` blocks character for character. |
 | P9b (10-23) | The DRC Rule Editor (`pcbnew/drc/rule_editor/`), over the `.kicad_dru`; `Cmd::EditDrcRule`. PARITY-pcb.md section 48 lists where it keeps rules KiCad's editor would lose. Left: Show Matches, Syntax help, auto-completion, drag and drop, units. |
+| P21 (10-23) | The SPICE simulator: kicad-cli's SPICE netlist, `ngspice -b` (`EDA_NGSPICE` or PATH), the Simulation window, Probe and Tune, the exports, the `.wbk` workbook. Reviewed against `eeschema/sim/`; the vectors equal ngspice run by hand on kicad-cli's netlist. Left: plotting while it runs (no libngspice), S-parameter port numbers, potentiometer tuning, IBIS currents. PARITY-sch.md section 38. |
+| Specctra via kicad-cli (10-23) | DSN export through `kicad-cli pcb export specctra` when kicad-cli has it; our exporter is the DEPRECATED fallback (the user's decision). |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
@@ -61,7 +63,7 @@ Gates for any of them:
 
 1. ~~**Finish Specctra**~~ merged 2026-10-23 (`9cd36d7`).
 2. ~~**Finish embedded files**, then merge `task-pad-details-wip`~~ both merged 2026-10-23.
-3. **The simulator** (P21; 32 rows of `ui-parity-missing.json`): `kicad-cli sch export netlist --format spice`, then ngspice (`ngspice -b`, or libngspice), parsed into a Simulation panel. ngspice is a separate program, not a crate. KiCad bundles libngspice; on the box, `sudo apt-get install ngspice`. Port the panels from `eeschema/sim/`.
+3. ~~**The simulator**~~ merged 2026-10-23. (P21; 32 rows of `ui-parity-missing.json`): `kicad-cli sch export netlist --format spice`, then ngspice (`ngspice -b`, or libngspice), parsed into a Simulation panel. ngspice is a separate program, not a crate. KiCad bundles libngspice; on the box, `sudo apt-get install ngspice`. Port the panels from `eeschema/sim/`.
 4. ~~**The graphical rule editor**~~ merged 2026-10-23. (P9b, `pcbnew.DRETool.drcRuleEditor`), after the simulator. Custom Rules is edited as text today.
 5. **Details** listed in `GAPS.md`:
    - the router: springback, rounded corners, virtual vias;
