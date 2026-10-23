@@ -444,6 +444,15 @@ fn write_project_with(work: &Path, stem: &str, design: &Design, model: &Constrai
             let _ = std::fs::remove_file(&prl);
         }
     }
+    // The simulator's workbook, under the name the project's `schematic.ngspice.workbook_filename` gives it (`SIMULATOR_FRAME_UI::InitWorkbook` reads it from there).
+    if let Some(sch) = design.schematic.as_ref() {
+        if let (Some(text), Some(ng)) = (sch.extras.sim_workbook.as_ref(), sch.extras.ngspice.as_ref()) {
+            let name = Path::new(&ng.workbook_filename);
+            if !ng.workbook_filename.is_empty() && name.is_relative() && name.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+                write_file(&work.join(name), text)?;
+            }
+        }
+    }
     let dru = work.join(format!("{stem}.kicad_dru"));
     match model.board.custom_rules_text.as_deref() {
         Some(text) => write_file(&dru, text)?,
@@ -1571,6 +1580,44 @@ pub fn export_sch(design: &Design, model: &ConstraintModel, work: &Path, root: &
     let (sch, _) = export_schematic(design, model, work, &stem)?;
     let out_dir = root.join("export").join("kicad").join(format!("sch-{kind}"));
     run_export(&cli, "sch", kind, args, &sch, &out_dir, SCH_DIR_KINDS.contains(&kind), sch_ext(kind), &stem, root)
+}
+
+/// kicad-cli's two netlists the simulator reads (`crates/sim`): `--format spice` (the circuit, `NETLIST_EXPORTER_SPICE` with
+/// `OPTION_SIM_COMMAND`) and `--format kicadxml` (the symbols' fields and the nets' pins), of `design`'s schematic, in `<work>/sim/`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SimNetlists {
+    pub spice: String,
+    pub xml: String,
+    /// What kicad-cli said making the SPICE netlist (the exporter's reporter: a symbol without a model, a library not found).
+    pub messages: Vec<String>,
+}
+
+pub fn sim_netlists(design: &Design, model: &ConstraintModel, work: &Path, name: &str) -> Result<SimNetlists, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let stem = file_stem(name);
+    let (sch, _) = export_schematic(design, model, work, &stem)?;
+    let dir = work.join("sim");
+    std::fs::create_dir_all(&dir).map_err(|e| fail("kicad_engine_dir", "sim", e.to_string()))?;
+    let mut messages = Vec::new();
+    let mut texts = Vec::new();
+    for (format, ext) in [("spice", "cir"), ("kicadxml", "xml")] {
+        let out = dir.join(format!("{stem}.{ext}"));
+        let _ = std::fs::remove_file(&out);
+        let mut cmd = cli_command(&cli, None);
+        cmd.args(["sch", "export", "netlist", "--format", format, "-o"]).arg(&out).arg(&sch);
+        let run = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+        let text = std::fs::read_to_string(&out).map_err(|_| {
+            fail("kicad_cli_export", "netlist", format!("kicad-cli sch export netlist --format {format} failed: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr)))
+        })?;
+        if format == "spice" {
+            let said = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+            messages.extend(said.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string));
+        }
+        texts.push(text);
+    }
+    let xml = texts.pop().unwrap_or_default();
+    let spice = texts.pop().unwrap_or_default();
+    Ok(SimNetlists { spice, xml, messages })
 }
 
 /// Puts a BOM preset and a BOM format preset (the JSON KiCad keeps in a project's `schematic.bom_presets` / `schematic.bom_fmt_presets`) into the derived

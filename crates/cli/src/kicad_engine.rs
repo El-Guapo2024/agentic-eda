@@ -131,6 +131,13 @@ fn project_name(dir: &Path) -> String {
     board::load(dir).ok().and_then(|(meta, _, _)| Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).map(str::to_string)).unwrap_or_else(|| "board".to_string())
 }
 
+/// kicad-cli's SPICE and XML netlists of the board's schematic, for the simulator (`crate::sim_api`), with the design they were made from.
+pub fn sim_netlists(dir: &Path) -> Result<(Design, eda_kicad_engine::SimNetlists), Vec<CheckResult>> {
+    let (design, model) = load_with_schematic(dir)?;
+    let n = eda_kicad_engine::sim_netlists(&design, &model, &work(dir), &project_name(dir))?;
+    Ok((design, n))
+}
+
 /// `kicad-cli pcb export <kind> [args...]`: `{ ok, engine, files }`.
 pub fn export(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
