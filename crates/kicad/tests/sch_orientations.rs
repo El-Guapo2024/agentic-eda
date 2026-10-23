@@ -54,7 +54,7 @@ fn model() -> ConstraintModel {
         body_um: None,
         edge: None,
     };
-    ConstraintModel { parts: vec![part("U1"), part("U2"), part("U3")], symbols: vec![gate()], ..Default::default() }
+    ConstraintModel { parts: ["U1", "U2", "U3", "U4", "U5", "U6"].map(part).to_vec(), symbols: vec![gate()], ..Default::default() }
 }
 
 fn design_with(sch: SchematicSection) -> Design {
@@ -73,16 +73,18 @@ fn design_with(sch: SchematicSection) -> Design {
     }
 }
 
-/// U1 unturned, U2 turned a quarter and U3 mirrored left-right, each pin with a wire out to a label `<REF>_<PIN>`.
+/// U1 unturned, U2 turned a quarter, U3 mirrored left-right, U4 mirrored top-bottom, U5 turned a quarter and mirrored left-right and U6 turned three quarters
+/// and mirrored top-bottom, each pin with a wire out to a label `<REF>_<PIN>` where the tracer (`eda_engine::placed`) has the pin -- which is where the
+/// editor and the painter draw it (`sch_move_tests::the_editor_s_pins_of_a_turned_symbol_are_the_writer_s_in_every_orientation`).
 fn sheet(m: &ConstraintModel) -> SchematicSection {
     let mut sch = SchematicSection::default();
-    for (i, (reference, rot, mirrored)) in [("U1", 0, false), ("U2", 90_000, false), ("U3", 0, true)].into_iter().enumerate() {
+    for (i, (reference, rot, mirrored, mirror_y)) in [("U1", 0, false, false), ("U2", 90_000, false, false), ("U3", 0, true, false), ("U4", 0, false, true), ("U5", 90_000, true, false), ("U6", 270_000, false, true)].into_iter().enumerate() {
         let sym = SymbolInstance {
             id: reference.into(),
             at: Point { x: 50_800 + 50_800 * i as i64, y: 76_200 },
             rot,
             mirrored,
-            mirror_y: false,
+            mirror_y,
             lib_id: "test:GATE".into(),
             unit: 1,
             value: "GATE".into(),
@@ -182,7 +184,7 @@ fn kicad_cli_connects_each_turned_symbol_to_the_wires_on_its_own_pins() {
     let run = Command::new(&cli).args(["sch", "export", "netlist", "--format", "kicadxml", "-o"]).arg(&out).arg(&path).output().expect("run kicad-cli");
     assert!(run.status.success() && out.exists(), "kicad-cli could not read the file: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
     let nets = xml_nets(&std::fs::read_to_string(&out).unwrap());
-    for reference in ["U1", "U2", "U3"] {
+    for reference in ["U1", "U2", "U3", "U4", "U5", "U6"] {
         for pin in ["1", "2", "3"] {
             let net = format!("{reference}_{pin}");
             assert_eq!(nets.get(&net).map(Vec::as_slice), Some(&[format!("{reference}.{pin}")][..]), "{net}: {nets:?}");

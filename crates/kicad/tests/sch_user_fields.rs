@@ -145,9 +145,9 @@ fn a_user_field_turns_with_its_symbol_in_the_file() {
     };
     let (dx, dy) = at(0);
     assert!((dx - 12.7).abs() < 1e-6 && (dy + 15.24).abs() < 1e-6);
-    // `bake`: a quarter takes (x, y) to (-y, x)
+    // KiCad's `TRANSFORM` for 90 degrees (counter-clockwise on the sheet): (x, y) goes to (y, -x)
     let (qx, qy) = at(90_000);
-    assert!((qx - 15.24).abs() < 1e-6 && (qy - 12.7).abs() < 1e-6, "{qx} {qy}");
+    assert!((qx + 15.24).abs() < 1e-6 && (qy + 12.7).abs() < 1e-6, "{qx} {qy}");
     let (hx, hy) = at(180_000);
     assert!((hx + 12.7).abs() < 1e-6 && (hy - 15.24).abs() < 1e-6, "{hx} {hy}");
 }

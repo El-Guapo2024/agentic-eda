@@ -259,11 +259,11 @@ fn a_user_field_goes_round_with_its_symbol() {
     let turned = run(start, rotate(&["R1"], true)).unwrap();
     let after = field_named(&turned, "MPN");
     assert!(after.vertical && !before.vertical, "the text turned with the symbol");
-    // the offset from the symbol's origin was turned a quarter, as the symbol's own points are (`bake`: rot 90 takes (x, y) to (-y, x))
+    // the offset from the symbol's origin was turned a quarter, as the symbol's own points are (KiCad's `TRANSFORM` for 90: (x, y) goes to (y, -x))
     let (dx, dy) = (before.at.0 - sym.x as f64, before.at.1 - sym.y as f64);
     let at = turned.symbols[0].at;
     assert_eq!(turned.symbols[0].rot, 90_000);
-    assert!(near(after.at, (at.x as f64 - dy, at.y as f64 + dx)), "{:?} from {:?}", after.at, (dx, dy));
+    assert!(near(after.at, (at.x as f64 + dy, at.y as f64 - dx)), "{:?} from {:?}", after.at, (dx, dy));
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------- edit

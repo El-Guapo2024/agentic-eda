@@ -451,8 +451,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let x = mm(ps.at.x);
         let y = mm(ps.at.y);
         let uuid = duid_for(&format!("pwr:{}", ps.id), &ps.id);
-        // KiCad turns counter-clockwise; the engine's `rot` runs the other way round
-        let angle = (360 - (ps.rot / 1000) as i64 % 360) % 360;
+        // `rot` is KiCad's angle (counter-clockwise on the sheet), as the reader reads it, the editor (`Matrix::of`) turns it and the painter draws it
+        let angle = (ps.rot / 1000) % 360;
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} {angle}) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
         writeln!(out, "\t\t(exclude_from_sim no) (in_bom no) (on_board no) (dnp no)").unwrap();
         if sch.extras.is_locked(&ps.id) {
@@ -1053,9 +1053,11 @@ fn baked_real_point(sym: &SymbolInstance, width_um: f64, x0: f64, y1: f64, p: ed
 /// turn adds its own angle (a symbol turned half a turn has every pin pointing
 /// the other way: a pin line that ran in from the left runs in from the right).
 fn baked_real_angle(sym: &SymbolInstance, angle_deg: f64) -> f64 {
-    let mirrored = if sym.mirrored { 180.0 - angle_deg } else { angle_deg };
-    // the instance's turn is clockwise on the sheet, which the library's y-up frame reads as the opposite sense
-    (mirrored - sym.rot as f64 / 1000.0).rem_euclid(360.0)
+    // KiCad's `TRANSFORM`: the turn (counter-clockwise on the sheet, so an angle of the library's y-up frame grows by it), then the left-right mirror
+    // (`angle -> 180 - angle`); a top-bottom mirror is folded into a half turn and a left-right one (`symgeom::kicad_turn`)
+    let (rot, mirrored) = eda_engine::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
+    let turned = angle_deg + rot as f64 / 1000.0;
+    (if mirrored { 180.0 - turned } else { turned }).rem_euclid(360.0)
 }
 
 /// [`write_symbol_graphic`]'s input, but with every point run through
@@ -1493,10 +1495,9 @@ fn local_stub_tip(port: &Port, lx: f64, ly: f64) -> (f64, f64) {
 /// `power_pin_not_driven` too) even though the wire in the file terminates
 /// at exactly the un-negated point -- KiCad is looking for it at `-y`.
 fn baked_local(sym: &SymbolInstance, width: f64, lx: f64, ly: f64) -> (f64, f64) {
-    let lx = if sym.mirrored { width - lx } else { lx };
-    let theta = (sym.rot as f64 / 1000.0) * std::f64::consts::PI / 180.0;
-    let rx = lx * theta.cos() - ly * theta.sin();
-    let ry = lx * theta.sin() + ly * theta.cos();
+    // the editor's and the painter's turn and mirror (KiCad's `TRANSFORM` about `at`): `eda_engine::symgeom::bake`
+    let (rot, mirrored) = eda_engine::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
+    let (rx, ry) = eda_engine::symgeom::bake(rot, mirrored, width, lx, ly);
     (rx / 1000.0, -ry / 1000.0)
 }
 

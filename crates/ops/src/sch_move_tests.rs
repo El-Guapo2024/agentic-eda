@@ -942,3 +942,36 @@ fn an_image_moves_by_its_centre_and_turns_about_its_own() {
     // the pixels and the scale stay
     assert_eq!(turned.extras.graphics[0].shape, s.extras.graphics[0].shape);
 }
+
+/// On a sheet this project drew (a symbol placed by the corner of its box), the editor's pins of a turned or mirrored symbol (`Scene::pins_of`: KiCad's
+/// `TRANSFORM` of the orientation) are where the writer bakes them and the tracer finds them (`eda_engine::placed::pin_points_in`), in every one of
+/// KiCad's orientations: what the user wires to is what kicad-cli connects.
+#[test]
+fn the_editor_s_pins_of_a_turned_symbol_are_the_writer_s_in_every_orientation() {
+    use eda_model::{Part, Pin, PinKind};
+    let part = |r: &str, n: usize| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("x".into()), package: None, footprint: None, symbol: None, datasheet: None, pins: (1..=n).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(), body_um: None, edge: None };
+    let mut m = ConstraintModel { parts: vec![part("R1", 2), part("U1", 6)], ..Default::default() };
+    m.parts[0].symbol = Some("Device:R".into());
+    let mut bad = Vec::new();
+    for (id, lib_id) in [("R1", "Device:R"), ("U1", "")] {
+        for rot in [0, 90_000, 180_000, 270_000] {
+            for (mirrored, mirror_y) in [(false, false), (true, false), (false, true)] {
+                let mut s = eda_model::ir::SchematicSection::default();
+                let mut x = sym(id, p(50_800, 50_800));
+                (x.lib_id, x.rot, x.mirrored, x.mirror_y) = (lib_id.into(), rot, mirrored, mirror_y);
+                s.symbols.push(x.clone());
+                let scene = Scene::new(&s, &m);
+                let mut editor = scene.pins_of(0);
+                editor.sort();
+                let pt = m.part(id).unwrap();
+                let resolved = m.real_symbol_of_instance(&s, &x, pt);
+                let mut writer = eda_engine::placed::pin_points_in(&s, &x, pt, resolved.as_ref());
+                writer.sort();
+                if editor != writer {
+                    bad.push(format!("{id} rot {rot} mirrored {mirrored} mirror_y {mirror_y}: editor {editor:?} writer {writer:?}"));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
