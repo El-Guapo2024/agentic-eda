@@ -95,6 +95,66 @@ export interface BoardRefImage {
 }
 
 /** `PCB_POINT`: a marker on the board (a cross with a ring), a snap anchor for the grid helper. `x`, `y` are its centre, `size` its extent in µm. */
+/**
+ * KiCad 10's grid item (`PCB_GRID_ITEM`, crates/model/src/grid_item.rs) as the state lists it: a sub-grid the cursor, the router and the placement tools snap to where it covers the
+ * board. `extent` is the half-extent (centre to edge) and `spacing` the pitch, µm; on a polar grid `[0]` of each is the radius and the radial pitch and `phi_extent` / `phi_spacing`
+ * the sweep and the angular pitch, degrees. `angle` is the orientation, degrees counter-clockwise on the screen.
+ */
+export interface BoardGridItem {
+  id: string;
+  kind: "cartesian" | "polar";
+  x: Um;
+  y: Um;
+  extent: [Um, Um];
+  spacing: [Um, Um];
+  angle: number;
+  phi_extent: number;
+  phi_spacing: number;
+  priority: number;
+  tick_interval: number;
+  affects: { cursor: boolean; routing: boolean; placement: boolean };
+  custom_properties?: [string, string][];
+}
+
+/** A grid item as `add_grid_item` / `edit_grid_item` take it (`eda_model::grid_item::GridItem`). */
+export interface CmdGridItem {
+  kind: "cartesian" | "polar";
+  at: PointXY;
+  extent: PointXY;
+  spacing: PointXY;
+  angle: number;
+  phi_extent_deg: number;
+  phi_spacing_deg: number;
+  priority: number;
+  tick_interval: number;
+  affects: { cursor: boolean; routing: boolean; placement: boolean };
+  custom_properties?: [string, string][];
+}
+
+/**
+ * KiCad 10's via stitching (`PCB_VIA_STITCH`, crates/model/src/via_stitch.rs) as the state lists it -- the model's own form, which `set_via_stitch` takes back. µm; an absent number
+ * is 0 (the pitch 0 is the default, twice the via and at least 2 mm), an absent layout or mode the first.
+ */
+export interface BoardViaStitch {
+  id: string;
+  layer?: string;
+  name?: string;
+  outline: PointXY[];
+  pitch_um?: number;
+  layout?: "plain" | "staggered" | "poisson";
+  mode?: "stitch" | "guard";
+  seed?: number;
+  origin_offset?: PointXY;
+  origin?: PointXY;
+  net?: string;
+  guarded_net?: string;
+  excluded_cells?: [number, number][];
+  excluded_positions?: PointXY[];
+  via?: { size_um: number; drill_um: number; from_layer: string; to_layer: string; text?: string };
+  member_ids?: string[];
+  custom_properties?: [string, string][];
+}
+
 export interface BoardPoint {
   id: string;
   layer: string;
@@ -192,7 +252,108 @@ export type PcbItemCmd =
    * dialog's choice), for all of `ids` as one undo step. The hatch lines are worked out when the board is described -- `pcbnew.Control.rehatchShapes` (`PCB_CONTROL::RehatchShapes`,
    * which KiCad posts after every commit, undo and file load) is that, so there is no verb for it. A fill left out changes nothing.
    */
-  | { verb: "set_shape_style"; ids: string[]; fill?: ShapeFill };
+  | { verb: "set_shape_style"; ids: string[]; fill?: ShapeFill; start_ending?: CmdLineEnding; end_ending?: CmdLineEnding }
+  /** Place Sub-grid's second click (`DRAWING_TOOL::PlaceSubGrid`) and Grid Item Properties' OK (`DIALOG_GRID_ITEM_PROPERTIES`). */
+  | { verb: "add_grid_item"; grid_item: CmdGridItem }
+  | { verb: "edit_grid_item"; id: string; grid_item: CmdGridItem }
+  | { verb: "delete_grid_item"; id: string }
+  /**
+   * A via stitching's settings and its vias made again (Via Stitching Properties' OK, the Properties panel, Exclude From Stitching, Clear Via Stitching Exclusions), or a new one
+   * (Draw Via Stitch Area: no `id`); the server places the vias from the zone fills when `vias` is left out. One undo step.
+   */
+  | { verb: "set_via_stitch"; id?: string; stitch: Omit<BoardViaStitch, "id"> & { id?: string }; vias?: { cell: [number, number]; at: PointXY }[] }
+  | { verb: "delete_via_stitch"; id: string }
+  /** KiCad 10's Place Drill Chart: a chart of the default template on a documentation layer, built from the board, its first corner at `at`. One undo step. */
+  | { verb: "place_drill_chart"; layer: string; at: PointXY }
+  /** The Properties panel's Units, Decimal Places and Show Totals of a drill chart (`id` is its table's): the chart rebuilt from the board. */
+  | { verb: "set_drill_chart"; id: string; units: TableUnits; precision: number; show_totals: boolean; filter: DrillChartFilter }
+  /** KiCad 10's Place Drill Map: a map on a documentation layer that has none. */
+  | { verb: "place_drill_map"; layer: string }
+  | { verb: "edit_drill_map"; id: string; map: BoardDrillMap }
+  | { verb: "delete_drill_map"; id: string };
+
+/** `GENERATED_TABLE_UNITS` (crates/model/src/drill_chart.rs). */
+export type TableUnits = "mm" | "inch" | "mils";
+
+/** `DRILL_CHART_FILTER`: which holes a chart reports on. */
+export interface DrillChartFilter {
+  plated: boolean;
+  non_plated: boolean;
+  vias: boolean;
+  slots: boolean;
+  backdrills: boolean;
+  castellated: boolean;
+}
+
+/** What makes a table of the board a KiCad 10 drill chart (`eda_model::drill_chart::DrillChart`), keyed by the table's id. */
+export interface BoardDrillChart {
+  table_id: string;
+  units?: TableUnits;
+  precision?: number;
+  columns: { id: string; heading: string; align: "left" | "center" | "right"; width_um?: number }[];
+  /** Table row -> the key of the hole group it reports. */
+  row_keys?: Record<string, string>;
+  filter?: DrillChartFilter;
+  show_totals?: boolean;
+  /** The table column the marks are drawn in, -1 for none. */
+  symbol_column?: number;
+  /** Table row -> the curated shape drawn in its symbol cell. */
+  row_shapes?: Record<string, number>;
+}
+
+/** `DRILL_SPAN`: the layers a drill runs between, start first. */
+export interface BoardDrillSpan {
+  start: string;
+  end: string;
+  backdrill?: boolean;
+  npth?: boolean;
+}
+
+/** KiCad 10's drill map (`eda_model::drill_chart::DrillMap`): the drill marks drawn at the holes on a documentation layer, slid by `offset`. */
+export interface BoardDrillMap {
+  id: string;
+  layer: string;
+  offset: PointXY;
+  size_um: number;
+  /** One span only; absent shows every span. */
+  span?: BoardDrillSpan | null;
+  outline_slots?: boolean;
+  guide_cross?: boolean;
+  custom_properties?: string[];
+}
+
+/** The board's drill symbol profile (`DRILL_SYMBOL_PROFILE`): the size and width of the marks are what the canvas reads. */
+export interface BoardDrillProfile {
+  size_um: number;
+  width_um: number;
+  mark_policy: string;
+  group_by: string[];
+  freeze_assignments: boolean;
+}
+
+/** One hole's mark as a map draws it (`DRILL_SYMBOL_ENTRY`, crates/ops/src/drill_chart.rs `DrillMark`). */
+export interface BoardDrillMark {
+  at: PointXY;
+  span: BoardDrillSpan;
+  mode: "shape" | "letter" | "size_text";
+  shape_index: number;
+  letter: string;
+  diameter_um: number;
+  size_um: [number, number];
+  orientation_deg: number;
+  is_slot: boolean;
+}
+
+/**
+ * One line ending as `set_shape_style` takes it (`eda_model::line_ending::LineEnding`): KiCad 10's `(start_shape ..)` / `(end_shape ..)` of a line, an arc or a curve -- the shape dialog's
+ * Start and End rows and the Properties panel's Start Shape, Start Length, Start Width and Start Stroke Width (and the End ones). A size of 0 is automatic; `none` takes the ending away.
+ */
+export interface CmdLineEnding {
+  style: "none" | "arrow" | "circle" | "square" | "arrow_open";
+  length_um?: number;
+  width_um?: number;
+  stroke_width_um?: number;
+}
 
 /** `FILL_T`: how a closed shape is filled (`UI_FILL_MODE`). */
 export type ShapeFill = "none" | "solid" | "hatch" | "reverse_hatch" | "cross_hatch";

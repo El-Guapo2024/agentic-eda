@@ -674,6 +674,7 @@ fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &st
             thermal_spoke_width_override: None,
             zone_connection: None,
             thermal_spoke_angle_mdeg: None,
+            kicad: Default::default(),
         })
         .collect();
 
@@ -895,6 +896,7 @@ fn build_inductor(defaults: &TextGraphicsDefaults, start: Point, end: Point, len
         thermal_spoke_width_override: None,
         zone_connection: None,
         thermal_spoke_angle_mdeg: None,
+        kicad: Default::default(),
     };
     built.footprint.pads = vec![round_pad("1", Point { x: 0, y: 0 }), round_pad("2", local(s))];
 

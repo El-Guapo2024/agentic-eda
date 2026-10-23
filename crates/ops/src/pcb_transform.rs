@@ -169,6 +169,11 @@ impl Board<'_> {
             out.dimensions.insert(id.to_string());
         } else if crate::pcb_items::has_board_item(dr, id) {
             out.board_items.insert(id.to_string());
+            // A via stitching is a group (`PCB_GENERATOR` is a `PCB_GROUP`): `PCB_GROUP::Move`, `Rotate` and `Flip` take its vias along.
+            if let Some(v) = dr.board_items.via_stitches.iter().find(|v| v.id == id) {
+                let on_board = |m: &String| self.design.routing.as_ref().is_some_and(|rt| rt.vias.iter().any(|x| &x.id == m));
+                out.vias.extend(v.member_ids.iter().filter(|m| on_board(m)).cloned());
+            }
         } else if dr.tables.iter().any(|t| t.id == id) {
             out.tables.insert(id.to_string());
         } else {

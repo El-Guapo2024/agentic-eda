@@ -1,6 +1,9 @@
 // The board items GAPS.md item 24 (package P16) added, as the canvas draws them: the text box today; reference images, points and hatch fills as their steps land. Called from
 // `paintBoard` (painter.ts) once for the board and once for the items in the hand, after the dimensions. Ports of `PCB_PAINTER::draw( const PCB_TEXTBOX* )` (pcbnew/pcb_painter.cpp at
 // KiCad 8303b2ad): the border in the layer's colour with its line style, the text in the stroke font wrapped to the box, and, for a knockout box, the box filled with the text cut out.
+import type { BoardGridItem } from "../../api/pcbItemTypes";
+import { sizeGridToCursor } from "../../kicad-port/gridItem";
+import { drawGridItemPreview } from "./gridItemPaint";
 import type { BoardState } from "../../api/types";
 import type { BoardBarcode, BoardRefImage, BoardTextBox } from "../../api/pcbItemTypes";
 import { barcodeShape, barcodeShapeKey, symbolCorners } from "../../kicad-port/barcodeShapes";
@@ -41,7 +44,9 @@ export type ToolPreview =
   | { kind: "rect"; from: [number, number]; layer: string }
   | { kind: "image"; img: HTMLImageElement; w: number; h: number; layer: string }
   /** The Draw Microwave Lines tool between its two clicks (`CENTRELINE_RECT_ITEM`): the line from `from` to the cursor, held by the angle snap, and the rectangle along it, `aspect` as wide as it is long. */
-  | { kind: "centreline_rect"; from: [number, number]; aspect: number };
+  | { kind: "centreline_rect"; from: [number, number]; aspect: number }
+  /** Place Sub-grid between its two clicks (`DRAWING_TOOL::PlaceSubGrid`): the grid centred on the first, sized and turned to the cursor, drawn as a selected grid. */
+  | { kind: "grid"; item: BoardGridItem };
 let toolPreview: ToolPreview | null = null;
 export function setToolPreview(p: ToolPreview | null): void {
   toolPreview = p;
@@ -170,6 +175,7 @@ export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
     ctx.stroke();
     ctx.restore();
   }
+  if (toolPreview?.kind === "grid" && cursor && !opts.movePreview) drawGridItemPreview(ctx, view, sizeGridToCursor(toolPreview.item, cursor));
   if (toolPreview?.kind === "rect" && cursor && !opts.movePreview) {
     ctx.save();
     ctx.strokeStyle = layerColor("selection");

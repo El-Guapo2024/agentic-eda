@@ -455,7 +455,7 @@ fn add_shape(dir: &Path, shape: Shape) -> String {
 }
 
 fn set_fill(dir: &Path, id: &str, fill: ShapeFill) {
-    step(dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.to_string()], fill: Some(fill) }), false, "test").unwrap();
+    step(dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.to_string()], fill: Some(fill), start_ending: None, end_ending: None }), false, "test").unwrap();
 }
 
 fn rect_shape(layer: &str, (x0, y0): (i64, i64), (x1, y1): (i64, i64)) -> Shape {
@@ -825,4 +825,95 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
     assert_eq!(read[0].0, "KEPT");
     assert_eq!((read[0].1, read[0].2, read[0].3, read[0].4), (BarcodeKind::Qr, EccLevel::Q, at, 8_000));
     assert_eq!((read[1].0.as_str(), read[1].1), ("KEPT-TOO", BarcodeKind::Code128));
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------- KiCad 10: line endings, grid items
+
+/// A line's endings are one undo step, described by the state (`start_ending`, `end_ending`) and written to the board after the stroke.
+#[test]
+fn a_lines_endings_are_one_undo_step_described_by_the_state_and_written_to_the_board() {
+    use eda_model::line_ending::{LineEnding, LineEndingStyle};
+    let dir = scratch("k10_endings");
+    setup(&dir);
+    let id = add_shape(&dir, bar("F.SilkS", 5_000, 10_000, 20_000));
+    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_um: 2_000, ..Default::default() };
+    step(&dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.clone()], fill: None, start_ending: Some(arrow), end_ending: Some(LineEnding::new(LineEndingStyle::ArrowOpen)) }), false, "test").unwrap();
+    let s = shape_json(&dir, &id);
+    assert_eq!(s["start_ending"], serde_json::json!({ "style": "arrow", "length": 2000, "width": 0, "stroke_width": 0 }));
+    assert_eq!(s["end_ending"]["style"], "arrow_open");
+    let pcb = std::fs::read_to_string(dir.join(".kicad").join(format!("{}.kicad_pcb", dir.file_name().unwrap().to_str().unwrap()))).unwrap_or_default();
+    if !pcb.is_empty() {
+        assert!(pcb.contains("(start_shape arrow (length 2)) (end_shape arrow_open)"), "{pcb}");
+    }
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert!(shape_json(&dir, &id).get("start_ending").is_none(), "the undo takes them away");
+}
+
+/// A grid item is one undo step of the board and the state lists it.
+#[test]
+fn a_grid_item_is_one_undo_step_and_the_state_lists_it() {
+    use eda_model::grid_item::GridItem;
+    let dir = scratch("k10_grid");
+    setup(&dir);
+    let g = GridItem { angle: 30.0, tick_interval: 5, ..GridItem::new(Point { x: 20_000, y: 15_000 }) };
+    step(&dir, Cmd::PcbItem(PcbItemCmd::AddGridItem { grid_item: g }), false, "test").unwrap();
+    let grids = state(&dir)["drawings"]["grid_items"].clone();
+    assert_eq!(grids.as_array().unwrap().len(), 1);
+    let j = &grids[0];
+    assert_eq!((j["kind"].as_str(), j["x"].as_i64(), j["extent"][0].as_i64(), j["angle"].as_f64(), j["tick_interval"].as_i64(), j["affects"]["cursor"].as_bool()), (Some("cartesian"), Some(20_000), Some(5_000), Some(30.0), Some(5), Some(true)));
+    assert!(j["id"].as_str().unwrap().starts_with("grd_"));
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!(state(&dir)["drawings"]["grid_items"].as_array().map_or(0, |a| a.len()), 0);
+}
+
+/// A command's drill-chart rebuild sees the board the command left (`OnModify`'s `RefreshGeneratedTables` after the commit): a new board's footprints are in its chart in
+/// the import's own step, not in the next command's.
+#[test]
+fn a_replaced_boards_drill_chart_lists_its_footprints_holes_in_the_same_step() {
+    let qa = std::path::PathBuf::from(std::env::var_os("KICAD10_QA_DATA").unwrap_or_else(|| "/home/team_braneboard_com/src/kicad-src-25ec2335/qa/data".into()));
+    let Ok(text) = std::fs::read_to_string(qa.join("pcbnew/api_kitchen_sink.kicad_pcb")) else {
+        eprintln!("skipped: needs KiCad 25ec2335's api_kitchen_sink.kicad_pcb (KICAD10_QA_DATA)");
+        return;
+    };
+    let dir = scratch("drill_chart_replace");
+    setup(&dir);
+    step(&dir, Cmd::ReplaceBoard { text, name: "api_kitchen_sink.kicad_pcb".into(), keep_kicad_layer_names: false, project: None }, false, "test").unwrap();
+    let dr = load(&dir).unwrap().1.drawings.unwrap();
+    let chart = dr.board_items.drill_charts.first().expect("the kitchen sink's chart");
+    let t = dr.tables.iter().find(|t| t.id == chart.table_id).unwrap();
+    let texts: Vec<&str> = t.cells.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(texts, ["SYM", "Drill (mm)", "", "0.30", "", "1.14", "", "1.52"], "the pads' rows, as kicad-cli's upgrade has them");
+}
+
+/// Fill All regenerates a via stitching its fill made dirty (`ZONE_FILLER_TOOL::regenerateDirtyGenerators`, `PCB_VIA_STITCH::OnZoneFillChanged`), then refills round the
+/// vias (`refillAroundGenerators`): `stitch_fp_rulearea`'s stitching emptied, a fill brings KiCad's 73 vias back. Slow tier (kicad-cli fills).
+#[test]
+fn fill_all_regenerates_a_via_stitching_over_the_new_fill() {
+    if !slow() {
+        return;
+    }
+    let qa = std::path::PathBuf::from(std::env::var_os("KICAD10_QA_DATA").unwrap_or_else(|| "/home/team_braneboard_com/src/kicad-src-25ec2335/qa/data".into()));
+    let Ok(text) = std::fs::read_to_string(qa.join("pcbnew/stitch_fp_rulearea.kicad_pcb")) else {
+        eprintln!("skipped: needs KiCad 25ec2335's stitch_fp_rulearea.kicad_pcb (KICAD10_QA_DATA)");
+        return;
+    };
+    if eda_kicad_engine::find_cli().is_none() {
+        eprintln!("skipped: needs kicad-cli");
+        return;
+    }
+    let dir = scratch("stitch_fill");
+    setup(&dir);
+    step(&dir, Cmd::ReplaceBoard { text, name: "stitch_fp_rulearea.kicad_pcb".into(), keep_kicad_layer_names: false, project: None }, false, "test").unwrap();
+    let design = load(&dir).unwrap().1;
+    let v = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
+    let kicad: std::collections::BTreeSet<(i64, i64)> = design.routing.as_ref().unwrap().vias.iter().filter(|x| v.member_ids.contains(&x.id)).map(|x| (x.at.x, x.at.y)).collect();
+    assert_eq!(kicad.len(), 73);
+    step(&dir, Cmd::PcbItem(PcbItemCmd::SetViaStitch { id: Some(v.id.clone()), stitch: v.clone(), vias: Some(Vec::new()) }), false, "test").unwrap();
+    assert!(load(&dir).unwrap().1.drawings.unwrap().board_items.via_stitches[0].member_ids.is_empty());
+    let done = crate::fill_api::refill(&dir, None);
+    assert_eq!(done["ok"], true, "{done}");
+    let after = load(&dir).unwrap().1;
+    let v = &after.drawings.as_ref().unwrap().board_items.via_stitches[0];
+    let ours: std::collections::BTreeSet<(i64, i64)> = after.routing.as_ref().unwrap().vias.iter().filter(|x| v.member_ids.contains(&x.id)).map(|x| (x.at.x, x.at.y)).collect();
+    assert_eq!(ours, kicad, "the fill put the stitching's vias back where KiCad's Update put them");
 }

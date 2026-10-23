@@ -195,8 +195,8 @@ What the round trip changed before, read from the two kicad-cli reports and the 
 
 What still differs in the files, with no finding of these boards to show for it: the coordinates are micrometres, so an inch board's tenths of one are rounded; a footprint's jumper pad groups, Datasheet and Description fields and `ki_*` fields, a pad's
 teardrop settings and a property's `unlocked` come back as text but are not in the model, and the link to the symbol (`path`) is not written, on purpose: the derived schematic's symbols have uuids of their own; a shape's line style (dashes, dots) and a zone
-outline's hatch pitch are not kept; nor are dimension details (text position mode, extension height); reference images and text boxes are written back as text, drawn by kicad-cli's plots and not by the canvas, with no editor (P16); KiCad 10's line ending
-shapes, grid items, via stitching and guarding, microvia stack generators, custom user properties and drill charts are not read (no board of the QA corpus or of the installed KiCad's templates has one; a top-level item of a kind nobody reads is carried as text).
+outline's hatch pitch are not kept; nor are dimension details (text position mode, extension height); reference images and text boxes are written back as text, drawn by kicad-cli's plots and not by the canvas, with no editor (P16); KiCad 10's microvia stack
+generators and custom user properties are not read (a top-level item of a kind nobody reads is carried as text); its line endings, grid items, via stitching and drill charts and maps are (PARITY-pcb.md section 50).
 The zone fills are KiCad's: the harness exports unfilled zones and `--refill-zones` fills them, the studio keeps the file's own beside `design.json`.
 """
 

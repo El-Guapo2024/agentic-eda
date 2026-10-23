@@ -468,7 +468,7 @@ pub(crate) fn block_items(clip: &eda_kicad::Clipboard) -> super::multichannel_co
     items.extend(clip.vias.iter().cloned().map(Item::Via));
     items.extend(clip.zones.iter().filter(|z| !z.teardrop).cloned().map(Item::Zone));
     for (i, s) in clip.shapes.iter().enumerate() {
-        items.push(Item::Shape(s.clone(), clip.shape_hatch.get(i).copied().flatten()));
+        items.push(Item::Shape(s.clone(), clip.shape_style.get(i).cloned().flatten()));
     }
     items.extend(clip.texts.iter().cloned().map(|t| Item::Text(t, None)));
     items.extend(clip.dimensions.iter().cloned().map(Item::Dimension));

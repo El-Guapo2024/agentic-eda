@@ -13,6 +13,9 @@ test("the mode is only live for a symbol with more than one unit, and starts on 
   assert.equal(synchronizePins(false, 4), false);
   assert.equal(defaultSyncMode(1), false);
   assert.equal(defaultSyncMode(3), true);
+  // `IsMultiUnit() && !UnitsLocked()`: units that are not interchangeable do not start synchronized, and are never synchronized
+  assert.equal(defaultSyncMode(3, true), false);
+  assert.equal(synchronizePins(true, 3, true), false);
 });
 
 test("changePinLength keeps the inner end and moves the connection point (SCH_PIN::ChangeLength)", () => {

@@ -9,7 +9,8 @@
       "resources/bitmaps_png/sources/light",
       "resources/bitmaps_png/sources/dark"
     ],
-    "note": "2 icon(s) not found under either theme dir (checked \"<name>.svg\" plus bitmaps_list.h overrides): go_down, go_up"
+    "note": "2 icon(s) not found under either theme dir (checked \"<name>.svg\" plus bitmaps_list.h overrides): go_down, go_up",
+    "kicad10Additions": "add_grid_item, add_via_stitch: from KiCad 25ec2335 (the commit of the box's kicad-cli), for the KiCad 10 items 8303b2ad predates"
   },
   "icons": {
     "reload": "reload.svg",
@@ -349,6 +350,8 @@
     "show_smt": "show_smt.svg",
     "show_other": "show_other.svg",
     "show_not_in_posfile": "show_not_in_posfile.svg",
-    "show_dnp": "show_dnp.svg"
+    "show_dnp": "show_dnp.svg",
+    "add_grid_item": "add_grid_item.svg",
+    "add_via_stitch": "add_via_stitch.svg"
   }
 }

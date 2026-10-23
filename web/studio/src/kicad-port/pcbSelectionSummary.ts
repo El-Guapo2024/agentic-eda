@@ -7,6 +7,7 @@
 //   pcbnew/tools/board_editor_control.cpp     getOverlappingZones, ZONE_PRIORITY_CONTEXT_MENU::update   raise / lower
 //
 // Pure: no store, no DOM. Unit-tested in pcbSelectionSummary.test.ts.
+import { hasExclusions } from "./viaStitch";
 import type { BoardState, Zone } from "../api/types";
 import { convertAvailability } from "./pcbConvert";
 import { emptyPcbSummary, type PcbSelectionSummary, type ShapeKind } from "./pcbContextMenu";
@@ -49,6 +50,7 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
   for (const id of ids) {
     const kind = itemKind(board, id);
     if (kind === null) continue;
+    if (kind === "via_stitch" && hasExclusions(board.drawings!.via_stitches!.find((v) => v.id === id)!)) s.stitchesWithExclusions = (s.stitchesWithExclusions ?? 0) + 1;
     onlyItem = id;
     s.total++;
     // A table cell is as locked as its table.

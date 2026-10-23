@@ -69,6 +69,11 @@ fn a_whole_symbol_with_graphics_reads_back_from_text_as_the_design_file_holds_it
         published: false,
         extends: None,
         fields: vec![],
+        units_locked: false,
+        power_local: false,
+        exclude_from_sim: false,
+        exclude_from_pos_files: false,
+        kicad: Default::default(),
     };
     // The design file is pretty-printed, so floats that are whole numbers carry a `.0`.
     let text = serde_json::to_string_pretty(&sym).unwrap();

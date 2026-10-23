@@ -183,12 +183,15 @@ pub struct FpShape {
     /// `(solder_mask_margin ..)` of a graphic on a copper layer that has a mask opening.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask_margin: Option<Um>,
+    /// KiCad 10's line endings of a line, an arc or a curve (`(start_shape ..)`, `(end_shape ..)`): see [`crate::line_ending`]. Additive.
+    #[serde(default, skip_serializing_if = "crate::line_ending::LineEndings::is_none")]
+    pub endings: crate::line_ending::LineEndings,
 }
 
 impl FpShape {
     /// A solid-stroked shape with nothing else about it.
     pub fn new(shape: Shape) -> Self {
-        FpShape { shape, style: LineStyle::Solid, hatch: None, radius: 0, layers: Vec::new(), mask_margin: None }
+        FpShape { shape, style: LineStyle::Solid, hatch: None, radius: 0, layers: Vec::new(), mask_margin: None, endings: Default::default() }
     }
 
     pub fn layer(&self) -> &str {
@@ -238,7 +241,7 @@ impl FpShape {
                 }
             }
         };
-        FpShape { shape, style: self.style, hatch: self.hatch, radius: if matches!(self.shape, Shape::Rect { .. }) && self.radius > 0 { 0 } else { self.radius }, layers: self.layers.iter().map(|l| layer_on_side(l, fp.side)).collect(), mask_margin: self.mask_margin }
+        FpShape { shape, style: self.style, hatch: self.hatch, radius: if matches!(self.shape, Shape::Rect { .. }) && self.radius > 0 { 0 } else { self.radius }, layers: self.layers.iter().map(|l| layer_on_side(l, fp.side)).collect(), mask_margin: self.mask_margin, endings: self.endings }
     }
 
     /// The box `(x0, y0, x1, y1)` the geometry spans in its own frame, grown by half the stroke width (`EDA_SHAPE::getBoundingBox`); an arc, a circle

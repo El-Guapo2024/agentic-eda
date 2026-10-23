@@ -308,6 +308,11 @@ export function computeItemAnchors(out: AnchorList, item: SnapItem, ref: Pt, fro
       if (!allowed(filter, "points")) break;
       if (ctx.visible(item)) out.add(item.at, ANCHOR.ORIGIN | SNAP, [item], PT.CENTER);
       break;
+    // KiCad 10's `case PCB_GRID_ITEM_T:` "Edit handles only": the centre, then the corners (or the polar arc's ends and middle).
+    case "grid":
+      out.add(item.centre, ANCHOR.ORIGIN | ANCHOR.CORNER | SNAP, [item], PT.CENTER);
+      for (const c of item.corners) out.add(c, ANCHOR.CORNER | SNAP, [item]);
+      break;
   }
 }
 

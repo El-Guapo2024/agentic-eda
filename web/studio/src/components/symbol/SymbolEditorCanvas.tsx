@@ -14,7 +14,7 @@
 // belongs here.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryFill, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
-import { useSymApi, useSymDispatch, useSymState, type SymToolId } from "../../state/symbolEditorStore";
+import { drawTarget, useSymApi, useSymDispatch, useSymState, type SymToolId } from "../../state/symbolEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
 import { paintSymbol, mmPointToUm, umPointToMm, toLibPin, IDENTITY, type SymShapeKind } from "./symbolPainter";
 import { resolvePin } from "../schematic/transform";
@@ -355,7 +355,8 @@ export function SymbolEditorCanvas() {
   const finishDraw = useCallback(() => {
     const draw = state.drawState;
     if (!draw) return;
-    const graphic = symbolGraphicFromDraw(draw.shapeKind, draw.pts, state.activeUnit, state.activeBodyStyle);
+    const target = drawTarget(state);
+    const graphic = symbolGraphicFromDraw(draw.shapeKind, draw.pts, target.unit, target.bodyStyle);
     if (graphic) void api.addGraphic(graphic);
     dispatch({ type: "SET_DRAW_STATE", draw: null });
   }, [state.drawState, state.activeUnit, state.activeBodyStyle, api, dispatch]);
@@ -366,7 +367,7 @@ export function SymbolEditorCanvas() {
    */
   const confirmPinPlacement = useCallback(
     async (pin: LibrarySymbolPin): Promise<boolean> => {
-      if (!sym || !synchronizePins(state.syncPins, sym.unit_count)) return true;
+      if (!sym || !synchronizePins(state.syncPins, sym.unit_count, !!sym.units_locked)) return true;
       const occupant = pinOccupying(pin, sym.pins);
       if (!occupant) return true;
       return askConfirm({
@@ -451,10 +452,12 @@ export function SymbolEditorCanvas() {
       if (pts.length >= (AUTO_FINISH[shapeKind] ?? Infinity)) {
         if (shapeKind === "textbox") {
           // `doDrawShape`: the box the two clicks made is shown to `DIALOG_TEXT_PROPERTIES`, which adds it on OK and drops it on Cancel
-          dispatch({ type: "SET_TEXT_BOX_DIALOG", dialog: { id: null, box: newTextBox(pts[0]!, pts[1]!, state.activeUnit, state.activeBodyStyle, state.lastTextBox) } });
+          const target = drawTarget(state);
+          dispatch({ type: "SET_TEXT_BOX_DIALOG", dialog: { id: null, box: newTextBox(pts[0]!, pts[1]!, target.unit, target.bodyStyle, state.lastTextBox) } });
           return;
         }
-        const graphic = symbolGraphicFromDraw(shapeKind, pts, state.activeUnit, state.activeBodyStyle);
+        const target = drawTarget(state);
+        const graphic = symbolGraphicFromDraw(shapeKind, pts, target.unit, target.bodyStyle);
         if (graphic) void api.addGraphic(graphic);
         dispatch({ type: "SET_DRAW_STATE", draw: null });
       } else {
@@ -466,7 +469,8 @@ export function SymbolEditorCanvas() {
     if (state.activeTool === "text") {
       // `TwoClickPlace` (SCH_TEXT_T): the first click asks for the text (DIALOG_TEXT_PROPERTIES), which then follows the cursor; the second click places it.
       if (state.pendingText) {
-        void api.addGraphic({ kind: "text", unit: state.activeUnit, body_style: state.activeBodyStyle, text: state.pendingText.text, at: umPointToMm(sx, sy), angle_deg: state.pendingText.angleDeg, size_mm: state.pendingText.sizeMm });
+        const target = drawTarget(state);
+        void api.addGraphic({ kind: "text", unit: target.unit, body_style: target.bodyStyle, text: state.pendingText.text, at: umPointToMm(sx, sy), angle_deg: state.pendingText.angleDeg, size_mm: state.pendingText.sizeMm });
         dispatch({ type: "SET_PENDING_TEXT", pending: null });
       } else {
         dispatch({ type: "SET_TEXT_DIALOG", at: [sx, sy] });
