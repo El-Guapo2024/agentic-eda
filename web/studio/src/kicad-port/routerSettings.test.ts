@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_ROUTER_SETTINGS, modeOptionEnabled, routerSettingsToWire, withTrackSnapping, type RouterSettings } from "./routerSettings";
+import { cornerModeMenuKey, DEFAULT_ROUTER_SETTINGS, modeOptionEnabled, nextCornerMode, routerSettingsToWire, withTrackSnapping, type CornerMode, type RouterSettings } from "./routerSettings";
 
 test("the defaults are ROUTING_SETTINGS' constructor", () => {
   // pns_routing_settings.cpp: m_routingMode = RM_Walkaround, m_optimizerEffort = OE_MEDIUM, m_removeLoops = true,
@@ -23,7 +23,7 @@ test("the defaults are ROUTING_SETTINGS' constructor", () => {
 });
 
 test("every setting goes to the backend under the name crates/cli/src/route_api.rs reads", () => {
-  const s: RouterSettings = { mode: "shove", optimizerEffort: "full", shoveVias: false, jumpOverObstacles: true, removeLoops: false, smartPads: false, allowDrcViolations: true, freeAngleMode: true, fixAllSegments: false, smoothDragged: false, optimizeEntireDragged: true, autoPosture: false };
+  const s: RouterSettings = { mode: "shove", optimizerEffort: "full", shoveVias: false, jumpOverObstacles: true, removeLoops: false, smartPads: false, allowDrcViolations: true, freeAngleMode: true, fixAllSegments: false, smoothDragged: false, optimizeEntireDragged: true, autoPosture: false, cornerMode: "rounded_90" };
   assert.deepEqual(routerSettingsToWire(s), {
     mode: "shove",
     optimizer_effort: "full",
@@ -37,6 +37,7 @@ test("every setting goes to the backend under the name crates/cli/src/route_api.
     smooth_dragged_segments: false,
     optimize_entire_dragged_track: true,
     auto_posture: false,
+    corner_mode: "rounded_90",
   });
   // The default settings are the backend's defaults, so a start request with nothing changed behaves as it always did.
   assert.deepEqual(routerSettingsToWire(DEFAULT_ROUTER_SETTINGS), {
@@ -52,7 +53,14 @@ test("every setting goes to the backend under the name crates/cli/src/route_api.
     smooth_dragged_segments: true,
     optimize_entire_dragged_track: false,
     auto_posture: true,
+    corner_mode: "mitered_45",
   });
+});
+
+test("Track Corner Mode: the next mode goes 45, arc 45, 90, arc 90 and round, and each is its check item of the menu", () => {
+  const order: CornerMode[] = ["mitered_45", "rounded_45", "mitered_90", "rounded_90"];
+  order.forEach((m, i) => assert.equal(nextCornerMode(m), order[(i + 1) % 4]));
+  assert.deepEqual(order.map(cornerModeMenuKey), ["45", "arc45", "90", "arc90"]);
 });
 
 test("onModeChange: free angle and DRC violations belong to Highlight collisions, shove vias and jump over obstacles to Shove", () => {

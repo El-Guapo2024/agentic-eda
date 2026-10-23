@@ -52,6 +52,8 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-router-details` | Next tasks 5, the router's three leftovers: springback, rounded corners, virtual vias (`crates/pns/PARITY.md` Stage 10) | All three done: springback (the line placer), rounded corners, virtual vias | Springback in the dragger and the pair placer; board text on copper is no router obstacle (`syncTextItem`, found by the corner-mode proof) |
+| `task-router-review` | Review of `task-router-details`'s three ports against KiCad (`crates/pns/PARITY.md` "Stage 10 review"); branch cut from it | Six divergences fixed: the tail is pushable (`LockJoint`), Backspace keeps the leg before, 90-degree box hulls, no virtual via at a T (KiCad's `n_seg`), `syncTextItem`, router_tool.cpp's static actions in the catalog | Springback in the dragger and the pair placer; a footprint's copper texts |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -67,7 +69,7 @@ Gates for any of them:
 3. ~~**The simulator**~~ merged 2026-10-23. (P21; 32 rows of `ui-parity-missing.json`): `kicad-cli sch export netlist --format spice`, then ngspice (`ngspice -b`, or libngspice), parsed into a Simulation panel. ngspice is a separate program, not a crate. KiCad bundles libngspice; on the box, `sudo apt-get install ngspice`. Port the panels from `eeschema/sim/`.
 4. ~~**The graphical rule editor**~~ merged 2026-10-23. (P9b, `pcbnew.DRETool.drcRuleEditor`), after the simulator. Custom Rules is edited as text today.
 5. **Details** listed in `GAPS.md`:
-   - the router: springback, rounded corners, virtual vias;
+   - the router: ~~springback, rounded corners, virtual vias~~ on `task-router-details` (springback for the line placer only);
    - the schematic: copying and pasting whole sheets, buses across sheets, a label's own fields;
    - KiCad 10 items the reader skips: line endings, grid items, via stitching, drill charts;
    - browser checks for the older areas (P20);

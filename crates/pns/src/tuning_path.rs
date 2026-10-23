@@ -193,7 +193,7 @@ fn lines_from_via(world: &Node, via_id: ItemId, visited: &HashSet<ItemId>) -> Ve
 /// The line `AssembleLine( seg )` gives the tuner: not through a locked segment, and it stops where the track width changes -- KiCad's call
 /// lets a line cross a width change and rewrites the whole of it at the start segment's width, which would change the tracks it does not tune.
 pub fn assemble_opts() -> AssembleOpts {
-    AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }
+    AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }
 }
 
 struct WalkResult {
@@ -473,7 +473,7 @@ mod tests {
         let mut w = Node::new();
         w.add(pad("S", p(0, 0)));
         let a = w.add(seg("S", 0, p(0, 0), p(10_000, 0)));
-        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000, 0), diameter: 600, drill: 300, source_via: Some("via".into()), locked: false }));
+        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000, 0), diameter: 600, drill: 300, source_via: Some("via".into()), locked: false, is_virtual: false }));
         w.add(seg("S", 1, p(10_000, 0), p(10_000, 8_000)));
         w.add(pad_on("S", p(10_000, 8_000), LayerRange::new(0, 1)));
         let path = assemble_tuning_path(&w, a).expect("a path");

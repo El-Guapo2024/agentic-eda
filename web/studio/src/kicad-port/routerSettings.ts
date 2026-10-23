@@ -7,6 +7,19 @@
 // `POST /api/route/{start,drag_start}` and `POST /api/route/settings`.
 import type { RouteMode } from "../api/types";
 
+/** `DIRECTION_45::CORNER_MODE` (`GetCornerMode()`, the Track Corner Mode actions): mitered or rounded (an arc), 45 or 90 degrees. */
+export type CornerMode = "mitered_45" | "rounded_45" | "mitered_90" | "rounded_90";
+
+/** `ROUTER_TOOL::handlePnSCornerModeChange` for `SwitchRoundingToNext`: 45, arc 45, 90, arc 90, and round again. */
+export function nextCornerMode(m: CornerMode): CornerMode {
+  return m === "mitered_45" ? "rounded_45" : m === "rounded_45" ? "mitered_90" : m === "mitered_90" ? "rounded_90" : "mitered_45";
+}
+
+/** The Track Corner Mode submenu's check items (`cornerMode45Cond` ...): "45", "arc45", "90", "arc90". */
+export function cornerModeMenuKey(m: CornerMode): "45" | "arc45" | "90" | "arc90" {
+  return m === "mitered_45" ? "45" : m === "rounded_45" ? "arc45" : m === "mitered_90" ? "90" : "arc90";
+}
+
 /** `PNS_OPTIMIZATION_EFFORT`: `OE_LOW`, `OE_MEDIUM`, `OE_FULL`. KiCad keeps it in the settings file (`tools.pns.effort`) and has no row for it in the dialog. */
 export type OptimizerEffort = "low" | "medium" | "full";
 
@@ -35,6 +48,8 @@ export interface RouterSettings {
   optimizeEntireDragged: boolean;
   /** `GetAutoPosture()` -- "Use mouse path to set track posture": the elbow of the head follows how the mouse has moved (`MOUSE_TRAIL_TRACER`). */
   autoPosture: boolean;
+  /** `GetCornerMode()`: not a row of the dialog but the Track Corner Mode actions (`pcbnew.InteractiveRouter.SwitchRounding*`). Left out, mitered 45. */
+  cornerMode?: CornerMode;
   /** `GetSnapToTracks()`: not a row of the dialog but the magnetic setting for tracks (`TOOL_BASE::checkSnap`) -- a route ends on the same-net track under the cursor. Set by the canvas ([`withTrackSnapping`]); left out, the router's own default (on). */
   snapToTracks?: boolean;
 }
@@ -71,6 +86,7 @@ export function routerSettingsToWire(s: RouterSettings): Record<string, string |
     smooth_dragged_segments: s.smoothDragged,
     optimize_entire_dragged_track: s.optimizeEntireDragged,
     auto_posture: s.autoPosture,
+    corner_mode: s.cornerMode ?? "mitered_45",
   };
 }
 

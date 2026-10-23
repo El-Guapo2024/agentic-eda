@@ -93,7 +93,7 @@ fn commit_into_node(node: &Node, layers: &eda_pns::layer::LayerMap, commit: &Rou
         w.add_line(&line, None, false);
     }
     for v in &commit.vias {
-        w.add(Item::Via(eda_pns::item::Via { net: eda_pns::item::net_of(&v.net), layers: layers.range_of(&v.from_layer, &v.to_layer), pos: v.at, diameter: v.diameter, drill: v.drill, source_via: None, locked: false }));
+        w.add(Item::Via(eda_pns::item::Via { net: eda_pns::item::net_of(&v.net), layers: layers.range_of(&v.from_layer, &v.to_layer), pos: v.at, diameter: v.diameter, drill: v.drill, source_via: None, locked: false, is_virtual: false }));
     }
     w
 }

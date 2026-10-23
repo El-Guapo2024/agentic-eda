@@ -1394,7 +1394,7 @@ export function Canvas() {
     // above). Re-requests the preview at the last known cursor position so
     // the flip is visible immediately rather than waiting for the next
     // mouse pixel to move.
-    if (e.key === "/" && state.drawState?.kind === "route" && state.cursorUm) {
+    if (e.key === "/" && !(e.ctrlKey || e.metaKey) && state.drawState?.kind === "route" && state.cursorUm) {
       e.preventDefault();
       const draw = state.drawState;
       const token = routeMoveGuardRef.current.next();
@@ -1402,6 +1402,27 @@ export function Canvas() {
         if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
         dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) });
       });
+    }
+    // The Track Corner Mode hotkeys (router_tool.cpp's `ACT_SwitchCornerMode*`, static TOOL_ACTIONs of the router tool): Ctrl+/ the next
+    // mode, Ctrl+W 45, Ctrl+Shift+W arc 45, Ctrl+Alt+W 90, Alt+W arc 90 -- in the router tool only (`AS_CONTEXT`), the pair router's too.
+    // Matched here by the physical key so that a layout's Alt+W character does not hide it. (A browser keeps Ctrl+W for itself; the
+    // menu has the same five.)
+    if (state.activeTool === "route" || state.activeTool === "diffpair" || state.drawState?.kind === "route" || state.drawState?.kind === "diffpair") {
+      const ctrl = e.ctrlKey || e.metaKey;
+      const w = e.code === "KeyW";
+      const action =
+        ctrl && (e.key === "/" || e.code === "Slash") ? "pcbnew.InteractiveRouter.SwitchRoundingToNext"
+        : ctrl && e.altKey && w ? "pcbnew.InteractiveRouter.SwitchRounding90"
+        : ctrl && e.shiftKey && w ? "pcbnew.InteractiveRouter.SwitchRoundingArc45"
+        : ctrl && w ? "pcbnew.InteractiveRouter.SwitchRounding45"
+        : e.altKey && w ? "pcbnew.InteractiveRouter.SwitchRoundingArc90"
+        : null;
+      if (action) {
+        e.preventDefault();
+        e.stopPropagation();
+        void run(action);
+        return;
+      }
     }
     // Same `/` posture flip, for the diff-pair tool's own spine posture.
     if (e.key === "/" && state.drawState?.kind === "diffpair" && state.cursorUm) {

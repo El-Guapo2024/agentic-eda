@@ -83,3 +83,28 @@ test("buildSymbolIndex resolves by qualified symbol and bare func name", () => {
   assert.equal(index.resolve("zoomIn"), "common.Control.zoomIn");
   assert.equal(index.resolve("nonsense"), null);
 });
+
+test("parseActionsFromFile: router_tool.cpp's file-local `static const TOOL_ACTION`s are actions too", () => {
+  const src = `static const TOOL_ACTION ACT_SwitchCornerModeArc45( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveRouter.SwitchRoundingArc45" )
+        .Scope( AS_CONTEXT )
+        .DefaultHotkey( MD_CTRL + MD_SHIFT + 'W' )
+        .FriendlyName( _( "Track Corner Mode Arc 45" ) )
+        .Tooltip( _( "Switch to arc 45° corner when routing tracks." ) ) );
+
+TOOL_ACTION PCB_ACTIONS::routeSingleTrack( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveRouter.SingleTrack" )
+        .FriendlyName( _( "Route Single Track" ) ) );
+`;
+  const [a, b] = parseActionsFromFile(src);
+  assert.equal(a.name, "pcbnew.InteractiveRouter.SwitchRoundingArc45");
+  assert.equal(a.symbol, "ACT_SwitchCornerModeArc45");
+  assert.equal(a.hotkey, "Ctrl+Shift+W");
+  assert.equal(a.label, "Track Corner Mode Arc 45");
+  assert.equal(b.symbol, "PCB_ACTIONS::routeSingleTrack");
+});
+
+test("parseActionsFromFile: a local TOOL_ACTION variable (hotkey_store.cpp's common.Control.Fake) is not an action", () => {
+  const src = `    TOOL_ACTION commonAction( TOOL_ACTION_ARGS().Name( "common.Control.Fake" ).Scope( AS_GLOBAL ) );\n`;
+  assert.deepEqual(parseActionsFromFile(src), []);
+});
