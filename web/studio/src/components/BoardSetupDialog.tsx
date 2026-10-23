@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
+import { predefinedSizesCmds } from "../kicad-port/boardSetupRules";
 import type { DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Um } from "../api/types";
 import { BoardLayersPage } from "./boardSetup/BoardLayersPage";
 import { ConstraintsPage } from "./boardSetup/ConstraintsPage";
@@ -209,9 +210,9 @@ export function BoardSetupDialog() {
 
   if (!open) return null;
 
+  // One Apply, one undo step (kicad-port/boardSetupRules.ts `predefinedSizesCmds`).
   const applyTrackVia = async () => {
-    await api.cmd({ op: "set_track_width_presets", widths });
-    await api.cmd({ op: "set_via_presets", presets: vias });
+    for (const c of predefinedSizesCmds(widths, vias)) await api.cmd(c);
   };
 
   const setTdField = <K extends keyof TeardropSettings>(key: K, value: TeardropSettings[K]) => setTd((s) => ({ ...s, [key]: value }));

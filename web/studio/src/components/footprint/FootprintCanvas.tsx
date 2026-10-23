@@ -631,7 +631,10 @@ export function FootprintCanvas() {
       }
       return;
     }
-    if ((e.key === "Delete" || e.key === "Backspace") && state.selection.size > 0 && state.activeTool === "select") {
+    // Delete is the registered `common.Interactive.delete` (actions/editorFrameActions.ts), which the window-level hotkey runs; the canvas keeps Backspace, which
+    // the hotkey table binds on a Mac only (`macHotkey`), so off a Mac it would otherwise do nothing.
+    const macDelete = /Mac/.test(navigator.platform);
+    if (e.key === "Backspace" && !macDelete && state.selection.size > 0 && state.activeTool === "select") {
       for (const id of state.selection) {
         if (api.padById(id)) void api.deletePad(id);
         else if (api.graphicById(id)) void api.deleteGraphic(id);
@@ -642,13 +645,7 @@ export function FootprintCanvas() {
     }
     // R / Shift+R (rotate the selected pads) is the registered action `pcbnew.InteractiveEdit.rotateCcw` / `rotateCw` (actions/editorFrameActions.ts), which
     // the window-level hotkey runs -- and the top toolbar's Rotate buttons too -- so this canvas no longer handles the key itself (it would rotate twice).
-    // `pcbnew.InteractiveEdit.properties` ("E"), same hotkey the PCB tab's
-    // own `useActionRunner.ts` binds -- single-pad only, same as that
-    // action's own single-item scope there.
-    if ((e.key === "e" || e.key === "E") && state.activeTool === "select" && state.selection.size === 1) {
-      const [only] = state.selection;
-      if (only && api.padById(only)) dispatch({ type: "SET_PAD_PROPERTIES_ID", id: only });
-    }
+    // E is the registered `pcbnew.InteractiveEdit.properties` (actions/editorFrameActions.ts: `EDIT_TOOL::Properties`), which the window-level hotkey runs.
   };
 
   const onContextMenu = (e: React.MouseEvent) => {

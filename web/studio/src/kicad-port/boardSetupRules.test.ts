@@ -23,6 +23,7 @@ import {
   isThicknessEditable,
   mmText,
   netClassSettingsOf,
+  predefinedSizesCmds,
   netsMatching,
   newStackupSettings,
   proposePattern,
@@ -365,4 +366,16 @@ test("a check has the table's severity, else KiCad's default", () => {
   assert.deepEqual(severitiesToSend(items, { silk_overlap: "warning" }, { silk_overlap: "ignore" }), { silk_overlap: "warning" });
   // A check nobody touched and the table does not name is left out.
   assert.deepEqual(severitiesToSend(items, { clearance: "error" }, {}), {});
+});
+
+test("predefinedSizesCmds: Pre-defined Sizes' Apply is the track widths and the via sizes in one command, so one Undo takes the page back", () => {
+  const cmds = predefinedSizesCmds([250, 350], [{ diameter: 900, drill: 450 }]);
+  assert.equal(cmds.length, 1);
+  assert.deepEqual(cmds[0], {
+    op: "batch",
+    cmds: [
+      { op: "set_track_width_presets", widths: [250, 350] },
+      { op: "set_via_presets", presets: [{ diameter: 900, drill: 450 }] },
+    ],
+  });
 });

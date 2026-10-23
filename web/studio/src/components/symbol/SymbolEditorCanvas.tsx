@@ -607,22 +607,15 @@ export function SymbolEditorCanvas() {
       dispatch({ type: "ESCAPE" });
       return;
     }
-    if ((e.key === "Delete" || e.key === "Backspace") && state.selection.size > 0 && state.activeTool === "select") {
+    // Delete, R / Shift+R and E are the registered `common.Interactive.delete`, `eeschema.InteractiveEdit.rotateCCW` / `rotateCW` and
+    // `eeschema.InteractiveEdit.properties` (actions/editorFrameActions.ts), which the window-level hotkey runs. The canvas keeps Backspace, which the hotkey
+    // table binds on a Mac only (`macHotkey`).
+    if (e.key === "Backspace" && !/Mac/.test(navigator.platform) && state.selection.size > 0 && state.activeTool === "select") {
       for (const id of state.selection) {
         if (api.pinById(id)) void api.deletePin(id);
         else if (api.graphicById(id)) void api.deleteGraphic(id);
       }
       dispatch({ type: "CLEAR_SELECTION" });
-      return;
-    }
-    if ((e.key === "r" || e.key === "R") && state.activeTool === "select" && state.selection.size > 0) {
-      rotatePinSelection(!e.shiftKey);
-      return;
-    }
-    if ((e.key === "e" || e.key === "E") && state.activeTool === "select" && state.selection.size === 1) {
-      const [only] = state.selection;
-      if (only && api.pinById(only)) dispatch({ type: "SET_PIN_PROPERTIES_ID", id: only });
-      else if (only) openGraphicProperties(only);
     }
   };
 
