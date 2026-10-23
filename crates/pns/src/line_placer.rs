@@ -39,8 +39,9 @@
 //!
 //! **Springback** (`SHOVE`'s `m_nodeStack`, [`crate::springback`]): in Shove mode every `Move` starts its shove from the newest frame the
 //! head still presses on (`reduceSpringback`) and pushes the world it leaves (`pushSpringback`), so a pushed track stays pushed, is pushed
-//! on from where it was left, and springs back as the head draws back. A click pushes a locked frame with the fixed run in it (locked:
-//! the commit is built from the runs, so a later shove may not move them -- KiCad's tail can be pushed), Backspace rewinds the stack to
+//! on from where it was left, and springs back as the head draws back. A click pushes a locked frame with the fixed run in it (a track of
+//! that world, which a later leg's shove may push, as KiCad's: the preview and the commit draw it as the newest frame has it,
+//! [`LinePlacer::placed_runs`]), Backspace rewinds the stack to
 //! the frame the undone run was fixed in, and what the commit replaces is what the newest frame has moved against the session's world
 //! ([`LinePlacer::displaced_tracks`]). The `Node` passed to `preview()`/`fix()` is that world, and must be the same for the whole session: the
 //! frames are diffs against it. In the other modes the head is resolved in the world the last click left (`m_currentNode` is

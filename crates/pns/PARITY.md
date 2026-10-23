@@ -747,9 +747,7 @@ a locked track (refused, Drag Anyway, walked round), `V` shoving the track under
    preview reports the same (`Preview::displaced_lines` is the frame's, not only this move's). **Differences:** a frame is a diff against the
    session's world (the IR tracks and vias it moved, by id, and the fixed runs), not a `NODE` -- a `Node` is a full clone here (decision 1) and a
    route pushes a frame per mouse move; the frame's world is made from it when a shove starts there, and `reduceSpringback`'s `CheckColliding`
-   asks the session's world without what the frame moved plus a small node of what it moved to. The fixed runs are **locked** in the frame (KiCad
-   adds them as ordinary segments, so a later shove may push the route's own tail, and `CommitPlacement` commits the node; the commit here is
-   built from the runs, which a shove cannot reach). When the stage's `commit` node is not a frame (no shove had succeeded before the click),
+   asks the session's world without what the frame moved plus a small node of what it moved to. The fixed runs were **locked** in the frame (until the review below: now they are tracks a later shove may push, as KiCad's). When the stage's `commit` node is not a frame (no shove had succeeded before the click),
    KiCad's `RewindSpringbackTo` finds nothing and keeps the undone run's locked frame; here it is erased. `SetSpringbackDoNotTouchNode` has no
    counterpart (the end item is picked from the session's world, never a frame). Not ported here: the dragger's and the pair placer's use of the
    stack (`DRAGGER::dragShove`, `DIFF_PAIR_PLACER::tryShove`: they still shove from the world their gesture or last fix started from).
@@ -794,8 +792,8 @@ a locked track (refused, Drag Anyway, walked round), `V` shoving the track under
 3. **Virtual vias** (`pns_node.cpp`: `NODE::FixupVirtualVias`, run by `ROUTER::SyncWorld`; `pns_via.h`: `VVIA`; `pns_item.h`: `m_isVirtual`;
    `pns_node.cpp:148, :273`: virtual items never collide; `pns_joint.h`: `NextSegment` with `aAllowLockedSegs`; `pns_dragger.cpp`: `checkVirtualVia`,
    `DRAGGER::Start`; `router_preview_item.cpp` and `pns_router.cpp::CommitRouting`: a virtual item is neither drawn nor committed). **What KiCad means
-   by it:** a via the router itself puts in its world at every joint on one layer with no pad and no via where three or more segments meet, where the
-   track width changes, or where a locked segment ends (and at that segment's other end), so that the point is a joint with a via in it. It has no hole,
+   by it:** a via the router itself puts in its world at every joint on one layer with no pad and no via where the track width changes or
+   where a locked segment ends (not where three segments meet: the review below) (and at that segment's other end), so that the point is a joint with a via in it. It has no hole,
    collides with nothing, is not drawn and not committed. **What the person sees:** `D` on a segment within half its width of such an end drags that
    point as a via (`DM_VIA`): every track meeting there follows, in each mode, and no via appears or is committed -- before, the drag took the corner of
    one line and tore it off the others. And a line ends at such a joint (`NextSegment` stops at a via, unless locked segments are followed). Ported:
@@ -810,6 +808,66 @@ a locked track (refused, Drag Anyway, walked round), `V` shoving the track under
    `EDA_SLOW_TESTS=1`): six of `pic_programmer`'s 27 junctions dragged 0.3 mm in Shove, Walk around and Highlight collisions add no copper violation
    and no dangling track; the browser check's virtual via scenario. All of `tests/qa_regressions.rs` replays agree as before with the virtual vias in the
    world.
+
+## Stage 10 review -- the three ports held to KiCad's code (branch `task-router-review`, 2026-10-23)
+
+An adversarial review, function by function against KiCad 8303b2ad (not against the doc comments above), of springback, the four corner
+modes and virtual vias. Each divergence found has a failing test that the fix makes pass.
+
+**Fixed.**
+1. *The route's own tail could not be pushed* (decision 2 of Stage 10). `FixRoute` adds the fixed segments to `m_lastNode` as ordinary
+   tracks, so in KiCad a later leg's head that pushes another net's track into the route's tail pushes the tail on. The port locked the
+   runs: in `a_later_leg_pushes_the_routes_own_tail_as_kicads_shove_does` (three legs, then a fourth pushing GND's track into the first leg)
+   the head stopped 150 um short of the cursor. Now a run is a track of the frame's world with a tag of its own (`springback::run_tag`); what a
+   shove made of it is in the frame's `World::tracks` under the tag and the preview and the commit draw the runs from there
+   (`World::placed_runs`, `LinePlacer::placed_runs`). Its ends are locked joints: `NODE::LockJoint` / `JOINT::m_locked` and `AssembleLine`'s
+   `aStopAtLockedJoints` are ported (`Joint::locked`, `Node::lock_joint`, `AssembleOpts::stop_at_locked_joints`, set by the shove's own
+   `assemble`); `SHOVE::Run` locks each head's start and end, and the frames inherit the locks, so every leg's start stays one. Left: the
+   vias the clicks place stay locked (KiCad's are ordinary vias, a shove could push one not at the head's start; the commit here puts a via
+   where two runs on different layers meet).
+2. *Backspace after a leg none of whose shoves succeeded.* That stage's `commit` is the locked frame of the click before (`Run` fell back to
+   its parent), and `RewindSpringbackTo` erases it too: the earlier leg leaves the world while it is still fixed, and `CommitPlacement`
+   (`RewindToLastLockedNode`) then commits a frame without it. A bug of KiCad's; here the locked frame stays (`Springback::rewind_to`,
+   `backspace_after_a_leg_whose_shoves_all_failed_keeps_the_leg_before`).
+3. *The 90-degree modes walked round octagons.* `WALKAROUND::processCluster` and `NODE::NearestObstacle` read the corner mode themselves and,
+   in `MITERED_90` / `ROUNDED_90`, use the bounding box of every hull (`cachedHull.BBox()`, `simplifyHull`). Ported (`Walker::corner_mode`,
+   `QueryOpts::box_hull`, `hull::bbox_hull`), set by the head's walks, the shove (nearest obstacle and walk), the dragger's walk and the
+   pair's walk: a walk in a 90-degree mode goes round a pad in axis legs (`a_walk_in_a_90_degree_mode_goes_round_the_box_of_the_hull`).
+4. *A virtual via at every T.* `FixupVirtualVias` tests `n_seg >= 3`, but its loop never counts a segment into `n_seg`: KiCad's world has a
+   virtual via only where the width changes and at the ends of a locked segment. The port counted them, so `D` at a T of one width took hold
+   of a via KiCad does not have (KiCad drags the corner of the one line). Fixed; the units, the kicad-cli proof (now 18 width-change
+   junctions on `pic_programmer`, six dragged) and the browser check use width changes. `checkVirtualVia` compares the distance as a double.
+5. *Copper board text was no obstacle* (`syncTextItem`, the leftover the corner-mode proof found): ported in `from_ir::add_copper_texts` --
+   a solid of no net on the text's layer, not routable (`Solid::routable`, `ITEM::IsRoutable`), the text's bounding hull
+   (`TransformShapeToPolygon`: `buildBoundingHull` of the glyphs with the pen and `GetMaxError()`, 5 um), for the imported copper texts and a
+   plain `Text` on copper. The kicad-cli proofs no longer leave the "PCB text" violations out (the corner-mode one had four; none now). Not
+   here: a footprint's copper texts, tables, a knockout's margin.
+6. *The Track Corner Mode actions were not in the action catalog*: the extractor read `TOOL_ACTION X::y( .. )` only; router_tool.cpp's
+   `static const TOOL_ACTION ACT_..` (13 of them) are read now. With their hotkeys in the catalog the global listener would have fired them
+   anywhere, so the five are registered only while the router tool is active (`AS_CONTEXT`).
+
+**Checked, no divergence.** `reduceSpringback` (pop while unlocked and not colliding, never the last; the head set is the head before the
+shove with its via), `pushSpringback`'s area merge, a failed shove leaving `m_currentNode = parent` with the stack already reduced, the
+stage's `commit` (the newest frame when the click came) and `RewindSpringbackTo`'s erase from it, `CommitPlacement`; `direction45.rs` (the
+oracle of 100 000 cases); `mergeStep`'s bypass in the corner mode (`orig_start` / `orig_end` are computed but unused in KiCad); the smart-pads
+conditions; `ToggleCornerMode` / `handlePnSCornerModeChange`'s order and its refresh `Move`; `VVIA`'s single layer and `aDiameter / 2` drill;
+virtual items neither drawn nor committed; `JOINT::NextSegment`'s skip of a virtual via when locked segments are followed.
+
+**Decisions of Stage 10, judged.** (1) *Frames as diffs*: equivalent for the line placer -- everything a shove can change there is a track
+with an IR id, a via with one, or (now) a run with its tag, and the collision question `reduceSpringback` asks is the same world's; what is
+not carried is KiCad's per-item state that outlives a frame (ranks are cleared every `Run`; the root-line history only steers which line is
+the root of a shove). (2) *Locked runs*: wrong, fixed (1 above). (3) *Virtual vias in every world*: right -- `ROUTER::SyncWorld` (tool reset,
+undo/redo, model change, before a footprint drag; the tuner's proxy too) is the only way KiCad builds its world, and it calls
+`FixupVirtualVias`; KiCad does not recompute them after a commit inside one tool session (the port rebuilds its world from the IR, so a
+junction made by the last commit has its virtual via at once: a staleness of KiCad's not reproduced). (4) *`SwitchRounding*` and the
+catalog*: fixed (6 above).
+
+**Left, with sizes.** Springback in the dragger (`DRAGGER::dragShove` / `dragViaShove`: one `SHOVE` per gesture, a frame per move, and
+`m_draggedVias` restored when a frame is popped -- about the size of the line placer's use, 150-250 lines and a commit built from the newest
+frame) and in the pair placer (`DIFF_PAIR_PLACER::tryShove`: a frame per move of the leg, a fresh `SHOVE` at each fix, no locked frames --
+somewhat smaller). The mark-obstacles hull snap (`rhMarkObstacles`, with its 90-degree box) as before. And a pre-existing difference met on
+the way: when the head cannot be resolved KiCad keeps the previous head (`routeStep`: `m_head = prevHead`) and `FixRoute` in Shove mode is
+refused only by a solid, where the port shows the straight line flagged colliding and refuses the click.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 

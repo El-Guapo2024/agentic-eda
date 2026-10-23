@@ -50,6 +50,7 @@ Each was cut from an older main. Merge `main` into it first.
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
 | `task-router-details` | Next tasks 5, the router's three leftovers: springback, rounded corners, virtual vias (`crates/pns/PARITY.md` Stage 10) | All three done: springback (the line placer), rounded corners, virtual vias | Springback in the dragger and the pair placer; board text on copper is no router obstacle (`syncTextItem`, found by the corner-mode proof) |
+| `task-router-review` | Review of `task-router-details`'s three ports against KiCad (`crates/pns/PARITY.md` "Stage 10 review"); branch cut from it | Six divergences fixed: the tail is pushable (`LockJoint`), Backspace keeps the leg before, 90-degree box hulls, no virtual via at a T (KiCad's `n_seg`), `syncTextItem`, router_tool.cpp's static actions in the catalog | Springback in the dragger and the pair placer; a footprint's copper texts |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
