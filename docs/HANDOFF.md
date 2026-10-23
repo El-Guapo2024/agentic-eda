@@ -47,6 +47,7 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-rule-editor` (P9b) | The DRC Rule Editor (`pcbnew.DRETool.drcRuleEditor`): KiCad's rule tree and constraint panels over the `.kicad_dru` (`eda_drc::rule_editor`: loader, matcher, saver, checks), `Cmd::EditDrcRule` (Save, Delete, Move Up/Down, one undo step each), `GET /api/rule_editor`, `components/RuleEditorDialog.tsx`. PARITY-pcb.md section 48 | done 2026-10-23: 19 drc + 2 cli tests (slow: kicad-cli reports by the saved rule), KiCad's 22 QA rule files read back with the same rules, 10 node tests, `e2e/rule-editor.check.js` 7/7 | Show Matches, the Syntax help window; the lead to check the deviations listed in section 48 (rules KiCad's editor loses are kept; Move changes the file's order) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
