@@ -37,6 +37,7 @@ test("the start number is read as a whole number, never below zero", () => {
   assert.equal(startNumber("100"), 100);
   assert.equal(startNumber(" 7 "), 7);
   assert.equal(startNumber("abc"), 0);
+  assert.equal(startNumber("9.6"), 10, "KiROUND( DoubleValueFromString )");
   assert.equal(startNumber("-5"), 0);
   assert.equal(startNumber(""), 0);
 });

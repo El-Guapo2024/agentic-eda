@@ -40,10 +40,13 @@ export function rememberAnnotateSettings(settings: AnnotateSettings): void {
   remembered = settings;
 }
 
-/** `GetStartNumber()`: the field read as a whole number; what is not one counts from 0, and a negative start is no start. */
+/**
+ * `GetStartNumber()`: `(int) EDA_UNIT_UTILS::UI::ValueFromString( m_textNumberAfter->GetValue() )`, the field read as a number and rounded (`KiROUND`), so "9.6" is 10;
+ * what is not a number counts from 0. A negative start is no start here (KiCad keeps the sign; the numbering takes no negative number).
+ */
 export function startNumber(text: string): number {
-  const n = Number.parseInt(text.trim(), 10);
-  return Number.isFinite(n) && n > 0 ? n : 0;
+  const n = Number.parseFloat(text.trim());
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
 }
 
 /** What the canvas has selected, in the two kinds the Selection scope takes (`getInferredSymbols`, and the sheets when recursive). */
