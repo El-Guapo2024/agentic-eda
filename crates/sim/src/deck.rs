@@ -103,6 +103,10 @@ pub fn driver(controls: &Controls, netlist: &str, raw_stem: &str) -> Result<(Str
         c.push_str(&format!("alter @{}={}\n", t.item, fmt_g(t.value)));
     }
     c.push_str("run\n");
+    // `OnSimRefresh` of a pole-zero analysis: "Simulation results:" and `print all` in the console.
+    if sim == SimType::Pz {
+        c.push_str("echo\necho Simulation results:\necho\nprint all\n");
+    }
     if sim == SimType::Fft {
         for line in controls.command.split('\n').map(str::trim).filter(|l| !l.is_empty()) {
             c.push_str(line);

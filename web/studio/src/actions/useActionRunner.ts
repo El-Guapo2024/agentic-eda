@@ -94,6 +94,8 @@ import { openSchProperties } from "../components/schematic/schPropertiesOpen";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 import { registerBoardControlActions } from "./boardControlActions";
 import { registerImportActions } from "./importActions";
+import { registerSimActions } from "./simActions";
+import { simChecked, simEnabled, useSimUi } from "../state/simulator";
 import { registerDesignBlockActions } from "./designBlockActions";
 import { designBlockChecked, useDesignBlocksUi } from "../state/designBlocks";
 import { flipLocalX } from "../kicad-port/boardControl";
@@ -2307,6 +2309,8 @@ export function useActionRunner() {
     registerSchControlActions(m, { tab: state.tab, state, api, dispatch, requestSelection, symApi, symDispatch, control: schControl, controlDispatch: schControlDispatch });
     // Import Sheet... / Draw Sheet from File (SCH_DRAWING_TOOLS::ImportSheet / DrawSheet).
     registerSchSheetFileActions(m, { tab: state.tab, state, api, dispatch, controlDispatch: schControlDispatch });
+    // The SPICE simulator (actions/simActions.ts): last, as it hands the shared zoom and grid actions to the plot while its window has the keyboard.
+    registerSimActions(m, { tab: state.tab, dispatch, api });
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch, schControl, schControlDispatch]);
@@ -2338,7 +2342,9 @@ export function useActionRunner() {
   // eeschema action now dims while looking at it from the PCB tab (and
   // vice versa) -- arguably more honest ("usable right now" instead of
   // "usable somewhere"), not a regression.
-  const isEnabled = useCallback((name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)), [registry, state.tab]);
+  // The simulator's own conditions (`SIMULATOR_FRAME::setupUIConditions`), read again when its window changes.
+  const simUi = useSimUi();
+  const isEnabled = useCallback((name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)) && (simEnabled(name, simUi) ?? true), [registry, state.tab, simUi]);
   /** `param` is the event parameter KiCad's parameterised actions carry (`zoomPreset`'s entry, `selectItems`' items, `changeSheet`'s path ...). */
   const run = useCallback((name: string, param?: unknown) => registry.get(name)?.(param), [registry]);
   /**
@@ -2350,6 +2356,9 @@ export function useActionRunner() {
     (name: string): boolean | undefined => {
       // The shared tools' toggles (Always Show Crosshairs, the crosshair mode, Draw Bounding Boxes, the selection mode, Library Tree), in every editor.
       if (registry.has(name)) {
+        // The simulator's toggles (View > Show Legend, Dark Mode Plots, ...), and the grid of its plot while its window has the keyboard.
+        const sim = simChecked(name, simUi);
+        if (sim !== undefined) return sim;
         const shared = commonChecked(name, commonOptions);
         if (shared !== undefined) return shared;
         // View > Design Blocks (`designBlockCond`: the pane is shown)
@@ -2366,7 +2375,7 @@ export function useActionRunner() {
       });
     },
     // `designBlocksShown` is read through `designBlockChecked`: it is listed so the check marks follow the pane being shown or hidden
-    [registry, schControl, state, commonOptions, designBlocksShown]
+    [registry, schControl, state, commonOptions, designBlocksShown, simUi]
   );
   /** Every action id the registry has a handler for on this tab (the scripted test hook, `window.__eda`, lists them). */
   const actionNames = useMemo(() => [...registry.keys()], [registry]);

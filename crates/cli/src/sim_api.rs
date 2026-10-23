@@ -157,6 +157,11 @@ pub fn circuit_route(dir: &Path, body: &[u8]) -> Value {
         "sch_sim_command": sch_command,
         "messages": c.messages,
         "ngspice": find_ngspice().is_some(),
+        "project": kicad_engine::project_name_of(dir),
+        "settings": {
+            "ngspice": c.design.schematic.as_ref().and_then(|s| s.extras.ngspice.as_ref()),
+            "workbook": c.design.schematic.as_ref().and_then(|s| s.extras.sim_workbook.as_ref()),
+        },
     });
     if let Some(command) = req.get("command").and_then(Value::as_str) {
         let n = simulator_netlist(&c.spice, &c.directives, command, options_of(&req), &pin_counts(&c.items), &resolver(dir));

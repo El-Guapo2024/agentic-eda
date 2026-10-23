@@ -131,6 +131,11 @@ fn project_name(dir: &Path) -> String {
     board::load(dir).ok().and_then(|(meta, _, _)| Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).map(str::to_string)).unwrap_or_else(|| "board".to_string())
 }
 
+/// The board's project name (the derived files' stem), for the simulator's default workbook name (`SIMULATOR_CONTROL::getDefaultFilename`).
+pub fn project_name_of(dir: &Path) -> String {
+    project_name(dir)
+}
+
 /// kicad-cli's SPICE and XML netlists of the board's schematic, for the simulator (`crate::sim_api`), with the design they were made from.
 pub fn sim_netlists(dir: &Path) -> Result<(Design, eda_kicad_engine::SimNetlists), Vec<CheckResult>> {
     let (design, model) = load_with_schematic(dir)?;
