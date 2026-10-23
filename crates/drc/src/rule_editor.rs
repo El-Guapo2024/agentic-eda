@@ -15,11 +15,10 @@
 //!     that panel writes), any other `hole_size` to a Custom rule, a `via_diameter` to Via style (which writes one alone when no hole size is given). KiCad
 //!     skips it (`LoadExistingRules`: "No parent found ... skipping"), and the next save leaves it out of the file -- a rule made with Minimum drill size, or
 //!     a Via style with no hole size, is gone the next time the editor opens.
-//!   - Two rules with the same name each keep their own text: the n-th rule of a name is cut from the n-th `(rule <name>` of the file, and the saver groups
-//!     only the panels of one rule of the file ([`Entry::source`]). KiCad cuts both from the first (`ExtractRuleText`) and merges both into one group when
-//!     their conditions match, so the second is lost or replaced by a copy of the first.
-//!   - The claims of one priority are kept in the order `initClaims` lists them (a stable sort); KiCad's `std::sort` leaves their order to the library. It
-//!     only orders the panels of a rule with two constraints of one tier in the tree.
+//!   - Two rules with the same name each keep their own text: the n-th rule of a name is cut from the n-th `(rule <name>` of the file, quoted or not,
+//!     and the saver groups only the panels of one rule of the file ([`Entry::source`]). KiCad cuts both from the first (`ExtractRuleText`) and merges
+//!     both into one group when their conditions match, so the second is lost or replaced by a copy of the first. (A name only one rule has is found
+//!     as KiCad finds it.)
 //!   - A file that does not parse is not opened ([`load`] says why) where KiCad's loader shows an empty tree, and its first save writes an empty file.
 
 use crate::constraints::{disallow, CType, Constraint, Rule, Severity};
@@ -1086,7 +1085,7 @@ fn claims() -> Vec<Claim> {
     use CType::*;
     use PanelType as P;
     let c = |panel, required, optional, priority| Claim { panel, required, optional, priority };
-    let mut v = vec![
+    let v = vec![
         c(P::RoutingDiffPair, &[TrackWidth, DiffPairGap][..], &[MaxUncoupled, Skew][..], 100),
         c(P::ViaStyle, &[ViaDiameter, HoleSize], &[], 90),
         c(P::MinimumTextHeightAndThickness, &[TextHeight, TextThickness], &[], 80),
@@ -1117,9 +1116,14 @@ fn claims() -> Vec<Claim> {
         c(P::RoutingDiffPair, &[MaxUncoupled], &[], 10),
         c(P::ViasUnderSmd, &[Disallow], &[], 5),
     ];
-    // Highest priority first. (A stable sort: see the module's comment.)
-    v.sort_by(|a, b| b.priority.cmp(&a.priority));
-    v
+    // Highest priority first: `std::sort( .., a.priority > b.priority )`. The sort is not stable, so the claims of one priority come in the order
+    // the library's introsort leaves them in -- the one below, libstdc++'s (g++ 13 on initClaims' 29 claims), which is KiCad's Linux build and so
+    // kicad-cli's. It orders the panels of a rule with two constraints of one tier, and so the clauses of that rule when it is written merged.
+    const LIBSTDCXX_ORDER: [usize; 29] = [0, 1, 2, 3, 24, 4, 25, 5, 6, 14, 15, 13, 11, 10, 9, 7, 8, 12, 20, 23, 22, 21, 19, 18, 17, 16, 26, 27, 28];
+    let mut slots: Vec<Option<Claim>> = v.into_iter().map(Some).collect();
+    let sorted: Vec<Claim> = LIBSTDCXX_ORDER.iter().map(|&i| slots[i].take().expect("each claim once")).collect();
+    debug_assert!(sorted.windows(2).all(|w| w[0].priority >= w[1].priority));
+    sorted
 }
 
 /// `DRC_PANEL_MATCHER::MatchRule`: the panels a rule's constraints go to, each with the constraints it claims; what no panel claims goes to a Custom rule.
@@ -1209,24 +1213,31 @@ pub fn extract_rule_comment(original: &str) -> String {
     comment
 }
 
-/// `DRC_RULE_LOADER::ExtractRuleText`: the rule's whole `(rule ...)` in the file, by its name -- here its `occurrence`-th one (from 0), where KiCad takes
-/// the first (see the module's comment). Empty when it is not found or its parentheses do not close.
-pub fn extract_rule_text(content: &str, name: &str, occurrence: usize) -> String {
-    let quoted = format!("(rule \"{name}\"");
-    let unquoted = format!("(rule {name}");
-    let mut starts: Vec<usize> = content.match_indices(&quoted).map(|(i, _)| i).collect();
-    if starts.is_empty() {
-        let mut pos = 0;
-        while let Some(i) = content[pos..].find(&unquoted).map(|i| i + pos) {
-            let after = i + unquoted.len();
-            match content[after..].chars().next() {
-                None | Some(')' | ' ' | '\n' | '\r' | '\t') => starts.push(i),
-                _ => {}
-            }
-            pos = after;
+/// `DRC_RULE_LOADER::ExtractRuleText`: the rule's whole `(rule ...)` in the file, by its name: the first `(rule "name"`, else the first `(rule name`
+/// followed by a blank or `)`. With `occurrence` (not KiCad's: see the module's comment), for a name two rules of the file have, the `occurrence`-th
+/// (from 0) of those, quoted or not, in the file's order. Empty when it is not found or its parentheses do not close.
+pub fn extract_rule_text(content: &str, name: &str, occurrence: Option<usize>) -> String {
+    let quoted_search = format!("(rule \"{name}\"");
+    let unquoted_search = format!("(rule {name}");
+    let quoted: Vec<usize> = content.match_indices(&quoted_search).map(|(i, _)| i).collect();
+    let mut unquoted: Vec<usize> = Vec::new();
+    let mut pos = 0;
+    while let Some(i) = content[pos..].find(&unquoted_search).map(|i| i + pos) {
+        let after = i + unquoted_search.len();
+        if let None | Some(')' | ' ' | '\n' | '\r' | '\t') = content[after..].chars().next() {
+            unquoted.push(i);
         }
+        pos = after;
     }
-    let Some(&start) = starts.get(occurrence) else { return String::new() };
+    let start = match occurrence {
+        None => quoted.first().or(unquoted.first()).copied(),
+        Some(n) => {
+            let mut all: Vec<usize> = quoted.iter().chain(&unquoted).copied().collect();
+            all.sort_unstable();
+            all.get(n).copied()
+        }
+    };
+    let Some(start) = start else { return String::new() };
     let (mut depth, mut in_string, mut escaped) = (0i32, false, false);
     for (i, c) in content[start..].char_indices() {
         if escaped {
@@ -1538,11 +1549,15 @@ pub fn load(text: &str, env: &Rc<Env>) -> Result<Vec<Entry>, ParseError> {
         rules_text.insert_str(0, "(version 1)\n");
     }
     let parsed = dru::parse_rules(&rules_text, env)?;
-    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut count: HashMap<&str, usize> = HashMap::new();
+    for rule in &parsed.rules {
+        *count.entry(rule.name.as_str()).or_insert(0) += 1;
+    }
+    let mut seen: HashMap<&str, usize> = HashMap::new();
     let mut entries = Vec::new();
     for (i, rule) in parsed.rules.iter().enumerate() {
-        let n = seen.entry(rule.name.clone()).or_insert(0);
-        let original = extract_rule_text(text, &rule.name, *n);
+        let n = seen.entry(rule.name.as_str()).or_insert(0);
+        let original = extract_rule_text(text, &rule.name, (count[rule.name.as_str()] > 1).then_some(*n));
         *n += 1;
         entries.extend(load_rule(rule, &original, i));
     }
@@ -1872,15 +1887,27 @@ pub fn duplicate_base_name(name: &str) -> String {
     name.to_string()
 }
 
-/// `DRC_RE_CUSTOM_RULE_PANEL::onCheckSyntax`: the panel's text as a rule of its own through the parser: "Syntax OK", or the error.
+/// `DRC_RE_CUSTOM_RULE_PANEL::onCheckSyntax`: the panel's text as a rule of its own through the parser with a `WX_STRING_REPORTER`, and what the
+/// tip says of it: every message the parser told (each on its line, KiCad's `ERROR: <a href='line:offset'>..</a>` included), a thrown
+/// `PARSE_ERROR` as "ERROR at line %d, column %d: %s"; "Syntax check passed with warnings:" before messages that are no error -- which is also what
+/// a text with nothing wrong gets, the parser telling its reporter "No errors found." -- and "Syntax OK" for none at all.
 pub fn check_custom_syntax(name: &str, body: &str, env: &Rc<Env>) -> String {
+    let text = format!("(version 1)\n(rule \"{}\"\n{body})", name.replace('"', "\\\""));
     if body.trim_end().is_empty() {
         return "No rule text to check.".into();
     }
-    let text = format!("(version 1)\n(rule \"{}\"\n{body})", name.replace('"', "\\\""));
-    match dru::parse_rules(&text, env) {
-        Ok(_) => "Syntax OK".into(),
-        Err(e) => format!("ERROR at line {}, column {}: {}", e.line, e.offset, e.message),
+    let (mut reported, parsed) = dru::parse_reporting(&text, env);
+    if let Err(pe) = parsed {
+        let problem = pe.message.clone();
+        reported.push(dru::Reported { text: format!("ERROR at line {}, column {}: {problem}", pe.line, pe.offset), severity: dru::ReportedSeverity::Error });
+    }
+    let messages: String = reported.iter().map(|r| format!("{}\n", r.text)).collect();
+    if reported.iter().any(|r| r.severity == dru::ReportedSeverity::Error) {
+        messages
+    } else if !reported.is_empty() {
+        format!("Syntax check passed with warnings:\n{messages}")
+    } else {
+        "Syntax OK".into()
     }
 }
 

@@ -1388,6 +1388,11 @@ impl Condition {
         ok
     }
 
+    /// What the compiler told its error callback: each message with where in the expression.
+    pub fn compile_messages(&self) -> Vec<(String, usize)> {
+        self.compiled.as_ref().map(|c| c.errors.iter().map(|e| (e.message.clone(), e.pos)).collect()).unwrap_or_default()
+    }
+
     /// Every message the compiler told: the errors `DRC_ENGINE::compileRules` throws on.
     pub fn compile_errors(&self) -> &[String] {
         &self.errors

@@ -308,6 +308,51 @@ fn a_rule_with_two_panels_is_two_entries_written_back_as_one_rule() {
     assert_eq!(err, "1. Rule name must be unique.\n");
 }
 
+/// The claims of one priority are in the order KiCad's `std::sort` leaves them in (libstdc++, KiCad's Linux build): the panels of a rule with two
+/// constraints of one tier come in that order, and so do the clauses of the rule when it is written merged.
+#[test]
+fn claims_of_one_priority_are_in_the_order_kicads_sort_leaves_them() {
+    let order: Vec<PanelType> = claims().iter().map(|c| c.panel).collect();
+    use PanelType as P;
+    assert_eq!(
+        order,
+        vec![
+            P::RoutingDiffPair,
+            P::ViaStyle,
+            P::MinimumTextHeightAndThickness,
+            P::RoutingWidth,
+            P::MatchedLengthDiffPair,
+            P::AbsoluteLength,
+            P::MatchedLengthDiffPair,
+            P::PermittedLayers,
+            P::AllowedOrientation,
+            P::SilkToSilkClearance,
+            P::CreepageDistance,
+            P::PhysicalClearance,
+            P::CourtyardClearance,
+            P::HoleToHoleDistance,
+            P::CopperToHoleClearance,
+            P::MinimumClearance,
+            P::CopperToEdgeClearance,
+            P::MinimumSoldermaskSliver,
+            P::MaximumViaCount,
+            P::MinimumThermalReliefSpokeCount,
+            P::SolderpasteExpansion,
+            P::SoldermaskExpansion,
+            P::MinimumConnectionWidth,
+            P::MinimumAnnularWidth,
+            P::MinimumViaDiameter,
+            P::HoleSize,
+            P::RoutingDiffPair,
+            P::RoutingDiffPair,
+            P::ViasUnderSmd,
+        ]
+    );
+    let b = board();
+    let entries = load("(version 1)\n(rule r (constraint clearance (min 0.2mm)) (constraint creepage (min 1mm)))", &b.env()).unwrap();
+    assert_eq!(entries.iter().map(|e| e.panel).collect::<Vec<_>>(), vec![P::CreepageDistance, P::MinimumClearance]);
+}
+
 #[test]
 fn the_matcher_claims_by_priority() {
     let b = board();
@@ -363,10 +408,17 @@ fn the_loader_reads_the_values_kicad_reads() {
 #[test]
 fn extracting_a_rule_finds_it_by_name_and_keeps_two_of_one_name_apart() {
     let text = "(version 1)\n(rule \"Clearance for BGA\" (constraint clearance (min 1mm)))\n(rule Clearance\n (constraint clearance (min 2mm)))\n(rule Clearance (constraint clearance (min 3mm)))";
-    assert_eq!(extract_rule_text(text, "Clearance", 0), "(rule Clearance\n (constraint clearance (min 2mm)))");
-    assert_eq!(extract_rule_text(text, "Clearance", 1), "(rule Clearance (constraint clearance (min 3mm)))");
-    assert_eq!(extract_rule_text(text, "Clearance for BGA", 0), "(rule \"Clearance for BGA\" (constraint clearance (min 1mm)))");
-    assert_eq!(extract_rule_text(text, "Clearance", 2), "");
+    assert_eq!(extract_rule_text(text, "Clearance", None), "(rule Clearance\n (constraint clearance (min 2mm)))");
+    assert_eq!(extract_rule_text(text, "Clearance", Some(0)), "(rule Clearance\n (constraint clearance (min 2mm)))");
+    assert_eq!(extract_rule_text(text, "Clearance", Some(1)), "(rule Clearance (constraint clearance (min 3mm)))");
+    assert_eq!(extract_rule_text(text, "Clearance for BGA", None), "(rule \"Clearance for BGA\" (constraint clearance (min 1mm)))");
+    assert_eq!(extract_rule_text(text, "Clearance", Some(2)), "");
+    // KiCad's search takes a quoted name before an unquoted one; two rules of one name, one quoted, are found each in its place.
+    let mixed = "(version 1)\n(rule X (constraint clearance (min 1mm)))\n(rule \"X\" (condition \"A.Type == 'Pad'\") (constraint clearance (min 2mm)))\n";
+    assert_eq!(extract_rule_text(mixed, "X", None), "(rule \"X\" (condition \"A.Type == 'Pad'\") (constraint clearance (min 2mm)))");
+    assert_eq!(extract_rule_text(mixed, "X", Some(0)), "(rule X (constraint clearance (min 1mm)))");
+    let entries = load(mixed, &board().env()).unwrap();
+    assert_eq!(save(&entries, &board()), mixed);
     assert_eq!(extract_rule_body("(rule \"x\"\n\t(constraint clearance (min 1mm))\n)"), "(constraint clearance (min 1mm))");
     assert_eq!(extract_rule_comment("(rule x\n  # one\n\t#two\n (constraint ..))"), "one\ntwo");
     let b = board();
@@ -464,9 +516,35 @@ fn the_layer_selector_offers_what_kicad_offers() {
 fn a_file_that_does_not_parse_is_not_opened() {
     let err = load("(version 1)\n(rule x (constraint clearance (min 1mm))", &env()).unwrap_err();
     assert!(err.message.starts_with("ERROR:"), "{err:?}");
-    assert_eq!(check_custom_syntax("x", "(constraint clearance (min 1mm))", &env()), "Syntax OK");
-    assert!(check_custom_syntax("x", "(constraint nonsense)", &env()).starts_with("ERROR at line 3, column"), "{}", check_custom_syntax("x", "(constraint nonsense)", &env()));
     assert_eq!(check_custom_syntax("x", "  \n", &env()), "No rule text to check.");
+}
+
+/// Check Syntax on a Custom rule (`DRC_RE_CUSTOM_RULE_PANEL::onCheckSyntax`): the parser with a reporter tells every message, each where it is, and
+/// goes on; a text with nothing wrong gets the reporter's "No errors found." under "Syntax check passed with warnings:", as KiCad's tip shows it.
+#[test]
+fn check_syntax_says_what_kicads_reporter_is_told() {
+    let e = env();
+    assert_eq!(check_custom_syntax("x", "(constraint clearance (min 1mm))", &e), "Syntax check passed with warnings:\nNo errors found.\n");
+    assert_eq!(
+        check_custom_syntax("x", "(constraint hole (min 1mm))", &e),
+        "Syntax check passed with warnings:\nThe 'hole' keyword has been deprecated.  Please use 'hole_size' instead.\n"
+    );
+    // An unknown constraint: the error at its place (line 3, `CurOffset()` 13), the rest of the constraint skipped, and the next error told too.
+    let two = check_custom_syntax("x", "(constraint nonsense (min 1mm))\n(constraint clearance (min 1mm)) (severity bogus)", &e);
+    assert_eq!(
+        two,
+        "ERROR: <a href='3:13'>Unrecognized item 'nonsense'.</a> Expected assertion, clearance, hole_clearance, edge_clearance, physical_clearance, \
+         physical_hole_clearance, courtyard_clearance, silk_clearance, hole_size, hole_to_hole, track_width, track_angle, track_segment_length, \
+         annular_width, disallow, zone_connection, thermal_relief_gap, thermal_spoke_width, min_resolved_spokes, solder_mask_expansion, \
+         solder_mask_sliver, solder_paste_abs_margin, solder_paste_rel_margin, length, skew, via_count, via_dangling, via_diameter, diff_pair_gap, \
+         diff_pair_uncoupled or bridged_mask.\nERROR: <a href='4:44'>Unrecognized item 'bogus'.</a> Expected ignore, warning, error, or exclusion.\n\
+         ERROR: <a href='5:1'>Missing ')'.</a>\n"
+    );
+    // What the lexer throws ends it: KiCad's catch words it.
+    assert!(check_custom_syntax("x", "(condition \"A.Type == 'Pad')", &e).starts_with("ERROR at line 3, column "), "{}", check_custom_syntax("x", "(condition \"A.Type == 'Pad')", &e));
+    // A condition the compiler does not understand: its messages, then the parser's.
+    let bad = check_custom_syntax("x", "(condition \"A.Type == \")", &e);
+    assert!(bad.contains("</a>") && bad.ends_with("ERROR: <a href='3:12'>Could not parse expression 'A.Type == '.</a>\n"), "{bad}");
 }
 
 /// KiCad's own rule files (`qa/data/pcbnew/*.kicad_dru`): read by the editor and written back unedited, every rule is the same rule -- the same
