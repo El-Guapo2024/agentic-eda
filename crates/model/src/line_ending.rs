@@ -148,7 +148,7 @@ mod tests {
     use super::*;
 
     fn mm(v: Nm) -> String {
-        let s = format!("{:.6}", v as f64 / 1000.0);
+        let s = format!("{:.6}", v as f64 / 1e6);
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     }
 
@@ -156,9 +156,9 @@ mod tests {
     fn an_ending_is_written_as_line_ending_format_writes_it() {
         assert_eq!(LineEnding::new(LineEndingStyle::None).format("start_shape", mm), "", "no ending, no token");
         assert_eq!(LineEnding::new(LineEndingStyle::Arrow).format("start_shape", mm), "(start_shape arrow)", "an automatic size says none");
-        let e = LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: 3000, width_nm: 3000, stroke_width_nm: 600, stroke_style: LineStyle::Default };
+        let e = LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: 3_000_000, width_nm: 3_000_000, stroke_width_nm: 600_000, stroke_style: LineStyle::Default };
         assert_eq!(e.format("end_shape", mm), "(end_shape arrow_open (length 3) (width 3) (stroke (width 0.6) (type default)))");
-        let both = LineEndings { start: LineEnding { width_nm: 1500, ..LineEnding::new(LineEndingStyle::Square) }, end: LineEnding::new(LineEndingStyle::Circle) };
+        let both = LineEndings { start: LineEnding { width_nm: 1_500_000, ..LineEnding::new(LineEndingStyle::Square) }, end: LineEnding::new(LineEndingStyle::Circle) };
         assert_eq!(both.format(mm), " (start_shape square (width 1.5)) (end_shape circle)");
     }
 

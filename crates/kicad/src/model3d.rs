@@ -273,18 +273,18 @@ mod tests {
 
     #[test]
     fn identical_pads_are_no_fit() {
-        let p = pads(&[("1", -800.0, 0.0), ("2", 800.0, 0.0)]);
+        let p = pads(&[("1", -800_000.0, 0.0), ("2", 800_000.0, 0.0)]);
         assert_eq!(fit_pads(&p, &p), None);
     }
 
     #[test]
     fn a_header_that_runs_along_y_is_turned_onto_one_along_x() {
         // KiCad's PinHeader_1x04: pin 1 at the origin, the others down the y axis. The built-in one: centred, along +x.
-        let lib = pads(&[("1", 0.0, 0.0), ("2", 0.0, 2540.0), ("3", 0.0, 5080.0), ("4", 0.0, 7620.0)]);
-        let part = pads(&[("1", -3810.0, 0.0), ("2", -1270.0, 0.0), ("3", 1270.0, 0.0), ("4", 3810.0, 0.0)]);
+        let lib = pads(&[("1", 0.0, 0.0), ("2", 0.0, 2_540_000.0), ("3", 0.0, 5_080_000.0), ("4", 0.0, 7_620_000.0)]);
+        let part = pads(&[("1", -3_810_000.0, 0.0), ("2", -1_270_000.0, 0.0), ("3", 1_270_000.0, 0.0), ("4", 3_810_000.0, 0.0)]);
         let fit = fit_pads(&lib, &part).expect("the same footprint, turned");
         assert_eq!(fit.rot_deg, -90.0);
-        assert!((fit.dx_nm + 3810.0).abs() < 1e-6 && fit.dy_nm.abs() < 1e-6, "{fit:?}");
+        assert!((fit.dx_nm + 3_810_000.0).abs() < 1e-6 && fit.dy_nm.abs() < 1e-6, "{fit:?}");
         // The model's pin k, 2.54 k below pin 1 on the footprint (y up in the model: -2.54 k), lands on the part's pad x = -3.81 + 2.54 k.
         let m = fit.apply(&Model3d { offset: [0.0, -5.08, 0.0], ..Model3d::identity("x.step") });
         assert!((m.offset[0] - 1.27).abs() < 1e-9 && m.offset[1].abs() < 1e-9, "pin 3 of the model sits on pad 3: {:?}", m.offset);
@@ -293,25 +293,25 @@ mod tests {
 
     #[test]
     fn a_small_shift_is_kept_and_a_different_footprint_is_not_fitted() {
-        let lib = pads(&[("1", -825.0, 0.0), ("2", 825.0, 0.0)]);
-        let near = pads(&[("1", -750.0, 0.0), ("2", 750.0, 0.0)]);
+        let lib = pads(&[("1", -825_000.0, 0.0), ("2", 825_000.0, 0.0)]);
+        let near = pads(&[("1", -750_000.0, 0.0), ("2", 750_000.0, 0.0)]);
         assert_eq!(fit_pads(&lib, &near), None, "a 0603 and its built-in twin: pads 75 um apart about one centre are the identity");
-        let moved = pads(&[("1", -250.0, 0.0), ("2", 1250.0, 0.0)]);
+        let moved = pads(&[("1", -250_000.0, 0.0), ("2", 1_250_000.0, 0.0)]);
         let fit = fit_pads(&lib, &moved).expect("the same pair, shifted half a millimetre");
         assert_eq!(fit.rot_deg, 0.0);
-        assert!((fit.dx_nm - 500.0).abs() < 1e-6 && fit.dy_nm.abs() < 1e-6, "{fit:?}");
-        let far = pads(&[("1", -9000.0, 0.0), ("2", 9000.0, 0.0)]);
+        assert!((fit.dx_nm - 500_000.0).abs() < 1e-6 && fit.dy_nm.abs() < 1e-6, "{fit:?}");
+        let far = pads(&[("1", -9_000_000.0, 0.0), ("2", 9_000_000.0, 0.0)]);
         assert_eq!(fit_pads(&lib, &far), None, "pads 16 mm further apart are not the same footprint");
         assert_eq!(fit_pads(&lib, &pads(&[("A", 0.0, 0.0)])), None, "no pad number in common");
     }
 
     #[test]
     fn a_pad_number_shared_by_several_pads_counts_once_at_their_mean() {
-        let lib = pads(&[("1", 0.0, 0.0), ("2", 1000.0, 0.0), ("2", 1000.0, 2000.0)]);
-        let part = pads(&[("1", 100.0, 0.0), ("2", 1100.0, 1000.0)]);
+        let lib = pads(&[("1", 0.0, 0.0), ("2", 1_000_000.0, 0.0), ("2", 1_000_000.0, 2_000_000.0)]);
+        let part = pads(&[("1", 100_000.0, 0.0), ("2", 1_100_000.0, 1_000_000.0)]);
         let fit = fit_pads(&lib, &part).expect("mean of the two pads numbered 2 is (1000, 1000)");
         assert_eq!(fit.rot_deg, 0.0);
-        assert!((fit.dx_nm - 100.0).abs() < 1e-6 && (fit.dy_nm - 0.0).abs() < 1e-6, "{fit:?}");
+        assert!((fit.dx_nm - 100_000.0).abs() < 1e-6 && (fit.dy_nm - 0.0).abs() < 1e-6, "{fit:?}");
     }
 
     #[test]

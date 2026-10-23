@@ -116,7 +116,7 @@ mod tests {
         let mut refs = Vec::new();
         let grids = read_all(tree.as_list().unwrap(), &mut refs);
         let g = &grids[0];
-        assert_eq!((g.kind, g.at, g.extent, g.spacing, g.angle, g.priority, g.tick_interval), (GridKind::Cartesian, Point { x: 100_000_000, y: 50_000_000 }, Point { x: 4_000_000, y: 2_500_000 }, Point { x: 500_000, y: 250_000 }, 30.0, 3000, 5000));
+        assert_eq!((g.kind, g.at, g.extent, g.spacing, g.angle, g.priority, g.tick_interval), (GridKind::Cartesian, Point { x: 100_000_000, y: 50_000_000 }, Point { x: 4_000_000, y: 2_500_000 }, Point { x: 500_000, y: 250_000 }, 30.0, 3, 5));
         assert_eq!(g.affects, GridAffects { cursor: true, routing: false, placement: true });
         assert_eq!(g.custom_properties, vec![("role".to_string(), "via field".to_string())]);
         assert!(refs[0].locked);

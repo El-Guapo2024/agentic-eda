@@ -1705,7 +1705,7 @@ mod tests {
         let custom = export_kicad_pro_for(&design, &model);
         let json: serde_json::Value = serde_json::from_str(&custom).expect("valid json");
         assert_eq!(json["erc"]["pin_map"][1][1], 0, "{custom}");
-        assert_eq!(json["erc"]["pin_map"].as_array().map(Vec::len), Some(12_000));
+        assert_eq!(json["erc"]["pin_map"].as_array().map(Vec::len), Some(12));
         assert_eq!(json["erc"]["rule_severities"]["lib_symbol_mismatch"], "ignore");
         assert!(json["board"]["design_settings"]["rules"]["min_clearance"].is_number(), "the board half is untouched");
         // A malformed matrix is ignored wholesale, like KiCad's own loader.
@@ -1721,11 +1721,11 @@ mod tests {
         let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
         assert!(plain["board"]["design_settings"]["drc_exclusions"].is_null(), "nothing waived: the key is not written");
         assert!(plain["board"]["design_settings"]["meta"].is_null() && plain["erc"]["meta"].is_null(), "and neither section says which schema it is at");
-        assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(2000), "only the two library checks, which are always ignored");
+        assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(2), "only the two library checks, which are always ignored");
 
         design.drawings = Some(DrawingsSection {
             drc_exclusions: vec![
-                DrcExclusion { check: "annular_width".into(), items: vec!["via-uuid".into()], ids: vec!["v1".into()], positions_nm: vec![[12_459_000_000, 18_390_000_000]], comment: "tight on purpose".into() },
+                DrcExclusion { check: "annular_width".into(), items: vec!["via-uuid".into()], ids: vec!["v1".into()], positions_nm: vec![[12_459_000, 18_390_000]], comment: "tight on purpose".into() },
                 DrcExclusion { check: "clearance".into(), items: vec!["a".into(), "b".into()], ids: vec![], positions_nm: vec![], comment: String::new() },
             ],
             ..Default::default()
@@ -1737,7 +1737,7 @@ mod tests {
                     check: "footprint_link_issues".into(),
                     location: "R1".into(),
                     comment: "bare footprint on purpose".into(),
-                    marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [113_030_000_000, 100_330_000_000], items: vec!["a4f97020-e09b-4e24-b611-b376f3c27df7".into()], ..Default::default() }),
+                    marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [113_030_000, 100_330_000], items: vec!["a4f97020-e09b-4e24-b611-b376f3c27df7".into()], ..Default::default() }),
                 },
                 eda_model::ir::ErcExclusion { check: "wire_dangling".into(), location: "W1".into(), ..Default::default() },
             ],
@@ -1781,7 +1781,7 @@ mod tests {
         design.schematic = Some(sch.clone());
         let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
         assert!(plain["schematic"].is_null(), "nothing chosen: KiCad's own 50 mils applies and the project says nothing");
-        sch.extras.connection_grid_mils = Some(25_000);
+        sch.extras.connection_grid_mils = Some(25);
         design.schematic = Some(sch);
         let json: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
         assert_eq!(json["schematic"]["connection_grid_size"], 25.0, "in mils, as `connection_grid_size` is in the project file");
@@ -1915,9 +1915,9 @@ mod tests {
         assert!(a.contains("(gr_arc (start 0 0) (mid 0.707 0.707) (end 1 1)"), "{a}");
         // `case SHAPE_T::BEZIER:` -- `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)) ...)`, never `fill`ed.
         let curve = a.find("(gr_curve (pts (xy 0 0) (xy 0 2) (xy 3 2) (xy 3 0))").unwrap_or_else(|| panic!("{a}"));
-        assert!(a[curve..curve + 140_000].contains("(stroke (width 0.12)") && !a[curve..curve + 140_000].contains("fill"), "{a}");
+        assert!(a[curve..curve + 140].contains("(stroke (width 0.12)") && !a[curve..curve + 140].contains("fill"), "{a}");
         // A line/arc never gets a `fill` token -- KiCad's own writer does not emit one for either.
-        assert!(!a[a.find("(gr_line").unwrap()..a.find("(gr_line").unwrap() + 200_000].contains("fill"), "{a}");
+        assert!(!a[a.find("(gr_line").unwrap()..a.find("(gr_line").unwrap() + 200].contains("fill"), "{a}");
 
         assert!(a.contains("(gr_text \"REV A\" (at 1 2 90)") && a.contains("(justify left mirror)"), "{a}");
         assert!(a.contains("(gr_text \"centred\" (at 0 0 0)"), "{a}");
@@ -1994,7 +1994,7 @@ mod tests {
     /// A made-up fill of kicad-cli's for every zone: a square ring on each layer of each (the writer puts what it is handed, whatever the ring).
     fn kicad_fills_of(design: &Design) -> crate::zone_fills::KicadFills {
         use crate::zone_fills::{zone_signature, KicadFills, KicadRing, ZoneEntry};
-        let ring = KicadRing { island: false, pts: vec![[2_000_000_000, 2_000_000_000], [4_000_000_000, 2_000_000_000], [4_000_000_000, 4_000_000_000], [2_000_000_000, 4_000_000_000]] };
+        let ring = KicadRing { island: false, pts: vec![[2_000_000, 2_000_000], [4_000_000, 2_000_000], [4_000_000, 4_000_000], [2_000_000, 4_000_000]] };
         let zones = design.routing.as_ref().unwrap().zones.iter().filter(|z| !z.is_rule_area).map(|z| (z.id.clone(), ZoneEntry { sig: zone_signature(z), layers: z.layer_set().into_iter().map(|l| (l.to_string(), vec![ring.clone()])).collect() })).collect();
         KicadFills::new("kicad-cli".into(), "r".into(), 1, zones)
     }
@@ -2058,9 +2058,9 @@ mod tests {
         let (mut design, model) = fixture();
         let zone = Zone { id: "zg".into(), net: "GND".into(), layer: "F.Cu".into(), outline: square(1_000_000, 1_000_000, 10_000_000), ..Default::default() };
         design.routing.as_mut().unwrap().zones = vec![zone.clone()];
-        let ring = |island: bool| KicadRing { island, pts: vec![[2_000_000_000, 2_000_000_000], [8_123_456_000, 2_000_000_000], [8_123_456_000, 7_654_321_000], [2_000_000_000, 7_654_321_000]] };
+        let ring = |island: bool| KicadRing { island, pts: vec![[2_000_000, 2_000_000], [8_123_456, 2_000_000], [8_123_456, 7_654_321], [2_000_000, 7_654_321]] };
         let entry = ZoneEntry { sig: zone_signature(&zone), layers: std::collections::BTreeMap::from([("F.Cu".to_string(), vec![ring(false), ring(true)])]) };
-        let kicad = KicadFills::new("kicad-cli 10.99.0".into(), "r1".into(), 2_500_000, std::collections::BTreeMap::from([("zg".to_string(), entry)]));
+        let kicad = KicadFills::new("kicad-cli 10.99.0".into(), "r1".into(), 2_500, std::collections::BTreeMap::from([("zg".to_string(), entry)]));
 
         let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();
         let block = first_zone(&out);
@@ -2102,12 +2102,12 @@ mod tests {
             pad_connection: eda_model::ir::PadConnection::Full,
             priority: 3,
             island_removal_mode: eda_model::ir::IslandRemovalMode::Area,
-            min_island_area: 2_500_000_000,
+            min_island_area: 2_500_000_000_000,
             fill_mode: eda_model::ir::FillMode::HatchPattern,
             hatch_thickness: 400_000,
             hatch_gap: 900_000,
             hatch_orientation_mdeg: 45_000,
-            hatch_smoothing_level: 2000,
+            hatch_smoothing_level: 2,
             hatch_smoothing_value: 0.25,
             hatch_hole_min_area: 0.3,
             hatch_border_algorithm: 0,
@@ -2228,7 +2228,7 @@ mod tests {
     #[test]
     fn a_zone_on_a_four_layer_stack_keeps_its_layers_in_both_orders() {
         let (mut design, mut model) = fixture();
-        model.board.layers = eda_model::rules::copper_layer_names(4000);
+        model.board.layers = eda_model::rules::copper_layer_names(4);
         let mut pour = Zone { id: "z4".into(), net: "GND".into(), outline: square(1_000_000, 1_000_000, 10_000_000), ..Default::default() };
         pour.set_layer_set(&["In2.Cu", "B.Cu", "F.Cu", "In1.Cu"]);
         assert_eq!(pour.layer_set(), vec!["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
@@ -2283,11 +2283,11 @@ mod tests {
         use eda_model::ir::Point;
         let (mut design, model) = fixture();
         let mut arc = Track::new_arc("VIN".into(), "F.Cu".into(), 250_000, Point { x: 2_000_000, y: 2_000_000 }, Point { x: 4_000_000, y: 1_000_000 }, Point { x: 6_000_000, y: 2_000_000 });
-        arc.pts.truncate(5000); // an edit that cut the curve short: no longer the tessellation of its arc
+        arc.pts.truncate(5); // an edit that cut the curve short: no longer the tessellation of its arc
         design.routing.as_mut().unwrap().tracks.push(arc);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(out.matches("\t(arc ").count(), 0, "a stale arc is never written: {out}");
-        assert_eq!(out.matches("\t(segment ").count(), 1 + 4000);
+        assert_eq!(out.matches("\t(segment ").count(), 1 + 4);
     }
 
     #[test]
@@ -2309,7 +2309,7 @@ mod tests {
             min_amplitude: 200_000,
             max_amplitude: 1_000_000,
             spacing: 600_000,
-            corner_radius_percent: 80_000,
+            corner_radius_percent: 80,
             rounded: true,
             single_sided: false,
             override_custom_rules: false,
@@ -2317,7 +2317,7 @@ mod tests {
             target_skew: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             is_time_domain: false,
             target_delay: TargetRange::delay_unconstrained(),
-            target_skew_delay: TargetRange { min: -100_000_000, opt: 0, max: 100_000_000 },
+            target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             base_line: vec![Point { x: 10_000_000, y: 5_000_000 }, Point { x: 11_000_000, y: 6_000_000 }],
             base_line_coupled: vec![],
             last_track_width: 200_000,
@@ -2338,7 +2338,7 @@ mod tests {
         let members_line = out.lines().find(|l| l.trim_start().starts_with("(members") && l.contains("\"")).and_then(|l| (!l.contains("(group")).then_some(l)).unwrap_or_else(|| panic!("a members line: {out}"));
         assert_eq!(members_line.matches('"').count(), 4, "two quoted uuids: {members_line}");
         let in_members = seg_uuids.iter().filter(|u| members_line.contains(**u)).count();
-        assert_eq!(in_members, 2000, "the polyline's two segments, not the plain track: {members_line}");
+        assert_eq!(in_members, 2, "the polyline's two segments, not the plain track: {members_line}");
 
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let drawings = back.drawings.as_ref().expect("the pattern comes back");
@@ -2349,7 +2349,7 @@ mod tests {
         for m in &got.member_ids {
             let t = tracks.iter().find(|t| &t.id == m).expect("a member is a track of the board");
             assert_eq!(t.pts.len(), 2);
-            assert!(t.pts.iter().all(|p| p.x >= 10_000 && p.y >= 5_000), "the polyline's segments, not the plain track: {t:?}");
+            assert!(t.pts.iter().all(|p| p.x >= 10_000_000 && p.y >= 5_000_000), "the polyline's segments, not the plain track: {t:?}");
         }
         let mut want = pattern;
         want.id = got.id.clone();
@@ -2533,7 +2533,7 @@ mod tests {
         let group = out.split("\t(group ").nth(1).expect("a group block");
         assert!(group.starts_with("\"decoupling\" (uuid \""), "{group}");
         // U1, C1, the via, both segments of the two-segment track; the stale id names nothing.
-        assert_eq!(group.split("(members").nth(1).unwrap().matches('"').count() / 2, 5000, "{group}");
+        assert_eq!(group.split("(members").nth(1).unwrap().matches('"').count() / 2, 5, "{group}");
         assert!(out.rfind("\t(group ").unwrap() > out.rfind("\t(segment ").unwrap(), "groups come last, like KiCad's own writer");
 
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
@@ -2575,7 +2575,7 @@ mod tests {
         assert_eq!(out.matches("\t(group ").count(), 4, "outer, middle, inner and the holder; the ghost is not written:\n{out}");
         let block = |name: &str| out.split("\t(group ").skip(1).find(|g| g.starts_with(&format!("\"{name}\""))).unwrap_or_else(|| panic!("no group {name}")).to_string();
         let uuids_in = |block: &str| block.split("(members").nth(1).unwrap().matches('"').count() / 2;
-        assert_eq!(uuids_in(&block("outer")), 2000, "U1 and the middle group: {}", block("outer"));
+        assert_eq!(uuids_in(&block("outer")), 2, "U1 and the middle group: {}", block("outer"));
         assert_eq!(uuids_in(&block("holder")), 1, "the via alone: {}", block("holder"));
 
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
@@ -2670,7 +2670,7 @@ mod tests {
         assert_eq!(rules["min_text_height"], 1.0);
         assert_eq!(rules["solder_mask_to_copper_clearance"], 0.04);
         assert_eq!(rules["max_error"], 0.005);
-        assert_eq!(rules["min_resolved_spokes"], 2000);
+        assert_eq!(rules["min_resolved_spokes"], 2);
         assert_eq!(exact["board"]["design_settings"]["defaults"]["silk_text_size_h"], 1.0, "the Text & Graphics grid rides along");
 
         // And the importer reads every one back from that project.
@@ -2678,7 +2678,7 @@ mod tests {
         crate::merge_project_design_rules(&mut back, &export_kicad_pro(&model));
         assert!(back.board.constraints_explicit);
         assert_eq!((back.board.track_width_min_nm, back.board.min_clearance_nm, back.board.copper_edge_clearance_nm, back.board.annular_width_min_nm), (250_000, 300_000, Some(350_000), 130_000));
-        assert_eq!((back.board.max_error_nm, back.board.min_resolved_spokes, back.board.min_silk_text_height_nm), (5000, 2000, 1_000_000));
+        assert_eq!((back.board.max_error_nm, back.board.min_resolved_spokes, back.board.min_silk_text_height_nm), (5000, 2, 1_000_000));
     }
 
     #[test]
@@ -2834,9 +2834,9 @@ mod tests {
             for pad in eda_model::footprint::placed_pads(&model, part, fp).unwrap() {
                 let key = format!("{}.{}", fp.id, pad.number);
                 let (x, y) = kicad[&key];
-                let (ex, ey) = (pad.center.x as f64 / 1000.0, pad.center.y as f64 / 1000.0);
+                let (ex, ey) = (pad.center.x as f64 / 1e6, pad.center.y as f64 / 1e6);
                 assert!(
-                    (x - ex).abs() < 0.001 && (y - ey).abs() < 0.001,
+                    (x - ex).abs() < 1e-6 && (y - ey).abs() < 1e-6,
                     "{key} ({:?}, rot {}): KiCad puts it at ({x:.3}, {y:.3}), the engine routed to ({ex:.3}, {ey:.3})",
                     fp.side,
                     fp.rot
@@ -2845,7 +2845,7 @@ mod tests {
             }
         }
         // U1 top SOT-23, C1 bottom 0603, U2 bottom SOT-23.
-        assert_eq!(checked, 8000);
+        assert_eq!(checked, 8);
     }
 
     #[test]
@@ -2865,7 +2865,7 @@ mod tests {
             }
         }
         // Reference and value of U1 (top) and C1 (bottom).
-        assert_eq!(properties, 4000);
+        assert_eq!(properties, 4);
     }
 
     /// What kicad-cli draws a footprint's 3D model at is the footprint's `(model ...)` placement, and KiCad turns a flipped footprint's model with
@@ -2993,8 +2993,8 @@ mod tests {
         assert_eq!((by_text("High_current netclass:").justify, by_text("High_current netclass:").stroke_width), (TextJustify::Left, 40_000));
 
         let wide = extra("Actionneur").expect("italic, narrow");
-        assert_eq!((wide.width_nm, wide.italic, wide.knockout, wide.line_spacing_permille, wide.face.as_deref(), wide.valign), (Some(1_524_000), true, true, 1_500_000, Some("Arial"), eda_model::ir::TextVAlign::Top));
-        assert_eq!((by_text("Actionneur").size_nm, by_text("Actionneur").stroke_width, by_text("Actionneur").justify, by_text("Actionneur").mirror), (2_032_000, 305_000, TextJustify::Right, true));
+        assert_eq!((wide.width_nm, wide.italic, wide.knockout, wide.line_spacing_permille, wide.face.as_deref(), wide.valign), (Some(1_524_000), true, true, 1500, Some("Arial"), eda_model::ir::TextVAlign::Top));
+        assert_eq!((by_text("Actionneur").size_nm, by_text("Actionneur").stroke_width, by_text("Actionneur").justify, by_text("Actionneur").mirror), (2_032_000, 304_800, TextJustify::Right, true));
 
         // No thickness in the file: KiCad's automatic stroke width (an eighth of the glyph width), and none is written back.
         let auto = extra("auto").expect("auto thickness");
@@ -3009,7 +3009,7 @@ mod tests {
         assert!(labels.contains("(layer \"F.Cu\")") && labels.contains("(effects (font (size 0.2 0.2) (thickness 0.04) bold) (justify left bottom))"), "{labels}");
         let wide = block("Actionneur");
         assert!(wide.contains("(layer \"B.Cu\" knockout)"), "{wide}");
-        assert!(wide.contains("(effects (font (face \"Arial\") (size 2.032 1.524) (line_spacing 1.5) (thickness 0.305) italic) (justify right top mirror))"), "{wide}");
+        assert!(wide.contains("(effects (font (face \"Arial\") (size 2.032 1.524) (line_spacing 1.5) (thickness 0.3048) italic) (justify right top mirror))"), "{wide}");
         assert!(block("plain").contains("(effects (font (size 1 1) (thickness 0.15)))"), "{}", block("plain"));
         let auto = block("auto");
         assert!(auto.contains("(effects (font (size 1.2 1.6)) (justify bottom))"), "{auto}");
@@ -3114,13 +3114,13 @@ mod tests {
         };
         let (design, model, notes) = crate::import_kicad_pcb(&outline(["0.2032"; 4])).unwrap();
         assert_eq!(notes.outline_source, "lines");
-        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(203_000));
+        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(203_200));
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let lines: Vec<&str> = out.lines().filter(|l| l.contains("\"Edge.Cuts\")") && l.contains("(gr_line")).collect();
         assert_eq!(lines.len(), 4, "{out}");
-        assert!(lines.iter().all(|l| l.contains("(stroke (width 0.203) (type default))")), "{lines:?}");
+        assert!(lines.iter().all(|l| l.contains("(stroke (width 0.2032) (type default))")), "{lines:?}");
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
-        assert_eq!(back.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(203_000));
+        assert_eq!(back.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(203_200));
 
         // An outline made here says no width, and is written as it always was.
         let (made, made_model) = fixture();
@@ -3222,7 +3222,7 @@ mod tests {
         assert_eq!((rev.margin_left_nm, rev.margin_top_nm, rev.margin_right_nm, rev.margin_bottom_nm), (1_000_000, 1_500_000, 2_000_000, 2_500_000));
         assert_eq!((rev.size_nm, rev.width_nm, rev.bold, rev.knockout, rev.border), (1_000_000, Some(1_200_000), true, true, true));
         let turned = dr.board_items.text_boxes.iter().find(|t| t.text == "turned").unwrap();
-        assert_eq!((turned.pts.len(), turned.angle, turned.border, turned.mirror), (4000, 45_000, false, true));
+        assert_eq!((turned.pts.len(), turned.angle, turned.border, turned.mirror), (4, 45_000, false, true));
         assert!(dr.locked_ids.contains(&turned.id), "a locked text box comes back locked");
         assert_eq!(dr.groups.len(), 1, "a group holds the first text box and the line");
         assert!(dr.groups[0].member_ids.contains(&rev.id));
@@ -3459,9 +3459,9 @@ mod tests {
         let line = |net: usize| out.lines().find(|l| l.contains("(via") && l.contains(&format!("(net {net}) "))).unwrap_or_else(|| panic!("via on net {net} in {out}")).trim().to_string();
         let blind = line(1);
         assert!(blind.starts_with("(via blind (at 10 10) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"In2.Cu\") (remove_unused_layers yes) (keep_end_layers yes) (free yes) (zone_layer_connections \"F.Cu\" \"In1.Cu\") (tenting (front no) (back no)) (capping yes) (covering (front no) (back yes)) (net "), "{blind}");
-        let micro = line(2000);
+        let micro = line(2);
         assert!(micro.starts_with("(via micro (at 20 10) (size 0.3) (drill 0.1) (layers \"F.Cu\" \"In1.Cu\") (padstack (mode front_inner_back) (layer \"Inner\" (size 0.35)) (layer \"B.Cu\" (size 0.4))) (teardrops (best_length_ratio 0.5) (max_length 1) (curved_edges no)) (net "), "{micro}");
-        let plain = line(3000);
+        let plain = line(3);
         assert!(plain.starts_with("(via (at 30 10) (size 0.8) (drill 0.4) (layers \"F.Cu\" \"B.Cu\") (net "), "{plain}");
         // Read again, the same.
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();

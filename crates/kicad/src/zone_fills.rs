@@ -756,7 +756,7 @@ mod tests {
         let copper = fills.copper(&d);
         let f = copper.get("zone-a", "F.Cu").expect("a fill");
         assert_eq!(f.polys.len(), 1);
-        assert_eq!(f.polys[0][0][1], Point64::new(9_250, 500));
+        assert_eq!(f.polys[0][0][1], Point64::new(9_250_000, 500_000));
 
         // An edit elsewhere on the board changes nothing about the zone; an edit to the zone itself empties it.
         let mut moved = z.clone();

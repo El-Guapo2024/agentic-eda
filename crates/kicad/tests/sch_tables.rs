@@ -65,7 +65,7 @@ fn a_table_is_written_into_the_sheet_and_read_back_with_its_cells_its_lock_and_i
     assert_eq!((t.col_count(), t.row_count(), t.at, t.angle), (2, 3, want.at, 0));
     assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (want.col_widths.clone(), want.row_heights.clone()));
     assert_eq!(t.texts(), want.texts());
-    assert_eq!((t.cells[4].col_span, t.cells[5].col_span, t.cells[5].row_span), (2000, 0, 1));
+    assert_eq!((t.cells[4].col_span, t.cells[5].col_span, t.cells[5].row_span), (2, 0, 1));
     assert_eq!((t.cells[3].style.h_align, t.cells[3].style.bold, t.cells[1].style.v_align), (TextJustify::Right, true, TextVAlign::Center));
     assert_eq!((t.cells[1].fill, t.cells[1].fill_color), (want.cells[1].fill, want.cells[1].fill_color));
     assert!(t.cells[2].exclude_from_sim && !t.cells[0].exclude_from_sim);

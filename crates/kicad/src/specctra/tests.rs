@@ -73,10 +73,10 @@ pub(super) fn sample_board() -> (Design, ConstraintModel) {
         ..Default::default()
     };
     let placement = PlacementSection {
-        outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }],
+        outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
         footprints: vec![
-            FootprintInstance { id: "U1".into(), at: Point { x: 5_000_000, y: 5_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
-            FootprintInstance { id: "C1".into(), at: Point { x: 10_000_000, y: 10_000_000 }, rot: 90_000, side: Side::Bottom, label: Default::default() },
+            FootprintInstance { id: "U1".into(), at: Point { x: 5_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
+            FootprintInstance { id: "C1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 90_000, side: Side::Bottom, label: Default::default() },
         ],
         modules: Vec::new(),
     };
@@ -91,9 +91,9 @@ pub(super) fn sample_board() -> (Design, ConstraintModel) {
         nets: None,
         placement: Some(placement),
         routing: Some(RoutingSection {
-            tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 5_000_000, y: 5_000_000 }, Point { x: 10_000_000, y: 5_000_000 }, Point { x: 10_000_000, y: 8_000_000 }], arc_mid_offset: None }],
-            vias: vec![Via { id: String::new(), net: "VIN".into(), at: Point { x: 10_000_000, y: 8_000_000 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
-            zones: vec![Zone { net: "GND".into(), layer: "B.Cu".into(), outline: vec![Point { x: 1_000_000, y: 1_000_000 }, Point { x: 19_000_000, y: 1_000_000 }, Point { x: 19_000_000, y: 19_000_000 }, Point { x: 1_000_000, y: 19_000_000 }], ..Zone::default() }],
+            tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }, Point { x: 10_000, y: 8_000 }], arc_mid_offset: None }],
+            vias: vec![Via { id: String::new(), net: "VIN".into(), at: Point { x: 10_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
+            zones: vec![Zone { net: "GND".into(), layer: "B.Cu".into(), outline: vec![Point { x: 1_000, y: 1_000 }, Point { x: 19_000, y: 1_000 }, Point { x: 19_000, y: 19_000 }, Point { x: 1_000, y: 19_000 }], ..Zone::default() }],
             track_width_presets: vec![],
             via_presets: vec![],
             teardrop_settings: Default::default(),
@@ -162,7 +162,7 @@ fn the_pins_of_the_dsn_are_where_the_pads_of_the_board_are() {
             }
         }
     }
-    assert_eq!(checked, 5000, "every pad was found");
+    assert_eq!(checked, 5, "every pad was found");
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------- the writer, element by element
@@ -182,10 +182,10 @@ fn a_path_wraps_past_seventy_characters_at_nest_level_six() {
     p.layer_id = "F.Cu".into();
     p.aperture_width = 200.0;
     p.points = (0..8).map(|i| Pt::new(10000.0 + i as f64, -20000.5)).collect();
-    let text = written(|o| p.format(o, 2000));
+    let text = written(|o| p.format(o, 2));
     assert_eq!(text, "    (path F.Cu 200  10000 -20000.5  10001 -20000.5  10002 -20000.5  10003 -20000.5\n            10004 -20000.5  10005 -20000.5  10006 -20000.5  10007 -20000.5)\n");
     // At nest level 0 (inside a wire) there is no newline after it, and a square aperture is said.
-    p.points.truncate(2000);
+    p.points.truncate(2);
     p.aperture_square = true;
     assert_eq!(written(|o| p.format(o, 0)), "(path F.Cu 200  10000 -20000.5  10001 -20000.5(aperture_type square))");
     p.polygon = true;
@@ -196,9 +196,9 @@ fn a_path_wraps_past_seventy_characters_at_nest_level_six() {
 #[test]
 fn a_circle_writes_its_centre_only_off_the_origin_and_a_qarc_its_three_points() {
     let c = Circle { layer_id: "B.Cu".into(), diameter: 600.0, vertex: Pt::default() };
-    assert_eq!(written(|o| c.format(o, 3000)), "      (circle B.Cu 600)\n");
+    assert_eq!(written(|o| c.format(o, 3)), "      (circle B.Cu 600)\n");
     let c = Circle { vertex: Pt::new(-1.5, 2.0), ..c };
-    assert_eq!(written(|o| c.format(o, 3000)), "      (circle B.Cu 600 -1.5 2)\n");
+    assert_eq!(written(|o| c.format(o, 3)), "      (circle B.Cu 600 -1.5 2)\n");
     let q = Qarc { layer_id: "F.Cu".into(), aperture_width: 250.0, vertex: [Pt::new(0.0, 0.0), Pt::new(10.0, 10.0), Pt::new(10.0, 0.0)] };
     assert_eq!(written(|o| q.format(o, 0)), "(qarc F.Cu 250  0 0  10 10  10 0)");
 }
@@ -215,19 +215,19 @@ fn a_wire_and_a_via_are_written_as_kicad_writes_them() {
     w.shape = Some(ShapeElem::Path(p));
     w.net_id = "/SDA".into();
     w.wire_type = Some(WireType::Fix);
-    assert_eq!(written(|o| w.format(o, 2000)), "    (wire (path \"Top Layer\" 150  1 2  3 4)(net /SDA)(type fix))\n");
+    assert_eq!(written(|o| w.format(o, 2)), "    (wire (path \"Top Layer\" 150  1 2  3 4)(net /SDA)(type fix))\n");
 
     let mut v = WireVia::new();
     v.padstack_id = "Via[0-1]_600:300_um".into();
     v.vertexes = vec![Pt::new(3292.0, -8374.0)];
     v.net_id = "N1".into();
     v.via_type = Some(WireType::Route);
-    assert_eq!(written(|o| v.format(o, 2000)), "    (via \"Via[0-1]_600:300_um\"  3292 -8374 (net N1)(type route))\n");
+    assert_eq!(written(|o| v.format(o, 2)), "    (via \"Via[0-1]_600:300_um\"  3292 -8374 (net N1)(type route))\n");
     v.vertexes = (0..7).map(|i| Pt::new(100000.0 + i as f64, -200000.0)).collect();
     v.net_id.clear();
     v.via_type = None;
     assert_eq!(
-        written(|o| v.format(o, 2000)),
+        written(|o| v.format(o, 2)),
         "    (via \"Via[0-1]_600:300_um\"  100000 -200000  100001 -200000  100002 -200000  100003 -200000\n      100004 -200000  100005 -200000  100006 -200000)\n"
     );
 }
@@ -241,7 +241,7 @@ fn a_place_is_one_line_with_its_part_number_last() {
     p.side = super::model::Side::Back;
     p.rotation = 270.0;
     p.part_number = "10k".into();
-    assert_eq!(written(|o| p.format(o, 3000)), "      (place \"R 1\" 2875 -11200 back 270 (PN 10k))\n");
+    assert_eq!(written(|o| p.format(o, 3)), "      (place \"R 1\" 2875 -11200 back 270 (PN 10k))\n");
 }
 
 /// `PADSTACK::Format` of a via `makeVia` made: a circle on each layer and `(attach off)`.
@@ -254,7 +254,7 @@ fn a_via_padstack_is_its_circles_and_attach_off() {
         s.shape = Some(ShapeElem::Circle(Circle { layer_id: layer.into(), diameter: 600.0, vertex: Pt::default() }));
         ps.shapes.push(s);
     }
-    assert_eq!(written(|o| ps.format(o, 2000)), "    (padstack \"Via[0-1]_600:300_um\"\n      (shape (circle F.Cu 600))\n      (shape (circle B.Cu 600))\n      (attach off)\n    )\n");
+    assert_eq!(written(|o| ps.format(o, 2)), "    (padstack \"Via[0-1]_600:300_um\"\n      (shape (circle F.Cu 600))\n      (shape (circle B.Cu 600))\n      (attach off)\n    )\n");
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------- FromSESSION
@@ -279,16 +279,16 @@ fn a_session_brings_back_the_routing_and_the_placement_the_dsn_had() {
     let segs: Vec<(Point, Point, i64, &str, &str)> = got.tracks.iter().map(|(t, _)| (t.pts[0], t.pts[1], t.width, t.layer.as_str(), t.net.as_str())).collect();
     assert_eq!(
         segs,
-        vec![(Point { x: 5_000_000, y: 5_000_000 }, Point { x: 10_000_000, y: 5_000_000 }, 200_000, "F.Cu", "VIN"), (Point { x: 10_000_000, y: 5_000_000 }, Point { x: 10_000_000, y: 8_000_000 }, 200_000, "F.Cu", "VIN")]
+        vec![(Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }, 200, "F.Cu", "VIN"), (Point { x: 10_000, y: 5_000 }, Point { x: 10_000, y: 8_000 }, 200, "F.Cu", "VIN")]
     );
     assert!(got.tracks.iter().all(|(_, locked)| !locked));
     assert_eq!(got.vias.len(), 1);
     let v = &got.vias[0];
-    assert_eq!((v.via.at, v.via.diameter, v.via.drill, v.via.from_layer.as_str(), v.via.to_layer.as_str(), v.via.net.as_str()), (Point { x: 10_000_000, y: 8_000_000 }, 600_000, 300_000, "F.Cu", "B.Cu", "VIN"));
+    assert_eq!((v.via.at, v.via.diameter, v.via.drill, v.via.from_layer.as_str(), v.via.to_layer.as_str(), v.via.net.as_str()), (Point { x: 10_000, y: 8_000 }, 600, 300, "F.Cu", "B.Cu", "VIN"));
     assert_eq!(v.kind, ViaKind::Through);
     let mut places: Vec<_> = got.placements.iter().map(|p| (p.reference.as_str(), p.at, p.rot, p.side)).collect();
     places.sort_by(|a, b| a.0.cmp(b.0));
-    assert_eq!(places, vec![("C1", Point { x: 10_000_000, y: 10_000_000 }, 90_000, Side::Bottom), ("U1", Point { x: 5_000_000, y: 5_000_000 }, 0, Side::Top)]);
+    assert_eq!(places, vec![("C1", Point { x: 10_000, y: 10_000 }, 90_000, Side::Bottom), ("U1", Point { x: 5_000, y: 5_000 }, 0, Side::Top)]);
 }
 
 fn session_with(routes: &str) -> String {
@@ -306,7 +306,7 @@ fn a_session_is_read_in_its_own_resolution() {
     assert_eq!((t.pts[0], t.pts[1], t.width, *locked), (Point { x: 0, y: 0 }, Point { x: 2_540_000, y: 1_270_000 }, 254_000, true));
     assert_eq!(got.tracks[1].0.net, "", "a net the board has not got is no net");
     let v = &got.vias[0].via;
-    assert_eq!((v.at, v.diameter, v.drill), (Point { x: 2_540_000, y: 1_270_000 }, 610_000, 400_000));
+    assert_eq!((v.at, v.diameter, v.drill), (Point { x: 2_540_000, y: 1_270_000 }, 609_600, 400_000));
 }
 
 /// `makeARC`: a quarter arc about its third vertex, the middle on the short way round.
@@ -317,8 +317,8 @@ fn a_qarc_is_an_arc_through_its_middle() {
     let got = from_session(&ses, "s.ses", &design, &model).unwrap();
     let (start, mid, end) = got.tracks[0].0.arc().expect("an arc");
     assert_eq!((start, end), (Point { x: 0, y: 0 }, Point { x: 2_540_000, y: 2_540_000 }));
-    // The centre is (2540, 0) on the board: the middle of the quarter is at 45 degrees from it, towards the origin's side.
-    let r = 2_540.0_f64;
+    // The centre is (2540000, 0) on the board: the middle of the quarter is at 45 degrees from it, towards the origin's side.
+    let r = 2_540_000.0_f64;
     assert!(((mid.x as f64) - (r - r / 2f64.sqrt())).abs() <= 1.0 && ((mid.y as f64) - r / 2f64.sqrt()).abs() <= 1.0, "{mid:?}");
 }
 
@@ -346,9 +346,9 @@ fn a_via_drill_equal_to_the_default_is_the_nets_own() {
     let pcb_text = crate::export_kicad_pcb(&sample_board().0, &model, &crate::ExportMeta { date: "", title: "" }).unwrap();
     let board = BoardView::parse(&pcb_text).unwrap();
     let session = super::parse::load_session(&session_with("(net VIN (via V:400_um 0 0))"), "s.ses").unwrap();
-    let got = from_session_db(&session, &board, 400_000_000, &|net| if net == "VIN" { 350_000 } else { 0 }).unwrap();
+    let got = from_session_db(&session, &board, 400_000, &|net| if net == "VIN" { 350_000 } else { 0 }).unwrap();
     assert_eq!(got.vias[0].via.drill, 350_000);
-    let got = from_session_db(&session, &board, 300_000_000, &|_| 0).unwrap();
+    let got = from_session_db(&session, &board, 300_000, &|_| 0).unwrap();
     assert_eq!(got.vias[0].via.drill, 400_000);
 }
 
@@ -373,17 +373,17 @@ fn block<'a>(text: &'a str, head: &str) -> &'a str {
 /// `FromBOARD` on the hand-made board, read as KiCad reads it: the Default class at KiCad's defaults, the outline its Edge.Cuts rectangle.
 fn parity_export() -> String {
     let mut board = BoardView::parse(PARITY_PCB).unwrap();
-    let edge = eda_model::ir::Shape::Rect { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50_000_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 80_000_000_000, y: 40_000_000_000 } };
-    let mut outline = eda_drc::outline::build_board_polygon_outlines(&[edge], 5_000.0, 10_000_000, true);
+    let edge = eda_model::ir::Shape::Rect { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 80_000_000, y: 40_000_000 } };
+    let mut outline = eda_drc::outline::build_board_polygon_outlines(&[edge], 5_000.0, 10_000, true);
     outline.polys.simplify();
-    let default_class = super::export::ClassFacts { name: "Default".into(), track_width: 200_000_000, clearance: 200_000_000, via_diameter: 600_000_000, via_drill: 300_000_000 };
+    let default_class = super::export::ClassFacts { name: "Default".into(), track_width: 200_000, clearance: 200_000, via_diameter: 600_000, via_drill: 300_000 };
     let class_of = |_: &str| default_class.clone();
     let st = super::export::Settings {
         pcb_name: "specctra_parity.dsn".into(),
         host_version: super::HOST_VERSION.into(),
         outline: &outline,
         hole_clearance: 0,
-        max_error: 5_000_000,
+        max_error: 5_000,
         default_class: default_class.clone(),
         class_of_net: &class_of,
     };
@@ -465,6 +465,8 @@ fn the_placement_and_network_of_the_hand_made_board_are_kicads() {
 #[test]
 fn a_round_cutout_is_kicads_polygon_to_the_nanometre() {
     let (mut design, model) = sample_board();
+    // the sample board's outline is a 20 mm square here, so that the 1.5 mm hole at (15, 15) mm is inside it
+    design.placement.as_mut().unwrap().outline = vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }];
     design.drawings = Some(eda_model::ir::DrawingsSection {
         shapes: vec![eda_model::ir::Shape::Circle { id: "shp_hole".into(), layer: "Edge.Cuts".into(), stroke_width: 50_000, filled: false, center: Point { x: 15_000_000, y: 15_000_000 }, end: Point { x: 16_500_000, y: 15_000_000 } }],
         ..Default::default()

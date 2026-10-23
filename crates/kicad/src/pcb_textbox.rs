@@ -17,7 +17,7 @@ const NO_STROKE: i64 = -1;
 /// The first board file version with an explicit `(border yes|no)`; before it a text box had a border when its stroke width was not negative.
 const FIRST_BORDER_FLAG: i64 = 20230825;
 /// The text size of a text with no `(size ..)` in its effects (`parseEDA_TEXT`: "force legacy default units", 60 mils).
-const LEGACY_TEXT_SIZE_NM: i64 = 1_524;
+const LEGACY_TEXT_SIZE_NM: i64 = 1_524_000;
 
 fn yes(item: &[Sexpr], name: &str) -> Option<bool> {
     sexpr::find(item, name).map(|l| sexpr::txt(l, 1).map_or(true, |v| v != "no"))
@@ -277,7 +277,7 @@ mod tests {
         b.thickness_nm = 0;
         b.bold = true;
         b.italic = true;
-        b.line_spacing_permille = 1_500_000;
+        b.line_spacing_permille = 1_500;
         b.mirror = true;
         let mut out = String::from("(kicad_pcb (version 20241229)\n");
         write(&mut out, &b, false);

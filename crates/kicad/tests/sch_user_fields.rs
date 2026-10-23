@@ -277,7 +277,7 @@ fn a_sheet_pins_text_look_is_written_and_read_back() {
     // the font of the pin says its size, bold and italic; the other pin has the default text
     let pin = |name: &str| {
         let from = text.find(&format!("(pin \"{name}\"")).unwrap_or_else(|| panic!("no pin {name}"));
-        text[from..from + text[from..].find("(effects").unwrap() + 120_000].to_string()
+        text[from..from + text[from..].find("(effects").unwrap() + 120].to_string()
     };
     assert!(pin("CLK").contains("(font (size 2 2) (bold yes) (italic yes))"), "{}", pin("CLK"));
     assert!(pin("DATA").contains("(font (size 1.27 1.27))") && !pin("DATA").contains("bold"), "{}", pin("DATA"));

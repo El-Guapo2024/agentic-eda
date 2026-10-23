@@ -462,14 +462,14 @@ mod tests {
         let by = |i: usize| &art.shapes[i];
         assert!(matches!(&by(0).shape, Shape::Segment { start, end, stroke_width: 120_000, layer, .. } if *start == p(-2_000_000, -1_500_000) && *end == p(2_000_000, -1_500_000) && layer == "F.SilkS"));
         assert_eq!((by(1).style, matches!(by(1).shape, Shape::Arc { .. })), (LineStyle::Dash, true));
-        assert!(matches!(&by(2000).shape, Shape::Circle { filled: true, center, end, layer, .. } if *center == p(0, 0) && *end == p(500_000, 0) && layer == "F.Fab"));
-        assert!(matches!(&by(3000).shape, Shape::Rect { filled: false, .. }));
-        assert_eq!((by(3000).radius, by(3000).style), (200_000, LineStyle::Unset), "a rectangle's corner radius and the file's own `default` stroke type");
+        assert!(matches!(&by(2).shape, Shape::Circle { filled: true, center, end, layer, .. } if *center == p(0, 0) && *end == p(500_000, 0) && layer == "F.Fab"));
+        assert!(matches!(&by(3).shape, Shape::Rect { filled: false, .. }));
+        assert_eq!((by(3).radius, by(3).style), (200_000, LineStyle::Unset), "a rectangle's corner radius and the file's own `default` stroke type");
         // A polygon of no width is allowed because it is filled.
-        assert!(matches!(&by(4000).shape, Shape::Polygon { filled: true, stroke_width: 0, pts, .. } if pts.len() == 3));
-        assert!(matches!(&by(5000).shape, Shape::Bezier { c1, c2, .. } if *c1 == p(100_000, 200_000) && *c2 == p(300_000, 200_000)));
-        assert_eq!((by(6000).hatch, by(6000).shape.is_filled(), by(6000).layer()), (Some(Hatch::CrossHatch), false, "Dwgs.User"));
-        assert_eq!((by(7000).layers.clone(), by(7000).mask_margin), (vec!["F.Cu".to_string(), "F.Mask".to_string()], Some(50_000)));
+        assert!(matches!(&by(4).shape, Shape::Polygon { filled: true, stroke_width: 0, pts, .. } if pts.len() == 3));
+        assert!(matches!(&by(5).shape, Shape::Bezier { c1, c2, .. } if *c1 == p(100_000, 200_000) && *c2 == p(300_000, 200_000)));
+        assert_eq!((by(6).hatch, by(6).shape.is_filled(), by(6).layer()), (Some(Hatch::CrossHatch), false, "Dwgs.User"));
+        assert_eq!((by(7).layers.clone(), by(7).mask_margin), (vec!["F.Cu".to_string(), "F.Mask".to_string()], Some(50_000)));
     }
 
     #[test]
@@ -484,7 +484,7 @@ mod tests {
         let u = &art.texts[1];
         assert_eq!(u.text, "two\nlines");
         assert_eq!((u.layout.layer.as_str(), u.layout.knockout, u.layout.keep_upright, u.layout.mirror), ("B.SilkS", true, false, true));
-        assert_eq!((u.face.as_deref(), u.line_spacing_permille), (Some("Arial"), 1_200_000));
+        assert_eq!((u.face.as_deref(), u.line_spacing_permille), (Some("Arial"), 1200));
     }
 
     #[test]
@@ -552,7 +552,7 @@ mod tests {
             0,
         );
         let Shape::Arc { start, mid, end, stroke_width, .. } = &art.shapes[0].shape else { panic!("an arc") };
-        assert_eq!((*start, *mid, *end, *stroke_width), (p(20_000_000, 5_000_000), p(18_536_000, 8_536_000), p(15_000_000, 10_000_000), 150_000));
+        assert_eq!((*start, *mid, *end, *stroke_width), (p(20_000_000, 5_000_000), p(18_535_534, 8_535_534), p(15_000_000, 10_000_000), 150_000));
         // a circle of no width and a polygon with no `fill` token are filled
         assert!(art.shapes[1].shape.is_filled() && art.shapes[2].shape.is_filled());
         assert_eq!(art.texts[0].text, "${REFERENCE} ${VALUE}");

@@ -76,7 +76,7 @@ fn read_cell(item: &[Sexpr]) -> Option<(TableCell, FileCell)> {
     };
     let angle = ((angle_deg * 1000.0).round() as i64).rem_euclid(360_000) as u32;
     // The text of a text box is left and top until `(effects ..)` says otherwise; `(effects ..)` with no `(justify ..)` is centred both ways.
-    let style = if sexpr::find(item, "effects").is_some() { read_effects(item) } else { TableText::sch_default(1_270) };
+    let style = if sexpr::find(item, "effects").is_some() { read_effects(item) } else { TableText::sch_default(1_270_000) };
     let margins = match sexpr::find(item, "margins") {
         Some(m) => [um(sexpr::num(m, 1).unwrap_or(0.0)), um(sexpr::num(m, 2).unwrap_or(0.0)), um(sexpr::num(m, 3).unwrap_or(0.0)), um(sexpr::num(m, 4).unwrap_or(0.0))],
         None => [TableCell::legacy_margin_nm(&style, DEFAULT_STROKE_NM); 4],
@@ -380,9 +380,9 @@ mod tests {
         assert_eq!((t.border.external, t.border.header, t.border.stroke.width_nm, t.border.stroke.style), (true, true, 0, TableLineStyle::Solid));
         assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_nm), (true, true, 0));
         let c = &t.cells[0];
-        // 1.27 mm text, left and top, the margin 0.9525 mm (to the micrometre it is held in), no fill, in simulation
+        // 1.27 mm text, left and top, the margin 0.9525 mm, no fill, in simulation
         assert_eq!((c.style.height_nm, c.style.width_nm, c.style.h_align, c.style.v_align, c.fill, c.exclude_from_sim), (1_270_000, 1_270_000, eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, SchFill::None, false));
-        assert!(c.margins.iter().all(|m| (*m - 952).abs() <= 1), "{:?}", c.margins);
+        assert!(c.margins.iter().all(|m| *m == 952_500), "{:?}", c.margins);
         assert_eq!(c.uuid, "b8109563-e2fa-4fb6-9110-83137bb1a864");
         // the cells are where the file put them
         for (i, (row, col)) in [(0, 0), (0, 1), (1, 0), (1, 1)].into_iter().enumerate() {
@@ -435,10 +435,10 @@ mod tests {
 		(cells (table_cell "x" (at 1 2 0) (size 10 4) (span 1 1))))
 )"#;
         let t = read_first(text).table;
-        assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (152_000, 152_000));
+        assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (152_400, 152_400));
         assert_eq!((t.cells[0].style.h_align, t.cells[0].style.v_align, t.cells[0].style.height_nm), (eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, 1_270_000));
         // no margins: the legacy margin of the cell (the stroke's half and three quarters of 1.27 mm)
-        assert!(t.cells[0].margins.iter().all(|m| *m == 76 + 953), "{:?}", t.cells[0].margins);
+        assert!(t.cells[0].margins.iter().all(|m| *m == 76_200 + 952_500), "{:?}", t.cells[0].margins);
         // and nothing is written for the strokes of a table that draws none
         let mut out = String::new();
         write(&mut out, &t, false);

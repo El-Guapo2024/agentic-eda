@@ -1567,9 +1567,9 @@ mod tests {
                 p("1", "A1", "input", -2.54, 0.0, 1),
                 p("2", "A2", "input", -2.54, 0.0, 1),
                 p("3", "Y1", "output", 2.54, 180.0, 1),
-                p("4", "A3", "input", -2.54, 0.0, 2000),
-                p("5", "A4", "input", -2.54, 0.0, 2000),
-                p("6", "Y2", "output", 2.54, 180.0, 2000),
+                p("4", "A3", "input", -2.54, 0.0, 2),
+                p("5", "A4", "input", -2.54, 0.0, 2),
+                p("6", "Y2", "output", 2.54, 180.0, 2),
             ],
             power: false,
             in_bom: true,
@@ -1598,7 +1598,7 @@ mod tests {
 
         let sym = |unit: u32, x: i64| SymbolInstance { id: "U1".into(), at: Point { x, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "DUAL".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         let sch = SchematicSection {
-            symbols: vec![sym(1, 0), sym(2000, 50_000_000)],
+            symbols: vec![sym(1, 0), sym(2, 50_000_000)],
             wires: vec![],
             labels: vec![],
             texts: vec![],
@@ -1621,7 +1621,7 @@ mod tests {
         assert_eq!(back_sch.symbols.len(), 2, "both placed units survive the round trip");
         assert!(back_sch.symbols.iter().all(|s| s.id == "U1"));
         let units: std::collections::BTreeSet<u32> = back_sch.symbols.iter().map(|s| s.unit).collect();
-        assert_eq!(units, std::collections::BTreeSet::from([1, 2000]));
+        assert_eq!(units, std::collections::BTreeSet::from([1, 2]));
 
         // One Part, every one of the real symbol's 6 pins -- not split per
         // unit, not duplicated (this task's own "one part, one footprint,
@@ -1697,11 +1697,11 @@ mod tests {
         let (back, back_model, notes) = import_kicad_sch(&alt).expect("round trips");
         assert_eq!(notes.unresolved_symbols, 0);
         let back_sch = back.schematic.unwrap();
-        assert_eq!(back_sch.extras.body_styles.get("U1"), Some(&2000), "the instance keeps its body style");
-        assert_eq!(back_sch.body_style_of(&back_sch.symbols[0]), 2000);
+        assert_eq!(back_sch.extras.body_styles.get("U1"), Some(&2), "the instance keeps its body style");
+        assert_eq!(back_sch.body_style_of(&back_sch.symbols[0]), 2);
         let lib = &back_model.symbols[0];
         let alternate = lib.alternate.as_ref().expect("both bodies are read");
-        assert_eq!((lib.pins.len(), alternate.pins.len()), (3000, 3000), "each body has its own pins");
+        assert_eq!((lib.pins.len(), alternate.pins.len()), (3, 3), "each body has its own pins");
         assert_eq!((lib.graphics.len(), alternate.graphics.len()), (1, 1), "and its own graphics, not both drawn at once");
         let width = |g: &SymbolGraphic| match g {
             SymbolGraphic::Rectangle { start, end, .. } => (end.x - start.x).abs(),
@@ -1949,7 +1949,7 @@ mod tests {
         let mut segs: Vec<Vec<Point>> = joined.lines.iter().map(|l| l.pts.clone()).collect();
         segs.sort();
         assert_eq!(segs, vec![vec![Point { x: 0, y: 30_000_000 }, Point { x: 5_000_000, y: 30_000_000 }], vec![Point { x: 5_000_000, y: 30_000_000 }, Point { x: 5_000_000, y: 35_000_000 }]]);
-        assert!(joined.lines.iter().all(|l| l.width_nm == 254));
+        assert!(joined.lines.iter().all(|l| l.width_nm == 254_000));
         assert_eq!(joined.wires.len(), 2, "a graphic line is never read back as a wire");
     }
 

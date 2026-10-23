@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// `DEFAULT_JUNCTION_DIAM`, 36 mil: the preview junction's effective diameter (`SCH_JUNCTION::GetEffectiveDiameter`), nanometres.
 const JUNCTION_DIAMETER_NM: f64 = 914_400.0;
-/// "std::max( base * 1.5, 800.0 )" and "std::max( { 800.0, ... } )": 800 nm.
-const MIN_RADIUS_NM: f64 = 800.0;
+/// "std::max( base * 1.5, 800.0 )" and "std::max( { 800.0, ... } )" (sch_drag_net_collision.cpp): 800 schematic IU of 100 nm.
+const MIN_RADIUS_NM: f64 = 80_000.0;
 
 /// A circle where the held items would join two nets (`COLLISION_MARKER`).
 #[derive(Debug, Clone, PartialEq, Serialize)]

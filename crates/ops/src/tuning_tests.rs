@@ -15,7 +15,7 @@ fn pattern() -> TuningPattern {
         min_amplitude: 200_000,
         max_amplitude: 1_000_000,
         spacing: 600_000,
-        corner_radius_percent: 80_000,
+        corner_radius_percent: 80,
         rounded: true,
         single_sided: false,
         override_custom_rules: false,

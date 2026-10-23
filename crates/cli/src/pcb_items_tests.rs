@@ -608,7 +608,7 @@ fn kicad_cli_plots_the_hatching_this_studio_works_out() {
     let hatched = |id: &str| (all.shapes.iter().find(|s| s.id() == id).unwrap(), all.board_items.hatch_of(id).unwrap());
 
     // The three hatchings, each polygon of ours against one of kicad-cli's: a stadium per line for the hatch and the reverse hatch.
-    let to_mm = |poly: &eda_shape_poly_set::LineChain| -> Vec<(f64, f64)> { poly.iter().map(|p| (p.x as f64 / 1000.0, p.y as f64 / 1000.0)).collect() };
+    let to_mm = |poly: &eda_shape_poly_set::LineChain| -> Vec<(f64, f64)> { poly.iter().map(|p| (p.x as f64 / 1e6, p.y as f64 / 1e6)).collect() };
     let stadiums: Vec<Vec<(f64, f64)>> = [&rect, &circle].iter().flat_map(|id| { let (s, h) = hatched(id); eda_drc::hatch::hatch_polygons(&design, Some(&model), s, h).iter().map(to_mm).collect::<Vec<_>>() }).collect();
     assert!(stadiums.len() > 10, "{} lines", stadiums.len());
     let (tri_shape, tri_kind) = hatched(&tri);

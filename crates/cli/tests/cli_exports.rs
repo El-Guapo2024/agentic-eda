@@ -76,7 +76,7 @@ struct Board {
 
 fn board(dir: &Path) -> Board {
     let d: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("design.json")).unwrap()).unwrap();
-    let mm = |v: &Value| v.as_f64().unwrap() / 1000.0;
+    let mm = |v: &Value| v.as_f64().unwrap() / 1e6;
     let outline = d["placement"]["outline"].as_array().unwrap().iter().map(|p| (mm(&p["x"]), mm(&p["y"]))).collect();
     let parts = d["placement"]["footprints"].as_array().unwrap().iter().map(|f| (f["id"].as_str().unwrap().to_string(), (mm(&f["at"]["x"]), mm(&f["at"]["y"])))).collect();
     Board { outline, parts }

@@ -15,7 +15,7 @@ use eda_model::sch_extras::{LabelField, LabelSpin, INTERSHEET_REFS_FIELD};
 use std::fmt::Write as _;
 
 /// The height of a label's field text: `SCH_FIELD`'s default, 50 mil.
-const FIELD_SIZE_NM: f64 = 1270.0;
+const FIELD_SIZE_NM: f64 = 1_270_000.0;
 
 /// One field of a label, where `AutoplaceFields` puts it.
 #[derive(Debug, Clone, PartialEq)]

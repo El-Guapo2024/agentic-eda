@@ -10,9 +10,9 @@ use crate::sexpr::{self, Sexpr};
 use crate::{fmt_mm_f, mm, mm_to_nm, sexpr_str};
 
 /// `PCB_BARCODE`'s own defaults: 40 mm square, a QR code of error correction level L on `Dwgs.User`, the text printed.
-const DEFAULT_SIZE_NM: i64 = 40_000;
+const DEFAULT_SIZE_NM: i64 = 40_000_000;
 /// The height of a `PCB_TEXT` that nothing sized (1.5 mm).
-const DEFAULT_TEXT_HEIGHT_NM: i64 = 1_500;
+const DEFAULT_TEXT_HEIGHT_NM: i64 = 1_500_000;
 
 fn yes(item: &[Sexpr], name: &str) -> Option<bool> {
     sexpr::find(item, name).map(|l| sexpr::txt(l, 1).map_or(true, |v| v != "no"))

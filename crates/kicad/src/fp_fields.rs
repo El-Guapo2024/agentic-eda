@@ -410,12 +410,12 @@ mod tests {
                 (property "Sheet file" "a.kicad_sch") (property "Sheetname" "root") (property "ki_description" "an inductor") (property "Manufacturer" "ACME")
                 (property "Shown" "yes" (hide no)))"#,
         );
-        let e = parse_footprint_edit_in(&node, "L1", None, Side::Top, 0, 20_210_722_000);
+        let e = parse_footprint_edit_in(&node, "L1", None, Side::Top, 0, 20210722);
         let names: Vec<&str> = e.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["Manufacturer", "Shown"]);
         assert_eq!((e.fields[0].layout.visible, e.fields[1].layout.visible), (false, true));
         // the same properties in a current file are fields like any other, shown
-        let e = parse_footprint_edit_in(&node, "L1", None, Side::Top, 0, 20_241_229_000);
+        let e = parse_footprint_edit_in(&node, "L1", None, Side::Top, 0, 20241229);
         assert_eq!(e.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["Sheet file", "Sheetname", "Manufacturer", "Shown"]);
         assert!(e.fields.iter().all(|f| f.layout.visible));
     }
@@ -465,7 +465,7 @@ mod tests {
             // The offset in the file's frame: x negated on the bottom side, where the whole frame is mirrored.
             let ox = if side == Side::Bottom { -300_000 } else { 300_000 };
             let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(ox), mm(-100_000), t.margins));
-            let back = parse_pad_extras(&node, side, 20_241_229_000);
+            let back = parse_pad_extras(&node, side, 20241229);
             assert_eq!((back.offset, back.solder_mask_margin, back.solder_paste_margin, back.solder_paste_margin_ratio), (e.offset, e.solder_mask_margin, e.solder_paste_margin, e.solder_paste_margin_ratio), "{side:?}");
         }
         assert!(pad_text(None).margins.is_empty());
@@ -474,9 +474,9 @@ mod tests {
     #[test]
     fn an_old_file_reads_a_zero_margin_as_unset() {
         let node = parse("(pad \"1\" smd rect (at 0 0) (size 1 1) (solder_mask_margin 0))");
-        let old = parse_pad_extras(&node, Side::Top, 20_231_231_000);
+        let old = parse_pad_extras(&node, Side::Top, 20231231);
         assert_eq!(old.solder_mask_margin, None);
-        let new = parse_pad_extras(&node, Side::Top, 20_241_229_000);
+        let new = parse_pad_extras(&node, Side::Top, 20241229);
         assert_eq!(new.solder_mask_margin, Some(0));
     }
 }

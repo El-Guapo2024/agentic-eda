@@ -1286,7 +1286,7 @@ mod tests {
         assert_eq!(patterns.len(), 4);
         let mut tuned_again = 0;
         for p in &patterns {
-            let (lo, hi) = (p.target_length.min as f64 / 1000.0, p.target_length.max as f64 / 1000.0);
+            let (lo, hi) = (p.target_length.min as f64 / 1e6, p.target_length.max as f64 / 1e6);
             let cmds = match retune_cmds(&scene, p, &Value::Null) {
                 Ok(c) => c,
                 Err(e) => panic!("pattern {} ({}, {} members): {e}", p.id, p.layer, p.member_ids.len()),
@@ -1307,7 +1307,7 @@ mod tests {
             }
             tuned_again += 1;
         }
-        assert_eq!(tuned_again, 4000);
+        assert_eq!(tuned_again, 4);
     }
 
     /// kicad-cli's own lengths for the nets of `qa/data/pcbnew/length_calculations.kicad_pcb` (a `.kicad_dru` rule `(constraint length (max 0.001mm))` that nothing can meet
@@ -1397,7 +1397,7 @@ mod tests {
                             let (mut raw, mut clipped) = (0.0f64, 0.0f64);
                             for it in &path.items {
                                 if let eda_pns::tuning_path::PathItem::Line { line, clipped: c } = it {
-                                    raw += line.pts.windows(2).map(|w| ((w[1].x - w[0].x) as f64).hypot((w[1].y - w[0].y) as f64)).sum::<f64>() / 1000.0;
+                                    raw += line.pts.windows(2).map(|w| ((w[1].x - w[0].x) as f64).hypot((w[1].y - w[0].y) as f64)).sum::<f64>() / 1e6;
                                     clipped += c.length() as f64 / 1e6;
                                 }
                             }

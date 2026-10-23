@@ -133,12 +133,12 @@ pub(crate) fn write_all(out: &mut String, stitches: &[ViaStitch], written: &BTre
             writeln!(out, "\t\t(net_name {})", sexpr_str(&v.net)).unwrap();
         }
         point_prop(out, "origin", v.origin);
-        writeln!(out, "\t\t(origin_offset_x {})", fmt_g10(v.origin_offset.x as f64 / 1000.0)).unwrap();
-        writeln!(out, "\t\t(origin_offset_y {})", fmt_g10(v.origin_offset.y as f64 / 1000.0)).unwrap();
+        writeln!(out, "\t\t(origin_offset_x {})", fmt_g10(v.origin_offset.x as f64 / 1e6)).unwrap();
+        writeln!(out, "\t\t(origin_offset_y {})", fmt_g10(v.origin_offset.y as f64 / 1e6)).unwrap();
         if v.outline.len() >= 3 {
             line_prop(out, "outline", &v.outline);
         }
-        writeln!(out, "\t\t(pitch {})", fmt_g10(v.pitch_nm as f64 / 1000.0)).unwrap();
+        writeln!(out, "\t\t(pitch {})", fmt_g10(v.pitch_nm as f64 / 1e6)).unwrap();
         writeln!(out, "\t\t(seed {})", v.seed as i32).unwrap();
         let template_uuid = crate::duid_for(&format!("via_stitch:{}:template", v.id), &v.id);
         writeln!(out, "\t\t(templates (template (name \"via\") {}))", template_text(&v.via, &template_uuid)).unwrap();
@@ -166,9 +166,9 @@ mod tests {
         let g = sexpr::find(tree.as_list().unwrap(), "generated").unwrap();
         let ids: BTreeMap<String, String> = [("04288bcc-34bb-42f3-875a-f6ee14bb69e9".to_string(), "via_a".to_string())].into_iter().collect();
         let v = read(g, &ids);
-        assert_eq!((v.layout, v.mode, v.net.as_str(), v.pitch_nm, v.seed, v.origin_offset), (StitchLayout::Staggered, StitchMode::Stitch, "GND", 1_000_000, 7000, Point { x: 250_000, y: 0 }));
+        assert_eq!((v.layout, v.mode, v.net.as_str(), v.pitch_nm, v.seed, v.origin_offset), (StitchLayout::Staggered, StitchMode::Stitch, "GND", 1_000_000, 7, Point { x: 250_000, y: 0 }));
         assert_eq!(v.outline.len(), 4);
-        assert_eq!(v.excluded_cells, vec![(3000, 4000), (-1, 2000)]);
+        assert_eq!(v.excluded_cells, vec![(3, 4), (-1, 2)]);
         assert_eq!((v.via.size_nm, v.via.drill_nm, v.via.from_layer.as_str()), (600_000, 300_000, "F.Cu"));
         assert_eq!(v.member_ids, vec!["via_a".to_string()], "a member that is not a via of the board is not one");
 

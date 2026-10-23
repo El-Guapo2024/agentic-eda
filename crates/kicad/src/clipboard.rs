@@ -515,7 +515,7 @@ mod tests {
         design.drawings.as_mut().unwrap().zone_overrides.push(eda_model::ir::FootprintZoneOverrides {
             id: "C1".into(),
             footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(900_000) }),
-            pads: vec![PadZoneOverride { number: "2".into(), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400_000), thermal_spoke_width: Some(300_000), thermal_spoke_angle_mdeg: Some(30_000_000), clearance: Some(600_000) }],
+            pads: vec![PadZoneOverride { number: "2".into(), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400_000), thermal_spoke_width: Some(300_000), thermal_spoke_angle_mdeg: Some(30_000), clearance: Some(600_000) }],
         });
         // A footprint on its own, and the same one inside a board fragment: the text says the same, and the paste reads it back.
         for names in [ids(&["C1"]), ids(&["C1", "zone_a"])] {
@@ -526,7 +526,7 @@ mod tests {
             let edit = clip.footprints[0].zone_overrides.as_ref().expect("the paste reads them back");
             assert_eq!(edit.footprint, Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(900_000) }));
             assert_eq!(edit.pads.len(), 1, "{:?}", edit.pads);
-            assert_eq!((edit.pads[0].number.as_str(), edit.pads[0].zone_connection, edit.pads[0].thermal_gap, edit.pads[0].thermal_spoke_width, edit.pads[0].thermal_spoke_angle_mdeg, edit.pads[0].clearance), ("2", Some(PadConnection::Full), Some(400_000), Some(300_000), Some(30_000_000), Some(600_000)));
+            assert_eq!((edit.pads[0].number.as_str(), edit.pads[0].zone_connection, edit.pads[0].thermal_gap, edit.pads[0].thermal_spoke_width, edit.pads[0].thermal_spoke_angle_mdeg, edit.pads[0].clearance), ("2", Some(PadConnection::Full), Some(400_000), Some(300_000), Some(30_000), Some(600_000)));
         }
         // C2 sets nothing, and its copy says so.
         let clip = parse_pcb_clipboard(&export_pcb_clipboard(&design, &model, &ids(&["C2"]), p(0, 0)).unwrap()).unwrap();

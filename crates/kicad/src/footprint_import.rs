@@ -532,7 +532,7 @@ mod tests {
         fp.pads[0].zone_connection = Some(eda_model::ir::PadConnection::Full);
         fp.pads[0].thermal_gap_override = Some(250_000);
         fp.pads[0].thermal_spoke_width_override = Some(300_000);
-        fp.pads[0].thermal_spoke_angle_mdeg = Some(30_500_000);
+        fp.pads[0].thermal_spoke_angle_mdeg = Some(30_500);
         fp.pads[1].zone_connection = Some(eda_model::ir::PadConnection::ThtThermal);
         // 90 degrees is an oval's default angle: KiCad does not write it, and the reader gives back "not set".
         fp.pads[1].thermal_spoke_angle_mdeg = Some(90_000);
@@ -549,7 +549,7 @@ mod tests {
         let by = |n: &str| back.pads.iter().find(|p| p.number == n).unwrap();
         let p1 = by("1");
         assert_eq!(p1.zone_connection, Some(eda_model::ir::PadConnection::Full));
-        assert_eq!((p1.thermal_gap_override, p1.thermal_spoke_width_override, p1.thermal_spoke_angle_mdeg, p1.clearance_override), (Some(250_000), Some(300_000), Some(30_500_000), Some(200_000)));
+        assert_eq!((p1.thermal_gap_override, p1.thermal_spoke_width_override, p1.thermal_spoke_angle_mdeg, p1.clearance_override), (Some(250_000), Some(300_000), Some(30_500), Some(200_000)));
         assert_eq!((by("2").zone_connection, by("2").thermal_spoke_angle_mdeg), (Some(eda_model::ir::PadConnection::ThtThermal), None));
         assert_eq!((by("3").zone_connection, by("3").thermal_spoke_angle_mdeg), (Some(eda_model::ir::PadConnection::None), None));
         // a footprint that sets nothing writes nothing

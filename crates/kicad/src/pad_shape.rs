@@ -291,7 +291,7 @@ mod tests {
         let r = read_pad_shape(&node, Side::Top);
         assert_eq!(r.shape, PadShape::Custom);
         let custom = r.ext.custom.clone().unwrap();
-        assert_eq!((custom.anchor, custom.zone, custom.primitives.len()), (PadAnchor::Rect, CustomZoneMode::ConvexHull, 6000));
+        assert_eq!((custom.anchor, custom.zone, custom.primitives.len()), (PadAnchor::Rect, CustomZoneMode::ConvexHull, 6));
         assert_eq!(custom.primitives.iter().filter(|p| p.proxy).count(), 2, "gr_bbox and gr_vector are proxy items");
         assert!(matches!(custom.primitives[0].shape, Shape::Circle { stroke_width: 2_200_000, filled: false, center: Point { x: -2_975_000, y: 0 }, .. }));
         // The text it writes reads back to the same shape, on either side.

@@ -44,7 +44,7 @@ fn cases() -> Vec<(LabelKind, LabelSpin, LabelLook)> {
             let look = match (k + s) % 4 {
                 0 => LabelLook::default(),
                 1 => LabelLook { size_nm: 2_000_000, bold: false, italic: false, auto_rotate: false },
-                2000 => LabelLook { size_nm: 0, bold: true, italic: true, auto_rotate: false },
+                2 => LabelLook { size_nm: 0, bold: true, italic: true, auto_rotate: false },
                 _ => LabelLook { size_nm: 1_000_000, bold: true, italic: false, auto_rotate: false },
             };
             out.push((kind.clone(), *spin, look));

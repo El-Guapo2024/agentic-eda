@@ -70,7 +70,7 @@ fn gate_sheet(m: &ConstraintModel, swapped: bool) -> SchematicSection {
 fn cached_pin_at(text: &str, name: &str, number: &str) -> String {
     let start = text.find(&format!("\t\t(symbol \"{name}\"")).unwrap_or_else(|| panic!("no cached symbol {name}"));
     let entry = &text[start..];
-    let end = entry[3..].find("\n\t\t(symbol ").map_or(entry.len(), |i| i + 3000).min(entry.find("\n\t)\n").unwrap_or(entry.len()));
+    let end = entry[3..].find("\n\t\t(symbol ").map_or(entry.len(), |i| i + 3).min(entry.find("\n\t)\n").unwrap_or(entry.len()));
     let entry = &entry[..end];
     let at = entry.find(&format!("(number \"{number}\"")).unwrap_or_else(|| panic!("no pin {number} in {name}"));
     let pin_start = entry[..at].rfind("(pin ").unwrap();

@@ -298,7 +298,7 @@ mod tests {
             min_amplitude: 200_000,
             max_amplitude: 1_500_000,
             spacing: 1_000_000,
-            corner_radius_percent: 100_000,
+            corner_radius_percent: 100,
             rounded: false,
             single_sided: true,
             override_custom_rules: true,
@@ -306,12 +306,12 @@ mod tests {
             target_skew: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             is_time_domain: false,
             target_delay: TargetRange::delay_unconstrained(),
-            target_skew_delay: TargetRange { min: -100_000_000, opt: 0, max: 100_000_000 },
+            target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             base_line: vec![p(115_571_000, 50_140_000), p(123_137_000, 50_140_000)],
             base_line_coupled: vec![p(115_571_000, 50_540_000), p(123_137_000, 50_540_000)],
             last_track_width: 200_000,
             last_diff_pair_gap: 180_000,
-            last_tuning_length: 99_987_654_000,
+            last_tuning_length: 99_987_654,
             last_tuning_delay: 0,
             last_netname: "USB_P".into(),
             last_status: "too_short".into(),
@@ -375,9 +375,9 @@ mod tests {
         let back = import_patterns(tree.as_list().unwrap(), &ids);
         assert_eq!(back.len(), 1);
         let t = &back[0];
-        assert_eq!((t.mode, t.layer.as_str(), t.max_amplitude, t.min_amplitude, t.spacing, t.corner_radius_percent), (TuningMode::Single, "F.Cu", 2_000_000, 200_000, 600_000, 100_000), "min_amplitude takes MEANDER_SETTINGS' default");
-        assert_eq!((t.target_length, t.last_status.as_str(), t.base_line.len(), t.member_ids.len()), (TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 }, "too_short", 2000, 2000));
-        assert_eq!((t.origin, t.end), (p(115_571_000, 50_140_000), p(123_137_000, 50_140_000)));
+        assert_eq!((t.mode, t.layer.as_str(), t.max_amplitude, t.min_amplitude, t.spacing, t.corner_radius_percent), (TuningMode::Single, "F.Cu", 2_000_000, 200_000, 600_000, 100), "min_amplitude takes MEANDER_SETTINGS' default");
+        assert_eq!((t.target_length, t.last_status.as_str(), t.base_line.len(), t.member_ids.len()), (TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 }, "too_short", 2, 2));
+        assert_eq!((t.origin, t.end), (p(115_571_487, 50_140_000), p(123_137_350, 50_140_000)));
         // a pattern with no member of the board is a ghost
         assert!(import_patterns(tree.as_list().unwrap(), &BTreeMap::new()).is_empty());
     }

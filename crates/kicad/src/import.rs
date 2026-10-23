@@ -2525,15 +2525,15 @@ mod tests {
         let pts = poly_points(item).expect("a polygon");
         // Chords would leave 8 points; the arcs are polylines.
         assert!(pts.len() > 16, "{} points", pts.len());
-        // Every point sits on one of the four circles, within the 5 micrometres the flattening is held to, and the ends of the arcs are exact.
-        let centres = [(5000.0, 1000.0), (5000.0, 3000.0), (1000.0, 3000.0), (1000.0, 1000.0)];
-        let on_arc = |p: &Point| centres.iter().any(|c| ((p.x as f64 - c.0).hypot(p.y as f64 - c.1) - 1000.0).abs() <= 5.0);
+        // Every point sits on one of the four circles, within the 5 micrometres (5000 nm) the flattening is held to, and the ends of the arcs are exact.
+        let centres = [(5_000_000.0, 1_000_000.0), (5_000_000.0, 3_000_000.0), (1_000_000.0, 3_000_000.0), (1_000_000.0, 1_000_000.0)];
+        let on_arc = |p: &Point| centres.iter().any(|c| ((p.x as f64 - c.0).hypot(p.y as f64 - c.1) - 1_000_000.0).abs() <= 5_000.0);
         assert!(pts.iter().all(on_arc), "{pts:?}");
         for exact in [Point { x: 5_000_000, y: 0 }, Point { x: 6_000_000, y: 1_000_000 }, Point { x: 6_000_000, y: 3_000_000 }, Point { x: 5_000_000, y: 4_000_000 }, Point { x: 1_000_000, y: 4_000_000 }, Point { x: 0, y: 3_000_000 }, Point { x: 0, y: 1_000_000 }, Point { x: 1_000_000, y: 0 }] {
             assert!(pts.contains(&exact), "{exact:?} in {pts:?}");
         }
         // The area is the rounded rectangle's, 24 - (4 - pi) = 23.14 mm^2; the chords of the four arcs would leave 22.
-        let area: f64 = (0..pts.len()).map(|i| { let (a, b) = (pts[i], pts[(i + 1) % pts.len()]); a.x as f64 * b.y as f64 - b.x as f64 * a.y as f64 }).sum::<f64>().abs() / 2.0 / 1.0e6;
+        let area: f64 = (0..pts.len()).map(|i| { let (a, b) = (pts[i], pts[(i + 1) % pts.len()]); a.x as f64 * b.y as f64 - b.x as f64 * a.y as f64 }).sum::<f64>().abs() / 2.0 / 1.0e12;
         assert!((area - (24.0 - (4.0 - std::f64::consts::PI))).abs() < 0.01, "area {area}");
         // An arc with no middle is its chord, as before.
         let broken = crate::sexpr::parse("(gr_poly (pts (xy 0 0) (arc (start 1 0) (end 1 1)) (xy 0 1)))").unwrap();
@@ -2545,8 +2545,8 @@ mod tests {
     #[test]
     fn a_legacy_arc_is_three_points_turned_about_its_centre() {
         let p = |x, y| Point { x, y };
-        assert_eq!(legacy_arc(p(15_000_000, 5_000_000), p(20_000_000, 5_000_000), 90.0), (p(20_000_000, 5_000_000), p(18_536_000, 8_536_000), p(15_000_000, 10_000_000)));
-        assert_eq!(legacy_arc(p(15_000_000, 5_000_000), p(20_000_000, 5_000_000), -90.0), (p(20_000_000, 5_000_000), p(18_536_000, 1_464_000), p(15_000_000, 0)));
+        assert_eq!(legacy_arc(p(15_000_000, 5_000_000), p(20_000_000, 5_000_000), 90.0), (p(20_000_000, 5_000_000), p(18_535_534, 8_535_534), p(15_000_000, 10_000_000)));
+        assert_eq!(legacy_arc(p(15_000_000, 5_000_000), p(20_000_000, 5_000_000), -90.0), (p(20_000_000, 5_000_000), p(18_535_534, 1_464_466), p(15_000_000, 0)));
         // A half turn goes through the far side of the circle: the middle is a quarter turn on.
         assert_eq!(legacy_arc(p(0, 0), p(1_000_000, 0), 180.0), (p(1_000_000, 0), p(0, 1_000_000), p(-1_000_000, 0)));
     }
@@ -2585,11 +2585,11 @@ mod tests {
         let pad = parse_pad_geometry(pad_sexpr.as_list().unwrap(), Side::Bottom, fp_rot, &mut notes).expect("pad parses");
         // Pre-mirror local frame (what `to_board` expects to mirror itself):
         // negating the file's raw -0.5975mm gives +597.5um -> rounds to 598.
-        assert_eq!(pad.at, (598_000, 0), "importer must undo the file's own back-side mirror, not pass x through as-is");
+        assert_eq!(pad.at, (597_500, 0), "importer must undo the file's own back-side mirror, not pass x through as-is");
 
         let fp = FootprintInstance { id: "R34".into(), at: Point { x: 114_800_000, y: 137_800_000 }, rot: fp_rot, side: Side::Bottom, label: Default::default() };
         let board_pos = eda_model::footprint::to_board(&fp, pad.at);
-        assert_eq!(board_pos, Point { x: 114_800_000, y: 138_398_000 }, "must match kicad-cli's own reported absolute pad position (114.8, 138.3975mm), not the other pad's position 1.196mm away");
+        assert_eq!(board_pos, Point { x: 114_800_000, y: 138_397_500 }, "must match kicad-cli's own reported absolute pad position (114.8, 138.3975mm), not the other pad's position 1.196mm away");
     }
 
     /// GAPS.md #3's second over-firing source: `courtyards_overlap` was a
@@ -2827,7 +2827,7 @@ mod tests {
     fn merge_project_design_rules_reads_the_board_wide_minimums() {
         let mut model = eda_model::ConstraintModel::default();
         merge_project_design_rules(&mut model, SAMPLE_DESIGN_RULES_JSON);
-        assert_eq!(model.board.track_width_min_nm, 102_000, "0.1016mm rounds to 102um");
+        assert_eq!(model.board.track_width_min_nm, 101_600, "0.1016 mm is 101600 nm");
         assert_eq!(model.board.min_clearance_nm, 0);
         assert_eq!(model.board.via_diameter_min_nm, 450_000);
         assert_eq!(model.board.via_drill_min_nm, 200_000);

@@ -561,7 +561,7 @@ mod tests {
         let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data")).join("pcbnew/pns_regressions/issue22749-shove-weird-drag-track-end");
         if let Ok(text) = std::fs::read_to_string(root.join("pns.log")) {
             let log: serde_json::Value = serde_json::from_str(&text).unwrap();
-            let pt = |v: &serde_json::Value| Point { x: (v["x"].as_f64().unwrap() / 1000.0).round() as i64, y: (v["y"].as_f64().unwrap() / 1000.0).round() as i64 };
+            let pt = |v: &serde_json::Value| Point { x: v["x"].as_f64().unwrap().round() as i64, y: v["y"].as_f64().unwrap().round() as i64 };
             let events = log["events"].as_array().unwrap();
             let mut router = Router::new(&design, &model);
             router.settings.mode = Mode::Shove;

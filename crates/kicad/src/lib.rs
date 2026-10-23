@@ -1883,8 +1883,8 @@ mod tests {
         let (plx, ply) = local_port_point(&port, width, height);
         let (slx, sly) = local_stub_tip(&port, plx, ply);
         let (bx_mm, by_mm) = baked_local(u1, width as f64, slx, sly);
-        let expected_x_nm = u1.at.x + (bx_mm * 1000.0).round() as i64;
-        let expected_y_nm = u1.at.y + (by_mm * 1000.0).round() as i64;
+        let expected_x_nm = u1.at.x + (bx_mm * 1e6).round() as i64;
+        let expected_y_nm = u1.at.y + (by_mm * 1e6).round() as i64;
 
         let meta = ExportMeta { date: "2026-01-01", title: "t" };
         let out = export_kicad_sch(&design, &model, &meta).unwrap();
@@ -1899,10 +1899,10 @@ mod tests {
         let at_str = &before[at_idx + 4..];
         let end = at_str.find(" 0)").unwrap();
         let coords: Vec<f64> = at_str[..end].split(' ').map(|t| t.parse().unwrap()).collect();
-        let got_x_nm = (coords[0] * 1000.0).round() as i64 + u1.at.x;
-        let got_y_nm = (coords[1] * 1000.0).round() as i64 + u1.at.y;
-        assert!((got_x_nm - expected_x_nm).abs() <= 1, "x mismatch: {got_x_nm} vs {expected_x_nm}");
-        assert!((got_y_nm - expected_y_nm).abs() <= 1, "y mismatch: {got_y_nm} vs {expected_y_nm}");
+        let got_x_nm = (coords[0] * 1e6).round() as i64 + u1.at.x;
+        let got_y_nm = (coords[1] * 1e6).round() as i64 + u1.at.y;
+        assert!((got_x_nm - expected_x_nm).abs() <= 100, "x mismatch: {got_x_nm} vs {expected_x_nm}");
+        assert!((got_y_nm - expected_y_nm).abs() <= 100, "y mismatch: {got_y_nm} vs {expected_y_nm}");
     }
 
     #[test]

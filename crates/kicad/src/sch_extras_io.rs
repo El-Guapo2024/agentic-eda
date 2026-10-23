@@ -605,15 +605,15 @@ mod tests {
     #[test]
     fn scale_text_has_no_trailing_zeros() {
         assert_eq!(scale_str(1_000_000), "1");
-        assert_eq!(scale_str(500_000_000), "0.5");
-        assert_eq!(scale_str(2_250_000_000), "2.25");
-        assert_eq!(scale_str(333_333_000), "0.333333");
-        assert_eq!(scale_str(1_000_001_000), "1.000001");
+        assert_eq!(scale_str(500_000), "0.5");
+        assert_eq!(scale_str(2_250_000), "2.25");
+        assert_eq!(scale_str(333_333), "0.333333");
+        assert_eq!(scale_str(1_000_001), "1.000001");
     }
 
     #[test]
     fn text_box_margin_defaults_to_the_kicad_legacy_formula() {
-        assert_eq!(default_text_box_margin(1_270_000, 0), 953_000);
-        assert_eq!(default_text_box_margin(1_270_000, 200_000), 100_000 + 953_000);
+        assert_eq!(default_text_box_margin(1_270_000, 0), 952_500);
+        assert_eq!(default_text_box_margin(1_270_000, 200_000), 100_000 + 952_500);
     }
 }

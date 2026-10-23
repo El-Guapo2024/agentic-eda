@@ -387,7 +387,7 @@ mod tests {
         let tree = sexpr::parse(CHART).unwrap();
         let (t, c) = read_chart(tree.as_list().unwrap()).unwrap();
         assert_eq!((t.col_count(), t.row_count(), t.layer.as_str()), (2, 2, "Dwgs.User"));
-        assert_eq!(c.precision, 2000);
+        assert_eq!(c.precision, 2);
         assert_eq!(c.columns.iter().map(|x| (x.id, x.heading.as_str(), x.width_nm)).collect::<Vec<_>>(), vec![(DrillChartColumnId::Symbol, "SYM", 16_000_000), (DrillChartColumnId::DrillDiameter, "Drill (mm)", 16_000_000)]);
         assert_eq!((c.filter.non_plated, c.filter.slots, c.show_totals, c.symbol_column), (false, false, false, 0));
         assert_eq!(c.row_shapes.get(&1), Some(&0));

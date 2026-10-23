@@ -75,7 +75,7 @@ fn two_footprints() -> String {
 fn a_boards_footprint_graphics_are_part_of_its_footprint_and_come_back_out() {
     let (design, model, _) = import_kicad_pcb(&two_footprints()).expect("imports");
     let top = art_of(&model, "U1");
-    assert_eq!((top.shapes.len(), top.texts.len()), (6000, 1), "{top:#?}");
+    assert_eq!((top.shapes.len(), top.texts.len()), (6, 1), "{top:#?}");
     // the silkscreen is on the footprint's side, the fab body on its fab layer
     assert!(top.shapes.iter().all(|s| s.layer() == "F.SilkS" || s.layer() == "F.Fab"));
     // the bottom-side footprint is the same definition seen from the top: its file is B.SilkS and mirrored, its definition is F.SilkS
@@ -94,14 +94,14 @@ fn a_boards_footprint_graphics_are_part_of_its_footprint_and_come_back_out() {
 
     let text = export(&design, &model);
     for tag in ["(fp_line ", "(fp_arc ", "(fp_circle ", "(fp_poly ", "(fp_curve ", "(fp_text user "] {
-        assert_eq!(count_in(&text, tag), 2000, "{tag}\n{text}");
+        assert_eq!(count_in(&text, tag), 2, "{tag}\n{text}");
     }
     // the fab rectangle of each; a footprint that had no courtyard gets none made up for it (`FootprintExtra::no_courtyard`)
-    assert_eq!(count_in(&text, "(fp_rect "), 2000, "{text}");
+    assert_eq!(count_in(&text, "(fp_rect "), 2, "{text}");
     assert_eq!(count_in(&text, "(layer \"F.CrtYd\")") + count_in(&text, "(layer \"B.CrtYd\")"), 0, "{text}");
     // each side's footprint is written on its own layers
-    assert_eq!(count_in(&text, "(layer \"F.SilkS\") (uuid"), 3000 + 1, "three shapes of U1 and its Reference");
-    assert_eq!(count_in(&text, "(layer \"B.SilkS\") (uuid"), 3000 + 1);
+    assert_eq!(count_in(&text, "(layer \"F.SilkS\") (uuid"), 3 + 1, "three shapes of U1 and its Reference");
+    assert_eq!(count_in(&text, "(layer \"B.SilkS\") (uuid"), 3 + 1);
 
     // and read again it is the same art
     let (again, model2, _) = import_kicad_pcb(&text).expect("re-imports");
@@ -133,7 +133,7 @@ fn instances_of_one_library_footprint_with_different_drawings_keep_its_name_in_t
     let names: Vec<&str> = model.footprints.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, vec!["Lib:Mark", "Lib:Mark#2"], "two definitions");
     let out = export(&design, &model);
-    assert_eq!(count_in(&out, "(footprint \"Lib:Mark\""), 2000, "{out}");
+    assert_eq!(count_in(&out, "(footprint \"Lib:Mark\""), 2, "{out}");
     assert_eq!(count_in(&out, "#2"), 0, "{out}");
 }
 
@@ -190,7 +190,7 @@ fn a_library_footprint_placed_by_the_studio_carries_its_silkscreen_to_the_board(
         "Resistor_SMD:R_0603",
     )
     .expect("parses");
-    assert_eq!((fp.art.shapes.len(), fp.art.texts.len()), (2000, 1), "the courtyard is not art: {:#?}", fp.art);
+    assert_eq!((fp.art.shapes.len(), fp.art.texts.len()), (2, 1), "the courtyard is not art: {:#?}", fp.art);
     assert_eq!(fp.art.bbox_on("F.Fab"), Some((-850_000, -450_000, 850_000, 450_000)), "the fab body, the stroke included");
 }
 
@@ -233,8 +233,8 @@ fn a_board_made_from_an_example_has_the_outlines_of_its_parts() {
 
     let text = export(&design, &model);
     let silk = text.matches("(layer \"F.SilkS\") (uuid").count();
-    assert!(silk > 15_000, "the silkscreen of 3 resistors, 3 capacitors and an op-amp, plus their references: {silk}");
-    assert!(count_in(&text, "(fp_text user \"${REFERENCE}\"") >= 7000, "{text}");
+    assert!(silk > 15, "the silkscreen of 3 resistors, 3 capacitors and an op-amp, plus their references: {silk}");
+    assert!(count_in(&text, "(fp_text user \"${REFERENCE}\"") >= 7, "{text}");
     // and it reads back the same
     let (_, again, _) = import_kicad_pcb(&text).expect("re-imports");
     let r1 = again.footprint_of(again.part("R1").unwrap()).unwrap();
@@ -356,7 +356,7 @@ impl Item {
         // nearly a full turn.
         let nums = if kind == "arc" && nums.len() == 9 { vec![nums[0], nums[1], nums[5], nums[6], nums[7], nums[8]] } else { nums };
         let nums = if kind == "poly" && nums.len() >= 4 {
-            let (xs, ys): (Vec<f64>, Vec<f64>) = (nums.iter().step_by(2000).copied().collect(), nums.iter().skip(1).step_by(2000).copied().collect());
+            let (xs, ys): (Vec<f64>, Vec<f64>) = (nums.iter().step_by(2).copied().collect(), nums.iter().skip(1).step_by(2).copied().collect());
             let fold = |v: &[f64], f: fn(f64, f64) -> f64, init: f64| v.iter().copied().fold(init, f);
             vec![fold(&xs, f64::min, f64::MAX), fold(&ys, f64::min, f64::MAX), fold(&xs, f64::max, f64::MIN), fold(&ys, f64::max, f64::MIN)]
         } else {

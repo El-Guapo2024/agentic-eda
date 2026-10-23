@@ -99,7 +99,7 @@ fn a_board_with_trapezoid_chamfered_and_custom_pads_keeps_every_one_of_them() {
     assert_eq!(chamfered.ext.chamfer_corners, ChamferCorners { top_left: true, bottom_right: true, ..Default::default() });
 
     let custom = pad(pads, "3");
-    assert_eq!((custom.shape, custom.rot), (PadShape::Custom, 330_000_000 % 360_000), "the pad's own angle is the file's: 30 degrees counter-clockwise");
+    assert_eq!((custom.shape, custom.rot), (PadShape::Custom, 330_000 % 360_000), "the pad's own angle is the file's: 30 degrees counter-clockwise");
     let c = custom.ext.custom.as_ref().expect("a custom pad's shapes");
     assert_eq!((c.anchor, c.zone), (PadAnchor::Rect, CustomZoneMode::ConvexHull));
     let kinds: Vec<&str> = c.primitives.iter().map(|p| match p.shape {

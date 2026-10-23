@@ -329,7 +329,7 @@ fn kicad_cli_reads_the_rule_areas_as_its_own_rewrite_and_finds_the_repeated_chan
             assert!((x1 - x2).abs() < 1e-6 && (y1 - y2).abs() < 1e-6, "{source}: ({x1}, {y1}) against ({x2}, {y2})");
         }
         for (p, (x, y)) in outline.iter().zip(a.iter()) {
-            assert!(((p.x as f64 / 1000.0) - x).abs() < 1e-6 && ((p.y as f64 / 1000.0) - y).abs() < 1e-6, "{source}: the corner of the area is the corner written");
+            assert!(((p.x as f64 / 1e6) - x).abs() < 1e-6 && ((p.y as f64 / 1e6) - y).abs() < 1e-6, "{source}: the corner of the area is the corner written");
         }
     }
 

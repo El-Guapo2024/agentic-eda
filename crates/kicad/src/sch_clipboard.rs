@@ -910,7 +910,7 @@ mod tests {
         let f = parse_clipboard(&text).expect("a fragment with an image parses");
         assert!(f.notes.iter().all(|n| !n.contains("images")), "{:?}", f.notes);
         let images: Vec<_> = f.section.extras.graphics.iter().filter_map(|g| if let eda_model::sch_extras::SchGraphicKind::Image { at, scale_ppm, data } = &g.shape { Some((*at, *scale_ppm, data.clone())) } else { None }).collect();
-        assert_eq!(images, vec![(Point { x: 50_800_000, y: 38_100_000 }, 2_000_000_000, data)]);
+        assert_eq!(images, vec![(Point { x: 50_800_000, y: 38_100_000 }, 2_000_000, data)]);
     }
 
     #[test]

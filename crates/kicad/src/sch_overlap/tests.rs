@@ -42,7 +42,7 @@ fn a_resistor_with_its_fields_beside_it_is_clean() {
     let fields = format!("{} {}", field("Reference", "R1", (103.0, 98.0), "(justify left)"), field("Value", "330", (103.0, 102.0), "(justify left)"));
     let r = report(&resistor((100.0, 100.0), &fields));
     assert_eq!(r.count(), 0, "{}", r.render());
-    assert!(r.items >= 5000, "body, two pins, two fields: {}", r.items);
+    assert!(r.items >= 5, "body, two pins, two fields: {}", r.items);
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn a_rotated_symbol_turns_its_pins_and_its_body() {
     assert_eq!(pins.len(), 2);
     for p in pins {
         let (a, _) = p.seg.unwrap();
-        assert!((a.1 - 100_000.0).abs() < 1.0 && ((a.0 - 100_000.0).abs() - 3_810.0).abs() < 1.0, "{a:?}");
+        assert!((a.1 - 100_000_000.0).abs() < 1.0 && ((a.0 - 100_000_000.0).abs() - 3_810_000.0).abs() < 1.0, "{a:?}");
     }
     let body = items.iter().find(|i| i.kind == Kind::Body).unwrap();
     assert!(body.rect.w() > body.rect.h(), "{:?}", body.rect);

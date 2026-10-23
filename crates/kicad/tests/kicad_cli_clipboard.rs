@@ -105,7 +105,7 @@ fn kicad_cli_reads_a_copy_as_a_board_and_finds_the_items_where_the_copy_put_them
 
     // The same text is what our own reader takes back.
     let clip = parse_pcb_clipboard(&text).unwrap();
-    assert_eq!((clip.tracks.len(), clip.vias.len(), clip.footprints.len()), (2000, 1, 1));
+    assert_eq!((clip.tracks.len(), clip.vias.len(), clip.footprints.len()), (2, 1, 1));
     assert_eq!(clip.footprints[0].at, p(50_000_000, 40_000_000));
     assert_eq!(clip.vias[0].at, p(40_000_000, 20_000_000));
     assert_eq!(clip.footprints[0].pad_nets, vec![("1".to_string(), "VIN".to_string()), ("2".to_string(), "GND".to_string())]);

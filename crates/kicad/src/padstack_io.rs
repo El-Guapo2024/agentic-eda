@@ -224,7 +224,7 @@ mod tests {
 
     fn layers(n: usize) -> Vec<String> {
         let mut v = vec!["F.Cu".to_string()];
-        v.extend((1..=n.saturating_sub(2000)).map(|i| format!("In{i}.Cu")));
+        v.extend((1..=n.saturating_sub(2)).map(|i| format!("In{i}.Cu")));
         v.push("B.Cu".to_string());
         v
     }
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(inner.tokens, vec!["(thermal_gap 0.3)".to_string(), "(clearance 0.2)".to_string(), "(zone_connect 2)".to_string()]);
         let back = pad.ext.stack.back.as_ref().unwrap();
         let custom = back.custom.as_ref().unwrap();
-        assert_eq!((custom.anchor, custom.primitives.len()), (PadAnchor::Rect, 2000));
+        assert_eq!((custom.anchor, custom.primitives.len()), (PadAnchor::Rect, 2));
         let written = write_padstack(&pad, Side::Top, &layers(2));
         assert!(written.contains("(layer \"Inner\" (shape circle) (size 1.5 1.5) (thermal_gap 0.3) (clearance 0.2) (zone_connect 2))"), "{written}");
         assert!(written.contains("(layer \"B.Cu\" (shape custom) (size 1 1) (options (anchor rect)) (primitives (gr_line (start 0 0) (end 1 0) (width 0.2)) (gr_poly"), "{written}");
@@ -345,6 +345,6 @@ mod tests {
         assert!(pad.ext.stack.is_default());
         assert_eq!(write_padstack(&pad, Side::Top, &layers(2)), "");
         let all = library_copper_layers();
-        assert_eq!((all.len(), all[1].as_str(), all[30].as_str(), all[31].as_str()), (32_000, "In1.Cu", "In30.Cu", "B.Cu"));
+        assert_eq!((all.len(), all[1].as_str(), all[30].as_str(), all[31].as_str()), (32, "In1.Cu", "In30.Cu", "B.Cu"));
     }
 }

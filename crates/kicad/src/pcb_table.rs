@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn a_table_as_kicad_writes_it_is_read_with_its_grid_its_strokes_and_its_cells_looks() {
         let t = read_text(&table_text("", &flat_cells())).expect("a table");
-        assert_eq!((t.col_count(), t.row_count()), (2000, 2000));
+        assert_eq!((t.col_count(), t.row_count()), (2, 2));
         assert_eq!(t.at, Point { x: 10_000_000, y: 20_000_000 });
         assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![10_000_000, 20_000_000], vec![5_000_000, 6_000_000]));
         assert_eq!(t.layer, "F.SilkS");
@@ -463,14 +463,14 @@ mod tests {
     #[test]
     fn a_table_turned_by_any_other_angle_is_a_polygon_per_cell() {
         let mut t = read_text(&table_text("", &flat_cells())).unwrap();
-        t.rotate(Point { x: 10_000_000, y: 20_000_000 }, 30_000_000);
+        t.rotate(Point { x: 10_000_000, y: 20_000_000 }, 30_000);
         t.id = "tbl_r".into();
         let mut text = String::new();
         write(&mut text, &t, false);
         assert_eq!(text.matches("(pts (xy").count(), 4, "{text}");
         assert!(!text.contains("(start "), "{text}");
         let again = read_text(text.trim()).expect("reads again");
-        assert_eq!(again.angle, 30_000_000);
+        assert_eq!(again.angle, 30_000);
         for r in 0..2 {
             for c in 0..2 {
                 for (a, b) in again.cell_corners(r, c).iter().zip(t.cell_corners(r, c).iter()) {
@@ -545,16 +545,16 @@ mod tests {
     /// as the same cell; a margin set to the micrometre stays what it is.
     #[test]
     fn a_new_cells_legacy_margin_is_written_to_the_nanometre() {
-        let mut t = Table::new_grid("F.SilkS", eda_model::ir::Point { x: 0, y: 0 }, 2000, 1, 10_000_000, 5_000_000, 100_000);
+        let mut t = Table::new_grid("F.SilkS", eda_model::ir::Point { x: 0, y: 0 }, 2, 1, 10_000_000, 5_000_000, 100_000);
         t.id = "tbl_l".into();
         t.cells = vec![TableCell::pcb_new(false), TableCell { margins: [500_000; 4], ..TableCell::pcb_new(false) }];
-        assert_eq!(t.cells[0].margins, [1_003_000; 4]);
+        assert_eq!(t.cells[0].margins, [1_002_500; 4]);
         let mut out = String::new();
         write(&mut out, &t, false);
         assert!(out.contains("(margins 1.0025 1.0025 1.0025 1.0025)"), "{out}");
         assert!(out.contains("(margins 0.5 0.5 0.5 0.5)"), "{out}");
         let back = read_text(&out).expect("a table");
-        assert_eq!((back.cells[0].margins, back.cells[0].margin_nm(0)), ([1_003_000; 4], 1_002_500_000));
+        assert_eq!((back.cells[0].margins, back.cells[0].margin_nm(0)), ([1_002_500; 4], 1_002_500));
     }
 
     #[test]
@@ -565,7 +565,7 @@ mod tests {
         let cells = [cell("hdr", 0.0, 0.0, 30.0, 5.0, "2 1"), cell("", 10.0, 0.0, 20.0, 5.0, "0 1"), cell("a", 0.0, 5.0, 10.0, 6.0, "1 1"), cell("b", 10.0, 5.0, 20.0, 6.0, "1 1")].join(" ");
         let text = format!(r#"(table (column_count 2) (layer "F.SilkS") (column_widths 10 20) (row_heights 5 6) (cells {cells}))"#);
         let t = read_text(&text).expect("a table");
-        assert_eq!((t.cell(0, 0).unwrap().col_span, t.cell(0, 1).unwrap().col_span), (2000, 0));
+        assert_eq!((t.cell(0, 0).unwrap().col_span, t.cell(0, 1).unwrap().col_span), (2, 0));
         assert_eq!(t.cell_local_rect(0, 0), (0, 0, 30_000_000, 5_000_000));
         let mut out = String::new();
         let mut t = t;
