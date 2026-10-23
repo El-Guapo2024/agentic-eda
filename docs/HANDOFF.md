@@ -34,6 +34,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | P25 pad details (10-22) | Explode and recombine, padstacks, Remove Unused Pads, Swap Pad Nets and Swap Gate Nets |
 | P26 step 1 (10-22) | Embedded files: the IR and the four readers and writers. `zstd` is added, the one new dependency the user approved. |
 | P19b steps 1-2 (10-22) | Specctra: the DSN model with KiCad's writer, lexer and parser, plus `FromBOARD`. kicad-cli has no DSN, so this is our own exporter; the user approved it on 2026-10-21. |
+| P19b done (10-23) | Specctra: File > Export > Specctra DSN, File > Import > Specctra Session (`FromSESSION` as `Cmd::Specctra`, one undo step), `eda board export specctra` and `eda board import-ses`. The round trip leaves kicad-cli's DRC unchanged; `e2e/specctra.check.js` passes 5/5. PARITY-pcb.md section 46. No golden DSN exists in `qa/data`, and no outside router was run. |
 | Also | The Generators Manager no longer swallows Escape app-wide, and `studio_import_foreign` reports why its test server died |
 
 ## Open branches (on GitHub, not merged)
@@ -42,7 +43,6 @@ Each was cut from an older main. Merge `main` into it first.
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-specctra-wip` (on `task-specctra`) | Specctra DSN export and SES import, P19b | **Done 2026-10-23, ready to merge.** File > Export > Specctra DSN and File > Import > Specctra Session in the studio, `FromSESSION` as `Cmd::Specctra` (one undo step), `eda board export specctra -o FILE.dsn` and `eda board import-ses FILE.ses`; PARITY-pcb.md section 46. Gates on the box: `cargo check --workspace --tests` no warnings; `tools/check.sh fast` Rust 3401 passed, 0 failed, 24 ignored, web 2350; slow `EDA_SLOW_TESTS=1 cargo test -p eda-cli --test specctra_session` 2 passed (kicad-cli DRC: no new violation); `web/studio/e2e/specctra.check.js` 5/5 in headless Chromium. | Merge; regenerate `UI-ACTIONS.md` (pcbnew 324 of 350 handled with it). No golden DSN exists in `qa/data`. |
 | `task-embedded-files-wip` (on `task-embedded-files`) | Embedded files, P26 | Step 1 is merged. The WIP commit holds steps 2-3, unverified: the verbs, routes and library handling. | The Embedded Files panel (Board Setup, Schematic Setup, Footprint Properties: add by upload, remove, extract, embed fonts); `kicad-embed://` paths for 3D models; Collect and Embed 3D Models; tests (byte-for-byte round trips, a STEP/GLB export with an embedded model, `e2e/embedded-files.check.js`) |
 | `task-pad-details-wip` (on `task-pad-details`) | A review fix for Remove Unused Pads (layer depth), its test and a PARITY line | Small, unverified | Run the `eda-ops` unused-pads tests, then merge |
 
@@ -55,7 +55,7 @@ Gates for any of them:
 
 ## Next tasks, in order (the user's decisions of 2026-10-21)
 
-1. **Finish Specctra** (`task-specctra-wip`, above).
+1. ~~**Finish Specctra**~~ merged 2026-10-23 (`9cd36d7`).
 2. **Finish embedded files** (`task-embedded-files-wip`, above). Then merge `task-pad-details-wip`.
 3. **The simulator** (P21; 32 rows of `ui-parity-missing.json`): `kicad-cli sch export netlist --format spice`, then ngspice (`ngspice -b`, or libngspice), parsed into a Simulation panel. ngspice is a separate program, not a crate. KiCad bundles libngspice; on the box, `sudo apt-get install ngspice`. Port the panels from `eeschema/sim/`.
 4. **The graphical rule editor** (P9b, `pcbnew.DRETool.drcRuleEditor`), after the simulator. Custom Rules is edited as text today.
