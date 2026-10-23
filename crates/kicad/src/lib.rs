@@ -89,6 +89,7 @@ pub use bus::expand_bus_members;
 mod sch_clipboard;
 pub use sch_clipboard::{fragment_as_sheet_file, parse_clipboard, write_clipboard, CopyInput, CopyOutput};
 mod sch_extras_io;
+pub mod label_fields;
 mod sch_table_io;
 pub mod sch_overlap;
 mod sch_import;
@@ -101,6 +102,7 @@ pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_t
 pub mod drc_exclusions;
 pub mod erc_exclusions;
 pub use pcb::effective_erc_severities;
+pub use pcb::exact_pattern;
 // The zone fills kicad-cli makes (Fill All Zones, B): read back from a refilled board and kept as derived data beside `design.json`.
 pub mod zone_fills;
 // The Appearance panel's share: the layers, objects, colours, presets and views the person chose, in the derived `.kicad_prl` and `.kicad_pro`.
@@ -139,6 +141,9 @@ pub fn export_kicad_sch_mapped(design: &Design, model: &ConstraintModel, meta: &
 pub struct ScreenCtx {
     pub file_uuid: String,
     pub instance_paths: Vec<String>,
+    /// The [`eda_model::ir::SheetInstance::id`] of the placement each of `instance_paths` ends in (empty for the root's), which a symbol's
+    /// per-placement reference is filed under (`SchematicSection::instance_overrides`).
+    pub instance_parents: Vec<String>,
     pub seed: String,
     /// Sheet uuid -> page number.
     pub sheet_pages: BTreeMap<String, usize>,
@@ -148,7 +153,7 @@ impl ScreenCtx {
     /// The root screen of an ordinary single-sheet design (what `export_kicad_sch` has always written).
     pub fn root() -> ScreenCtx {
         let file_uuid = duid_plain("sheet:/");
-        ScreenCtx { instance_paths: vec![format!("/{file_uuid}")], file_uuid, seed: String::new(), sheet_pages: BTreeMap::new() }
+        ScreenCtx { instance_paths: vec![format!("/{file_uuid}")], instance_parents: vec![String::new()], file_uuid, seed: String::new(), sheet_pages: BTreeMap::new() }
     }
 }
 
@@ -390,9 +395,11 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         }
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
-        for path in &ctx.instance_paths {
+        // `SCH_SYMBOL_INSTANCE`: the reference this symbol has on each sheet that shows the screen -- a screen placed twice keeps one per placement
+        for (k, path) in ctx.instance_paths.iter().enumerate() {
+            let reference = eda_model::sheet_list::reference_under(sch, sym, ctx.instance_parents.get(k).map(String::as_str).filter(|p| !p.is_empty()));
             writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
-            writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&sym.id)).unwrap();
+            writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&reference)).unwrap();
             writeln!(out, "\t\t\t\t\t(unit {})", sym.unit).unwrap();
             writeln!(out, "\t\t\t\t)").unwrap();
         }
@@ -586,11 +593,16 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         // Label Properties gave it, else away from the wire the label ends
         let (angle, effects) = label_effects(sch, l, tag == "label");
         writeln!(out, " (at {x} {y} {angle})").unwrap();
+        // `saveText`: `(fields_autoplaced yes)` for a label with fields (they are where `AutoplaceFields` puts them), then its fields
+        if tag == "global_label" || sch.extras.label_fields.get(&l.id).is_some_and(|f| !f.is_empty()) {
+            writeln!(out, "\t\t(fields_autoplaced yes)").unwrap();
+        }
         writeln!(out, "\t\t{effects}").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&l.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
         }
+        label_fields::write_label_fields(&mut out, sch, l, design_intersheet_refs(design).show);
         writeln!(out, "\t)").unwrap();
     }
 
@@ -727,10 +739,10 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
 
     // The hierarchy, depth first: where every screen is placed (its path of sheet uuids) and the page each sheet gets (the root is
     // page 1, then 2, 3, ... in the order the sheets are met).
-    let mut placements: BTreeMap<String, Vec<String>> = BTreeMap::new(); // file -> instance paths
+    let mut placements: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new(); // file -> (instance path, placement id)
     let mut pages: BTreeMap<String, usize> = BTreeMap::new(); // sheet uuid -> page
     let mut sheet_pages_of: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new(); // file ("" = root) -> sheets drawn on it
-    fn walk(design: &Design, sch: &eda_model::ir::SchematicSection, here: &str, file: &str, in_progress: &mut Vec<String>, placements: &mut BTreeMap<String, Vec<String>>, pages: &mut BTreeMap<String, usize>, sheet_pages_of: &mut BTreeMap<String, BTreeMap<String, usize>>) {
+    fn walk(design: &Design, sch: &eda_model::ir::SchematicSection, here: &str, file: &str, in_progress: &mut Vec<String>, placements: &mut BTreeMap<String, Vec<(String, String)>>, pages: &mut BTreeMap<String, usize>, sheet_pages_of: &mut BTreeMap<String, BTreeMap<String, usize>>) {
         for s in &sch.sheets {
             let uuid = sheet_uuid(s);
             let page = pages.len() + 2;
@@ -738,7 +750,7 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
             sheet_pages_of.entry(file.to_string()).or_default().insert(uuid.clone(), page);
             let Some(child) = design.sheet_contents.as_ref().and_then(|c| c.get(&s.file)) else { continue };
             let path = format!("{here}/{uuid}");
-            placements.entry(s.file.clone()).or_default().push(path.clone());
+            placements.entry(s.file.clone()).or_default().push((path.clone(), s.id.clone()));
             if in_progress.contains(&s.file) {
                 continue; // a sheet placed inside itself: not followed again
             }
@@ -753,13 +765,17 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
     let mut out = vec![(root_filename.to_string(), export_screen(design, model, meta, &root_ctx)?)];
     if let Some(screens) = &design.sheet_contents {
         for (file, sch) in screens {
-            let child_design = Design { schematic: Some(sch.clone()), sheet_contents: None, nets: None, ..design.clone() };
+            // (Schematic Setup's settings are the root's: the screen is written with them)
+            let mut sch = sch.clone();
+            sch.extras.intersheet_refs = root_sch.extras.intersheet_refs.clone();
+            let child_design = Design { schematic: Some(sch), sheet_contents: None, nets: None, ..design.clone() };
             let title = file.strip_suffix(".kicad_sch").unwrap_or(file);
             let child_meta = ExportMeta { date: meta.date, title };
             let ctx = ScreenCtx {
                 file_uuid: duid_plain(&format!("screen:{file}")),
                 // a screen no sheet places still gets one path, so its symbols are annotated
-                instance_paths: placements.get(file).cloned().unwrap_or_else(|| vec![format!("{root_path}/{}", duid_plain(&format!("unplaced:{file}")))]),
+                instance_paths: placements.get(file).map(|v| v.iter().map(|(p, _)| p.clone()).collect()).unwrap_or_else(|| vec![format!("{root_path}/{}", duid_plain(&format!("unplaced:{file}")))]),
+                instance_parents: placements.get(file).map(|v| v.iter().map(|(_, id)| id.clone()).collect()).unwrap_or_default(),
                 seed: format!("{file}|"),
                 sheet_pages: sheet_pages_of.get(file).cloned().unwrap_or_default(),
             };
@@ -819,6 +835,11 @@ pub(crate) fn label_spin_of(sch: &eda_model::ir::SchematicSection, l: &NetLabel)
         (-1, 0) => LabelSpin::Left,
         _ => LabelSpin::Right,
     }
+}
+
+/// Schematic Setup > Formatting > Inter-sheet References of the design (kept on the root sheet): KiCad's defaults when it set none.
+pub fn design_intersheet_refs(design: &Design) -> eda_model::sch_extras::IntersheetRefs {
+    design.schematic.as_ref().and_then(|s| s.extras.intersheet_refs.clone()).unwrap_or_default()
 }
 
 /// A label's file angle and horizontal justification, as `SCH_IO_KICAD_SEXPR::saveText` writes a spin: the text's own angle (0 or 90) with half a turn
@@ -1254,7 +1275,9 @@ fn write_power_lib_symbol(out: &mut String, lib_id: &str, resolved: &eda_model::
     writeln!(out, "\t\t\t(pin_numbers (hide yes))").unwrap();
     writeln!(out, "\t\t\t(pin_names (offset 0) (hide yes))").unwrap();
     writeln!(out, "\t\t\t(exclude_from_sim no) (in_bom yes) (on_board yes)").unwrap();
-    let value = lib_id.strip_prefix("power:").unwrap_or(lib_id);
+    // the library symbol's own name, the part of `lib_id` after its library nickname, whichever library it is (`power:`, or a project's own
+    // `complex_hierarchy_schlib:`): a unit named after the whole `lib_id` is a name/prefix mismatch and KiCad refuses the file
+    let value = lib_id.rsplit(':').next().unwrap_or(lib_id);
     write_property(out, "Reference", "#PWR", 0.0, -2.0, true);
     write_property(out, "Value", value, 0.0, 2.0, false);
     write_property(out, "Footprint", "", 0.0, 0.0, true);

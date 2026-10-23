@@ -869,6 +869,61 @@ somewhat smaller). The mark-obstacles hull snap (`rhMarkObstacles`, with its 90-
 the way: when the head cannot be resolved KiCad keeps the previous head (`routeStep`: `m_head = prevHead`) and `FixRoute` in Shove mode is
 refused only by a solid, where the port shows the straight line flagged colliding and refuses the click.
 
+## Stage 11 -- the router tool's via, posture and size actions (branch `task-router-actions`, 2026-10-23)
+
+The seven `static const TOOL_ACTION`s of router_tool.cpp that the action catalog listed as "referenced" are registered as the router tool's
+actions (`AS_CONTEXT`: only while the router tool is active, as Stage 10 review's corner modes): `PlaceBlindVia` (Alt+Shift+V), `PlaceMicroVia`
+(Ctrl+V), `SelLayerAndPlaceVia` (<), `SelLayerAndPlaceBlindVia` (Alt+<), `SelLayerAndPlaceMicroVia`, `SwitchPosture` (/) and
+`CustomTrackViaSize` (Q) -- `web/studio/src/actions/routerViaActions.ts`, their keys in `Canvas.tsx`'s router block (Ctrl+V is Paste's
+elsewhere).
+
+- **The via commands** (`ROUTER_TOOL::onViaCommand` -> `handleLayerSwitch( aEvent, true )`, ported in `kicad-port/routerVia.ts`
+  `planViaCommand`): a via already armed is taken back (`ToggleViaPlacement`); Select Layer needs a route in progress and opens
+  `PCB_ONE_LAYER_SELECTOR` (`SelectOneLayer`: copper layers only, less the current one for a via that is not a through via, PgUp / PgDn
+  shown for F.Cu / B.Cu); a picked blind or micro via from F.Cu to B.Cu is a through via; without a picked layer a blind / micro via spans
+  the layer pair when the route is on it and goes from the current layer to the pair's top otherwise, and a pair of one layer is refused with
+  "Via needs 2 different layers."; the sizes take `AddLayerPair( currentLayer, targetLayer )` and the route goes on on `PairedLayer`, else
+  the pair's top (`switchLayerOnViaPlacement`). The via's size is the net class's (`VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a
+  dummy via: a microvia's is the class's `uvia_dia` / `uvia_drill`, 0.3 / 0.1 mm by default) unless a via size of the list or a custom one is
+  chosen (`UseNetClassVia()`), which a microvia ignores.
+- **The router** (`Router::toggle_via_typed`, `LinePlacer::via_span`): the armed via spans its own layers (`LINE_PLACER::makeVia`: F_Cu ..
+  B_Cu for a through via, the pair for any other), which the head's collision check, the via's pushout and the shove see; each via a fix
+  places is kept with its layers, size and type (`Session::placed_vias`), so a route with vias of two kinds commits each with its own (before,
+  every via of a route took the last armed size). `RouteCommit::via_kinds` and `Cmd::CommitRoute { via_kinds }` (serde default) give the
+  board via its type (`PNS_KICAD_IFACE::AddItem`: `SetViaType( via->ViaType() )`) in `DrawingsSection::via_extras`, in the same step (one
+  undo); a via a shove or a drag moves keeps its type (`syncVia` reads it), and a removed via's extras go with it. `POST /api/route/via`
+  takes `via_type` and `span`.
+- **Switch Track Posture** is `performRouting`'s `FlipPosture()` and refreshing Move, the single track's and the pair's (it replaces the raw
+  `/` handler of `Canvas.tsx`).
+- **Custom Track/Via Size** is `DIALOG_TRACK_VIA_SIZE` ("Track and Via Dimensions", `PCB_VIA::ValidateViaParameters`'s messages word for
+  word); OK sets `UseCustomTrackViaSize( true )` and `m_TempOverrideTrackWidth`, and the route in progress takes the width at once
+  (`onTrackViaSizeChanged`). The width menu's "Use Custom Values..." is checked while it is in use; a width or via size of the list turns it
+  off (`SetTrackWidthIndex` / `SetViaSizeIndex`).
+
+**Not as the brief expected.** KiCad 8303b2ad has no `BDS::m_BlindBuriedViaAllowed` / `m_MicroViasAllowed` (they were removed from KiCad
+before this commit) and no "microvias only from an outer layer to its neighbour" rule in `handleLayerSwitch`; nothing refuses those here
+either. The box's kicad-cli nightly, newer than 8303b2ad, has a `microvia_crosses_core` check: a microvia through a core dielectric (KiCad's
+default stackup has a core under each outer layer) is a DRC violation there. The kicad-cli proof uses a build-up stackup (prepreg outside).
+
+**Differences.** The implicit blind via on the F.Cu / B.Cu pair stays a blind via spanning the board, as in KiCad (the through conversion is
+tested before the implicit target is chosen). In the pair tool the via commands do nothing: the pair placer places through vias only (KiCad's
+`DIFF_PAIR_PLACER::makeVia` takes the sizes' type and pair too). Place Through Via (V) is still the layer pair's other layer
+(`layerToggle`), not KiCad's nearest-ratsnest-anchor choice. The width menu's "Use Custom Values..." opens the dialog without first turning
+custom sizes on (KiCad turns them on before the dialog, and leaves them on if it is cancelled). The dialog refuses a track width that is not
+a positive length (KiCad has no check).
+
+**Found on the way.** After a click placed the armed via the studio still thought one was armed (`fixInteractiveRoute` kept `placingVia`), so
+the next V or via command took back a via that was no longer there instead of arming one; KiCad's `IsPlacingVia()` is false after `FixRoute`,
+and so is the studio's now (`components/canvas/routing.ts`). `e2e/run-check.mjs` prints the failed checks' notes (it printed only the
+scenario names).
+
+Proof: `routerVia.test.ts` (12: the flags, the pair, the type, the refusals, the picker's layers, the sizes, the dialog's messages);
+`route_api` `a_blind_via_and_a_microvia_are_committed_with_their_type_layers_and_size_as_one_undo_step` and the request words; `router`
+`a_shoved_blind_via_keeps_its_type`; ops `commit_route_gives_its_vias_their_type_and_drops_the_extras_of_removed_vias`; the slow
+`gate_vs_kicad::a_route_with_a_blind_via_and_one_with_a_microvia_are_clean_for_kicad_clis_drc_on_four_layers` (`(via blind ..)` F.Cu ..
+In1.Cu and `(via micro ..)` In2.Cu .. B.Cu in the file, kicad-cli finds nothing but the stubs' dangling ends); and the "via actions" scenario
+of `web/studio/e2e/router-leftovers.check.js`.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now

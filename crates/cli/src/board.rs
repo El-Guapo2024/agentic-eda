@@ -205,6 +205,8 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
             eda_kicad::merge_custom_rules(&mut model, text);
         }
     }
+    // A label's net class field puts its net in that class (`checkNetclassDrivers`, the project's `netclass_assignments`).
+    fold_label_netclasses(design, &mut model);
     // A symbol placed with `AddSymbol` has no part in the intent: its synthesized one (see `reconcile_schematic`) is not stored anywhere, so it is rebuilt here.
     fold_unknown_symbols(design, &mut model);
     // A footprint copied onto the board has no part in the intent either; `board_parts` is where it lives.
@@ -300,6 +302,96 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
             edge: None,
         });
     }
+    // A screen shown twice has a part for each reference a placement gives its symbols (`SCH_SYMBOL_INSTANCE`): the same part under the
+    // other name, so its pins are on the nets of that placement and its footprint is on the board.
+    for e in eda_model::sheet_list::walk(design).into_iter().skip(1) {
+        let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        for sym in &sec.symbols {
+            let reference = eda_model::sheet_list::reference_under(sec, sym, e.path.last().map(String::as_str));
+            if reference == sym.id || model.part(&reference).is_some() {
+                continue;
+            }
+            if let Some(mut part) = model.part(&sym.id).cloned() {
+                part.reference = reference;
+                model.parts.push(part);
+            }
+        }
+    }
+}
+
+/// The nets a label's `Netclass` field puts in a class (`CONNECTION_GRAPH` `checkNetclassDrivers`: every net class a label on a net names, `NET_SETTINGS::
+/// AppendNetclassLabelAssignment`, which `GetEffectiveNetClass` reads with the pattern assignments): the net's name added to the class's nets as the
+/// pattern that matches that net alone, as the importer reads a project's `netclass_assignments`. A class the board does not define has no parameters to
+/// give (KiCad's implicit class) and is left out here -- kicad-cli's ERC reports it (`undefined_netclass`).
+///
+/// The net is the one the wire under the label is on, on each placement of the label's sheet (a screen shown twice has a net per placement:
+/// `checkNetclassDrivers` runs per subgraph, so both are in the class), found by the pins of that wire under the references the placement gives them; a
+/// label off any pin's wire names its own. A bus label's classes go to its members too (`checkNetclassDrivers`' `processBusMember`): the nets of each
+/// member's name on that sheet.
+fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
+    let nets: Vec<eda_model::Net> = design.nets.clone().unwrap_or_else(|| model.nets.clone());
+    let net_of_pin: std::collections::BTreeMap<&str, &str> = nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
+    let mut assigned: Vec<(String, String)> = Vec::new();
+    for e in eda_model::sheet_list::walk(design) {
+        let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        let placement = e.path.last().map(String::as_str);
+        let renamed: std::collections::BTreeMap<&str, String> = sec
+            .symbols
+            .iter()
+            .filter_map(|s| {
+                let r = eda_model::sheet_list::reference_under(sec, s, placement);
+                (r != s.id).then_some((s.id.as_str(), r))
+            })
+            .collect();
+        // the net a label at `at` named `name` is on, on this placement
+        let net_at = |at: eda_model::ir::Point, name: &str| -> String {
+            let on = |w: &&eda_model::ir::Wire| !w.bus && (w.pts.contains(&at) || w.pts.windows(2).any(|s| (s[0].x == s[1].x && s[0].x == at.x && (s[0].y.min(s[1].y)..=s[0].y.max(s[1].y)).contains(&at.y)) || (s[0].y == s[1].y && s[0].y == at.y && (s[0].x.min(s[1].x)..=s[0].x.max(s[1].x)).contains(&at.x))));
+            let Some(w) = sec.wires.iter().find(on) else { return name.to_string() };
+            let by_pin = w.pins.iter().find_map(|p| {
+                let pin = match p.split_once('.') {
+                    Some((r, n)) => renamed.get(r).map_or_else(|| p.clone(), |new| format!("{new}.{n}")),
+                    None => p.clone(),
+                };
+                net_of_pin.get(pin.as_str()).map(|n| n.to_string())
+            });
+            by_pin.or_else(|| (!w.net.is_empty()).then(|| w.net.clone())).unwrap_or_else(|| name.to_string())
+        };
+        for l in &sec.labels {
+            let classes = sec.extras.label_netclasses(&l.id);
+            if classes.is_empty() {
+                continue;
+            }
+            let mut targets: Vec<String> = Vec::new();
+            match eda_kicad::expand_bus_members(&l.net, &design.bus_aliases) {
+                // a bus: each member's nets on this sheet (the labels of the member's name), else the member's own name
+                Some(members) => {
+                    for m in members {
+                        let here: Vec<String> = sec.labels.iter().filter(|o| o.net == m).map(|o| net_at(o.at, &m)).collect();
+                        if here.is_empty() {
+                            targets.push(m);
+                        } else {
+                            targets.extend(here);
+                        }
+                    }
+                }
+                None => targets.push(net_at(l.at, &l.net)),
+            }
+            for net in targets {
+                for class in &classes {
+                    assigned.push((net.clone(), class.to_string()));
+                }
+            }
+        }
+    }
+    for (net, class) in assigned {
+        let pattern = eda_kicad::exact_pattern(&net);
+        // `validateNetclassName` compares without regard to case
+        if let Some(nc) = model.board.net_classes.iter_mut().find(|c| c.name.eq_ignore_ascii_case(&class)) {
+            if !nc.nets.contains(&pattern) {
+                nc.nets.push(pattern);
+            }
+        }
+    }
 }
 
 /// A `Part` in `model` for every footprint that lives only on the board (`DrawingsSection::board_parts`): the copies Duplicate and
@@ -373,9 +465,13 @@ fn shown_pin_names(model: &ConstraintModel) -> std::collections::BTreeMap<String
 /// Trace the nets of the whole schematic tree of `design` (`eda_engine::nets`): a sheet pin and the hierarchical label of the same name,
 /// global labels and power symbols are one net across sheets. Writes what the drawing says back into the design's wires (their net and
 /// pins), power symbols and no-connect flags, and returns the nets read.
-fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, naming: &eda_engine::nets::Naming) -> Vec<eda_engine::nets::TracedNet> {
-    // a screen no sheet shows any more (its sheet was deleted) is not part of the schematic: its pins are on no net
-    let reachable = eda_model::sheet_list::reachable_files(design);
+///
+/// Every placement is traced, not every file (`CONNECTION_GRAPH::Recalculate` over the `SCH_SHEET_LIST`): a screen two sheet symbols show is
+/// traced twice, its pins named by the references each placement gives its symbols (`SchematicSection::instance_overrides`), so each placement
+/// has nets of its own. What is written back into the screen is what its first placement reads.
+pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, naming: &eda_engine::nets::Naming) -> Vec<eda_engine::nets::TracedNet> {
+    // the sheets of the hierarchy: a screen no sheet shows any more (its sheet was deleted) is not part of the schematic, its pins are on no net
+    let entries = eda_model::sheet_list::walk(design);
     let Some(mut root) = design.schematic.take() else { return Vec::new() };
     // Where each pin is, sheet by sheet. A schematic read from a KiCad file keeps its symbols at their library origin; one this
     // project drew places them by the corner of their box (`eda_engine::placed`), which is where the writer bakes the pins.
@@ -414,12 +510,29 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
     };
     let mut contents = design.sheet_contents.take();
     let root_pins = pins_of(&root);
-    let mut child_pins: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Point>> = contents.iter().flatten().filter(|(f, _)| reachable.contains(*f)).map(|(f, s)| (f.clone(), pins_of(s))).collect();
+    // (path, file, pins, the first placement of its file); a later placement of a file traces a copy of the screen
+    let mut plan: Vec<(Vec<String>, String, std::collections::BTreeMap<String, Point>, bool)> = Vec::new();
+    let mut copies: Vec<eda_model::ir::SchematicSection> = Vec::new();
+    {
+        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for e in entries.iter().skip(1) {
+            let Some(sec) = contents.as_ref().and_then(|c| c.get(&e.file)) else { continue };
+            let pins = pins_under_placement(pins_of(sec), sec, e.path.last().map(String::as_str));
+            let first = seen.insert(e.file.as_str());
+            if !first {
+                copies.push(sec.clone());
+            }
+            plan.push((e.path.clone(), e.file.clone(), pins, first));
+        }
+    }
     let traced = {
-        let mut screens = vec![eda_engine::nets::ScreenIn { sch: &mut root, file: String::new(), pins: root_pins }];
-        if let Some(c) = contents.as_mut() {
-            for (file, sec) in c.iter_mut().filter(|(f, _)| reachable.contains(*f)) {
-                screens.push(eda_engine::nets::ScreenIn { sch: sec, file: file.clone(), pins: child_pins.remove(file).unwrap_or_default() });
+        let mut screens = vec![eda_engine::nets::ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: root_pins }];
+        let mut firsts: std::collections::BTreeMap<&String, &mut eda_model::ir::SchematicSection> = contents.iter_mut().flatten().collect();
+        let mut later = copies.iter_mut();
+        for (path, file, pins, first) in plan {
+            let sch = if first { firsts.remove(&file) } else { later.next() };
+            if let Some(sch) = sch {
+                screens.push(eda_engine::nets::ScreenIn { path, sch, file, pins });
             }
         }
         eda_engine::nets::trace_nets_with(&mut screens, naming)
@@ -427,6 +540,27 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
     design.schematic = Some(root);
     design.sheet_contents = contents;
     traced
+}
+
+/// `pins` ("REF.PIN" -> point) of `sec` under the references the placement `placement` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
+fn pins_under_placement(pins: std::collections::BTreeMap<String, Point>, sec: &eda_model::ir::SchematicSection, placement: Option<&str>) -> std::collections::BTreeMap<String, Point> {
+    let renamed: std::collections::BTreeMap<&str, String> = sec
+        .symbols
+        .iter()
+        .filter_map(|sym| {
+            let r = eda_model::sheet_list::reference_under(sec, sym, placement);
+            (r != sym.id).then_some((sym.id.as_str(), r))
+        })
+        .collect();
+    if renamed.is_empty() {
+        return pins;
+    }
+    pins.into_iter()
+        .map(|(key, at)| match key.split_once('.').and_then(|(r, n)| renamed.get(r).map(|new| format!("{new}.{n}"))) {
+            Some(k) => (k, at),
+            None => (key, at),
+        })
+        .collect()
 }
 
 /// Recompute what the drawing says about connectivity after a schematic edit (`Wire::net`/`pins`, `PowerSymbol::pin`, `NoConnect::pin`) and
@@ -461,7 +595,12 @@ pub(crate) fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mu
     // The nets in force after the command applied: the design's own list (Reorganize sets one), else the intent's.
     let in_force: Vec<eda_model::Net> = design.nets.clone().unwrap_or_else(|| model.nets.clone());
     let pin_names = shown_pin_names(model);
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names) };
+    // a bus's members: its vector, its group, the design's aliases (`SCH_CONNECTION::ConfigureFromLabel`)
+    let aliases = design.bus_aliases.clone();
+    let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
+    // a power symbol names its net when its pin is a power input (`SCH_PIN::IsGlobalPower`), which a PWR_FLAG's is not
+    let global_power = |lib_id: &str| -> Option<bool> { resolve_lib_symbol(lib_id, model).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
+    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power) };
     let after = trace_design(design, model, &naming);
     if let Some(before) = before {
         let mut earlier = before.clone();
@@ -1426,6 +1565,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::ClearErcExclusions => "schematic erc-unexclude --all".to_string(),
         Cmd::SetConnectionGrid { mils } => format!("schematic connection-grid {mils}"),
+        Cmd::SetIntersheetRefs { settings } => format!("schematic intersheet-refs {}", if settings.show { "shown" } else { "hidden" }),
         Cmd::SetSimulator { workbook, .. } => format!("schematic simulator{}", if workbook.is_some() { " (workbook)" } else { "" }),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
@@ -1699,6 +1839,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::Multichannel(c) => c.kind(),
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
         Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
+        Cmd::SetIntersheetRefs { .. } => "schematic-intersheet-refs",
         Cmd::SetSimulator { .. } => "schematic-simulator",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
@@ -5148,8 +5289,8 @@ mod tests {
         let start = sheet_of(&load(&dir).unwrap().1);
         let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
         let commands = vec![
-            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None, auto_rotate: None },
-            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None, auto_rotate: None },
+            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None, auto_rotate: None, fields: None },
+            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None, auto_rotate: None, fields: None },
             V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_um: Some(2_540), angle: Some(90_000), h: None, v: None },
             V::EditSheet { id: "sheet_a".into(), name: Some("Power".into()), file: Some("power".into()) },
             V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_um: Some(300), style: Some(SchLineStyle::Dash), color: Some(red), diameter_um: Some(900) },
@@ -5186,7 +5327,7 @@ mod tests {
             Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_um: Some(2_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::AutoplaceFields { ids: vec!["R1".into()] }),
-            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true), auto_rotate: None }),
+            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true), auto_rotate: None, fields: None }),
         ];
         for cmd in commands {
             let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd.clone()) };
@@ -6159,7 +6300,7 @@ mod tests {
         };
         // Label Properties with "Auto" off: the spin chosen is kept
         let l2 = label.clone();
-        check(Cmd::SchEdit(V::EditLabel { id: label.clone(), text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Left), size_um: None, bold: None, italic: None, auto_rotate: Some(false) }), &move |d| {
+        check(Cmd::SchEdit(V::EditLabel { id: label.clone(), text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Left), size_um: None, bold: None, italic: None, auto_rotate: Some(false), fields: None }), &move |d| {
             let sch = d.schematic.as_ref().unwrap();
             assert_eq!(sch.extras.label_spins.get(&l2), Some(&eda_model::sch_extras::LabelSpin::Left));
             assert!(!sch.extras.label_looks.contains_key(&l2));

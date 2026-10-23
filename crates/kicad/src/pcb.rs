@@ -832,7 +832,7 @@ fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
 
 /// A net name as a pattern that matches that name and no other, read as a regular expression (`NET_SETTINGS`' matchers read every pattern as a wildcard pattern and as a regular
 /// expression): each character a regular expression gives a meaning to is escaped.
-pub(crate) fn exact_pattern(net: &str) -> String {
+pub fn exact_pattern(net: &str) -> String {
     let mut out = String::with_capacity(net.len());
     for c in net.chars() {
         if ".+*?()[]{}|^$\\".contains(c) {
@@ -900,6 +900,15 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
     // Schematic Setup > Formatting: the connection grid ERC's `endpoint_off_grid` judges by (`schematic.connection_grid_size`, in mils).
     if let Some(mils) = design.schematic.as_ref().and_then(|s| s.extras.connection_grid_mils) {
         project["schematic"]["connection_grid_size"] = serde_json::json!(f64::from(mils));
+    }
+    // Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS`, `schematic.drawing.intersheets_ref_*`): how a global label's Sheet References read
+    if let Some(iref) = design.schematic.as_ref().and_then(|s| s.extras.intersheet_refs.as_ref()) {
+        let drawing = &mut project["schematic"]["drawing"];
+        drawing["intersheets_ref_show"] = serde_json::json!(iref.show);
+        drawing["intersheets_ref_own_page"] = serde_json::json!(iref.own_page);
+        drawing["intersheets_ref_short"] = serde_json::json!(iref.short);
+        drawing["intersheets_ref_prefix"] = serde_json::json!(iref.prefix);
+        drawing["intersheets_ref_suffix"] = serde_json::json!(iref.suffix);
     }
     let waived_erc = crate::erc_exclusions::project_entries(design.schematic.as_ref().map_or(&[][..], |s| s.erc_exclusions.as_slice()));
     if !waived_erc.is_empty() {

@@ -64,6 +64,17 @@ fn import_cmd(source: &str, as_sheet: bool, keep: bool) -> Cmd {
     }
 }
 
+/// Every placed unit of every sheet of the hierarchy, by the reference its placement gives it (a screen shown twice counts twice).
+fn units_per_placement(design: &eda_model::ir::Design) -> Vec<(String, u32)> {
+    let mut out = Vec::new();
+    for e in eda_model::sheet_list::walk(design) {
+        let sec = eda_model::sheet_list::screen_of(design, &e.path).unwrap();
+        out.extend(sec.symbols.iter().map(|s| (eda_model::sheet_list::reference_under(sec, s, e.path.last().map(String::as_str)), s.unit)));
+    }
+    out.sort();
+    out
+}
+
 /// Every placed unit of the design's live screens: (reference, unit) -- no pair twice.
 fn placed_units(design: &eda_model::ir::Design) -> Vec<(String, u32)> {
     let reachable = eda_model::sheet_list::reachable_files(design);
@@ -183,7 +194,7 @@ fn the_annotate_report_matches_what_the_verb_does() {
 }
 
 #[test]
-fn a_copied_sheet_is_pasted_with_its_screens_as_a_sheet_of_its_own() {
+fn a_copied_sheet_is_pasted_as_a_second_placement_of_its_screen() {
     let dir = mcu30_board("sheet_paste");
     write_ldo_file(&dir, "ldo_stage.kicad_sch");
     step(&dir, import_cmd("ldo_stage.kicad_sch", true, false), false, "test").unwrap();
@@ -207,12 +218,22 @@ fn a_copied_sheet_is_pasted_with_its_screens_as_a_sheet_of_its_own() {
     let (_, design, model) = load(&dir).unwrap();
     let sheets = &design.schematic.as_ref().unwrap().sheets;
     assert_eq!(sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["LDO stage", "LDO stage1"]);
-    assert_eq!(sheets[1].file, "ldo_stage1.kicad_sch");
-    let units = placed_units(&design);
+    // `SetScreen( existingScreen )`: the new sheet shows the same file, which is still one screen
+    assert_eq!(sheets[1].file, "ldo_stage.kicad_sch");
+    assert_eq!(design.sheet_contents.as_ref().unwrap().len(), 1);
+    let screen = &design.sheet_contents.as_ref().unwrap()["ldo_stage.kicad_sch"];
+    let second: Vec<&eda_model::ir::SymbolPathOverride> = screen.instance_overrides.iter().filter(|o| o.parent_sheet_instance_id == sheets[1].id).collect();
+    assert_eq!(second.len(), screen.symbols.len(), "every symbol has a reference of its own on the new sheet");
+    let units = units_per_placement(&design);
     let mut unique = units.clone();
     unique.dedup();
-    assert_eq!(units.len(), unique.len(), "the copy's references are new: {units:?}");
-    assert!(design.sheet_contents.as_ref().unwrap()["ldo_stage1.kicad_sch"].symbols.iter().all(|s| model.part(&s.id).is_some()));
+    assert_eq!(units.len(), unique.len(), "the second placement's references are new: {units:?}");
+    // a part for each reference of the new placement, its pins on nets of their own
+    let nets = design.nets.as_ref().unwrap();
+    for o in &second {
+        assert!(model.part(&o.reference).is_some(), "{} is a part", o.reference);
+        assert!(nets.iter().any(|n| n.pins.iter().any(|p| p.starts_with(&format!("{}.", o.reference)))), "{} is on the nets", o.reference);
+    }
     undo(&dir, "test", Some(Domain::Schematic)).unwrap();
     assert_eq!(load(&dir).unwrap().1.schematic.as_ref().unwrap().sheets.len(), 1, "one undo takes the pasted sheet back");
 }
@@ -424,4 +445,685 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
     assert_no_reference_findings(&dir, "reorganized with a multi-unit part");
     let kinds = erc_kinds(&dir);
     assert!(kinds.is_empty(), "the reorganized board with its dual op-amp is clean: {kinds:?}");
+}
+
+// ---------------------------------------------------------------------------------------- a screen shown by two sheets
+
+/// kicad-cli's netlist of the board (`kicad-cli sch export netlist --format kicadxml`): the pins of each net, `REF.PIN` sorted, power symbols left out.
+pub(crate) fn kicad_net_groups(dir: &Path) -> Vec<Vec<String>> {
+    let done = crate::kicad_engine::export_sch(dir, "netlist", &["--format".to_string(), "kicadxml".to_string()]).expect("kicad-cli exports the netlist");
+    let file = dir.join(done["files"][0].as_str().expect("one netlist file"));
+    let text = std::fs::read_to_string(file).unwrap();
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    let mut current: Option<Vec<String>> = None;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with("<net ") {
+            current = Some(Vec::new());
+        } else if line.starts_with("</net>") {
+            if let Some(mut g) = current.take() {
+                g.sort();
+                groups.push(g);
+            }
+        } else if line.starts_with("<node ") {
+            let attr = |name: &str| line.split(&format!("{name}=\"")).nth(1).and_then(|r| r.split('"').next()).unwrap_or("").to_string();
+            let reference = attr("ref");
+            if let Some(g) = current.as_mut().filter(|_| !reference.starts_with('#')) {
+                g.push(format!("{reference}.{}", attr("pin")));
+            }
+        }
+    }
+    groups.retain(|g| !g.is_empty());
+    groups.sort();
+    groups
+}
+
+/// The pins of the nets the board's own net list (`design.nets`) has, sorted as [`kicad_net_groups`] sorts them.
+pub(crate) fn our_net_groups(dir: &Path) -> Vec<Vec<String>> {
+    let (_, design, _) = load(dir).unwrap();
+    let mut groups: Vec<Vec<String>> = design.nets.unwrap_or_default().into_iter().map(|n| {
+        let mut p = n.pins;
+        p.sort();
+        p
+    }).filter(|p| !p.is_empty()).collect();
+    groups.sort();
+    groups
+}
+
+/// A copied sheet pasted beside its original shows the same screen (`SCH_EDITOR_CONTROL::Paste`: `SetScreen( existingScreen )`), and kicad-cli makes a net per
+/// placement of it: the same drawing, two sets of nets, the second under the references the new placement gave the symbols. The studio's net list is
+/// the one kicad-cli exports for every net either placement's parts are on, the ERC finds no duplicate reference, and Undo takes the placement back.
+#[test]
+fn slow_a_pasted_sheet_shares_its_screen_and_kicad_cli_makes_a_net_per_placement() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let dir = mcu30_board("slow_shared_screen");
+    write_ldo_file(&dir, "ldo_stage.kicad_sch");
+    step(&dir, import_cmd("ldo_stage.kicad_sch", true, false), false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let sheet = design.schematic.as_ref().unwrap().sheets[0].clone();
+    let first_refs: Vec<String> = design.sheet_contents.as_ref().unwrap()[&sheet.file].symbols.iter().map(|s| s.id.clone()).collect();
+    let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
+    let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
+    let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    step(&dir, cmd, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let second = design.schematic.as_ref().unwrap().sheets[1].clone();
+    assert_eq!(second.file, sheet.file, "one screen, two placements");
+    let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
+    let second_refs: Vec<String> = screen.instance_overrides.iter().filter(|o| o.parent_sheet_instance_id == second.id).map(|o| o.reference.clone()).collect();
+    assert_eq!(second_refs.len(), first_refs.len());
+
+    // the derived files say it the way KiCad does: one file, each symbol with a reference per path
+    let (d, m) = crate::kicad_engine::load_with_schematic(&dir).unwrap();
+    let files = eda_kicad::export_kicad_sch_tree(&d, &m, &eda_kicad::ExportMeta { date: "2026-10-23", title: "t" }, "root.kicad_sch").unwrap();
+    assert_eq!(files.len(), 2, "the root and the one shared screen");
+    let child = &files.iter().find(|(f, _)| f == &sheet.file).unwrap().1;
+    for r in first_refs.iter().chain(&second_refs) {
+        assert!(child.contains(&format!("(reference \"{r}\")")), "{r} under its path");
+    }
+
+    let kicad = kicad_net_groups(&dir);
+    let ours = our_net_groups(&dir);
+    let refs: std::collections::BTreeSet<&str> = first_refs.iter().chain(&second_refs).map(String::as_str).collect();
+    // each net cut down to the pins of the two placements (the rest of mcu30's stored net list is the intent's, not what its drawing says)
+    let here = |groups: &[Vec<String>]| -> Vec<Vec<String>> {
+        let mut out: Vec<Vec<String>> = groups.iter().map(|g| g.iter().filter(|p| p.split_once('.').is_some_and(|(r, _)| refs.contains(r))).cloned().collect::<Vec<_>>()).filter(|g| g.len() >= 2).collect();
+        out.sort();
+        out
+    };
+    let (kicad_here, ours_here) = (here(&kicad), here(&ours));
+    println!("kicad-cli: {} nets touch the two placements", kicad_here.len());
+    assert!(kicad_here.iter().any(|g| g.iter().any(|p| p.starts_with(&format!("{}.", second_refs[0])))), "kicad-cli's netlist has the second placement's parts on nets");
+    assert_eq!(ours_here, kicad_here, "a net per placement, the same nets kicad-cli exports");
+    assert_no_reference_findings(&dir, "after pasting a second placement of the screen");
+
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    let (_, back, _) = load(&dir).unwrap();
+    assert_eq!(back.schematic.as_ref().unwrap().sheets.len(), 1, "one undo takes the placement back");
+    assert!(back.sheet_contents.as_ref().unwrap()[&sheet.file].instance_overrides.iter().all(|o| o.parent_sheet_instance_id != second.id));
+}
+
+// ---------------------------------------------------------------------------------------- a bus across sheets
+
+/// A board of four resistors, R1 and R2 on the root and R3 and R4 on a sheet "child", each pin 1 under a label: the members of `bus_label` on the root,
+/// D0 and D1 in the child; on the root a
+/// bus labelled `bus_label` to the sheet pin `D[0..1]`, inside the child a bus with no label yet. Returns the board, the child's placement id and where
+/// the child's hierarchical label `D[0..1]` is to go.
+fn bus_board(name: &str, bus_label: &str) -> (PathBuf, String, Point) {
+    use eda_model::ir::{LabelKind, LabelShape, NetLabel, SheetInstance, SheetPin, Wire};
+    let dir = scratch(name);
+    let intent = dir.join("intent.yaml");
+    let part = |r: &str| format!("  - {{ reference: {r}, value: 10k, package: \"0603\", pins: [{{ number: \"1\", kind: passive }}, {{ number: \"2\", kind: passive }}] }}\n");
+    let yaml = format!("parts:\n{}{}{}{}nets:\n  - {{ name: A, pins: [R1.2, R2.2] }}\n  - {{ name: B, pins: [R3.2, R4.2] }}\n", part("R1"), part("R2"), part("R3"), part("R4"));
+    std::fs::write(&intent, yaml).unwrap();
+    let model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+    let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+    design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
+    let mut root = design.schematic.take().unwrap();
+    let mut child = root.clone();
+    root.symbols.retain(|s| s.id == "R1" || s.id == "R2");
+    child.symbols.retain(|s| s.id == "R3" || s.id == "R4");
+    for sec in [&mut root, &mut child] {
+        sec.wires.clear();
+        sec.labels.clear();
+        sec.power_symbols.clear();
+        sec.no_connects.clear();
+        sec.junctions.clear();
+    }
+    let pin1 = |sec: &eda_model::ir::SchematicSection, r: &str| -> Point {
+        let sym = sec.symbols.iter().find(|s| s.id == r).unwrap();
+        let part = model.part(r).unwrap();
+        eda_engine::placed::pin_points_in(sec, sym, part, model.real_symbol_of_instance(sec, sym, part).as_ref()).into_iter().find(|(n, _)| n == "1").unwrap().1
+    };
+    let label = |net: &str, at: Point, kind: LabelKind| NetLabel { id: String::new(), net: net.into(), at, kind };
+    let wire = |pts: Vec<Point>, bus: bool| Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus };
+    // each pin 1 a short wire out to its label
+    for (sec, refs) in [(&mut root, ["R1", "R2"]), (&mut child, ["R3", "R4"])] {
+        let names = if refs[0] == "R1" { eda_kicad::expand_bus_members(bus_label, &[]).unwrap() } else { vec!["D0".to_string(), "D1".to_string()] };
+        for (r, net) in refs.iter().zip(names) {
+            let at = pin1(sec, r);
+            let end = Point { x: at.x - 5_080, y: at.y };
+            sec.wires.push(wire(vec![at, end], false));
+            sec.labels.push(label(&net, end, LabelKind::Local));
+        }
+    }
+    // the child: a bus from the hierarchical label down
+    let hl = Point { x: 20_320, y: 20_320 };
+    child.wires.push(wire(vec![hl, Point { x: 20_320, y: 40_640 }], true));
+    // the root: the sheet, its bus pin, and a bus label on a stub of bus away from it
+    let sheet_at = Point { x: 152_400, y: 25_400 };
+    let pin_at = Point { x: sheet_at.x, y: sheet_at.y + 5_080 };
+    root.sheets.push(SheetInstance { id: String::new(), name: "child".into(), file: "child.kicad_sch".into(), at: sheet_at, size: (25_400, 20_320), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: pin_at }], page: String::new() });
+    let stub = Point { x: pin_at.x - 25_400, y: pin_at.y };
+    root.wires.push(wire(vec![stub, pin_at], true));
+    root.labels.push(label(bus_label, stub, LabelKind::Local));
+    root.assign_missing_ids();
+    child.assign_missing_ids();
+    let sheet_id = root.sheets[0].id.clone();
+    design.schematic = Some(root);
+    design.sheet_contents = Some([("child.kicad_sch".to_string(), child)].into_iter().collect());
+    save(&dir, &design).unwrap();
+    let meta = Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+    std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    (dir, sheet_id, hl)
+}
+
+/// A bus across sheets: the hierarchical label `D[0..1]` put on the child's bus (one `add_label` on the sheet, one undo step) puts each member's nets on the
+/// two sheets on one net, as kicad-cli's netlist has them (`propagateToNeighbors`, `propagate_bus_neighbors`); a root bus named `X[0..1]` (its nets X0 and
+/// X1) matches the child's D0 and D1 by index (`matchBusMember`). Before the label, and after its undo, the sheets' nets are apart in both.
+#[test]
+fn slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    for bus_label in ["D[0..1]", "X[0..1]"] {
+        let (dir, sheet_id, hl) = bus_board(&format!("slow_bus_{}", &bus_label[..1]), bus_label);
+        // the nets of the pins 1 (the pins 2 are on the intent's nets A and B)
+        let cut = |groups: Vec<Vec<String>>| -> Vec<Vec<String>> {
+            let mut out: Vec<Vec<String>> = groups.into_iter().map(|g| g.into_iter().filter(|p| p.ends_with(".1")).collect::<Vec<_>>()).filter(|g| !g.is_empty()).collect();
+            out.sort();
+            out
+        };
+        let apart = vec![vec!["R1.1".to_string()], vec!["R2.1".into()], vec!["R3.1".into()], vec!["R4.1".into()]];
+        assert_eq!(cut(kicad_net_groups(&dir)), apart, "{bus_label}: kicad-cli has the two sheets apart before the bus is drawn");
+        let add = Cmd::AddLabel { net: "D[0..1]".into(), at: hl, kind: eda_model::ir::LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Bidirectional } };
+        step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(add) }, false, "test").unwrap();
+        let joined = vec![vec!["R1.1".to_string(), "R3.1".into()], vec!["R2.1".to_string(), "R4.1".into()]];
+        let kicad = cut(kicad_net_groups(&dir));
+        assert_eq!(kicad, joined, "{bus_label}: kicad-cli joins each member's nets across the sheets");
+        assert_eq!(cut(our_net_groups(&dir)), joined, "{bus_label}: and so does the studio's net list");
+        let (_, design, _) = load(&dir).unwrap();
+        let name_of = |pin: &str| design.nets.as_ref().unwrap().iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone()).unwrap();
+        assert_eq!(name_of("R3.1"), if bus_label.starts_with('X') { "X0" } else { "D0" }, "the root's member names the net");
+        let kinds = erc_kinds(&dir);
+        // (a bus labelled X[0..1] on a sheet pin D[0..1] is ERC's `bus_to_bus_conflict`: no member in common by name, which the netlist does not mind)
+        let allowed = |k: &str| bus_label.starts_with('X') && k == "bus_to_bus_conflict";
+        assert!(!kinds.keys().any(|k| (k.starts_with("bus_") && !allowed(k)) || k == "net_not_bus_member" || k == "hier_label_mismatch"), "{bus_label}: {kinds:?}");
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(cut(kicad_net_groups(&dir)), apart, "{bus_label}: one undo takes the bus and the joins back");
+        let ours = cut(our_net_groups(&dir));
+        assert!(ours.is_empty() || ours == apart, "{bus_label}: {ours:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------------------- a label's own fields
+
+fn edit_label_fields(id: &str, fields: Vec<eda_model::sch_extras::LabelField>) -> Cmd {
+    Cmd::SchEdit(eda_ops::sch_edit::SchCmd::EditLabel { id: id.into(), text: None, shape: None, spin: None, size_um: None, bold: None, italic: None, auto_rotate: None, fields: Some(fields) })
+}
+
+fn netclass(text: &str) -> eda_model::sch_extras::LabelField {
+    eda_model::sch_extras::LabelField { name: "Netclass".into(), text: text.into(), visible: true, italic: true }
+}
+
+/// A label's net class field (`Netclass`, Label Properties' grid: one `edit_label` with `fields`, one undo step) is in the file kicad-cli reads: its ERC reports a class
+/// the project does not define (`ERC_TESTER::TestMissingNetclasses`, "Netclass %s is not defined") and none once the board defines it; the label's net is then in
+/// the class -- in the studio's model and in kicad-cli's netlist (`<net .. class=..>`). Schematic Setup's Inter-sheet References reach the project file.
+#[test]
+fn slow_a_labels_net_class_field_is_read_by_kicad_cli() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let dir = mcu30_board("slow_label_fields");
+    let (_, design, _) = load(&dir).unwrap();
+    let root = design.schematic.as_ref().unwrap();
+    let label = root.labels.iter().find(|l| l.kind == eda_model::ir::LabelKind::Local && root.wires.iter().any(|w| w.pts.contains(&l.at))).expect("mcu30's flat sheet has a local label on a wire").clone();
+    let net = root.wires.iter().find(|w| w.pts.contains(&label.at)).unwrap().net.clone();
+    let undefined = |dir: &Path| erc_kinds(dir).get("undefined_netclass").copied().unwrap_or(0);
+    assert_eq!(undefined(&dir), 0);
+
+    step(&dir, edit_label_fields(&label.id, vec![netclass("NoSuchClass")]), false, "test").unwrap();
+    let (_, d, _) = load(&dir).unwrap();
+    assert_eq!(d.schematic.as_ref().unwrap().extras.label_netclass(&label.id), Some("NoSuchClass"));
+    assert_eq!(undefined(&dir), 1, "kicad-cli reads the label's net class and has no such class");
+
+    // the board defines the class: no finding, and the label's net is in it
+    let (_, _, model) = load(&dir).unwrap();
+    let defaults = eda_model::rules::net_class_settings_of(&model.board);
+    let power = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(400), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+    step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults } }, false, "test").unwrap();
+    step(&dir, edit_label_fields(&label.id, vec![netclass("HighCurrent")]), false, "test").unwrap();
+    assert_eq!(undefined(&dir), 0, "the class is defined");
+    let (_, _, model) = load(&dir).unwrap();
+    let class = model.board.net_classes.iter().find(|c| c.name == "HighCurrent").unwrap();
+    assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)), "{net} is in the class: {:?}", class.nets);
+    let done = crate::kicad_engine::export_sch(&dir, "netlist", &["--format".to_string(), "kicadxml".to_string()]).unwrap();
+    let xml = std::fs::read_to_string(dir.join(done["files"][0].as_str().unwrap())).unwrap();
+    let line = xml.lines().map(str::trim).find(|l| l.starts_with("<net ") && (l.contains(&format!("name=\"/{net}\"")) || l.contains(&format!("name=\"{net}\"")))).unwrap_or_else(|| panic!("{net} in the netlist"));
+    // (a composite of the classes the net is in, the Default one last: `NET_SETTINGS::makeEffectiveNetclass`)
+    let class = line.split("class=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or("");
+    assert!(class.split(',').any(|c| c == "HighCurrent"), "kicad-cli puts the net in the label's class: {line}");
+
+    // one undo takes the field's edit back
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert_eq!(load(&dir).unwrap().1.schematic.as_ref().unwrap().extras.label_netclass(&label.id), Some("NoSuchClass"));
+
+    // Schematic Setup > Formatting > Inter-sheet References: in the project kicad-cli reads
+    let settings = eda_model::sch_extras::IntersheetRefs { show: true, own_page: false, short: true, prefix: "<".into(), suffix: ">".into() };
+    step(&dir, Cmd::SetIntersheetRefs { settings }, false, "test").unwrap();
+    let (d, m) = crate::kicad_engine::load_with_schematic(&dir).unwrap();
+    let pro: serde_json::Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(&d, &m)).unwrap();
+    assert_eq!(pro["schematic"]["drawing"]["intersheets_ref_show"], true);
+    assert_eq!(pro["schematic"]["drawing"]["intersheets_ref_prefix"], "<");
+    assert!(erc_kinds(&dir).get("undefined_netclass").is_some(), "kicad-cli still loads the project");
+}
+
+/// A defined class "HighCurrent" on the board in `dir` (Board Setup > Net Classes).
+fn define_high_current(dir: &Path) {
+    let (_, _, model) = load(dir).unwrap();
+    let defaults = eda_model::rules::net_class_settings_of(&model.board);
+    let class = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(400), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+    step(dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![class], ..defaults } }, false, "test").unwrap();
+}
+
+/// The classes kicad-cli's netlist puts the net of `pin` ("REF.PIN") in (`<net .. class="A,B">`).
+fn kicad_classes_of_pin(dir: &Path, pin: &str) -> Vec<String> {
+    let done = crate::kicad_engine::export_sch(dir, "netlist", &["--format".to_string(), "kicadxml".to_string()]).unwrap();
+    let xml = std::fs::read_to_string(dir.join(done["files"][0].as_str().unwrap())).unwrap();
+    let (r, n) = pin.split_once('.').unwrap();
+    let mut class = String::new();
+    for line in xml.lines().map(str::trim) {
+        if line.starts_with("<net ") {
+            class = line.split("class=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or("").to_string();
+        } else if line.starts_with("<node ") && line.contains(&format!("ref=\"{r}\"")) && line.contains(&format!("pin=\"{n}\"")) {
+            return class.split(',').map(String::from).collect();
+        }
+    }
+    panic!("{pin} is in no net of kicad-cli's netlist");
+}
+
+/// A bus label's net class is its members' (`checkNetclassDrivers`: `processBusMember` appends the classes to each member's name): the nets of D0 and D1 are in the
+/// class in the studio's model and in kicad-cli's netlist, which reads the same field from the file.
+#[test]
+fn slow_a_bus_labels_net_class_is_its_members() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let (dir, sheet_id, hl) = bus_board("slow_bus_class", "D[0..1]");
+    let add = Cmd::AddLabel { net: "D[0..1]".into(), at: hl, kind: eda_model::ir::LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Bidirectional } };
+    step(&dir, Cmd::OnSheet { sheet: sheet_id, cmd: Box::new(add) }, false, "test").unwrap();
+    define_high_current(&dir);
+    let (_, design, _) = load(&dir).unwrap();
+    let bus = design.schematic.as_ref().unwrap().labels.iter().find(|l| l.net == "D[0..1]").unwrap().id.clone();
+    step(&dir, edit_label_fields(&bus, vec![netclass("HighCurrent")]), false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let class = model.board.net_classes.iter().find(|c| c.name == "HighCurrent").unwrap();
+    for pin in ["R1.1", "R2.1", "R3.1", "R4.1"] {
+        let net = design.nets.as_ref().unwrap().iter().find(|n| n.pins.iter().any(|p| p == pin)).unwrap().name.clone();
+        assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)), "{pin}'s net {net} is in the bus's class: {:?}", class.nets);
+        assert!(kicad_classes_of_pin(&dir, pin).iter().any(|c| c == "HighCurrent"), "kicad-cli puts {pin}'s net in the bus's class");
+    }
+}
+
+/// A label's net class on a screen shown twice is in force on both placements (`checkNetclassDrivers` runs for each net, and each placement has its own): the
+/// second placement's net is in the class too, in the studio's model and in kicad-cli's netlist.
+#[test]
+fn slow_a_shared_screens_label_class_is_in_force_on_each_placement() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let dir = mcu30_board("slow_shared_class");
+    write_ldo_file(&dir, "ldo_stage.kicad_sch");
+    step(&dir, import_cmd("ldo_stage.kicad_sch", true, false), false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let sheet = design.schematic.as_ref().unwrap().sheets[0].clone();
+    let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
+    let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
+    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    step(&dir, paste, false, "test").unwrap();
+    define_high_current(&dir);
+    let (_, design, _) = load(&dir).unwrap();
+    let second = design.schematic.as_ref().unwrap().sheets[1].id.clone();
+    let screen = design.sheet_contents.as_ref().unwrap()[&sheet.file].clone();
+    let (label, wire) = screen.labels.iter().filter(|l| l.kind == eda_model::ir::LabelKind::Local).find_map(|l| screen.wires.iter().find(|w| !w.bus && w.pts.contains(&l.at) && !w.pins.is_empty()).map(|w| (l.clone(), w.clone()))).expect("a local label on a wire with a pin");
+    let edit = Cmd::OnSheet { sheet: sheet.id.clone(), cmd: Box::new(edit_label_fields(&label.id, vec![netclass("HighCurrent")])) };
+    step(&dir, edit, false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let class = model.board.net_classes.iter().find(|c| c.name == "HighCurrent").unwrap();
+    let pin = wire.pins[0].clone();
+    let (r, n) = pin.split_once('.').unwrap();
+    let sym = screen.symbols.iter().find(|s| s.id == r).unwrap();
+    let other = format!("{}.{n}", eda_model::sheet_list::reference_under(&screen, sym, Some(&second)));
+    for p in [&pin, &other] {
+        let net = design.nets.as_ref().unwrap().iter().find(|x| x.pins.iter().any(|q| q == p)).unwrap_or_else(|| panic!("{p} on a net")).name.clone();
+        assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)), "{p}'s net {net} is in the class: {:?}", class.nets);
+        assert!(kicad_classes_of_pin(&dir, p).iter().any(|c| c == "HighCurrent"), "kicad-cli puts {p}'s net in the class");
+    }
+}
+
+/// The `<text>`s of the SVG pages kicad-cli plots of the board's schematic (`kicad-cli sch export svg`): KiCad writes each text it draws once more as a hidden text.
+fn plotted_texts(dir: &Path) -> Vec<String> {
+    let done = crate::kicad_engine::export_sch(dir, "svg", &[]).expect("kicad-cli plots the schematic");
+    let mut out = Vec::new();
+    for f in done["files"].as_array().unwrap() {
+        let svg = std::fs::read_to_string(dir.join(f.as_str().unwrap())).unwrap();
+        for part in svg.split("<text").skip(1) {
+            if let Some(t) = part.split_once('>').and_then(|(_, r)| r.split("</text>").next()) {
+                out.push(t.trim().to_string());
+            }
+        }
+    }
+    out
+}
+
+/// A global label's Sheet References (`SCH_GLOBALLABEL`'s mandatory field, `${INTERSHEET_REFS}`) as Schematic Setup > Formatting sets them (`set_intersheet_refs`,
+/// one undo step): kicad-cli's plot shows the pages the label's name is on as the studio shows them, its own page left out when "Show own page reference" is off.
+#[test]
+fn slow_a_global_labels_sheet_references_read_as_kicad_cli_plots_them() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let (dir, sheet_id, _) = bus_board("slow_isr", "D[0..1]");
+    let global = || eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input };
+    step(&dir, Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: 50_800, y: 101_600 }, kind: global() }, false, "test").unwrap();
+    step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: 60_960, y: 101_600 }, kind: global() }) }, false, "test").unwrap();
+    assert!(!plotted_texts(&dir).iter().any(|t| t.starts_with('[')), "not shown by default (`m_IntersheetRefsShow` is off)");
+    let shown = |dir: &Path, sheet: &str| -> Vec<String> {
+        let (_, d, m) = load(dir).unwrap();
+        let j = crate::studio::schematic_json_of(&d, &m, sheet);
+        j["labels"].as_array().unwrap().iter().flat_map(|l| l["fields"].as_array().cloned().unwrap_or_default()).filter(|f| f["intersheet_refs"] == true && f["visible"] == true).map(|f| f["shown"].as_str().unwrap().to_string()).collect()
+    };
+    let mut settings = eda_model::sch_extras::IntersheetRefs { show: true, ..Default::default() };
+    step(&dir, Cmd::SetIntersheetRefs { settings: settings.clone() }, false, "test").unwrap();
+    let texts = plotted_texts(&dir);
+    assert_eq!(texts.iter().filter(|t| *t == "[1,2]").count(), 2, "both labels show both pages: {texts:?}");
+    assert_eq!((shown(&dir, ""), shown(&dir, &sheet_id)), (vec!["[1,2]".to_string()], vec!["[1,2]".to_string()]), "as the studio shows them");
+    settings.own_page = false;
+    step(&dir, Cmd::SetIntersheetRefs { settings }, false, "test").unwrap();
+    let texts = plotted_texts(&dir);
+    assert!(texts.iter().any(|t| t == "[2]") && texts.iter().any(|t| t == "[1]"), "each the other's page only: {texts:?}");
+    assert_eq!((shown(&dir, ""), shown(&dir, &sheet_id)), (vec!["[2]".to_string()], vec!["[1]".to_string()]));
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert_eq!(shown(&dir, ""), vec!["[1,2]".to_string()], "one undo puts the setting back");
+}
+
+/// Delete of the second placement of a screen takes the references it gave the screen's symbols with it (`SCH_SCREENS::PruneOrphanedSymbolInstances`), and a
+/// placement pasted later where it was -- so under the same id, which is made from the file and the place -- is numbered afresh, not handed the old ones.
+#[test]
+fn a_deleted_placement_leaves_no_references_behind() {
+    let dir = mcu30_board("sheet_delete_prunes");
+    write_ldo_file(&dir, "ldo_stage.kicad_sch");
+    step(&dir, import_cmd("ldo_stage.kicad_sch", true, false), false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let sheet = design.schematic.as_ref().unwrap().sheets[0].clone();
+    let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
+    let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
+    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    step(&dir, paste.clone(), false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let second = design.schematic.as_ref().unwrap().sheets[1].id.clone();
+    assert!(!design.sheet_contents.as_ref().unwrap()[&sheet.file].instance_overrides.is_empty());
+
+    step(&dir, Cmd::SchEdit(eda_ops::sch_edit::SchCmd::DeleteSheet { id: second.clone() }), false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    assert!(design.sheet_contents.as_ref().unwrap()[&sheet.file].instance_overrides.is_empty(), "the placement's references went with it");
+
+    // the sheet pasted where it was again
+    step(&dir, paste, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    assert_eq!(design.schematic.as_ref().unwrap().sheets[1].id, second, "the same id again");
+    let units = units_per_placement(&design);
+    let mut unique = units.clone();
+    unique.dedup();
+    assert_eq!(units.len(), unique.len(), "{units:?}");
+    let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
+    assert_eq!(screen.instance_overrides.iter().filter(|o| o.parent_sheet_instance_id == second).count(), screen.symbols.len(), "one reference per symbol, not two");
+}
+
+/// A screen shown twice, edited on one of its placements: the references the other placement gives its symbols follow them (`SCH_SYMBOL_INSTANCE` belongs
+/// to the symbol, wherever it goes), a symbol added there gets a reference of its own on every placement (KiCad gives it an instance per path and
+/// annotates each), and a symbol deleted takes its references with it.
+#[test]
+fn the_references_of_a_shared_screen_follow_its_edits() {
+    let dir = mcu30_board("shared_screen_edits");
+    write_ldo_file(&dir, "ldo_stage.kicad_sch");
+    step(&dir, import_cmd("ldo_stage.kicad_sch", true, false), false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let sheet = design.schematic.as_ref().unwrap().sheets[0].clone();
+    let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
+    let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
+    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    step(&dir, paste, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let second = design.schematic.as_ref().unwrap().sheets[1].id.clone();
+    let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
+    let moved = screen.symbols[0].clone();
+    let its_second = eda_model::sheet_list::reference_under(screen, &moved, Some(&second));
+    assert_ne!(its_second, moved.id);
+    let unique = |design: &eda_model::ir::Design| {
+        let units = units_per_placement(design);
+        let mut u = units.clone();
+        u.dedup();
+        assert_eq!(units.len(), u.len(), "a reference per placement: {units:?}");
+    };
+
+    // moved on the first placement
+    let mv: Cmd = serde_json::from_value(json!({ "op": "on_sheet", "sheet": sheet.id, "cmd": { "op": "sch_move", "verb": "move", "ids": [moved.id], "dx": 2_540, "dy": 0 } })).unwrap();
+    step(&dir, mv, false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
+    let now = screen.symbols.iter().find(|s| s.id == moved.id).unwrap();
+    assert_ne!(now.at, moved.at, "the symbol moved");
+    assert_eq!(eda_model::sheet_list::reference_under(screen, now, Some(&second)), its_second, "its reference on the other placement went with it");
+    assert!(model.part(&its_second).is_some());
+    unique(&design);
+
+    // a symbol added on the first placement: a reference of its own on the second
+    let add: Cmd = serde_json::from_value(json!({ "op": "on_sheet", "sheet": sheet.id, "cmd": { "op": "add_symbol", "id": "R90", "lib_id": "Device:R", "at": { "x": 120_000, "y": 120_000 }, "rot_millideg": 0, "value": "1k", "footprint": "" } })).unwrap();
+    step(&dir, add, false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
+    let added = screen.symbols.iter().find(|s| s.id == "R90").expect("the symbol is on the shared screen");
+    let added_second = eda_model::sheet_list::reference_under(screen, added, Some(&second));
+    assert_ne!(added_second, "R90", "a reference of its own on the other placement");
+    assert!(model.part(&added_second).is_some(), "{added_second} is a part");
+    unique(&design);
+
+    // and deleted: its reference on the other placement goes with it
+    let del: Cmd = serde_json::from_value(json!({ "op": "on_sheet", "sheet": sheet.id, "cmd": { "op": "delete_symbol", "id": "R90" } })).unwrap();
+    step(&dir, del, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
+    assert!(screen.instance_overrides.iter().all(|o| o.reference != added_second), "{:?}", screen.instance_overrides);
+    assert_eq!(screen.instance_overrides.len(), screen.symbols.len());
+    unique(&design);
+}
+
+/// Annotate (reset, the entire schematic) on a design that shows a screen twice leaves no reference on two placements.
+#[test]
+fn annotate_of_a_design_with_a_shared_screen_leaves_no_duplicate() {
+    let dir = mcu30_board("shared_screen_annotate");
+    write_ldo_file(&dir, "ldo_stage.kicad_sch");
+    step(&dir, import_cmd("ldo_stage.kicad_sch", true, false), false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let sheet = design.schematic.as_ref().unwrap().sheets[0].clone();
+    let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
+    let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
+    let paste: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000 })).unwrap();
+    step(&dir, paste, false, "test").unwrap();
+    for reset in [false, true] {
+        let annotate: Cmd = serde_json::from_value(json!({ "op": "annotate", "reset_existing": reset, "options": { "scope": "all" } })).unwrap();
+        let r = step(&dir, annotate, false, "test");
+        assert!(!reset || r.is_ok(), "{r:?}");
+        let (_, design, _) = load(&dir).unwrap();
+        let units = units_per_placement(&design);
+        let mut u = units.clone();
+        u.dedup();
+        assert_eq!(units.len(), u.len(), "reset {reset}: a reference per placement: {units:?}");
+    }
+}
+
+/// A KiCad project whose root shows `ldo.kicad_sch` twice, written beside the board as `<file>` (the root) and `ldo.kicad_sch`.
+fn write_twice_placed_tree(dir: &Path, file: &str) {
+    let (_, model) = example("ldo.yaml");
+    let child = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+    let mut design = child.clone();
+    let mut root = eda_model::ir::SchematicSection { symbols: vec![], wires: vec![], labels: vec![], power_symbols: vec![], no_connects: vec![], ..child.schematic.clone().unwrap() };
+    root.sheets = ["a", "b"].iter().enumerate().map(|(i, n)| eda_model::ir::SheetInstance { id: format!("sh_{n}"), name: format!("LDO {n}"), file: "ldo.kicad_sch".into(), at: Point { x: 20_000 + 60_000 * i as i64, y: 20_000 }, size: (40_000, 20_000), pins: vec![], page: String::new() }).collect();
+    design.schematic = Some(root);
+    design.sheet_contents = Some([("ldo.kicad_sch".to_string(), child.schematic.unwrap())].into_iter().collect());
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-23", title: "twice" }, file).unwrap();
+    for (f, text) in files {
+        std::fs::write(dir.join(f), text).unwrap();
+    }
+}
+
+/// Import Sheet of a project that shows one screen twice keeps it one screen (KiCad's `LoadSheetFromFile` reads it once), and the second placement's symbols
+/// have references of their own (`SCH_SYMBOL_INSTANCE` per path), with and without Keep: no reference is on two placements, each is a part with nets of its
+/// own. (Before: both placements showed the screen's own references, so the board had every LDO part twice under one name.)
+#[test]
+fn an_imported_tree_that_shows_a_screen_twice_numbers_each_placement() {
+    for keep in [false, true] {
+        let dir = mcu30_board(&format!("twice_import_{keep}"));
+        write_twice_placed_tree(&dir, "twice.kicad_sch");
+        step(&dir, import_cmd("twice.kicad_sch", true, keep), false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        let contents = design.sheet_contents.as_ref().unwrap();
+        let screen = contents.iter().find(|(_, s)| s.sheets.is_empty() && !s.symbols.is_empty()).map(|(f, _)| f.clone()).unwrap();
+        let placements: Vec<_> = eda_model::sheet_list::walk(&design).into_iter().filter(|e| e.file == screen).collect();
+        assert_eq!(placements.len(), 2, "keep {keep}: one screen, two placements");
+        let units = units_per_placement(&design);
+        let mut unique = units.clone();
+        unique.dedup();
+        assert_eq!(units.len(), unique.len(), "keep {keep}: a reference per placement: {units:?}");
+        let sec = &contents[&screen];
+        let nets = design.nets.as_ref().unwrap();
+        for s in &sec.symbols {
+            let second = eda_model::sheet_list::reference_under(sec, s, placements[1].path.last().map(String::as_str));
+            assert_ne!(second, s.id, "keep {keep}");
+            assert!(model.part(&second).is_some(), "keep {keep}: {second} is a part");
+            assert!(nets.iter().any(|n| n.pins.iter().any(|p| p.starts_with(&format!("{second}.")))), "keep {keep}: {second} is on the nets");
+        }
+    }
+}
+
+/// The same import in kicad-cli: no `duplicate_reference`, and its netlist of the two placements is the studio's net list.
+#[test]
+fn slow_an_imported_tree_that_shows_a_screen_twice_is_a_net_per_placement_in_kicad_cli() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let dir = mcu30_board("slow_twice_import");
+    let before: std::collections::BTreeSet<String> = load(&dir).unwrap().2.parts.iter().map(|p| p.reference.clone()).collect();
+    write_twice_placed_tree(&dir, "twice.kicad_sch");
+    step(&dir, import_cmd("twice.kicad_sch", true, false), false, "test").unwrap();
+    assert_no_reference_findings(&dir, "after importing a tree that shows a screen twice");
+    let (_, design, _) = load(&dir).unwrap();
+    let refs: std::collections::BTreeSet<String> = units_per_placement(&design).into_iter().map(|(r, _)| r).filter(|r| !before.contains(r)).collect();
+    let here = |groups: &[Vec<String>]| -> Vec<Vec<String>> {
+        let mut out: Vec<Vec<String>> = groups.iter().map(|g| g.iter().filter(|p| p.split_once('.').is_some_and(|(r, _)| refs.contains(r))).cloned().collect::<Vec<_>>()).filter(|g| g.len() >= 2).collect();
+        out.sort();
+        out
+    };
+    let (kicad, ours) = (here(&kicad_net_groups(&dir)), here(&our_net_groups(&dir)));
+    assert!(!kicad.is_empty());
+    assert_eq!(ours, kicad, "a net per placement, as kicad-cli reads the derived files");
+}
+
+// ---------------------------------------------------------------------------------------- KiCad's QA projects: the studio's nets against kicad-cli's
+
+/// kicad-cli's netlist of the schematic `root` (`kicad-cli sch export netlist --format kicadxml`): the pins of each net, `REF.PIN` sorted, power
+/// symbols left out, nets of one pin kept.
+fn kicad_cli_net_groups(root: &Path) -> Vec<Vec<String>> {
+    let out = root.with_extension("net.xml");
+    let status = std::process::Command::new(eda_kicad_engine::find_cli().unwrap()).args(["sch", "export", "netlist", "--format", "kicadxml", "-o"]).arg(&out).arg(root).output().unwrap();
+    assert!(out.exists(), "kicad-cli exports {}: {}", root.display(), String::from_utf8_lossy(&status.stderr));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    let mut current: Option<Vec<String>> = None;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with("<net ") {
+            current = Some(Vec::new());
+        } else if line.starts_with("</net>") {
+            if let Some(mut g) = current.take() {
+                g.sort();
+                groups.push(g);
+            }
+        } else if line.starts_with("<node ") {
+            let attr = |name: &str| line.split(&format!("{name}=\"")).nth(1).and_then(|r| r.split('"').next()).unwrap_or("").to_string();
+            let reference = attr("ref");
+            if let Some(g) = current.as_mut().filter(|_| !reference.starts_with('#')) {
+                g.push(format!("{reference}.{}", attr("pin")));
+            }
+        }
+    }
+    groups.retain(|g| !g.is_empty());
+    groups.sort();
+    groups
+}
+
+/// The QA project `rel` read by our reader as it is (no Import Sheet: the symbols at their library origin) and traced as the studio traces a board
+/// (`board::trace_design`), beside kicad-cli's netlist of KiCad's own file: (ours, KiCad's), nets of two pins or more.
+fn qa_traced(rel: &str) -> Option<(Vec<Vec<String>>, Vec<Vec<String>>)> {
+    let src = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from)?.join("qa/data/eeschema").join(rel);
+    let work = scratch(&format!("qat_{}", rel.replace(['/', '.'], "_")));
+    for e in std::fs::read_dir(src.parent().unwrap()).unwrap().flatten().filter(|e| e.path().is_file()) {
+        std::fs::copy(e.path(), work.join(e.file_name())).unwrap();
+    }
+    let root = work.join(src.file_name().unwrap());
+    let kicad = kicad_cli_net_groups(&root);
+    let (mut design, mut model, _) = eda_kicad::import_kicad_sch_tree(&root).ok()?;
+    crate::board::reconcile_schematic(&mut design, &mut model, None);
+    let pin_names = std::collections::BTreeMap::new();
+    let aliases = design.bus_aliases.clone();
+    let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
+    let global_power = |lib_id: &str| -> Option<bool> { model.symbol_of(lib_id).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
+    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power) };
+    let mut ours: Vec<Vec<String>> = crate::board::trace_design(&mut design.clone(), &model, &naming).into_iter().map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).collect::<Vec<_>>()).filter(|p: &Vec<String>| p.len() >= 2).collect();
+    for g in ours.iter_mut() {
+        g.sort();
+    }
+    ours.sort();
+    Some((ours, kicad.into_iter().filter(|g| g.len() >= 2).collect()))
+}
+
+/// KiCad's QA projects that show a screen twice, carry buses across sheets or give labels fields of their own, read by our reader and traced as the studio
+/// traces a board: the nets are kicad-cli's netlist of KiCad's own files. (`KICAD_SRC_DIR` must name KiCad's source.)
+const QA_TRACED_ALIKE: &[&str] = &[
+    "issue13212.kicad_sch",
+    "issue23840/BusAndVectors.kicad_sch",
+    "netlists/test_global_promotion_2/test_global_promotion_2.kicad_sch",
+    "netlists/complex_hierarchy/complex_hierarchy.kicad_sch",
+    "netlists/complex_hierarchy_shared/complex_hierarchy.kicad_sch",
+    "legacy_hierarchy/legacy_hierarchy.kicad_sch",
+    "netlists/test_hier_renaming/test_hier_renaming.kicad_sch",
+    "netlists/prefix_bus_alias/prefix_bus_alias.kicad_sch",
+    "netlists/weak_vector_bus_disambiguation/weak_vector_bus_disambiguation.kicad_sch",
+    "netlists/group_bus_matching/group_bus_matching.kicad_sch",
+    "netlists/issue16439/issue16439.kicad_sch",
+    "issue18119/issue18119.kicad_sch",
+    "issue19646/issue19646.kicad_sch",
+    "issue23962/issue23962.kicad_sch",
+    "issue24044/issue24044.kicad_sch",
+    "issue18092/issue18092.kicad_sch",
+    "issue13112.kicad_sch",
+    "issue12814.kicad_sch",
+];
+
+/// The ones the studio still reads otherwise, each with why (PARITY-sch.md section 38, "Review"): printed, not asserted.
+const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[
+    ("issue10926_1.kicad_sch", "a screen shown twice inside a screen shown twice: one override per immediate parent"),
+    ("netlists/hierarchy_aliases/hierarchy_aliases.kicad_sch", "a screen shown twice inside a screen shown twice"),
+    ("netlists/bus_connection/bus_connection.kicad_sch", "two buses on one sheet joined only by a member name they share"),
+    ("issue17771/issue1771.kicad_sch", "two buses on one sheet joined only by a member name they share"),
+    ("ERC_dynamic_power_symbol_test.kicad_sch", "a power symbol's ${#} is not resolved per placement"),
+    ("netlists/video/video.kicad_sch", "not looked into"),
+];
+
+#[test]
+fn slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them() {
+    if !kicad_cli_ready() || std::env::var_os("KICAD_SRC_DIR").is_none() {
+        return;
+    }
+    let only = |a: &[Vec<String>], b: &[Vec<String>]| -> Vec<Vec<String>> { a.iter().filter(|x| !b.contains(x)).cloned().collect() };
+    for rel in QA_TRACED_ALIKE {
+        let (ours, kicad) = qa_traced(rel).unwrap_or_else(|| panic!("{rel} reads"));
+        assert!(!kicad.is_empty() || ours.is_empty(), "{rel}");
+        assert_eq!(ours, kicad, "{rel}: the studio's nets are kicad-cli's; ours only {:?}, kicad-cli's only {:?}", only(&ours, &kicad), only(&kicad, &ours));
+    }
+    for (rel, why) in QA_TRACED_OTHERWISE {
+        let Some((ours, kicad)) = qa_traced(rel) else { continue };
+        println!("{rel} ({why}): {} nets differ of {}", only(&kicad, &ours).len(), kicad.len());
+    }
 }

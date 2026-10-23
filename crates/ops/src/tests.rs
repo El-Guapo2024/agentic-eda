@@ -1477,6 +1477,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
         ],
         vias: vec![],
         lock_tracks: vec![],
+        via_kinds: vec![],
     })
     .unwrap();
 
@@ -1492,7 +1493,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
 fn commit_route_tolerates_an_already_gone_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![] }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 1);
 }
 
@@ -1500,7 +1501,7 @@ fn commit_route_tolerates_an_already_gone_id() {
 fn commit_route_rejects_an_unknown_net() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![] }).unwrap_err();
+    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap_err();
     assert!(!e.is_empty());
     assert!(b.design().routing.is_none(), "a refused commit must not partially apply");
 }
@@ -2906,4 +2907,31 @@ fn a_placement_snaps_to_the_grid_anchored_at_the_grid_origin() {
     assert_eq!((b.pose_of("R1").unwrap().at.x, b.pose_of("R1").unwrap().at.y), (10_250, 10_630), "a grid origin at (50, 30): 10234 -> 10250, 10678 -> 10630");
     b.apply(&Cmd::SetGridOrigin { at: None }).unwrap();
     assert!(b.design().drawings.as_ref().and_then(|d| d.grid_origin).is_none());
+}
+
+/// `Cmd::CommitRoute`'s `via_kinds` read from the JSON the studio and the route API send (`[[index, "blind"]]`, numbers inside a tagged enum: the
+/// `arbitrary_precision` reader), and the via it names gets its type in `via_extras`; a removed via's extras go with it.
+#[test]
+fn commit_route_gives_its_vias_their_type_and_drops_the_extras_of_removed_vias() {
+    let m = net_model();
+    let mut b = board(&m);
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({
+        "op": "commit_route",
+        "vias": [
+            { "net": "GND", "at": { "x": 1000, "y": 0 }, "drill": 300, "diameter": 600, "from_layer": "F.Cu", "to_layer": "B.Cu" },
+            { "net": "GND", "at": { "x": 3000, "y": 0 }, "drill": 100, "diameter": 300, "from_layer": "F.Cu", "to_layer": "B.Cu" }
+        ],
+        "via_kinds": [[1, "micro"]]
+    }))
+    .expect("the JSON reads");
+    b.apply(&cmd).unwrap();
+    let vias = b.design().routing.as_ref().unwrap().vias.clone();
+    let micro = vias.iter().find(|v| v.at.x == 3000).unwrap().id.clone();
+    let through = vias.iter().find(|v| v.at.x == 1000).unwrap().id.clone();
+    let extras = &b.design().drawings.as_ref().unwrap().via_extras;
+    assert_eq!(extras.len(), 1);
+    assert_eq!((extras[0].id.as_str(), extras[0].kind), (micro.as_str(), eda_model::via_extra::ViaKind::Micro));
+    assert!(b.design().drawings.as_ref().unwrap().via_extra(&through).is_none());
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![micro], tracks: vec![], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().via_extras.is_empty(), "the removed via's type went with it");
 }

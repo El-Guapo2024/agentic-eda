@@ -149,7 +149,7 @@ export type SchEditCmd =
    * Label Properties: a field left out is unchanged (`shape` is for global and hierarchical labels, `spin` is which way the text runs from the anchor). `auto_rotate` is the
    * "Auto" check of a global or hierarchical label: while it is on the label takes the spin of what it is connected to and `spin` is not applied.
    */
-  | { verb: "edit_label"; id: string; text?: string; shape?: LabelShape; spin?: "right" | "up" | "left" | "bottom"; size_um?: Um; bold?: boolean; italic?: boolean; auto_rotate?: boolean }
+  | { verb: "edit_label"; id: string; text?: string; shape?: LabelShape; spin?: "right" | "up" | "left" | "bottom"; size_um?: Um; bold?: boolean; italic?: boolean; auto_rotate?: boolean; fields?: LabelFieldEdit[] }
   /**
    * Place Label, Global Label and Hierarchical Label (`TwoClickPlace` after `createNewLabel`) with the properties of its dialog, as one step: `spin` (absent: read off the wire
    * the label ends at), `size_um`, `bold`, `italic`, and `auto_rotate` (global and hierarchical only; the label then takes the spin of what it is placed on).
@@ -264,4 +264,12 @@ export interface SchMovePatch {
   tables?: BoardTable[];
   /** The overlay of a Move or a Drag (absent from a backend built before it existed, and for a turn or a mirror). */
   net_collision?: SchNetCollision;
+}
+
+/** One row of Label Properties' grid of a label's own fields (`SchExtras::label_fields`): the name (`Netclass` for the net class), the text, Show and italics. */
+export interface LabelFieldEdit {
+  name: string;
+  text: string;
+  visible: boolean;
+  italic: boolean;
 }

@@ -59,7 +59,7 @@ pub fn referenced_sheet_files(text: &str) -> Vec<String> {
     let Ok(tree) = sexpr::parse(text) else { return Vec::new() };
     let Some(root) = tree.as_list() else { return Vec::new() };
     sexpr::find_all(root, "sheet")
-        .filter_map(|sheet| sexpr::find_all(sheet, "property").find(|p| sexpr::txt(p, 1) == Some("Sheetfile")).and_then(|p| sexpr::txt(p, 2)))
+        .filter_map(|sheet| sexpr::find_all(sheet, "property").find(|p| sexpr::txt(p, 1).is_some_and(|n| crate::sch_import::is_sheet_field(n, "Sheetfile"))).and_then(|p| sexpr::txt(p, 2)))
         .filter(|f| !f.is_empty())
         .map(String::from)
         .collect()
@@ -87,7 +87,7 @@ fn collect_lib_symbols(path: &Path, placed_by: Option<(&str, &str)>, seen: &mut 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let own = path.file_name().and_then(|n| n.to_str()).unwrap_or("the sheet");
     for sheet in sexpr::find_all(root, "sheet") {
-        let file = sexpr::find_all(sheet, "property").find(|p| sexpr::txt(p, 1) == Some("Sheetfile")).and_then(|p| sexpr::txt(p, 2));
+        let file = sexpr::find_all(sheet, "property").find(|p| sexpr::txt(p, 1).is_some_and(|n| crate::sch_import::is_sheet_field(n, "Sheetfile"))).and_then(|p| sexpr::txt(p, 2));
         if let Some(file) = file {
             collect_lib_symbols(&dir.join(file), Some((own, file)), seen, out, notes, missing);
         }

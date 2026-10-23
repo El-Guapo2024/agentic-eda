@@ -18,6 +18,7 @@
 
 use crate::board;
 use eda_model::ir::Point;
+use eda_model::via_extra::ViaKind;
 use eda_pns::line_placer::{FixOutcome, Preview};
 use eda_pns::router::Router;
 use eda_pns::settings::{Mode, OptEffort, RoutingSettings};
@@ -215,9 +216,12 @@ pub fn undo_segment(cell: &RouteCell) -> Value {
     json!({ "ok": true, "popped": popped })
 }
 
-/// `POST /api/route/via`: `{enabled, diameter?, drill?, to_layer?}` --
+/// `POST /api/route/via`: `{enabled, diameter?, drill?, to_layer?, via_type?, span?}` --
 /// arms (or disarms) "drop a via at the next fix and continue on
 /// `to_layer`", the live via-placement-with-layer-switch gesture.
+/// `via_type` (`through`, `blind`, `buried`, `micro`; through when absent) and `span` (`[top, bottom]`, the layer names the via spans:
+/// `LINE_PLACER::makeVia`'s `F_Cu` .. `B_Cu` or the sizes' layer pair) are what `ROUTER_TOOL::handleLayerSwitch` arms a via of a given type
+/// with (the studio works them out, `kicad-port/routerVia.ts`); without `span` the via goes from the layer being routed to `to_layer`.
 pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
@@ -226,7 +230,21 @@ pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
     let diameter = num(&req, "diameter", 600);
     let drill = num(&req, "drill", 300);
     let to_layer = req.get("to_layer").and_then(Value::as_str).and_then(|n| router.layer_index(n));
-    router.toggle_via(enabled, diameter, drill, to_layer);
+    let kind = match req.get("via_type").and_then(Value::as_str) {
+        None | Some("through") => ViaKind::Through,
+        Some(word) => match ViaKind::from_file_word(word) {
+            Some(kind) => kind,
+            None => return err(format!("unknown via type {word:?}")),
+        },
+    };
+    let span = match req.get("span").and_then(Value::as_array).map(|a| a.iter().map(|n| n.as_str().and_then(|n| router.layer_index(n))).collect::<Vec<_>>()) {
+        None => None,
+        Some(ends) => match ends.as_slice() {
+            [Some(a), Some(b)] => Some((*a, *b)),
+            _ => return err("a via span is two copper layers of the board"),
+        },
+    };
+    router.toggle_via_typed(enabled, diameter, drill, to_layer, span, kind);
     json!({ "ok": true })
 }
 
@@ -245,7 +263,7 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let Some(commit) = router.finish(at) else {
         return json!({ "ok": false, "message": "final segment still collides; route left uncommitted" });
     };
-    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks };
+    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => {
             // a route restarted from the other end is one undo with the part that was committed when it restarted
@@ -277,7 +295,7 @@ pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let committed = !continuation.commit.tracks.is_empty() || !continuation.commit.vias.is_empty() || !continuation.commit.remove_track_ids.is_empty();
     if committed {
         let c = continuation.commit;
-        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: c.remove_track_ids, remove_via_ids: c.remove_via_ids, tracks: c.tracks, vias: c.vias, lock_tracks: c.lock_tracks };
+        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: c.remove_track_ids, remove_via_ids: c.remove_via_ids, tracks: c.tracks, vias: c.vias, lock_tracks: c.lock_tracks, via_kinds: c.via_kinds };
         if let Err(e) = board::step(dir, cmd, true, "ui") {
             return err(board::reasons(&e));
         }
@@ -453,7 +471,7 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         let message = if marking { "Track violates DRC. Ctrl+click to commit anyway." } else { "drag target still collides; left uncommitted" };
         return json!({ "ok": false, "message": message });
     };
-    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks };
+    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary }),
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
@@ -601,7 +619,7 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let Some(commit) = router.finish_diff_pair(at) else {
         return json!({ "ok": false, "message": "the pair still collides; left uncommitted" });
     };
-    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks };
+    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => {
             // a pair restarted from the other end is one undo with the part that was committed when it restarted
@@ -633,7 +651,7 @@ pub fn dp_continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value 
     let committed = !continuation.commit.tracks.is_empty() || !continuation.commit.vias.is_empty() || !continuation.commit.remove_track_ids.is_empty();
     if committed {
         let c = continuation.commit;
-        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: c.remove_track_ids, remove_via_ids: c.remove_via_ids, tracks: c.tracks, vias: c.vias, lock_tracks: c.lock_tracks };
+        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: c.remove_track_ids, remove_via_ids: c.remove_via_ids, tracks: c.tracks, vias: c.vias, lock_tracks: c.lock_tracks, via_kinds: c.via_kinds };
         if let Err(e) = board::step(dir, cmd, true, "ui") {
             return err(board::reasons(&e));
         }
@@ -724,7 +742,13 @@ mod tests {
 
     /// A 20 mm board with these tracks and vias.
     fn setup_board(dir: &Path, tracks: Vec<Track>, vias: Vec<Via>) {
-        let model = ConstraintModel { nets: ["SIG", "GND", "USB_DP", "USB_DN"].iter().map(|n| eda_model::Net { name: n.to_string(), pins: vec![] }).collect(), ..ConstraintModel::default() };
+        setup_board_on(dir, tracks, vias, &["F.Cu", "B.Cu"]);
+    }
+
+    /// [`setup_board`] with these copper layers.
+    fn setup_board_on(dir: &Path, tracks: Vec<Track>, vias: Vec<Via>, layers: &[&str]) {
+        let mut model = ConstraintModel { nets: ["SIG", "GND", "USB_DP", "USB_DN"].iter().map(|n| eda_model::Net { name: n.to_string(), pins: vec![] }).collect(), ..ConstraintModel::default() };
+        model.board.layers = layers.iter().map(|l| l.to_string()).collect();
         let intent_path = dir.join("intent.yaml");
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
         let design = Design {
@@ -1094,5 +1118,51 @@ mod tests {
         assert_eq!((s.smooth_dragged_segments, s.snap_to_tracks, s.optimize_entire_dragged_track, s.auto_posture), (false, false, true, false));
         let d = settings_of(&json!({}));
         assert_eq!((d.smooth_dragged_segments, d.snap_to_tracks, d.optimize_entire_dragged_track, d.auto_posture), (true, true, false, true), "KiCad's defaults");
+    }
+
+    /// `ROUTER_TOOL::handleLayerSwitch` arming a blind via (F.Cu .. In1.Cu, the route going on on In1.Cu) and then a microvia (In1.Cu .. In2.Cu): the commit
+    /// has both with their own layers, sizes and types (`(via blind ..)`, `(via micro ..)` in the board file), as one step that one undo takes back.
+    #[test]
+    fn a_blind_via_and_a_microvia_are_committed_with_their_type_layers_and_size_as_one_undo_step() {
+        let dir = scratch("typed_vias");
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![p(2_000, 8_000), p(4_000, 8_000)], arc_mid_offset: None };
+        setup_board_on(&dir, vec![stub], vec![], &["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+        let cell: RouteCell = Mutex::new(None);
+        let started = start(&dir, &cell, &body(json!({ "x": 4_000, "y": 8_000, "layer": "F.Cu", "width": 200, "settings": { "mode": "walkaround" } })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        let armed = via(&cell, &body(json!({ "enabled": true, "diameter": 500, "drill": 250, "to_layer": "In1.Cu", "via_type": "blind", "span": ["F.Cu", "In1.Cu"] })));
+        assert_eq!(armed["ok"], json!(true), "{armed}");
+        assert_eq!(fix(&cell, &body(json!({ "x": 8_000, "y": 8_000 })))["ok"], json!(true));
+        let micro = via(&cell, &body(json!({ "enabled": true, "diameter": 300, "drill": 100, "to_layer": "In2.Cu", "via_type": "micro", "span": ["In1.Cu", "In2.Cu"] })));
+        assert_eq!(micro["ok"], json!(true), "{micro}");
+        assert_eq!(fix(&cell, &body(json!({ "x": 12_000, "y": 8_000 })))["ok"], json!(true));
+        let finished = finish(&dir, &cell, &body(json!({ "x": 15_000, "y": 8_000 })));
+        assert_eq!(finished["ok"], json!(true), "{finished}");
+        let (_, design, _) = board::load(&dir).unwrap();
+        let vias = &design.routing.as_ref().unwrap().vias;
+        let kind = |id: &str| design.drawings.as_ref().and_then(|d| d.via_extra(id)).map(|e| e.kind).unwrap_or_default();
+        let mut got: Vec<(Point, &str, &str, i64, i64, ViaKind)> = vias.iter().map(|v| (v.at, v.from_layer.as_str(), v.to_layer.as_str(), v.diameter, v.drill, kind(&v.id))).collect();
+        got.sort_by_key(|g| g.0.x);
+        assert_eq!(got, vec![(p(8_000, 8_000), "F.Cu", "In1.Cu", 500, 250, ViaKind::Blind), (p(12_000, 8_000), "In1.Cu", "In2.Cu", 300, 100, ViaKind::Micro)]);
+        let layers: Vec<String> = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.id != "sig").map(|t| t.layer.clone()).collect();
+        assert!(layers.contains(&"In1.Cu".to_string()) && layers.contains(&"In2.Cu".to_string()), "the route went on on the via's other layer: {layers:?}");
+        let undone = board::undo(&dir, "test", Some(eda_ops::Domain::Pcb));
+        assert!(undone.is_ok(), "{undone:?}");
+        let (_, design, _) = board::load(&dir).unwrap();
+        assert!(design.routing.as_ref().unwrap().vias.is_empty(), "one undo took the route back");
+        assert!(design.drawings.as_ref().is_none_or(|d| d.via_extras.is_empty()), "and the types with it");
+    }
+
+    /// `via_type` is one of the words the board file has for a via's type (`through`, `blind`, `buried`, `micro`), and `span` two copper layers
+    /// of the board: anything else is refused, and nothing is armed.
+    #[test]
+    fn a_via_request_names_its_type_and_span_in_the_boards_words() {
+        let dir = scratch("typed_via_words");
+        setup(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        start_with(&dir, &cell, json!({}));
+        assert_eq!(via(&cell, &body(json!({ "enabled": true, "via_type": "blind", "span": ["F.Cu", "In7.Cu"] })))["ok"], json!(false));
+        assert_eq!(via(&cell, &body(json!({ "enabled": true, "via_type": "tented" })))["ok"], json!(false));
+        assert_eq!(via(&cell, &body(json!({ "enabled": true, "via_type": "through", "span": ["F.Cu", "B.Cu"] })))["ok"], json!(true));
     }
 }

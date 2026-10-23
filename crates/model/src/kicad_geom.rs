@@ -251,6 +251,83 @@ pub fn hier_label_rect(fx: &TextStyle, text: &str, at: Pt, spin: Spin) -> Rect {
     }
 }
 
+/// `SCH_GLOBALLABEL::GetBodyBoundingBox`: the outline `CreateGraphicShape` draws (the text's box with a margin, a point at the ends its shape has), turned
+/// with the spin, grown by half the pen. `shape` is the label's flag shape.
+pub fn global_label_rect(fx: &TextStyle, text: &str, at: Pt, spin: Spin, shape: crate::ir::LabelShape) -> Rect {
+    use crate::ir::LabelShape;
+    // `GetLabelBoxExpansion`: `DEFAULT_LABEL_SIZE_RATIO` (0.375) of the text size
+    let margin = kiround(0.375 * fx.size_iu as f64);
+    let half = fx.size_iu / 2 + margin;
+    let pen = fx.pen();
+    let (x0, _, x1, _) = text_box_iu(text, fx.size_iu, pen, fx.h, fx.v);
+    let symb_len = (x1 - x0) + 2 * margin;
+    let x = symb_len + pen + 3;
+    let y = half + pen + 3;
+    let mut pts: Vec<(i64, i64)> = vec![(0, 0), (0, -y), (-x, -y), (-x, 0), (-x, y), (0, y)];
+    let mut x_offset = 0;
+    match shape {
+        LabelShape::Input => {
+            x_offset = -half;
+            pts[0].0 += half;
+        }
+        LabelShape::Output => pts[3].0 -= half,
+        LabelShape::Bidirectional | LabelShape::TriState => {
+            x_offset = -half;
+            pts[0].0 += half;
+            pts[3].0 -= half;
+        }
+        LabelShape::Passive => {}
+    }
+    // `RotatePoint` for the spin: LEFT as drawn, UP -90, RIGHT 180, BOTTOM 90
+    let turns = match spin {
+        Spin::Left => 0,
+        Spin::Up => -1,
+        Spin::Right => 2,
+        Spin::Bottom => 1,
+    };
+    let mut r: Option<Rect> = None;
+    for (px, py) in pts {
+        let q = rotate_about((um(px + x_offset), um(py)), (0.0, 0.0), turns);
+        let q = (q.0 + at.0, q.1 + at.1);
+        r = Some(r.map_or(Rect::point(q), |b| b.merge_point(q)));
+    }
+    r.unwrap_or(Rect::point(at)).inflate(um(pen) / 2.0)
+}
+
+/// Where one field of a label goes (`SCH_LABEL_BASE::AutoplaceFields`): its anchor, whether it runs up the sheet, and which end of it is at the anchor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LabelFieldPlace {
+    pub at: Pt,
+    pub vertical: bool,
+    pub h: HJustify,
+}
+
+/// `SCH_LABEL_BASE::AutoplaceFields`: a label's fields one under the other, under the label's text (beside it for a vertical label), the first after half the
+/// text's height -- and for a global label after its flag's margin and pen too -- and a global label's Sheet References (`isr`) at the far end of its flag.
+/// `fields` gives, for each field in order, whether it is the Sheet References and its text height (um). `body_len` is `GetBodyBoundingBox().GetSizeMax()`.
+pub fn autoplace_label_fields(fx: &TextStyle, global: bool, body_len: f64, spin: Spin, at: Pt, fields: &[(bool, f64)]) -> Vec<LabelFieldPlace> {
+    // `GetTextOffset() * 2`: `DEFAULT_TEXT_OFFSET_RATIO` (0.15) of the text size, twice
+    let margin = um(kiround(0.15 * fx.size_iu as f64) * 2);
+    let mut accumulated = um(fx.size_iu) / 2.0;
+    if global {
+        accumulated += margin + um(fx.pen()) + margin;
+    }
+    let mut out = Vec::with_capacity(fields.len());
+    for &(isr, height) in fields {
+        let (vertical, h, offset) = match spin {
+            Spin::Left => (false, HJustify::Right, if isr { (-(body_len + margin), 0.0) } else { (0.0, accumulated + height / 2.0) }),
+            Spin::Up => (true, HJustify::Left, if isr { (0.0, -(body_len + margin)) } else { (accumulated + height / 2.0, 0.0) }),
+            Spin::Right => (false, HJustify::Left, if isr { (body_len + margin, 0.0) } else { (0.0, accumulated + height / 2.0) }),
+            Spin::Bottom => (true, HJustify::Right, if isr { (0.0, body_len + margin) } else { (accumulated + height / 2.0, 0.0) }),
+        };
+        out.push(LabelFieldPlace { at: (at.0 + offset.0, at.1 + offset.1), vertical, h });
+        if isr {
+            accumulated += height + margin;
+        }
+    }
+    out
+}
+
 /// The three points of an arc and the box the arc covers: the ends, plus the extreme points of its circle the arc passes.
 pub fn arc_bbox(a: Pt, m: Pt, b: Pt) -> Rect {
     let mut r = Rect::point(a).merge_point(m).merge_point(b);
