@@ -329,6 +329,23 @@ fn autoplace_fields_places_a_shown_user_field_with_the_others() {
     assert_eq!(placed.extras.fields_autoplaced.get("R1"), Some(&AutoplaceAlgo::Manual));
 }
 
+/// `AUTOPLACER` places the fields `GetFields( aVisibleOnly = true )` gives it, and that skips a field with no text: a user field that is shown but empty
+/// takes no row of the box, so the Reference and the Value go where they go without it.
+#[test]
+fn autoplace_fields_leaves_a_shown_field_with_no_text_out_of_the_box() {
+    let m = model();
+    let mut start = sheet(0, false);
+    start.user_fields.get_mut("R1").unwrap().insert("MPN".into(), String::new());
+    start.field_layout.insert("R1".into(), OwnerCtx::new(&start, &m, "R1").unwrap().current(&start));
+    let without = run(start.clone(), Cmd::SchEdit(SchCmd::AutoplaceFields { ids: ids(&["R1"]) })).unwrap_or_else(|e| panic!("{e:?}"));
+    let shown = show(start, "MPN");
+    let with = run(shown, Cmd::SchEdit(SchCmd::AutoplaceFields { ids: ids(&["R1"]) })).unwrap_or_else(|e| panic!("{e:?}"));
+    for name in ["Reference", "Value"] {
+        let (a, b) = (field_named(&without, name), field_named(&with, name));
+        assert!(near(a.at, b.at), "{name}: {:?} against {:?}", a.at, b.at);
+    }
+}
+
 // ----------------------------------------------------------------------------------------------------------------- add, remove, rename
 
 #[test]

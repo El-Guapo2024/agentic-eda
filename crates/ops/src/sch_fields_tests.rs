@@ -279,6 +279,8 @@ fn field_properties_set_the_text_size_look_and_place_in_one_command() {
 #[test]
 fn showing_a_hidden_field_puts_it_beside_the_others_while_the_fields_are_autoplaced() {
     let mut start = sheet(0, false);
+    // a field with text (one with none takes no row: `GetFields` skips it)
+    start.symbols[0].footprint = "Resistor_SMD:R_0603_1608Metric".into();
     start.extras.fields_autoplaced.insert("R1".into(), AutoplaceAlgo::Auto);
     let m = model();
     start.field_layout.insert("R1".into(), OwnerCtx::new(&start, &m, "R1").unwrap().current(&start));

@@ -618,7 +618,9 @@ pub fn autoplace_symbol_manual(sym: &SymbolInstance, geom: &SymbolGeom, specs: &
 /// The placements of the fields named by `specs`: the fields that are shown and allow it are placed, a field that does not allow it keeps its
 /// placement in `kept`, a hidden one takes the first placed one's place.
 fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], kept: &[FieldPlacement], force: Option<(Side, i64)>, manual: Option<&Surroundings>) -> Vec<FieldPlacement> {
-    let movable: Vec<&FieldSpec> = specs.iter().filter(|s| s.visible && s.can_autoplace).collect();
+    // `AUTOPLACER` takes `GetFields( m_fields, aVisibleOnly = true )`, which skips a field that is hidden or has no text
+    // (`if( !field.IsVisible() || field.GetText().IsEmpty() ) continue;`): an empty field takes no row of the box
+    let movable: Vec<&FieldSpec> = specs.iter().filter(|s| s.visible && s.can_autoplace && !s.text.is_empty()).collect();
     let placed = autoplace_page(geom, sym.at, sym.mirrored, &movable, force, manual);
     let style = |mut p: FieldPlacement, spec: &FieldSpec| {
         p.size_um = spec.size_um;
@@ -632,7 +634,7 @@ fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], ke
     for (spec, (anchor, h, v)) in movable.iter().zip(placed) {
         by_name.insert(spec.name.clone(), style(local_placement(sym.at, sym.rot, sym.mirrored, geom.width, &spec.name, anchor, h, v, true), spec));
     }
-    let first = specs.iter().find(|s| s.visible && s.can_autoplace).and_then(|s| by_name.get(&s.name)).cloned();
+    let first = movable.first().and_then(|s| by_name.get(&s.name)).cloned();
     specs
         .iter()
         .map(|s| {
