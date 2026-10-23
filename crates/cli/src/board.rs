@@ -67,6 +67,9 @@ mod fp_library_tests;
 #[path = "fp_models_tests.rs"]
 mod fp_models_tests;
 #[cfg(test)]
+#[path = "embedded_api_tests.rs"]
+mod embedded_api_tests;
+#[cfg(test)]
 #[path = "lib_editors_tests.rs"]
 mod lib_editors_tests;
 #[cfg(test)]

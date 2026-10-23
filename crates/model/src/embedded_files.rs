@@ -291,7 +291,11 @@ pub fn list_of(design: &crate::ir::Design, owner: &EmbeddedOwner) -> Result<Embe
 }
 
 /// Every file with data a lookup by name can find, in the order KiCad's resolver would try them for a model nobody scoped: the board's own, then the footprints' (the order they
-/// are placed in).
+/// are placed in), then the footprints of the project's footprint library (the Footprint Editor's 3D view asks for their models by the same route).
+///
+/// `FILENAME_RESOLVER::ResolvePath` takes a stack of lists and the first that has the name wins; the 3D view's stack is the footprint's own list, then the board's
+/// (`RENDER_3D_OPENGL::load3dModels`). A board file holds one list for the board and its footprints, a name taken once ([`board_file_list`]), so the board's list first finds
+/// what the footprint's would.
 pub fn lookup_files(design: &crate::ir::Design) -> Vec<&EmbeddedFile> {
     let mut out: Vec<&EmbeddedFile> = Vec::new();
     if let Some(d) = design.drawings.as_ref() {
@@ -301,6 +305,9 @@ pub fn lookup_files(design: &crate::ir::Design) -> Vec<&EmbeddedFile> {
         if let Some(list) = of_footprint(design, &fp.id) {
             out.extend(list.files.iter().filter(|f| !f.data.is_empty()));
         }
+    }
+    if let Some(lib) = design.footprint_library.as_ref() {
+        out.extend(lib.embedded.values().flat_map(|l| l.files.iter()).filter(|f| !f.data.is_empty()));
     }
     out
 }
