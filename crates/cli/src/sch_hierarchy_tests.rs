@@ -1127,3 +1127,134 @@ fn slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them() {
         println!("{rel} ({why}): {} nets differ of {}", only(&kicad, &ours).len(), kicad.len());
     }
 }
+
+// ------------------------------------------------------------------- KiCad's QA projects: read, written back, judged by kicad-cli as the original
+
+/// kicad-cli's ERC of the schematic `root` (`kicad-cli sch erc --format json`): each violation's type with the count, over every sheet.
+fn kicad_cli_erc_counts(root: &Path) -> Option<std::collections::BTreeMap<String, usize>> {
+    let out = root.with_extension("erc.json");
+    let _ = std::fs::remove_file(&out);
+    std::process::Command::new(eda_kicad_engine::find_cli().unwrap()).args(["sch", "erc", "--format", "json", "--severity-all", "-o"]).arg(&out).arg(root).output().ok()?;
+    let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).ok()?).ok()?;
+    let mut counts = std::collections::BTreeMap::new();
+    for sheet in report["sheets"].as_array().into_iter().flatten() {
+        for v in sheet["violations"].as_array().into_iter().flatten() {
+            *counts.entry(v["type"].as_str().unwrap_or("?").to_string()).or_insert(0) += 1;
+        }
+    }
+    Some(counts)
+}
+
+/// The roots of KiCad's QA schematics: every `.kicad_sch` under `qa/data/eeschema` that no file of its folder places as a sheet.
+fn qa_schematic_roots() -> Vec<PathBuf> {
+    let Some(src) = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from) else { return Vec::new() };
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let mut files: Vec<PathBuf> = Vec::new();
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "kicad_sch") && !p.file_name().unwrap().to_string_lossy().starts_with("._") {
+                files.push(p);
+            }
+        }
+        let placed: std::collections::BTreeSet<String> = files.iter().flat_map(|f| eda_kicad::referenced_sheet_files(&std::fs::read_to_string(f).unwrap_or_default())).map(|f| f.rsplit('/').next().unwrap_or(&f).to_lowercase()).collect();
+        out.extend(files.into_iter().filter(|f| !placed.contains(&f.file_name().unwrap().to_string_lossy().to_lowercase())));
+    }
+    let mut out = Vec::new();
+    walk(&src.join("qa/data/eeschema"), &mut out);
+    out.sort();
+    out
+}
+
+/// A board with nothing on it: no parts, an empty root sheet.
+fn empty_board(name: &str) -> PathBuf {
+    let dir = scratch(name);
+    let model = ConstraintModel::default();
+    let intent = dir.join("empty.yaml");
+    std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+    let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+    design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
+    save(&dir, &design).unwrap();
+    let meta = Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+    std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    dir
+}
+
+/// Every QA root brought into an empty board the way the studio brings a KiCad schematic in (Import Sheet, its contents on the root, the
+/// annotations kept), and the files the studio derives from it judged by kicad-cli against the original: its ERC (violation types with
+/// their counts; both at the default settings, the original read without its project file) and its netlist (the pins of each net).
+/// Printed, one line per project that differs. `EDA_QA_SCH_ONLY=<part of a path>` runs the ones that match.
+#[test]
+fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
+    if !kicad_cli_ready() || std::env::var_os("KICAD_SRC_DIR").is_none() {
+        return;
+    }
+    let only = std::env::var("EDA_QA_SCH_ONLY").ok();
+    let (mut same, mut differ, mut failed) = (0, 0, 0);
+    for src in qa_schematic_roots() {
+        let rel = src.to_string_lossy().split("qa/data/eeschema/").nth(1).unwrap_or("").to_string();
+        if only.as_ref().is_some_and(|o| !rel.contains(o.as_str())) {
+            continue;
+        }
+        let tag = rel.replace(['/', '.'], "_");
+        let orig = scratch(&format!("qarw_o_{tag}"));
+        let dir = empty_board(&format!("qarw_w_{tag}"));
+        for e in std::fs::read_dir(src.parent().unwrap()).unwrap().flatten().filter(|e| e.path().is_file()) {
+            if e.path().extension().is_some_and(|x| x == "kicad_pro" || x == "kicad_prl") {
+                continue;
+            }
+            std::fs::copy(e.path(), orig.join(e.file_name())).unwrap();
+            std::fs::copy(e.path(), dir.join(e.file_name())).unwrap();
+        }
+        let root = orig.join(src.file_name().unwrap());
+        let Some(erc_o) = kicad_cli_erc_counts(&root) else {
+            println!("SKIP {rel}: kicad-cli has no ERC of the original");
+            continue;
+        };
+        let groups_o = kicad_cli_net_groups_opt(&root);
+        let file = src.file_name().unwrap().to_string_lossy().to_string();
+        // the click on a point of the 50 mil grid, as the tool snaps it
+        let mut cmd = import_cmd(&file, std::env::var_os("EDA_QA_SCH_AS_SHEET").is_some(), true);
+        if let Cmd::ImportSheet { at, .. } = &mut cmd {
+            *at = Point { x: 254_000, y: 50_800 };
+        }
+        if let Err(e) = step(&dir, cmd, false, "test") {
+            println!("FAIL {rel}: Import Sheet refuses it: {e:?}");
+            failed += 1;
+            continue;
+        }
+        let Ok(erc) = crate::kicad_engine::erc(&dir) else {
+            println!("FAIL {rel}: kicad-cli has no ERC of ours");
+            failed += 1;
+            continue;
+        };
+        let mut erc_w = std::collections::BTreeMap::new();
+        for v in erc["violations"].as_array().into_iter().flatten() {
+            *erc_w.entry(v["check"].as_str().or_else(|| v["type"].as_str()).unwrap_or("?").to_string()).or_insert(0) += 1;
+        }
+        let groups_w = std::panic::catch_unwind(|| kicad_net_groups(&dir)).unwrap_or_default();
+        // (`lib_symbol_issues` says the original's libraries are not in this machine's tables; ours are the project's own)
+        let erc_diff: Vec<String> = erc_o.keys().chain(erc_w.keys()).collect::<std::collections::BTreeSet<_>>().into_iter().filter(|k| *k != "lib_symbol_issues" && erc_o.get(*k) != erc_w.get(*k)).map(|k| format!("{k} {}->{}", erc_o.get(k).unwrap_or(&0), erc_w.get(k).unwrap_or(&0))).collect();
+        let nets_only_o = groups_o.iter().filter(|g| !groups_w.contains(g)).count();
+        let nets_only_w = groups_w.iter().filter(|g| !groups_o.contains(g)).count();
+        if erc_diff.is_empty() && nets_only_o == 0 && nets_only_w == 0 {
+            same += 1;
+        } else {
+            differ += 1;
+            println!("DIFF {rel}: erc [{}]; nets {} of {} only in the original, {} only in ours", erc_diff.join(", "), nets_only_o, groups_o.len(), nets_only_w);
+        }
+    }
+    println!("QA schematics written back: {same} judged alike, {differ} differ, {failed} failed");
+    // the ratchet: 87 of KiCad's 130 QA roots on 2026-10-23 (nightly 20261021); before the review of that day, 53 (turned and mirrored symbols were traced
+    // and written otherwise than drawn, and one file hung Import Sheet)
+    if only.is_none() {
+        assert!(same >= 87, "{same} judged alike, fewer than the 87 of 2026-10-23");
+    }
+}
+
+/// [`kicad_cli_net_groups`] that answers no nets when kicad-cli writes no netlist.
+fn kicad_cli_net_groups_opt(root: &Path) -> Vec<Vec<String>> {
+    std::panic::catch_unwind(|| kicad_cli_net_groups(root)).unwrap_or_default()
+}
