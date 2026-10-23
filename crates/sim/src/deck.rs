@@ -87,7 +87,9 @@ pub fn driver(controls: &Controls, netlist: &str, raw_stem: &str) -> Result<(Str
     let sim = command_to_sim_type(&controls.command);
     one_line("the netlist's path", netlist)?;
     let mut c = String::from("* KiCad SPICE simulator\n.control\n");
-    c.push_str(&format!("source {netlist}\n"));
+    // `NGSPICE::LoadNetlist`: "unset ngbehavior" before the netlist is parsed, whatever the mode (and whatever a `.spiceinit` set), the mode
+    // set again after it -- so with "User configuration" the netlist runs with no mode at all, as it does in KiCad.
+    c.push_str(&format!("unset ngbehavior\nsource {netlist}\n"));
     for s in setting_commands(controls.model_mode) {
         c.push_str(s);
         c.push('\n');
@@ -213,7 +215,7 @@ mod tests {
         let (c, raw) = driver(&controls, ".kicad/sim/run.cir", "sim").unwrap();
         assert_eq!(
             c,
-            "* KiCad SPICE simulator\n.control\nsource .kicad/sim/run.cir\nset ngbehavior=ltpsa\nalter @R1=1500\nrun\necho let user0 = V(out)*2\nlet user0 = V(\"out\")*2\necho meas TRAN meas_result_0 MAX V(out)\nmeas TRAN meas_result_0 MAX V(out)\nfourier 1k V(out)\nset filetype=binary\nwrite sim.raw\nquit\n.endc\n.end\n"
+            "* KiCad SPICE simulator\n.control\nunset ngbehavior\nsource .kicad/sim/run.cir\nset ngbehavior=ltpsa\nalter @R1=1500\nrun\necho let user0 = V(out)*2\nlet user0 = V(\"out\")*2\necho meas TRAN meas_result_0 MAX V(out)\nmeas TRAN meas_result_0 MAX V(out)\nfourier 1k V(out)\nset filetype=binary\nwrite sim.raw\nquit\n.endc\n.end\n"
         );
         assert_eq!(raw, RawFiles { main: "sim.raw".into(), second: None });
     }
@@ -230,7 +232,7 @@ mod tests {
     fn noise_writes_both_plots_and_events_can_go() {
         let controls = Controls { command: ".noise v(out) V1 dec 10 1 1Meg".into(), options: 0, model_mode: 0, ..Controls::default() };
         let (c, raw) = driver(&controls, "n.cir", "n").unwrap();
-        assert!(c.contains("source n.cir\necho Command: esave none\nesave none\nrun\n"), "{c}");
+        assert!(c.contains(".control\nunset ngbehavior\nsource n.cir\necho Command: esave none\nesave none\nrun\n"), "{c}");
         assert!(c.ends_with("write n-2.raw\nsetplot previous\nwrite n.raw\nquit\n.endc\n.end\n"), "{c}");
         assert_eq!(raw.second.as_deref(), Some("n-2.raw"));
     }

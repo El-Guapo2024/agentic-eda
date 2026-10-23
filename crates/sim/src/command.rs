@@ -147,10 +147,13 @@ pub fn is_sim_command(directive: &str) -> bool {
     [".AC", ".DC", ".TRAN", ".OP", ".DISTO", ".NOISE", ".PZ", ".SENS", ".TF"].iter().any(|d| is_directive(&c, d))
 }
 
-/// `SPICE_CIRCUIT_MODEL::GetSchTextSimCommand`: the directives that are analyses, each followed by "\r\n", the whole trimmed on the right.
+/// `SPICE_CIRCUIT_MODEL::GetSchTextSimCommand`: the directives that are analyses, each followed by "\r\n", the whole trimmed on the right. An
+/// analysis is what `SPICE_CIRCUIT_MODEL::IsSimCommand` says it is (`CommandToSimType( directive ) != ST_UNKNOWN`), not what the exporter's
+/// `WriteDirectives` leaves out ([`is_sim_command`]): a `.sp` directive is the schematic's analysis, and a `.op` directive with more lines after
+/// it is not.
 pub fn sch_text_sim_command(directives: &[String]) -> String {
     let mut s = String::new();
-    for d in directives.iter().filter(|d| is_sim_command(d)) {
+    for d in directives.iter().filter(|d| command_to_sim_type(d) != SimType::Unknown) {
         s.push_str(d);
         s.push_str("\r\n");
     }
@@ -272,6 +275,9 @@ mod tests {
         assert!(!is_sim_command(".include x"));
         let d = vec![".include x".to_string(), ".tran 1u 1m".to_string(), ".ac dec 10 1 1k".to_string()];
         assert_eq!(sch_text_sim_command(&d), ".tran 1u 1m\r\n.ac dec 10 1 1k");
+        // `IsSimCommand` is `CommandToSimType`'s: `.sp` is an analysis, `.op` with a line after it is not
+        let d = vec![".sp lin 10 1 1k".to_string(), ".op\n.save v(out)".to_string(), ".TRAN 1u 1m".to_string()];
+        assert_eq!(sch_text_sim_command(&d), ".sp lin 10 1 1k\r\n.TRAN 1u 1m");
     }
 
     #[test]

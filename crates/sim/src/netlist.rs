@@ -341,8 +341,10 @@ pub fn circuit(parts: &NetlistParts, xml: &XmlNetlist, ports: &BTreeMap<String, 
                 }
             }
         }
+        // `SPICE_GENERATOR::CurrentNames` and its overrides: `SPICE_GENERATOR_NGSPICE` (a transistor's terminals), `SPICE_GENERATOR_SUBCKT`
+        // (a port each but for two ports); every other generator -- an XSPICE device's and a mutual inductance's among them -- keeps the
+        // base's `I(<item>)`, which the signals list offers whether or not ngspice has the vector.
         let currents: Vec<String> = match letter {
-            'A' | 'K' => Vec::new(),
             'Q' => ["c", "b", "e"].iter().map(|p| format!("I({}:{p})", item.name)).collect(),
             'M' | 'J' | 'Z' => ["d", "g", "s"].iter().map(|p| format!("I({}:{p})", item.name)).collect(),
             'X' if pin_count != 2 => model_pins.iter().map(|p| format!("I({}:{p})", item.name)).collect(),
@@ -476,5 +478,10 @@ mod tests {
         assert_eq!(q.currents, vec!["I(Q1:c)", "I(Q1:b)", "I(Q1:e)"]);
         assert_eq!(q.pin_index["1"], 1, "pin 1 is the base");
         assert_eq!(circuit_nets(&items[..2]), vec!["/INV", "/OUT", "/VEE", "GND", "VCC"]);
+        // an XSPICE device and a mutual inductance keep `SPICE_GENERATOR::CurrentNames`' one current
+        let more = circuit(&split_netlist(".title KiCad schematic\nAU2 [ a ] b adc1\nK1 L1 L2 0.9\n.end\n", &[]), &XmlNetlist::default(), &BTreeMap::new());
+        assert_eq!(more[0].currents, vec!["I(AU2)"]);
+        assert_eq!(more[1].currents, vec!["I(K1)"]);
+        assert_eq!(more[1].pin_count, 0);
     }
 }
