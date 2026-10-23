@@ -156,7 +156,7 @@
     panel().querySelector('tr[data-name="b.txt"]').click();
     await sleep(200);
     await __eda.run("common.Embed.removeFile");
-    await sleep(900);
+    await until(async () => !(await names("owner=board")).includes("b.txt"), 8000);
     t(!(await names("owner=board")).includes("b.txt"), "Remove File removes the selected row of the panel showing");
     await closeDialogs();
     for (let i = 0; i < 4; i++) await undo();
