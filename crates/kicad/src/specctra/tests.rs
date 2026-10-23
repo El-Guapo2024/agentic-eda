@@ -331,10 +331,12 @@ fn a_bad_session_is_refused_in_kicads_words() {
     assert_eq!(err("(session s (routes (resolution um 10)))"), "Session file is missing the \"library_out\" section");
     assert_eq!(err(&session_with("(net VIN (wire (path In9.Cu 10 0 0 1 1)))")), "Session file uses invalid layer id 'In9.Cu'.");
     assert_eq!(err(&session_with("(net VIN (via Nope 0 0))")), "A wire_via refers to missing padstack 'Nope'.");
-    assert_eq!(err(&session_with("(net VIN (via Sq 0 0))")), "Unsupported via shape: rect.");
+    // `GetTokenString( type )` puts the token in quotes.
+    assert_eq!(err(&session_with("(net VIN (via Sq 0 0))")), "Unsupported via shape: 'rect'.");
     assert_eq!(err("(session s (placement (component X (place Q9 0 0 front 0))) (routes (library_out)))"), "Reference 'Q9' not found.");
     // What the parser refuses is said as `PARSE_ERROR` says it.
-    assert!(err("(pcb x)").starts_with("Expecting 'session' in 's.ses', line 1"), "{}", err("(pcb x)"));
+    // `Expecting( T_session )` puts `GetTokenString`'s quoted token in quotes again, as kicad-cli's own board reader says it ("Expecting ''('' in ..").
+    assert!(err("(pcb x)").starts_with("Expecting ''session'' in 's.ses', line 1"), "{}", err("(pcb x)"));
 }
 
 /// The drill a via's padstack name holds is `UNDEFINED_DRILL_DIAMETER` when it is the Default class's, so the via takes its own net's class drill.
@@ -487,3 +489,16 @@ fn a_round_cutout_is_kicads_polygon_to_the_nanometre() {
     assert_eq!(got, want);
 }
 
+/// `Expecting( "front|back" )` and `Unexpected( tok )` name the token they got as `GetTokenString` does -- a keyword by its spelling, any other bare word as
+/// `'symbol'` -- in a second pair of quotes, as kicad-cli 10.99's board reader words it (`Expecting start, end, .. or locked. Got ''symbol'' in ..`).
+/// `Unexpected( CurText() )` gives the word as it is.
+#[test]
+fn a_parse_error_names_a_keyword_by_its_spelling_and_another_word_as_a_symbol() {
+    let problem = |ses: &str| load_session(ses, "s.ses").unwrap_err().problem;
+    assert_eq!(problem("(session s (placement (component X (place R1 0 0 sideways 0))))"), "Expecting front|back. Got ''symbol''");
+    assert_eq!(problem("(session s (placement (component X (place R1 0 0 pins 0))))"), "Expecting front|back. Got ''pins''");
+    assert_eq!(problem("(session s (placement (component X (pins))))"), "Unexpected ''pins''");
+    assert_eq!(problem("(session s (placement (component X (wobble))))"), "Unexpected ''symbol''");
+    assert_eq!(problem("(session s (placement (component X (place R1 0 0 front 0 x))))"), "Expecting ''(''");
+    assert_eq!(problem("(session s (wobble))"), "Unexpected wobble");
+}
