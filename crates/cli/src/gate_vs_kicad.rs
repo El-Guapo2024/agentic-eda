@@ -638,8 +638,8 @@ mod tests {
     }
 
     /// The Track Corner Mode (`CORNER_MODE`) against kicad-cli's DRC (slow tier): routes on `pic_programmer` in each of the four modes, in Shove and
-    /// Walk around, from pads out into the board with a click and a second leg -- each commit adds no copper violation to kicad-cli's report (but those
-    /// with a board text on copper, which the router does not see), and in the two rounded modes the corners are `(arc ..)` tracks of the board file.
+    /// Walk around, from pads out into the board with a click and a second leg -- each commit adds no copper violation to kicad-cli's report (those with
+    /// the board's text on copper included: four of them before the router saw copper text, `syncTextItem`), and in the two rounded modes the corners are `(arc ..)` tracks of the board file.
     #[test]
     fn routes_in_every_corner_mode_add_no_violation_to_kicad_clis_drc() {
         use eda_model::ir::Point;
@@ -656,10 +656,8 @@ mod tests {
             return;
         };
         let dir = scratch("corner_modes");
-        // a board text on copper is not an obstacle of this router (`syncTextItem` is not ported: a gap of its own, not the corners'), so what a
-        // route does to the text of `pic_programmer` is left out of the count, and said
-        let without_text = |r: Vec<(String, String)>| r.into_iter().filter(|(_, d)| !d.contains("PCB text")).collect::<Vec<_>>();
-        let before = without_text(all_track_report(&design, &model, &dir, &kinds));
+        // a board text on copper is an obstacle of the router (`syncTextItem`): what a route does to the text of `pic_programmer` counts too
+        let before = all_track_report(&design, &model, &dir, &kinds);
         let baseline = counts_of(&before);
         let (node, _) = eda_pns::from_ir::build_node(&design, &model);
         let mut pads: Vec<(Point, String)> = node
@@ -701,12 +699,7 @@ mod tests {
                     let Some(commit) = router.finish(end) else { continue };
                     let arcs = commit.tracks.iter().filter(|t| t.arc().is_some() && t.net != "").count();
                     let after = apply_commit(&design, &commit);
-                    let full = all_track_report(&after, &model, &dir, &kinds);
-                    let text = full.iter().filter(|(_, d)| d.contains("PCB text")).count();
-                    if text > 0 {
-                        eprintln!("    {text} violation(s) with a board text, left out (the router does not see copper text)");
-                    }
-                    let now = without_text(full);
+                    let now = all_track_report(&after, &model, &dir, &kinds);
                     let counts = counts_of(&now);
                     eprintln!("pic_programmer {corner:?} {mode:?} from {name}: {} tracks put ({arcs} arcs), {} taken: {counts:?} (before {baseline:?})", commit.tracks.len(), commit.remove_track_ids.len());
                     if counts != baseline {
@@ -753,8 +746,7 @@ mod tests {
                 return;
             };
             let dir = scratch(&format!("vvia_{board}"));
-            let without_text = |r: Vec<(String, String)>| r.into_iter().filter(|(_, d)| !d.contains("PCB text")).collect::<Vec<_>>();
-            let before = without_text(all_track_report(&design, &model, &dir, &kinds));
+            let before = all_track_report(&design, &model, &dir, &kinds);
             let baseline = counts_of(&before);
             let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
             // the junctions: segment ends whose joint has a virtual via
@@ -791,7 +783,7 @@ mod tests {
                 let Some(commit) = router.drag_finish(to) else { continue };
                 assert!(commit.vias.iter().all(|v| v.at != to), "{board}: no via is committed at the junction");
                 let after = apply_commit(&design, &commit);
-                let now = without_text(all_track_report(&after, &model, &dir, &kinds));
+                let now = all_track_report(&after, &model, &dir, &kinds);
                 let counts = counts_of(&now);
                 eprintln!("{board} {mode:?} junction {end:?}: {} tracks put, {} taken: {counts:?} (before {baseline:?})", commit.tracks.len(), commit.remove_track_ids.len());
                 if counts != baseline {
