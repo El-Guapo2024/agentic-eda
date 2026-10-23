@@ -583,20 +583,26 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         }
         writeln!(out, "\t)").unwrap();
     }
-    // Graphic lines on the notes layer (`I`, `SchLine`): `(polyline ...)`, decoration with no net.
+    // Graphic lines on the notes layer (`I`, `SchLine`): `(polyline ...)`, decoration with no net. One polyline of two points per segment, as KiCad's
+    // line tool saves its `SCH_LINE`s: the parser makes a line of a two-point polyline only (`else if( poly->GetPointCount() > 2 ) screen->Append( poly )`
+    // keeps a longer one as a polygon shape, which KiCad then selects, edits and reads for a label's spin as one shape).
     let mut lines: Vec<&eda_model::ir::SchLine> = sch.lines.iter().filter(|l| l.pts.len() >= 2).collect();
     lines.sort_by(|a, b| a.pts.cmp(&b.pts));
     for l in lines {
-        let pts: String = l.pts.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect();
-        let uuid = duid_for(&format!("sch_line:{pts}"), &l.id);
-        writeln!(out, "\t(polyline").unwrap();
-        writeln!(out, "\t\t(pts{pts})").unwrap();
-        writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(l.width_um, sch.extras.strokes.get(&l.id))).unwrap();
-        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
-        if sch.extras.is_locked(&l.id) {
-            writeln!(out, "\t\t(locked yes)").unwrap();
+        for (k, seg) in l.pts.windows(2).enumerate() {
+            let pts: String = seg.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect();
+            // the first segment keeps the uuid the whole line had
+            let seed = if k == 0 { format!("sch_line:{}", l.pts.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect::<String>()) } else { format!("sch_line:{pts}:{k}") };
+            let uuid = duid_for(&seed, &l.id);
+            writeln!(out, "\t(polyline").unwrap();
+            writeln!(out, "\t\t(pts{pts})").unwrap();
+            writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(l.width_um, sch.extras.strokes.get(&l.id))).unwrap();
+            writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+            if sch.extras.is_locked(&l.id) {
+                writeln!(out, "\t\t(locked yes)").unwrap();
+            }
+            writeln!(out, "\t)").unwrap();
         }
-        writeln!(out, "\t)").unwrap();
     }
 
     // Shapes, text boxes, rule areas and directive labels (`SchGraphic`).
