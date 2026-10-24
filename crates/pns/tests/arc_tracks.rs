@@ -581,3 +581,14 @@ fn collisions_after_with_vias(design: &Design, model: &ConstraintModel, commit: 
     }
     bad
 }
+
+/// findings p5 F3-11: a free-angle grab (`G`) in the middle of a segment nearer the end where an arc starts takes the segment's start, not
+/// the arc's (`startDragSegment`: `!m_draggedLine.CLine().IsPtOnArc( m_draggedSegmentIndex + 1 )`).
+#[test]
+fn a_free_angle_grab_next_to_an_arc_takes_the_segments_start() {
+    let mut node = Node::new();
+    let [s1, _, _] = s_bend(&mut node, "SIG");
+    let at = p(4_000_000, -900_000);
+    let d = eda_pns::dragger::Dragger::start_with(&node, at, s1, true).expect("a free-angle grab");
+    assert_eq!(d.original.pts[d.grabbed_index], p(4_000_000, -3_000_000), "the segment's own start");
+}

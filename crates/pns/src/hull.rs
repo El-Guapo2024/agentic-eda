@@ -203,11 +203,9 @@ mod tests {
 // raw, y-down coordinates), which `LINE::Walkaround` relies on.
 // ---------------------------------------------------------------------
 
-/// KiCad builds hulls in nm, where rounding a vertex loses under 1 nm; at
-/// this IR's whole-µm resolution it can lose up to ~1 µm, enough for a
-/// hull-hugging path to sit 1 µm inside the rule. Every router hull is
-/// grown by this much so its output still meets clearance exactly.
-pub const HULL_ROUNDING_GUARD: Nm = 1;
+/// `PNS_HULL_MARGIN` (`pns_line.h`): 10 nm. (The micrometre-era `HULL_ROUNDING_GUARD`, a micrometre added to every router hull, is gone:
+/// on KiCad's nanometre grid the hulls are KiCad's own, findings p5 F1-6.)
+pub const PNS_HULL_MARGIN: Nm = 10;
 
 fn kiround(v: f64) -> Nm {
     v.round() as Nm

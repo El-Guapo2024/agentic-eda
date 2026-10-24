@@ -2,24 +2,48 @@
 //! on this router. Each case is a board from the QA corpus, a recorded mouse
 //! session (`pns.log`) and the commit KiCad recorded at the end of it.
 //!
-//! Skipped (prints a line, passes) when the QA corpus is not on this machine:
-//! `KICAD_QA_DATA`, default `~/ws/kicad-src-8303b2ad/qa/data`.
+//! The corpus is `$KICAD_QA_DATA`, else `$KICAD_SRC_DIR/qa/data`. Without it a test prints a line
+//! and passes in the fast tier, and **fails** under `EDA_SLOW_TESTS=1`, so the slow gate cannot pass
+//! without running the replays.
+//!
+//! KiCad's own test (`qa/tools/pns/pns_log_file.cpp::PNS_LOG_FILE::COMMIT_STATE::Compare` ->
+//! `comparePnsItems`, `sa->Seg() != sb->Seg()`, KiCad 25ec2335) demands every recorded segment
+//! exactly, in nm, and so does every replay here: all seven 8303b2ad sessions are reproduced to the
+//! nanometre. Each prints how many segments it reproduces exactly and within `TOL`, and the ones it
+//! misses.
 
 use eda_model::ir::{Point, Nm};
 use eda_pns::from_ir::build_node;
-use eda_pns::item::{net_of, Item, ItemId};
+use eda_pns::item::{Item, ItemId};
 use eda_pns::line::Line;
 use eda_pns::node::Node;
 use std::collections::HashSet;
-use eda_pns::line_placer::LinePlacer;
 use eda_pns::dragger::{DragKind, DragPreview, Dragger};
 use eda_pns::router::{RouteCommit, Router};
 use eda_pns::settings::{Mode, OptEffort, RoutingSettings};
 use std::path::PathBuf;
 
 fn qa_root() -> Option<PathBuf> {
-    let p = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data"));
-    p.join("pcbnew/pns_regressions").exists().then_some(p.join("pcbnew/pns_regressions"))
+    let data = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).or_else(|| std::env::var_os("KICAD_SRC_DIR").map(|s| PathBuf::from(s).join("qa/data")));
+    let found = data.map(|p| p.join("pcbnew/pns_regressions")).filter(|p| p.exists());
+    if found.is_none() && std::env::var_os("EDA_SLOW_TESTS").is_some() {
+        panic!("EDA_SLOW_TESTS is set but KiCad's QA corpus is not found: set KICAD_QA_DATA (or KICAD_SRC_DIR) to a KiCad source tree's qa/data");
+    }
+    found
+}
+
+/// How many of the `expected` segments `ours` reproduces exactly (KiCad's compare) and within `TOL`, printed for the report.
+fn hits(case: &str, expected: &[(String, Point, Point)], ours: &[(String, Point, Point)]) -> (usize, usize) {
+    let count = |tol: Nm| expected.iter().filter(|e| ours.iter().any(|o| same_segment(e, o, tol))).count();
+    let (exact, near) = (count(0), count(TOL));
+    eprintln!("{case}: {exact} of {} recorded segments exact, {near} within {TOL} nm; ours {} segments", expected.len(), ours.len());
+    for e in expected.iter().filter(|e| !ours.iter().any(|o| same_segment(e, o, 0))) {
+        eprintln!("MISS {e:?}");
+    }
+    for o in ours.iter().filter(|o| !expected.iter().any(|e| same_segment(e, o, 0))) {
+        eprintln!("OURS {o:?}");
+    }
+    (exact, near)
 }
 
 fn nm(v: &serde_json::Value) -> Nm {
@@ -131,7 +155,7 @@ fn recorded_segments(log: &serde_json::Value) -> Vec<(String, Point, Point)> {
     log["addedItems"].as_array().unwrap().iter().filter(|it| it["kind"] == "segment").map(|it| (it["net"].as_str().unwrap().to_string(), pt(&it["shape"]["start"]), pt(&it["shape"]["end"]))).collect()
 }
 
-/// How far a reproduced segment's ends may be from KiCad's: the integer roundings of the hulls and the shove's resizes (3 um on the micrometre grid).
+/// The near-miss count printed beside the exact one, to tell a rounding from a different path (3 um on the micrometre grid).
 const TOL: Nm = 10;
 
 fn close(a: Point, b: Point, tol: Nm) -> bool {
@@ -177,10 +201,15 @@ fn simple_shove_1_pushes_the_same_13_tracks_and_leaves_the_board_clean() {
     // the replay routes with the Default net class's width (the event's own 155 µm is not what KiCad used)
     let width = model.board.width_of("");
     let layer = layers.index_of("F.Cu").unwrap();
-    let placer = LinePlacer::start(&node, pt(&events[0]["position"]), None, net_of("(unconnected)"), layer, width);
+    let _ = layer;
+    // a route started in empty space, on no net (`LINE_PLACER::Start`: `GetOrphanedNetHandle()`), as KiCad's recorded head has `net: ""`
+    let mut router = Router::new(&design, &model);
+    router.settings = settings;
+    router.start(pt(&events[0]["position"]), "F.Cu", width).expect("a route starts in empty space");
+    assert!(router.current_net().is_none(), "on no net");
     let mut last = None;
     for e in &events[1..] {
-        last = Some(placer.preview(&node, &model.board, &settings, pt(&e["position"])));
+        last = router.preview(pt(&e["position"]));
     }
     let pv = last.unwrap();
     assert!(!pv.colliding);
@@ -191,9 +220,11 @@ fn simple_shove_1_pushes_the_same_13_tracks_and_leaves_the_board_clean() {
     // the pushed lines run where KiCad's do (the optimizer picks different corner cuts in places)
     let ours: Vec<(String, Point, Point)> = pv.displaced_lines.iter().flat_map(|d| d.line.segs().map(|(a, b)| (d.line.net.as_deref().unwrap_or("").to_string(), a, b)).collect::<Vec<_>>()).collect();
     let expected = recorded_segments(&log);
-    let hit = expected.iter().filter(|e| ours.iter().any(|o| same_segment(e, o, TOL))).count();
-    // 12 of the 28 before springback, when every move shoved from the world as it was
-    assert!(hit >= 24, "{hit} of {} recorded segments reproduced within {TOL} nm", expected.len());
+    let (exact, hit) = hits("simple-shove-1", &expected, &ours);
+    // 12 of the 28 before springback, when every move shoved from the world as it was; 24 at 3 um on the micrometre grid; 5 exact
+    // before `Simplify2`, the hulls without their micrometre-era guard and `collideSimple`'s "extra 1"
+    assert_eq!(hit, expected.len(), "{hit} of {} recorded segments reproduced within {TOL} nm", expected.len());
+    assert_eq!(exact, expected.len(), "KiCad's compare is exact");
     // and the board it leaves is clean
     let before = violations(&node, &model.board);
     let after = violations(&committed(&node, &pv), &model.board);
@@ -233,10 +264,9 @@ fn backspace1_ends_with_the_one_fixed_run_kicad_recorded() {
     let commit = router.finish(last_fix).expect("the final run does not collide");
     let expected = recorded_segments(&log);
     let ours: Vec<(String, Point, Point)> = commit.tracks.iter().flat_map(|t| t.pts.windows(2).map(|w| (t.net.clone(), w[0], w[1])).collect::<Vec<_>>()).collect();
+    let (exact, _) = hits("backspace1", &expected, &ours);
     assert_eq!(ours.len(), expected.len(), "ours {ours:?} expected {expected:?}");
-    for e in &expected {
-        assert!(ours.iter().any(|o| same_segment(e, o, 2)), "recorded segment {e:?} missing from {ours:?}");
-    }
+    assert_eq!(exact, expected.len(), "KiCad's compare is exact: ours {ours:?} expected {expected:?}");
     assert!(commit.tracks.iter().all(|t| t.width == width));
 }
 
@@ -265,9 +295,10 @@ fn issue22749_pushes_the_same_5_tracks_and_leaves_the_board_clean() {
     assert_eq!(removed, log["removedItems"].as_array().unwrap().len(), "KiCad pushed 5 tracks");
     let ours: Vec<(String, Point, Point)> = pv.displaced_lines.iter().flat_map(|d| d.line.segs().map(|(a, b)| (d.line.net.as_deref().unwrap_or("").to_string(), a, b)).collect::<Vec<_>>()).collect();
     let expected = recorded_segments(&log);
-    let hit = expected.iter().filter(|e| ours.iter().any(|o| same_segment(e, o, TOL))).count();
+    let (exact, hit) = hits("issue22749", &expected, &ours);
     // all of them since springback (4 of the 11 before it)
     assert_eq!(hit, expected.len(), "{hit} of {} recorded segments reproduced within {TOL} nm", expected.len());
+    assert_eq!(exact, expected.len(), "KiCad's compare is exact");
     let before = violations(&node, &model.board);
     let after = violations(&committed(&node, &pv), &model.board);
     let new_ones: Vec<_> = after.difference(&before).collect();
@@ -419,6 +450,8 @@ fn walk_drag_seg_against_board_edge_slides_the_segment_to_where_kicad_stopped_it
     let expected = recorded_segments(&log);
     assert_eq!(expected.len(), 3, "KiCad recorded the segment and its two legs");
     let ours = commit_segments(&commit);
+    let (exact, _) = hits("walk_drag_seg_against_board_edge", &expected, &ours);
+    assert_eq!(exact, expected.len(), "KiCad's compare is exact");
     assert_eq!(ours.len(), expected.len(), "ours {ours:?}\nexpected {expected:?}");
     for e in &expected {
         assert!(ours.iter().any(|o| same_segment(e, o, TOL)), "recorded segment {e:?} missing from {ours:?}");
@@ -462,10 +495,57 @@ fn simple_drag_shove_singlelayer_reproduces_what_kicad_recorded() {
     let commit = dragger.finish(&node, &model.board, &settings, end, false).expect("the drag commits");
     let expected = recorded_segments(&log);
     let ours = commit_segments(&commit);
-    let hit = expected.iter().filter(|e| ours.iter().any(|o| same_segment(e, o, TOL))).count();
+    let (exact, hit) = hits("simple-drag-shove-singlelayer", &expected, &ours);
     eprintln!("{} of {} recorded segments reproduced; ours {} segments; {} tracks removed (KiCad {}); {restored} positions restored", hit, expected.len(), ours.len(), commit.remove_track_ids.len(), log["removedItems"].as_array().unwrap().len());
-    assert!(hit * 10 >= expected.len() * 8, "{hit} of {} recorded segments reproduced within {TOL} nm", expected.len());
+    assert_eq!(hit, expected.len(), "{hit} of {} recorded segments reproduced within {TOL} nm", expected.len());
+    assert_eq!(exact, expected.len(), "KiCad's compare is exact");
     assert_eq!(commit.remove_track_ids.len(), log["removedItems"].as_array().unwrap().len(), "the same tracks are replaced");
+}
+
+/// walk-with-teardrops (8303b2ad log `pns-no-hug-2.log`, board `pns-no-hug-2.dump`, Walk around, `optimize_dragged_track` off): the
+/// B.Cu segment of `/Progger/SWCLK` at x = 59.75 (y 55..60) is grabbed in the middle and pulled left in 17 small moves, 0.48 mm in
+/// all. KiCad's recorded commit slides it to x = 59.27, where the 45-degree legs either side shrink it to a 184 um stub, and the jog
+/// below it to x = 59.673 is gone: 19 segments. On the micrometre grid this drag committed a 212 mm detour round the inside of the
+/// board outline (findings p5 P-1); on the nanometre grid without `Simplify2` the walk left 1 nm kinks along the line (59 segments).
+/// Every position keeps the line about as long as it was, and the commit is KiCad's to the nanometre.
+#[test]
+fn walk_with_teardrops_drag_does_not_detour_round_the_board() {
+    let Some(root) = qa_root() else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    let dir = root.join("walk-with-teardrops");
+    let text = std::fs::read_to_string(dir.join("pns-no-hug-2.dump")).unwrap();
+    let (mut design, mut model, _) = eda_kicad::import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import: {e:?}"));
+    let pro = std::fs::read_to_string(dir.join("pns-no-hug-2.kicad_pro")).unwrap();
+    eda_kicad::merge_project_net_classes(&mut model, &pro);
+    eda_kicad::merge_project_design_rules(&mut model, &pro);
+    design.assign_missing_ids();
+    let log: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("pns-no-hug-2.log")).unwrap()).unwrap();
+    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("pns-no-hug-2.settings")).unwrap()).unwrap();
+    assert_eq!(j["mode"], 2, "Walk around");
+    let settings = RoutingSettings { mode: Mode::Walkaround, optimize_entire_dragged_track: j["optimize_dragged_track"].as_bool().unwrap(), walkaround_iteration_limit: j["walkaround_iteration_limit"].as_i64().unwrap() as i32, ..RoutingSettings::default() };
+    let (node, layers) = build_node(&design, &model);
+    let events = log["events"].as_array().unwrap();
+    let start = pt(&events[0]["position"]);
+    let layer = layers.index_of("B.Cu").unwrap();
+    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), 300_000).expect("the SWCLK segment");
+    let mut dragger = Dragger::start_with(&node, start, id, false).expect("a track");
+    assert_eq!(dragger.kind, DragKind::Segment, "grabbed in the middle of the segment");
+    let length = |pts: &[Point]| pts.windows(2).map(|w| (((w[1].x - w[0].x) as f64).powi(2) + ((w[1].y - w[0].y) as f64).powi(2)).sqrt()).sum::<f64>();
+    let original = length(&dragger.original.pts);
+    for e in &events[1..] {
+        let to = pt(&e["position"]);
+        let pv = dragger.drag(&node, &model.board, &settings, to);
+        assert!(length(&pv.pts) < 2.0 * original, "dragging to {to:?} gives a {:.1} mm line for a {:.1} mm one", length(&pv.pts) / 1e6, original / 1e6);
+    }
+    let end = pt(&events.last().unwrap()["position"]);
+    let commit = dragger.finish(&node, &model.board, &settings, end, false).expect("the drag commits");
+    let expected = recorded_segments(&log);
+    let ours = commit_segments(&commit);
+    let (exact, hit) = hits("walk-with-teardrops", &expected, &ours);
+    assert_eq!(hit, expected.len(), "{hit} of {} recorded segments reproduced within {TOL} nm", expected.len());
+    assert_eq!(exact, expected.len(), "KiCad's compare is exact");
 }
 
 /// xorshift64: the same sequence every run.
@@ -496,7 +576,7 @@ fn random_shove_routes_never_leave_a_new_violation() {
         let mut anchors: Vec<(Point, String)> = node
             .iter()
             .filter_map(|(_, it)| match it {
-                Item::Solid(s) if s.net.is_some() && s.layers.overlaps_layer(0) => Some((s.pos, s.net.as_deref().unwrap().to_string())),
+                Item::Solid(s) if s.net.is_some() && s.net != eda_pns::item::not_a_net() && s.layers.overlaps_layer(0) => Some((s.pos, s.net.as_deref().unwrap().to_string())),
                 _ => None,
             })
             .collect();

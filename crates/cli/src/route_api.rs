@@ -213,7 +213,9 @@ pub fn undo_segment(cell: &RouteCell) -> Value {
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing") };
     let popped = router.undo_last_segment();
-    json!({ "ok": true, "popped": popped })
+    // `UnfixRoute` puts back a via the undone run ended in (`m_placingVia`): the studio shows it armed again
+    let via = router.pending_via_layer().map(|l| router.layer_name(l).to_string());
+    json!({ "ok": true, "popped": popped, "placing_via": via.is_some(), "via_to_layer": via })
 }
 
 /// `POST /api/route/via`: `{enabled, diameter?, drill?, to_layer?, via_type?, span?}` --
@@ -248,11 +250,20 @@ pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
     json!({ "ok": true })
 }
 
-/// `POST /api/route/finish`: `{x, y}`. Ends the session either way (a
-/// refusal leaves nothing committed, same as a plain `fix` refusal) --
-/// matching upstream `CommitRouting`'s "nothing placed is a no-op, but the
-/// tool still stops" shape would need the caller to retry `start` rather
-/// than silently continuing a half-finished session.
+/// The commit of a route (or of what it had fixed) as the one undoable step `Cmd::CommitRoute`; with `append_undo`, joined to the step
+/// before it (a route restarted from the other end is one undo with the part committed when it restarted).
+fn commit_route(dir: &Path, commit: eda_pns::router::RouteCommit, append_undo: bool) -> Result<String, String> {
+    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
+    let summary = board::step(dir, cmd, true, "ui").map_err(|e| board::reasons(&e))?;
+    if append_undo {
+        board::append_to_previous_undo(dir);
+    }
+    Ok(summary)
+}
+
+/// `POST /api/route/finish`: `{x, y}`. Ends the session either way, as `ROUTER_TOOL::performRouting`'s finish (`FixRoute( .., forceFinish
+/// = true, .. ); break;`, then `CommitRouting()`) does: when the last head still collides and the mode refuses it, what the earlier clicks
+/// fixed is committed all the same (`committed`), and only the head is lost.
 pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let mut router = match cell.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -261,7 +272,13 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let at = point_of(&req);
     let Some(commit) = router.finish(at) else {
-        return json!({ "ok": false, "message": "final segment still collides; route left uncommitted" });
+        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo)) {
+            Some(Err(e)) => return err(e),
+            Some(Ok(_)) => true,
+            None => false,
+        };
+        let message = if committed { "final segment still collides; the segments fixed before it are committed" } else { "final segment still collides; route left uncommitted" };
+        return json!({ "ok": false, "committed": committed, "message": message });
     };
     let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
     match board::step(dir, cmd, true, "ui") {
@@ -273,6 +290,31 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
             json!({ "ok": true, "message": summary })
         }
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+    }
+}
+
+/// `POST /api/route/attempt_finish`: `{x, y}` -- `ROUTER_TOOL`'s `routerAttemptFinish` (`F`) -> `ROUTER::Finish`: the route is taken to the
+/// nearest unconnected anchor of its net and, when it gets there, committed (`finished`, one undo step, as `finish`'s); otherwise the
+/// route goes on and the reply carries where the head got (`warp`, where KiCad warps the cursor) and the preview there.
+pub fn attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let at = point_of(&req);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing") };
+    match router.attempt_finish(at) {
+        Ok(commit) => {
+            let append_undo = router.append_undo;
+            *guard = None;
+            drop(guard);
+            match commit_route(dir, commit, append_undo) {
+                Ok(summary) => json!({ "ok": true, "finished": true, "message": summary }),
+                Err(e) => err(e),
+            }
+        }
+        Err(end) => {
+            let preview = router.preview(end).map(|p| preview_json(router, &p)).unwrap_or_else(|| json!({}));
+            json!({ "ok": true, "finished": false, "warp": [end.x, end.y], "preview": preview })
+        }
     }
 }
 
@@ -327,18 +369,22 @@ pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     reply
 }
 
-/// `POST /api/route/cancel`: no body. Drops whatever session is active --
-/// a route (`Router::session`) or a drag (`Router::drag`) alike, since
-/// both live on the one `Router` this cell holds -- without touching the
-/// board.
-pub fn cancel(cell: &RouteCell) -> Value {
-    *cell.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    json!({ "ok": true })
+/// `POST /api/route/cancel`: no body. Esc: ends whatever session is active. A route or a pair commits what its clicks have fixed
+/// (`ROUTER_TOOL::performRouting`: the cancel branch only does `break;`, and after the loop `m_router->CommitRouting()` commits
+/// `m_lastNode`, every fixed leg and the shoves the clicks locked), one undo step, and replies `committed`; only the head is dropped.
+/// A drag leaves the board as it was (`performDragging`: `if( evt->IsCancelInteractive() ) { .. break; }` then `StopRouting()`).
+pub fn cancel(dir: &Path, cell: &RouteCell) -> Value {
+    let Some(mut router) = cell.lock().unwrap_or_else(|e| e.into_inner()).take() else { return json!({ "ok": true, "committed": false }) };
+    match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo)) {
+        Some(Err(e)) => err(e),
+        Some(Ok(_)) => json!({ "ok": true, "committed": true }),
+        None => json!({ "ok": true, "committed": false }),
+    }
 }
 
 /// `POST /api/route/mode`: `{mode}` (`"mark_obstacles" | "walkaround" | "shove"`) -- `ROUTER_TOOL::ChangeRouterMode` /
-/// `CycleRouterMode` (`settings.SetMode( mode )`) applied to the session that is running right now (route, drag or diff pair), so
-/// the next `move` already uses it. With no session there is nothing to change (the studio keeps the mode for the next one).
+/// `CycleRouterMode` (`settings.SetMode( mode )`) applied to the session that is running right now (a route or a diff pair), so
+/// the next `move` already uses it; a drag keeps the mode it started in (`DRAGGER::Start`: `m_currentMode = Settings().Mode()`). With no session there is nothing to change (the studio keeps the mode for the next one).
 pub fn set_mode(cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
@@ -460,17 +506,20 @@ pub fn drag_move(cell: &RouteCell, body: &[u8]) -> Value {
 /// `force_commit` (Ctrl+click) and not otherwise.
 pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
-    let mut router = match cell.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        Some(r) => r,
-        None => return err("not dragging"),
-    };
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut().filter(|r| r.is_dragging()) else { return err("not dragging") };
     let at = point_of(&req);
     let force_commit = req.get("force_commit").and_then(Value::as_bool).unwrap_or(false);
     let marking = router.drag_forces_mark_obstacles();
+    // `performDragging`: "if( m_router->FixRoute( m_endSnapPoint, m_endItem, false, forceCommit ) ) break;" -- a click the drag refuses
+    // leaves it going (`dragging`), the hint up (findings p5 F3-2)
     let Some(commit) = router.drag_finish_with(at, force_commit) else {
-        let message = if marking { "Track violates DRC. Ctrl+click to commit anyway." } else { "drag target still collides; left uncommitted" };
-        return json!({ "ok": false, "message": message });
+        // `_( "Track violates DRC." )` and `wxString::Format( _( "(%s to commit anyway.)" ), KeyNameFromKeyCode( MD_CTRL + PSEUDO_WXK_CLICK ) )`
+        let message = if marking { "Track violates DRC. (Ctrl+Click to commit anyway.)" } else { "drag target still collides; left uncommitted" };
+        return json!({ "ok": false, "dragging": true, "message": message });
     };
+    *guard = None;
+    drop(guard);
     let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary }),
@@ -617,7 +666,14 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let at = point_of(&req);
     let Some(commit) = router.finish_diff_pair(at) else {
-        return json!({ "ok": false, "message": "the pair still collides; left uncommitted" });
+        // as a single track's finish: the legs fixed before are committed (`CommitRouting()` after the loop)
+        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo)) {
+            Some(Err(e)) => return err(e),
+            Some(Ok(_)) => true,
+            None => false,
+        };
+        let message = if committed { "the pair still collides; the legs fixed before it are committed" } else { "the pair still collides; left uncommitted" };
+        return json!({ "ok": false, "committed": committed, "message": message });
     };
     let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
     match board::step(dir, cmd, true, "ui") {
@@ -778,6 +834,72 @@ mod tests {
         assert_eq!(reply["ok"], json!(true), "{reply}");
     }
 
+    /// findings p5 F2-9: `F` routes to the nearest unconnected anchor and commits, or leaves the route going with the head where it got.
+    #[test]
+    fn attempt_finish_commits_at_the_nearest_unconnected_anchor() {
+        let dir = scratch("attempt_finish");
+        // a SIG stub to reach, and the GND via of `setup` out of the way
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)], arc_mid_offset: None };
+        let other = Track { id: "sig2".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![p(15_000_000, 12_000_000), p(16_000_000, 12_000_000)], arc_mid_offset: None };
+        setup_board(&dir, vec![stub, other], vec![]);
+        let cell: RouteCell = Mutex::new(None);
+        start_with(&dir, &cell, json!({ "mode": "walkaround" }));
+        mv(&cell, &body(json!({ "x": 12_000_000, "y": 8_000_000 })));
+        let reply = attempt_finish(&dir, &cell, &body(json!({ "x": 12_000_000, "y": 8_000_000 })));
+        assert_eq!((reply["ok"].clone(), reply["finished"].clone()), (json!(true), json!(true)), "{reply}");
+        let (_, design, _) = board::load(&dir).unwrap();
+        let reached = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.id != "sig" && t.id != "sig2").any(|t| t.pts.contains(&p(15_000_000, 12_000_000)));
+        assert!(reached, "the new track ends on the other stub: {:?}", design.routing.as_ref().unwrap().tracks);
+        assert!(cell.lock().unwrap().is_none());
+    }
+
+    /// findings p5 F2-3: Esc commits what the clicks fixed (`ROUTER_TOOL::performRouting`: the cancel branch breaks out of the loop, and
+    /// `CommitRouting()` follows), as one undo step; only the head is dropped.
+    #[test]
+    fn cancel_after_two_fixes_keeps_the_fixed_runs() {
+        let dir = scratch("cancel_keeps");
+        setup(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        start_with(&dir, &cell, json!({ "mode": "walkaround" }));
+        for (x, y) in [(13_000_000, 8_000_000), (13_000_000, 11_000_000)] {
+            mv(&cell, &body(json!({ "x": x, "y": y })));
+            assert_eq!(fix(&cell, &body(json!({ "x": x, "y": y })))["blocked"], json!(false));
+        }
+        mv(&cell, &body(json!({ "x": 16_000_000, "y": 11_000_000 })));
+        let reply = cancel(&dir, &cell);
+        assert_eq!((reply["ok"].clone(), reply["committed"].clone()), (json!(true), json!(true)), "{reply}");
+        let (_, design, _) = board::load(&dir).unwrap();
+        let sig: Vec<&Track> = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == "SIG" && t.id != "sig").collect();
+        let pts: Vec<Point> = sig.iter().flat_map(|t| t.pts.iter().copied()).collect();
+        assert!(pts.contains(&p(13_000_000, 8_000_000)) && pts.contains(&p(13_000_000, 11_000_000)), "both fixed runs are on the board: {sig:?}");
+        assert!(!pts.contains(&p(16_000_000, 11_000_000)), "the head is not: {sig:?}");
+        // nothing fixed: nothing committed
+        start_with(&dir, &cell, json!({ "mode": "walkaround" }));
+        mv(&cell, &body(json!({ "x": 13_000_000, "y": 8_000_000 })));
+        assert_eq!(cancel(&dir, &cell)["committed"], json!(false));
+    }
+
+    /// The same when the finish is refused because the last head collides: the runs fixed before it are committed (`FixRoute( .. ); break;`,
+    /// then `CommitRouting()`).
+    #[test]
+    fn a_refused_finish_still_commits_the_fixed_runs() {
+        let dir = scratch("refused_finish");
+        setup(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        start_with(&dir, &cell, json!({ "mode": "mark_obstacles" }));
+        mv(&cell, &body(json!({ "x": 13_000_000, "y": 8_000_000 })));
+        assert_eq!(fix(&cell, &body(json!({ "x": 13_000_000, "y": 8_000_000 })))["blocked"], json!(false));
+        // the head now ends on the GND via (10000, 5000): it collides, and Highlight collisions without "allow DRC violations" refuses it
+        mv(&cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
+        let reply = finish(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
+        assert_eq!((reply["ok"].clone(), reply["committed"].clone()), (json!(false), json!(true)), "{reply}");
+        let (_, design, _) = board::load(&dir).unwrap();
+        let pts: Vec<Point> = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == "SIG" && t.id != "sig").flat_map(|t| t.pts.iter().copied()).collect();
+        assert!(pts.contains(&p(13_000_000, 8_000_000)), "the fixed run is on the board: {pts:?}");
+        assert!(!pts.contains(&p(10_000_000, 5_000_000)), "the colliding head is not: {pts:?}");
+        assert!(cell.lock().unwrap().is_none(), "the session has ended");
+    }
+
     #[test]
     fn a_request_without_settings_is_kicads_defaults() {
         let s = settings_of(&json!({}));
@@ -932,9 +1054,12 @@ mod tests {
         assert_eq!((started["forced_mark_obstacles"].clone(), started["colliding"].clone()), (json!(true), json!(true)), "{started}");
         let refused = drag_finish(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_300_000 })));
         assert_eq!(refused["ok"], json!(false), "{refused}");
-        assert!(refused["message"].as_str().unwrap().contains("Ctrl+click"), "{refused}");
-        let started = drag_start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_200_000, "layer": "F.Cu" })));
-        assert_eq!(started["forced_mark_obstacles"], json!(true));
+        assert_eq!(refused["message"], json!("Track violates DRC. (Ctrl+Click to commit anyway.)"), "{refused}");
+        // findings p5 F3-2: the refused click leaves the drag going, in its forced-mark state (`performDragging` breaks only on a fix)
+        assert_eq!(refused["dragging"], json!(true));
+        let moved = drag_move(&cell, &body(json!({ "x": 10_000_000, "y": 5_300_000 })));
+        assert_eq!(moved["ok"], json!(true), "{moved}");
+        assert_eq!(moved["forced_mark_obstacles"], json!(true), "{moved}");
         let forced = drag_finish(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_300_000, "force_commit": true })));
         assert_eq!(forced["ok"], json!(true), "{forced}");
     }

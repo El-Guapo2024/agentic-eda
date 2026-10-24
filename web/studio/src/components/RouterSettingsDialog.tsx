@@ -75,7 +75,7 @@ export function RouterSettingsDialog() {
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog" style={{ width: 640 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
-          <span>Interactive Router Settings...</span>
+          <span>Interactive Router Settings</span>
         </div>
         <div className="dialog-body">
           <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>

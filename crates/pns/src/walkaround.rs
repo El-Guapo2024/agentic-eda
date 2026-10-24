@@ -317,7 +317,7 @@ impl<'a> Walker<'a> {
             let hull = item.hull(clearance, width, layer);
             let hull = if self.corner_mode.is_90() { crate::hull::bbox_hull(&hull) } else { hull };
             let mut simplified = Line { arcs: self.arcs.clone(), ..Line::from_points(net.clone(), layer, width, std::mem::take(pts)) };
-            simplified.simplify();
+            simplified.simplify2(); // `aLine.Line().Simplify2()`
             match walk_around_hull(&simplified.pts, &hull, cw) {
                 Some(p) => *pts = p,
                 None => {

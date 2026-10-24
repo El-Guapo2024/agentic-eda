@@ -70,6 +70,49 @@ export const DEFAULT_ROUTER_SETTINGS: RouterSettings = {
   autoPosture: true,
 };
 
+/**
+ * `ROUTING_SETTINGS` is a `NESTED_SETTINGS` of pcbnew.json (`tools.pns`, `PNS_TOOL_BASE::Reset`: `std::make_unique<ROUTING_SETTINGS>( settings,
+ * "tools.pns" )`): the dialog's choices and the Track Corner Mode survive a restart. What is saved is every field but `snapToTracks` (the
+ * magnetic setting's, set by the canvas). Reading takes each field that has the right type and keeps the default for the rest. (findings p5 F3-5)
+ */
+export function parseRouterSettings(raw: string | null): RouterSettings {
+  if (!raw) return DEFAULT_ROUTER_SETTINGS;
+  let j: Record<string, unknown>;
+  try {
+    j = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return DEFAULT_ROUTER_SETTINGS;
+  }
+  if (!j || typeof j !== "object") return DEFAULT_ROUTER_SETTINGS;
+  const d = DEFAULT_ROUTER_SETTINGS;
+  const bool = (k: keyof RouterSettings): boolean => (typeof j[k] === "boolean" ? (j[k] as boolean) : (d[k] as boolean));
+  const modes: RouteMode[] = ["mark_obstacles", "walkaround", "shove"];
+  const efforts: OptimizerEffort[] = ["low", "medium", "full"];
+  const corners: CornerMode[] = ["mitered_45", "rounded_45", "mitered_90", "rounded_90"];
+  const out: RouterSettings = {
+    mode: modes.includes(j.mode as RouteMode) ? (j.mode as RouteMode) : d.mode,
+    optimizerEffort: efforts.includes(j.optimizerEffort as OptimizerEffort) ? (j.optimizerEffort as OptimizerEffort) : d.optimizerEffort,
+    shoveVias: bool("shoveVias"),
+    jumpOverObstacles: bool("jumpOverObstacles"),
+    removeLoops: bool("removeLoops"),
+    smartPads: bool("smartPads"),
+    allowDrcViolations: bool("allowDrcViolations"),
+    freeAngleMode: bool("freeAngleMode"),
+    fixAllSegments: bool("fixAllSegments"),
+    smoothDragged: bool("smoothDragged"),
+    optimizeEntireDragged: bool("optimizeEntireDragged"),
+    autoPosture: bool("autoPosture"),
+  };
+  if (corners.includes(j.cornerMode as CornerMode)) out.cornerMode = j.cornerMode as CornerMode;
+  return out;
+}
+
+/** What [`parseRouterSettings`] reads back: the settings without `snapToTracks`. */
+export function serializeRouterSettings(s: RouterSettings): string {
+  const { snapToTracks: _snap, ...kept } = s;
+  return JSON.stringify(kept);
+}
+
 /** The `settings` object of the router's start requests (`settings_of` in crates/cli/src/route_api.rs). */
 export function routerSettingsToWire(s: RouterSettings): Record<string, string | boolean> {
   return {

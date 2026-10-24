@@ -198,6 +198,11 @@ fn a_segment_the_board_already_has_is_not_added_again() {
     let commit = router.finish(p(3_000_000, 0)).expect("commits");
     let covers_old = commit.tracks.iter().any(|t| t.pts.windows(2).any(|w| (w[0] == p(-6_000_000, 0) && w[1] == p(0, 0)) || (w[0] == p(0, 0) && w[1] == p(-6_000_000, 0))));
     assert!(!covers_old, "the stretch the board already has is not a track of the commit: {:?}", commit.tracks.iter().map(|t| t.pts.clone()).collect::<Vec<_>>());
-    assert!(commit.tracks.iter().any(|t| t.pts.first() == Some(&p(-9_000_000, 0)) && t.pts.last() == Some(&p(-6_000_000, 0))), "what comes before it is");
-    assert!(commit.tracks.iter().any(|t| t.pts.first() == Some(&p(0, 0)) && t.pts.last() == Some(&p(3_000_000, 0))), "and what comes after it");
+    // and the line all of it is part of -- the SIG stub, the new legs, the old track -- goes straight on from (-10000, 0) to (3000, 0):
+    // `simplifyNewLine` makes it the one segment, the two old tracks taken in (findings p5 F2-6)
+    let pts: Vec<Vec<Point>> = commit.tracks.iter().map(|t| t.pts.clone()).collect();
+    assert_eq!(pts, vec![vec![p(-10_000_000, 0), p(3_000_000, 0)]], "{pts:?}");
+    let mut gone = commit.remove_track_ids.clone();
+    gone.sort();
+    assert_eq!(gone, vec!["t_old".to_string(), "t_sig".to_string()]);
 }

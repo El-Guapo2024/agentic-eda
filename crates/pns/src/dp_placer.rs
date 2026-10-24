@@ -20,16 +20,15 @@
 //!
 //! - **No springback.** Every `Move` resolves from the world as the last fix left it: there is no shove branch kept between mouse
 //!   samples. (The single-track placer has KiCad's stack, [`crate::springback`]; `DIFF_PAIR_PLACER::tryShove` uses the same one.)
-//! - **A walk that fails shows the pair as it was drawn.** `tryWalkDp` ends with `if( bestScore > 0.0 ) {..; return true;}`, which is
-//!   always true -- when no attempt worked, `best` is an empty `DIFF_PAIR` and the pair vanishes while the walk is called a success. Here a
-//!   failed walk leaves the pair where [`DiffPairPlacer::route_head`] put it and reports that it does not fit (it is drawn in violation).
+//! - (Not a difference: `tryWalkDp` ends with `if( bestScore > 0.0 ) {..; return true;}`, which is always true -- when no attempt worked,
+//!   `best` is an empty `DIFF_PAIR` and the walk is called a success with an empty pair; [`DiffPairPlacer::try_walk_dp`] does the same.
+//!   Of the attempts that work it keeps the one of the lowest `cl + |skew| * 3`, the *shortest* coupled length.)
 //! - **Four attempts are two.** `tryWalkDp` tries `attempt` 0..=3 with `pfirst = attempt & 1` and a winding `attempt & 2` that
 //!   `attemptWalk` never reads; attempts 2 and 3 repeat 0 and 1.
 //! - **Backspace** (`UnfixRoute`, which `DIFF_PAIR_PLACER` does not implement) takes back the last fixed leg: the world, the posture and
 //!   the pair it went on from are put back as they were before it.
-//! - **A gap below the clearance is raised to it** when it comes from the rules (the model's 180 um fallback is under its 200 um default
-//!   clearance, which no pair can be clean at); one the user typed in the dialog is kept. The width is at least the board's minimum
-//!   track width, as `ImportSizes` makes it.
+//! - The sizes are `ImportSizes`' ([`DpSizes::resolve`]): the width at least the board's minimum track width, the gap and the via gap
+//!   the class's pair gap, at least the board's minimum clearance.
 
 use crate::diff_pair::{direction_of, line_project, vnorm, vsub, DiffPair, DpGateways, DpPrimitivePair, PairLine, ANG_HALF_FULL, ANG_STRAIGHT};
 use crate::direction45::Direction45;
@@ -66,17 +65,18 @@ pub struct DpSizes {
 }
 
 impl DpSizes {
-    /// `PNS_KICAD_IFACE_BASE::ImportSizes` for a pair, from the net class of the P net (the nets of a pair are in one class): width, gap
-    /// and via gap. `ImportSizes` starts the width at the board's minimum track width and takes the larger of that and the class's
-    /// (`std::max( diffPairWidth, constraint.m_Value.Opt() )`), so a pair is never narrower than the board allows (the model's 125 um
-    /// fallback is under its 200 um minimum). The gaps are raised to the clearance the two nets need between them: a pair routed at
-    /// less cannot be clean (the fallback gap is 180 um, under the 200 um default clearance).
-    pub fn resolve(rules: &BoardRules, net_p: &str, net_n: &str) -> Self {
-        let clearance = Node::clearance(rules, &net_of(net_p), &net_of(net_n));
+    /// `PNS_KICAD_IFACE_BASE::ImportSizes` for a pair, from the net class of the P net (the nets of a pair are in one class), in net-class
+    /// mode: the width starts at the board's minimum track width and takes the larger of that and the class's (`std::max( diffPairWidth,
+    /// constraint.m_Value.Opt() )`); the gap **and the via gap** start at the board's minimum clearance (`int diffPairGap =
+    /// bds.m_MinClearance; int diffPairViaGap = bds.m_MinClearance;`) and both take the `DIFF_PAIR_GAP` constraint, the class's pair gap
+    /// (`diffPairViaGap = std::max( diffPairViaGap, constraint.m_Value.Opt() )`) -- the class's own via gap is not read. The clearance
+    /// between the two nets plays no part (findings p5 F4-1: it raised a 0.1 mm pair gap to a class clearance of 0.5 mm).
+    pub fn resolve(rules: &BoardRules, net_p: &str, _net_n: &str) -> Self {
+        let gap = rules.diff_pair_gap_of(net_p).max(rules.min_clearance_nm);
         DpSizes {
             width: rules.diff_pair_width_of(net_p).max(rules.track_width_min_nm),
-            gap: rules.diff_pair_gap_of(net_p).max(clearance),
-            via_gap: rules.diff_pair_via_gap_of(net_p).max(clearance),
+            gap,
+            via_gap: gap,
             via_diameter: rules.via_diameter_of(net_p),
             via_drill: rules.via_drill_of(net_p),
             hole_to_hole: rules.hole_to_hole_min_nm,
@@ -699,10 +699,9 @@ impl DiffPairPlacer {
                 let post_walk_pts = Self::walk_line(node, rules, settings, pre_walk, mask)?;
                 let post_walk = Line::from_points(walk_net.clone(), cur.layer, cur.width, post_walk_pts);
                 let pre_shove_line = Line::from_points(shove_net.clone(), cur.layer, cur.width, shove_pts.clone());
-                // `shove.ForceClearance( true, cur.Gap() - 2 * PNS_HULL_MARGIN )`: the margin takes a hair off the gap so that a line already at
-                // the gap is not pushed. It is 20 nm there; here the hulls carry a micrometre of rounding guard of their own
-                // (`HULL_ROUNDING_GUARD`), which is what comes off.
-                let forced = cur.gap - crate::hull::HULL_ROUNDING_GUARD;
+                // `shove.ForceClearance( true, cur.Gap() - 2 * PNS_HULL_MARGIN )`: the margin (`PNS_HULL_MARGIN` 10 nm, `pns_line.h`) takes a hair off
+                // the gap so that a line already at the gap is not pushed
+                let forced = cur.gap - 2 * crate::hull::PNS_HULL_MARGIN;
                 let post_shove = crate::shove::shove_obstacle_line(node, rules, settings, &post_walk, walk_via.as_ref(), &pre_shove_line, shove_via.as_ref(), Some(forced))?;
                 let (mut post_walk, mut post_shove) = (post_walk, post_shove);
                 post_walk.simplify();
@@ -728,8 +727,8 @@ impl DiffPairPlacer {
         Some(walked)
     }
 
-    /// `DIFF_PAIR_PLACER::tryWalkDp`: the better of the walks starting with P and with N -- the longest coupled length, the least skew --
-    /// then optimized ([`crate::optimizer::optimize_pair`]). When neither walk works, KiCad's `if( bestScore > 0.0 )` is true all the same (the score
+    /// `DIFF_PAIR_PLACER::tryWalkDp`: the better of the walks starting with P and with N -- the lowest `1 + coupled length + 3 |skew|`
+    /// (`double score = cl + fabs( skew ) * 3.0; if( score < bestScore )`), so the *shortest* coupled length -- then optimized ([`crate::optimizer::optimize_pair`]). When neither walk works, KiCad's `if( bestScore > 0.0 )` is true all the same (the score
     /// starts at 1e14 and nothing lowers it): `aPair.SetShape( best )` takes the default `DIFF_PAIR` -- two empty lines -- and the function says `true`, so
     /// a pair that cannot be walked disappears and has no head to show. (Walk around then calls that a fit, and fixing it places nothing; Shove runs
     /// a shove with two empty heads, which fails.) The function never returns `false`; the result is kept for the callers' shape.
@@ -1406,12 +1405,21 @@ mod tests {
         assert_eq!(dp.preview().head_a.pts, before);
     }
 
+    /// findings p5 F4-1: `ImportSizes` takes the gap and the via gap from the `DIFF_PAIR_GAP` constraint (the class's pair gap), floored at
+    /// the board's minimum clearance; the clearance between the two nets and the class's via gap play no part.
     #[test]
-    fn a_gap_below_the_clearance_is_raised_to_it_but_the_dialog_may_ask_for_less() {
-        // the model's fallback gap is 180 um, under its 200 um clearance
+    fn dp_sizes_take_the_gap_and_the_via_gap_from_the_pair_gap() {
+        let mut rules: BoardRules = serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\n").unwrap();
+        rules.net_classes.push(eda_model::NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: Some(250_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: Some(200_000), diff_pair_via_gap: Some(500_000), priority: 0 });
+        let sizes = DpSizes::resolve(&rules, "USB_P", "USB_N");
+        assert_eq!((sizes.gap, sizes.via_gap), (200_000, 200_000), "not the class clearance (250), not the class via gap (500)");
+        rules.min_clearance_nm = 300_000;
+        let sizes = DpSizes::resolve(&rules, "USB_P", "USB_N");
+        assert_eq!((sizes.gap, sizes.via_gap), (300_000, 300_000), "floored at the board's minimum clearance");
+        // no class: KiCad's Default class sizes, the width at least the board minimum
         let plain: BoardRules = serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\n").unwrap();
         let sizes = DpSizes::resolve(&plain, "A_P", "A_N");
-        assert_eq!((sizes.width, sizes.gap), (200_000, 200_000), "the 125 um fallback width is under the board's 200 um minimum track width too");
+        assert_eq!((sizes.width, sizes.gap), (200_000, 250_000));
         let (node, start) = two_pad_pairs();
         let mut dp = DiffPairPlacer::start(&node, &plain, &RoutingSettings::default(), start, 0, LayerRange::new(0, 1)).unwrap();
         dp.set_dimensions(None, Some(150_000), None);

@@ -38,8 +38,24 @@ pub fn net_of(name: &str) -> Net {
 /// Two items on the same (non-`None`) net never collide with each other --
 /// `ITEM::Collide`'s net check. Two unconnected (`None`-net) items, or one
 /// connected and one not, still collide: only a shared real net is "safe".
+/// Two nets the same? KiCad gives every item of no net the one handle `NETINFO_LIST::OrphanedItem()` (`syncPad`: `solid->SetNet(
+/// aPad->GetNet() )`, a route started in empty space: `GetOrphanedNetHandle()`), so `ITEM::collideSimple`'s `Net() == aHead->Net() &&
+/// aHead->Net()` takes two no-net items as one net: here `None` and a net named `""` are that one no-net net.
+///
+/// **Differs:** the board outline, a copper text and a non-plated hole are given [`not_a_net`] instead, which is the net of nothing a route
+/// can be on: a route of no net keeps its clearance from them. (KiCad's outline shapes and NPTH pads carry `OrphanedItem()` too, so its
+/// no-net route would not; a copper text has no net handle at all, `nullptr`, and collides there as here.)
 pub fn same_net(a: &Net, b: &Net) -> bool {
-    matches!((a, b), (Some(x), Some(y)) if x == y)
+    let no_net = |n: &Net| n.as_deref().is_none_or(str::is_empty);
+    match (a, b) {
+        (Some(x), Some(y)) if x == y => true,
+        _ => no_net(a) && no_net(b),
+    }
+}
+
+/// The net of the router's items that are on no net yet must never be taken for a route's: see [`same_net`].
+pub fn not_a_net() -> Net {
+    Some(Rc::from("\u{1}"))
 }
 
 pub type ItemId = u64;
@@ -287,7 +303,6 @@ impl Item {
     /// `crate::hull` for the construction. Used only by WALKAROUND/
     /// OPTIMIZER (path shaping), never by the exact collision test.
     pub fn hull(&self, clearance: Nm, walkaround_width: Nm, layer: i32) -> Vec<Point> {
-        let clearance = clearance + hull::HULL_ROUNDING_GUARD;
         match self {
             // `SEGMENT::Hull` -> `SegmentHull`, `VIA::Hull`, `SOLID::Hull`.
             Item::Segment(s) => hull::segment_hull(s.a, s.b, s.width, clearance, walkaround_width),
