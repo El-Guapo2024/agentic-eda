@@ -148,27 +148,143 @@ pub(crate) fn apply(model: &mut ConstraintModel, renames: &BTreeMap<String, Stri
             pour.net = new.clone();
         }
     }
-    // a custom rule that compares a net's name (`A.NetName == 'PA7'`) names it by its new name, in the rules text kicad-cli reads and in the rules parsed
-    // from it (only there: `A.NetClass == 'HV'` names a class, whatever net is called HV)
-    let requote = |text: &str| -> String {
-        let mut out = text.to_string();
-        for (old, new) in renames {
-            for op in ["==", "!="] {
-                for gap in ["", " "] {
-                    out = out.replace(&format!("NetName{gap}{op}{gap}'{old}'"), &format!("NetName{gap}{op}{gap}'{new}'"));
-                }
-            }
-        }
-        out
-    };
+    // A custom rule that compares a net's name (`A.NetName == 'PA7'`, `A.NetName == 'USB_D*'`) or a pair's (`A.inDiffPair('USB_D')`) still takes the
+    // nets it took: the comparison is widened to the new names it no longer matches, in the rules text kicad-cli reads and in the rules parsed from it.
     if let Some(text) = model.board.custom_rules_text.as_mut() {
-        *text = requote(text);
+        *text = widen_rule_text(text, renames);
     }
     for rule in model.board.custom_rules.iter_mut() {
         if let Some(c) = rule.condition.as_mut() {
-            *c = requote(c);
+            *c = widen_rule_text(c, renames);
         }
     }
+    // An impedance target's pattern: a target of its own for each renamed net it matched and matches no more.
+    let mut targets = Vec::new();
+    for t in &model.impedance_targets {
+        for (old, new) in renames {
+            if wild_compare(&t.net_pattern, old) && !wild_compare(&t.net_pattern, new) {
+                targets.push(eda_model::ImpedanceTarget { net_pattern: eda_kicad::exact_pattern(new), ..t.clone() });
+            }
+        }
+    }
+    model.impedance_targets.extend(targets);
+}
+
+/// `WildCompareString( pattern, name, false )` as `VALUE::EqualTo` compares a string (`common/libeval/numeric_evaluator.cpp`, `pcbexpr_evaluator.cpp`):
+/// `*` and `?` wildcards, the case ignored.
+fn wild_compare(pattern: &str, name: &str) -> bool {
+    eda_model::glob_match(&pattern.to_lowercase(), &name.to_lowercase())
+}
+
+/// `text` (a rules file, or one condition) with each `X.NetName ==|!= '<pattern>'` and `X.inDiffPair('<pattern>')` that matched a renamed net's old
+/// name and does not match its new one widened to the new one: `(A.NetName == 'PA7' || A.NetName == '/LED/PA7')`, `!=` with `&&`, a pair by its base
+/// name (`BOARD::MatchDpSuffix`).
+pub(crate) fn widen_rule_text(text: &str, renames: &BTreeMap<String, String>) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    while i < chars.len() {
+        // `<item>.NetName` or `<item>.inDiffPair(` at i
+        let rest: String = chars[i..chars.len().min(i + 12)].iter().collect();
+        let field = if rest.starts_with(".NetName") && !chars.get(i + 8).is_some_and(|c| ident(*c)) {
+            Some(("NetName", 8))
+        } else if rest.starts_with(".inDiffPair") {
+            Some(("inDiffPair", 11))
+        } else {
+            None
+        };
+        let Some((field, flen)) = field else {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        };
+        // the item before the dot: `A`, `B`, `AB`
+        let mut start = i;
+        while start > 0 && ident(chars[start - 1]) {
+            start -= 1;
+        }
+        let item: String = chars[start..i].iter().collect();
+        let mut j = i + flen;
+        let skip = |j: &mut usize| {
+            while *j < chars.len() && chars[*j].is_whitespace() {
+                *j += 1;
+            }
+        };
+        skip(&mut j);
+        let op = if field == "NetName" {
+            let two: String = chars[j..chars.len().min(j + 2)].iter().collect();
+            if two != "==" && two != "!=" {
+                out.push(chars[i]);
+                i += 1;
+                continue;
+            }
+            j += 2;
+            two
+        } else {
+            if chars.get(j) != Some(&'(') {
+                out.push(chars[i]);
+                i += 1;
+                continue;
+            }
+            j += 1;
+            String::new()
+        };
+        skip(&mut j);
+        if chars.get(j) != Some(&'\'') {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let lit_start = j + 1;
+        let Some(len) = chars[lit_start..].iter().position(|c| *c == '\'') else {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        };
+        let lit: String = chars[lit_start..lit_start + len].iter().collect();
+        let mut end = lit_start + len + 1;
+        if field == "inDiffPair" {
+            skip(&mut end);
+            if chars.get(end) != Some(&')') {
+                out.push(chars[i]);
+                i += 1;
+                continue;
+            }
+            end += 1;
+        }
+        // the new names this comparison no longer takes
+        let mut extra: Vec<String> = Vec::new();
+        for (old, new) in renames {
+            let (old, new) = if field == "inDiffPair" {
+                let (o, n) = (eda_drc::pcbexpr::match_dp_suffix(old), eda_drc::pcbexpr::match_dp_suffix(new));
+                if o.0 == 0 || n.0 == 0 {
+                    continue;
+                }
+                (o.2, n.2)
+            } else {
+                (old.clone(), new.clone())
+            };
+            if wild_compare(&lit, &old) && !wild_compare(&lit, &new) && !extra.contains(&new) {
+                extra.push(new);
+            }
+        }
+        let original: String = chars[start..end].iter().collect();
+        // the item was already copied to `out`: take it back
+        out.truncate(out.len() - item.len());
+        if extra.is_empty() {
+            out.push_str(&original);
+        } else {
+            let one = |name: &str| if field == "NetName" { format!("{item}.NetName {op} '{name}'") } else { format!("{item}.inDiffPair('{name}')") };
+            let joiner = if op == "!=" { " && " } else { " || " };
+            let parts: Vec<String> = std::iter::once(original.clone()).chain(extra.iter().map(|n| one(n))).collect();
+            out.push('(');
+            out.push_str(&parts.join(joiner));
+            out.push(')');
+        }
+        i = end;
+    }
+    out
 }
 
 /// The intent's name of every net of the model the intent has a net of exactly those pins for, under another name, when no rename of this load recorded one
@@ -356,8 +472,8 @@ mod tests {
         assert!(model.nets.iter().any(|n| n.name == "VCC"), "a power net keeps its name: {:?}", model.nets);
         assert_eq!(design.routing.as_ref().unwrap().tracks.iter().find(|t| t.id == "trk_sig").unwrap().net, "/SIG", "the track follows its net");
         assert_eq!(model.board.class_of("/SIG").map(|c| c.name.as_str()), Some("Fast"), "the class the intent put SIG in has it");
-        assert_eq!(model.board.custom_rules[0].condition.as_deref(), Some("A.NetName == '/SIG'"));
-        assert!(model.board.custom_rules_text.as_deref().unwrap().contains("A.NetName == '/SIG'"));
+        assert_eq!(model.board.custom_rules[0].condition.as_deref(), Some("(A.NetName == 'SIG' || A.NetName == '/SIG')"));
+        assert!(model.board.custom_rules_text.as_deref().unwrap().contains("(A.NetName == 'SIG' || A.NetName == '/SIG')"));
 
         // Its drawing and its net list stored under KiCad's names (a schematic edit stores both), and a track on the intent's SIG brought back by an Undo
         // of a board-only step (the snapshot is the file as it was): the track takes the net's name all the same.
@@ -459,6 +575,22 @@ mod tests {
         save(&dir, &design).unwrap();
         on_nets(&dir, "stale names");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+
+    /// A rule's net comparison takes the nets it took (`VALUE::EqualTo`: `WildCompareString`, wildcards and case ignored): widened to the new names,
+    /// with or without spaces, a wildcard, another case, `!=` and a pair's base name; a comparison of a class or one that still matches is left alone.
+    #[test]
+    fn a_rule_that_named_a_net_takes_it_under_its_new_name() {
+        let renames: std::collections::BTreeMap<String, String> = [("PA7", "/LED/PA7"), ("USB_DP", "/USB_DP"), ("USB_DN", "/USB_DN"), ("HV", "/HV")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+        let w = |t: &str| super::widen_rule_text(t, &renames);
+        assert_eq!(w("A.NetName == 'PA7'"), "(A.NetName == 'PA7' || A.NetName == '/LED/PA7')");
+        assert_eq!(w("A.NetName=='pa7' && B.Type == 'Pad'"), "(A.NetName=='pa7' || A.NetName == '/LED/PA7') && B.Type == 'Pad'");
+        assert_eq!(w("AB.NetName != 'USB_D*'"), "(AB.NetName != 'USB_D*' && AB.NetName != '/USB_DN' && AB.NetName != '/USB_DP')");
+        assert_eq!(w("A.inDiffPair('USB_D')"), "(A.inDiffPair('USB_D') || A.inDiffPair('/USB_D'))");
+        assert_eq!(w("A.NetClass == 'HV'"), "A.NetClass == 'HV'", "a class is a class");
+        assert_eq!(w("A.NetName == '*PA7'"), "A.NetName == '*PA7'", "a pattern that still matches");
+        assert_eq!(w("(rule x (condition \"A.NetName == 'PA7'\"))"), "(rule x (condition \"(A.NetName == 'PA7' || A.NetName == '/LED/PA7')\"))");
     }
 
 }
