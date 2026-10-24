@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Pad, Part } from "../api/types";
-import { carriedIds, carryMatrix, carryPoint, splitCarried } from "./pcbCarry";
+import { carriedIds, carryMatrix, carryPoint, carryPress, splitCarried } from "./pcbCarry";
 import { planCarry } from "./pcbTransform";
 
 function board(partial: Partial<BoardState>): BoardState {
@@ -130,4 +130,47 @@ test("carriedIds: a group of groups carries every item below it and the groups t
   });
   assert.deepEqual([...carriedIds(b, ["outer"])].sort(), ["U1", "U2", "U3", "inner", "outer"]);
   assert.deepEqual([...carriedIds(b, ["inner"])].sort(), ["U1", "U2", "inner"]);
+});
+
+// ------------------------------------------------- the presses in order (p6 F4: `doMoveSelection`'s reference point is the cursor)
+
+test("a carried turn is about the grab point: a resistor grabbed by pad 2 turns about pad 2", () => {
+  const b = board({ parts: [part("R1", [0, 0], [pad("1", -2000, 0), pad("2", 2000, 0)])] });
+  const op = carryPress(b, ["R1"], [], { turnDegCcw: 90 }, [2000, 0])!;
+  assert.deepEqual(op, { kind: "turn", degCcw: 90, pivot: [2000, 0] });
+  const p = { refs: ["R1"], dxNm: 0, dyNm: 0, ops: [op] };
+  // pad 2 stays where it was; the origin goes to below it
+  near(carryPoint(p, [2000, 0]), [2000, 0]);
+  near(carryPoint(p, [0, 0]), [2000, 2000]);
+  // the drop sends the same: one turn about the grab point, then the move
+  const plan = planCarry(b, ["R1"], 500, 0, 0, false, undefined, 90, "left_right", [op]);
+  assert.deepEqual(plan.cmds, [
+    { op: "rotate_items", ids: ["R1"], pivot: { x: 2000, y: 0 }, angle_millideg: -90000 },
+    { op: "move_items", ids: ["R1"], dx: 500, dy: 0 },
+  ]);
+});
+
+test("F then R equals KiCad's order: Rot(+step) after the flip, not the flip after Rot(+step)", () => {
+  const b = board({ parts: [part("R1", [0, 0], [pad("1", -2000, 0), pad("2", 2000, 0)])] });
+  const grab: [number, number] = [0, 0];
+  const f = carryPress(b, ["R1"], [], { flip: "left_right" }, grab)!;
+  const r = carryPress(b, ["R1"], [f], { turnDegCcw: 90 }, grab)!;
+  const p = { refs: ["R1"], dxNm: 0, dyNm: 0, ops: [f, r] };
+  // (1000, 0): mirrored to (-1000, 0), then a quarter counter-clockwise to (0, 1000)
+  near(carryPoint(p, [1000, 0]), [0, 1000]);
+  // R then F would give (0, -1000) -> (0, -1000): the other way
+  near(carryPoint({ refs: ["R1"], dxNm: 0, dyNm: 0, ops: [r, f] }, [1000, 0]), [0, -1000]);
+  const plan = planCarry(b, ["R1"], 0, 0, 0, false, undefined, 90, "left_right", [f, r]);
+  assert.deepEqual(plan.cmds.map((c) => c.op), ["flip_items", "rotate_items"]);
+});
+
+test("a flip of several carried items is about the centre of their box as the presses have left it", () => {
+  const b = board({ parts: [part("R1", [0, 0]), part("R2", [10000, 0])] });
+  // the box is x -1000 .. 11000, y -500 .. 500: centre (5000, 0); after a quarter turn about (0, 0) it is x -500 .. 500, y -11000 .. 1000: centre (0, -5000)
+  const r = carryPress(b, ["R1", "R2"], [], { turnDegCcw: 90 }, [0, 0])!;
+  const f = carryPress(b, ["R1", "R2"], [r], { flip: "left_right" }, [0, 0])!;
+  assert.equal(f.kind, "flip");
+  near(f.pivot, [0, -5000]);
+  const f0 = carryPress(b, ["R1", "R2"], [], { flip: "left_right" }, [0, 0])!;
+  near(f0.pivot, [5000, 0]);
 });

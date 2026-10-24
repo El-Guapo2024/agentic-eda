@@ -24,6 +24,7 @@ import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "
 import { subItemIds } from "../kicad-port/pcbItems";
 import { tableCellIds } from "../kicad-port/tables";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
+import type { CarryOp } from "../kicad-port/pcbCarry";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { modificationSnapFor } from "./modificationSnap";
@@ -378,6 +379,10 @@ export interface MovePreview {
    */
   pivotNm?: [number, number];
   flipPivotNm?: [number, number];
+  /** `"pcb"`: the point the items were grabbed by (`BestDragOrigin`, the move's snapped origin), before the move: what R turns them about (kicad-port/pcbCarry.ts `carryPress`). */
+  grabNm?: [number, number];
+  /** `"pcb"`: R, Shift+R and F pressed while carrying, in order, each about its own point (kicad-port/pcbCarry.ts `CarryOp`); committed in that order with the move. */
+  ops?: CarryOp[];
   /**
    * edit_tool.cpp Rotate/Flip during an active Move: both act on the
    * live preview instead of committing immediately (updateModificationPoint's
@@ -1714,7 +1719,7 @@ export interface StudioApi {
   /** pcbnew.AlignAndDistribute.distribute* -- same placed-footprints-only scope. A no-op under 3 placed parts. */
   distributeSelection: (axis: "x" | "y", mode: "gaps" | "centers") => Promise<void>;
   /** Commit a completed drag: each ref moves by (dxNm, dyNm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
-  commitMove: (refs: string[], dxNm: number, dyNm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetNm?: MovePreview["perRefOffsetNm"]) => Promise<void>;
+  commitMove: (refs: string[], dxNm: number, dyNm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetNm?: MovePreview["perRefOffsetNm"], ops?: MovePreview["ops"]) => Promise<void>;
   placeArmedAt: (xNm: number, yNm: number) => Promise<void>;
   /** Place Footprint's click: the footprint of a library armed in the Footprint Chooser becomes a part of its own at this point (`place_footprint`, one undo step). */
   placeLibraryFootprintAt: (xNm: number, yNm: number) => Promise<void>;
@@ -2285,7 +2290,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const cmds = planDistributeSelection(st.board, [...st.selection], axis, mode);
       if (cmds.length > 0) await runBatch(cmds);
     },
-    commitMove: async (refs, dxNm, dyNm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetNm) => {
+    commitMove: async (refs, dxNm, dyNm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetNm, ops) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       // The drop ends a carried Duplicate or Paste: it joins the step the duplicate or the paste began (`carry: "commit"`), so both are one undo step. A drop that
       // sends nothing, or one the backend refuses, leaves the duplicate or the paste standing as a step of its own.
@@ -2299,7 +2304,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (kind === "pcb") {
         const board = stateRef.current.board;
         const prefs = stateRef.current.prefs;
-        const plan = board ? planCarry(board, refs, dxNm, dyNm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap(), prefs.rotationStepDeg, prefs.flipDirection) : null;
+        const plan = board ? planCarry(board, refs, dxNm, dyNm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap(), prefs.rotationStepDeg, prefs.flipDirection, ops) : null;
         const ok = plan ? await runPlan(plan, carry) : false;
         await settle(plan !== null && plan.cmds.length > 0, ok);
         advanceMoveQueue();

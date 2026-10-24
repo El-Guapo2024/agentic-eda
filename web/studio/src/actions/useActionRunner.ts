@@ -29,6 +29,7 @@ import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
+import { carryPress } from "../kicad-port/pcbCarry";
 import { itemKind, padById, padParent } from "../kicad-port/pcbItems";
 import { padsOnly } from "../kicad-port/gateSwap";
 import { extraDeleteCmd, extraItemById } from "../kicad-port/pcbExtraItems";
@@ -261,7 +262,18 @@ export function useActionRunner() {
       const press = (addQuarterTurns === 3 ? -1 : addQuarterTurns) * (state.tab === "pcb" && state.bcx.boardFlipped ? -1 : 1);
       const rotateQuarterTurns = addQuarterTurns ? wrapTurns((base.rotateQuarterTurns ?? 0) + press, state.prefs.rotationStepDeg) : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped } });
+      // A PCB carry keeps the presses in order, each about the point KiCad's acts about at that moment (`carryPress`: a turn about the grab point, a flip
+      // about it for a lone item or about the box of the items as they are now), so F then R turns the way KiCad's does. Before the pointer has moved the
+      // grab point is not known yet: the selection's own reference point stands in.
+      let ops = base.ops;
+      if (kind === "pcb" && state.board) {
+        const grab = base.grabNm ?? base.pivotNm ?? rotationPivot(state.board, base.refs, modificationSnapFor(state));
+        if (grab) {
+          const op = carryPress(state.board, base.refs, base.ops ?? [], toggleFlip ? { flip: state.prefs.flipDirection } : { turnDegCcw: press * state.prefs.rotationStepDeg }, grab);
+          if (op) ops = [...(base.ops ?? []), op];
+        }
+      }
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped, ops } });
       return true;
     };
 

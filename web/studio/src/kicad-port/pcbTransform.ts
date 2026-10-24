@@ -20,6 +20,7 @@ import { parseFieldId } from "./fpFields";
 import { itemBounds, itemKind, itemPosition, padParent, unionBounds } from "./pcbItems";
 import { ancestors, groupAndDescendants, groupLeaves, isGroup, parentGroup } from "./groupTree";
 import { cellById } from "./tables";
+import type { CarryOp } from "./pcbCarry";
 
 export type FlipDirection = "left_right" | "top_bottom";
 export type Pt = readonly [number, number];
@@ -199,12 +200,31 @@ export function wrapTurns(count: number, stepDeg = 90): number {
 /**
  * A Move that was turned or flipped on the way (R / F pressed while the selection was carried): `EDIT_TOOL::Rotate` and `::Flip` act
  * about the selection's reference point, which travels with the cursor, so the net effect is the same as turning it about where it was picked
- * up and then moving it -- one batch, in that order. `turnsCcw` counts the R presses (Shift+R takes one away).
+ * up and then moving it -- one batch, in that order. `ops` are the presses in the order they were made, each about its own point
+ * (kicad-port/pcbCarry.ts `carryPress`); without them, `turnsCcw` counts the R presses (Shift+R takes one away) and `flipped` follows them.
  */
-export function planCarry(board: BoardState, selection: readonly string[], dx: number, dy: number, turnsCcw = 0, flipped = false, snap: Snap = NO_SNAP, stepDeg = 90, direction: FlipDirection = "left_right"): TransformPlan {
+export function planCarry(board: BoardState, selection: readonly string[], dx: number, dy: number, turnsCcw = 0, flipped = false, snap: Snap = NO_SNAP, stepDeg = 90, direction: FlipDirection = "left_right", ops?: readonly CarryOp[]): TransformPlan {
   const { ids, lockedOut } = editableSelection(board, selection);
   if (ids.length === 0) return { ...EMPTY, lockedOut };
   const cmds: Cmd[] = [];
+  if (ops) {
+    // The presses in the order they were made, each about its own point (kicad-port/pcbCarry.ts `carryPress`); turns in a row about one point are one turn.
+    let k = 0;
+    while (k < ops.length) {
+      const op = ops[k]!;
+      if (op.kind === "flip") {
+        cmds.push({ op: "flip_items", ids, pivot: toXY(op.pivot), direction: op.direction });
+        k++;
+        continue;
+      }
+      let deg = 0;
+      while (k < ops.length && ops[k]!.kind === "turn" && ops[k]!.pivot[0] === op.pivot[0] && ops[k]!.pivot[1] === op.pivot[1]) deg += (ops[k++] as { degCcw: number }).degCcw;
+      const turned = carryAngleDeg(deg, 1);
+      if (turned !== 0) cmds.push({ op: "rotate_items", ids, pivot: toXY(op.pivot), angle_millideg: -Math.round(turned * 1000) });
+    }
+    if (dx !== 0 || dy !== 0) cmds.push({ op: "move_items", ids, dx: Math.round(dx), dy: Math.round(dy) });
+    return { cmds, ids, lockedOut };
+  }
   const turned = carryAngleDeg(turnsCcw, stepDeg);
   if (turned !== 0) {
     const pivot = rotationPivot(board, ids, snap);

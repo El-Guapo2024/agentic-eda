@@ -10,7 +10,7 @@
 
 import type { BoardState, FieldInfo, Part } from "../api/types";
 import { carryAngleDeg, type FlipDirection } from "./pcbTransform";
-import { padParent } from "./pcbItems";
+import { itemBounds, itemKind, padParent, unionBounds } from "./pcbItems";
 import { groupAndDescendants, groupLeaves } from "./groupTree";
 
 export type Matrix = readonly [number, number, number, number, number, number];
@@ -32,7 +32,16 @@ export interface CarryPreview {
   /** Where the selection was picked up: the point a turn is about, and the point a flip mirrors about. */
   pivotNm?: readonly [number, number];
   flipPivotNm?: readonly [number, number];
+  /**
+   * The R, Shift+R and F presses of the carry, in the order they were pressed, each with the point it acts about (in the items' frame before the move):
+   * `EDIT_TOOL::Rotate` and `::Flip` act on the carried items as they are at that moment, so the order counts (F then R is not R then F). When present it
+   * stands for `rotateQuarterTurns`, `flipped` and the two pivots. See [`carryPress`].
+   */
+  ops?: readonly CarryOp[];
 }
+
+/** One R / Shift+R (a turn of `degCcw`, counter-clockwise on the screen) or F (a mirror across `direction`) pressed while carrying, about `pivot`. */
+export type CarryOp = { kind: "turn"; degCcw: number; pivot: readonly [number, number] } | { kind: "flip"; direction: FlipDirection; pivot: readonly [number, number] };
 
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
@@ -58,8 +67,48 @@ function flipMatrix(fx: number, fy: number, direction: FlipDirection): Matrix {
   return direction === "top_bottom" ? [1, 0, 0, -1, 0, 2 * fy] : [-1, 0, 0, 1, 2 * fx, 0];
 }
 
-/** The transform from where the carried items are to where they are drawn: turned, then flipped, then moved. */
+/** The presses `ops`, in order, as one transform (before the move). */
+export function opsMatrix(ops: readonly CarryOp[]): Matrix {
+  let m: Matrix = IDENTITY;
+  for (const op of ops) {
+    const [px, py] = op.pivot;
+    m = after(op.kind === "turn" ? turnMatrix(op.degCcw, px, py) : flipMatrix(px, py, op.direction), m);
+  }
+  return m;
+}
+
+function apply(m: Matrix, pt: readonly [number, number]): [number, number] {
+  return [m[0] * pt[0] + m[2] * pt[1] + m[4], m[1] * pt[0] + m[3] * pt[1] + m[5]];
+}
+
+/**
+ * R, Shift+R or F pressed while the selection `ids` is carried, after the presses `ops`: what it does, about which point. In `EDIT_TOOL::doMoveSelection` the
+ * selection's reference point is the cursor (`selection.SetReferencePoint( m_cursor )` on every motion, from `BestDragOrigin` -- the anchor the items were grabbed
+ * by), and `updateModificationPoint` leaves it alone while dragging, so:
+ *   * `EDIT_TOOL::Rotate` turns about the cursor -- in the items' frame before the move, the grab point `grab`;
+ *   * `EDIT_TOOL::Flip` mirrors a lone item (not a rectangle, not a table) about the reference point, the grab point again, and several about
+ *     `selection.GetCenter()`: the centre of the box of the items as the presses so far have left them.
+ * `turnDegCcw` is the press's angle (the rotation step, negative for Shift+R, the other way in a flipped view).
+ */
+export function carryPress(board: BoardState, ids: readonly string[], ops: readonly CarryOp[], press: { turnDegCcw: number } | { flip: FlipDirection }, grab: readonly [number, number]): CarryOp | null {
+  if ("turnDegCcw" in press) return press.turnDegCcw === 0 ? null : { kind: "turn", degCcw: press.turnDegCcw, pivot: [grab[0], grab[1]] };
+  if (ids.length === 1) {
+    const id = ids[0]!;
+    const rect = board.drawings?.shapes.find((q) => q.id === id)?.kind === "rect";
+    if (!rect && itemKind(board, id) !== "table") return { kind: "flip", direction: press.flip, pivot: [grab[0], grab[1]] };
+  }
+  const b = unionBounds(ids.map((id) => itemBounds(board, id)));
+  if (!b) return null;
+  const m = opsMatrix(ops);
+  const pts = ([[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]] as const).map((c) => apply(m, c));
+  const xs = pts.map((q) => q[0]);
+  const ys = pts.map((q) => q[1]);
+  return { kind: "flip", direction: press.flip, pivot: [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2] };
+}
+
+/** The transform from where the carried items are to where they are drawn: turned, then flipped, then moved (or the presses `ops` in order, then moved). */
 export function carryMatrix(p: CarryPreview): Matrix {
+  if (p.ops) return after([1, 0, 0, 1, p.dxNm, p.dyNm], opsMatrix(p.ops));
   let m: Matrix = IDENTITY;
   const turned = carryAngleDeg(p.rotateQuarterTurns ?? 0, p.rotateStepDeg ?? 90);
   if (turned !== 0) {
