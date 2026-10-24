@@ -47,7 +47,8 @@ fn plan_entry(dir_libs: &dyn crate::library_index::LibSource, design: &eda_model
     let Some(part) = model.part(reference) else {
         return json!({ "reference": reference, "found": false, "from": "", "to": to.unwrap_or(""), "error": format!("no footprint {reference} on this board") });
     };
-    let from = eda_ops::footprint_name_of(part);
+    // the footprint the board names (a built-in `0603` is `Resistor_SMD:R_0603_1608Metric` in the files), which an update takes the library copy of
+    let from = eda_model::footprint::footprint_lib_id(part);
     match to {
         Some(to) => json!({ "reference": reference, "from": from, "to": to, "found": crate::library_place::footprint_found(to, reference, design, model, dir_libs), "differs": true }),
         None => {
@@ -101,7 +102,7 @@ pub fn footprint_diff(dir: &Path, reference: &str) -> Value {
     };
     let Some(part) = model.part(reference) else { return json!({ "ok": false, "message": format!("no footprint {reference} on this board") }) };
     let Some(board_fp) = eda_ops::board_footprint(&design, &model, reference) else { return json!({ "ok": false, "message": format!("{reference} has no footprint") }) };
-    let name = eda_ops::footprint_name_of(part);
+    let name = eda_model::footprint::footprint_lib_id(part);
     let (library, item) = split_id(&name);
     let footprints = crate::library_tables::libs(dir, Kind::Footprint);
     let base = json!({ "ok": true, "reference": reference, "library": library, "item": item });

@@ -50,11 +50,16 @@ pub(crate) fn drawn(design: &Design, model: &ConstraintModel) -> Drawn {
     if design.schematic.is_some() {
         return read(&mut design.clone());
     }
-    // what the derivation reads: the parts, the nets, the libraries' symbols, the clusters, the modules a placement recorded
+    // what the derivation reads: the parts, the nets, the libraries' symbols, the clusters, the modules a placement recorded, the design's bus aliases and
+    // footprint edits (`derived_schematic`'s Do Not Populate flags), and the options it derives with
     let key = {
         let modules = design.placement.as_ref().map(|p| p.modules.as_slice()).unwrap_or(&[]);
-        let bytes = serde_json::to_vec(&(&model.parts, &model.nets, &model.symbols, &model.symbol_sim_fields, &model.clusters, &model.placement_rules, &model.intent_net_names, modules)).unwrap_or_default();
-        *blake3::hash(&bytes).as_bytes()
+        let edits = design.drawings.as_ref().map(|d| d.footprint_edits.as_slice()).unwrap_or(&[]);
+        let bytes = serde_json::to_vec(&(&model.parts, &model.nets, &model.symbols, &model.symbol_sim_fields, &model.clusters, &model.placement_rules, &model.intent_net_names, modules, &design.bus_aliases, edits)).unwrap_or_default();
+        let mut h = blake3::Hasher::new();
+        h.update(&bytes);
+        h.update(format!("{:?}", eda_engine::EngineOptions::default()).as_bytes());
+        *h.finalize().as_bytes()
     };
     if let Some(hit) = DERIVED.lock().ok().and_then(|c| c.as_ref().and_then(|m| m.get(&key).cloned())) {
         return hit;

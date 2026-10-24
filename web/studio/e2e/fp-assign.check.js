@@ -181,7 +181,8 @@
     const plan = await (await fetch("/api/exchange_plan", { method: "POST", body: JSON.stringify({ references: [r4, r5], footprint: null }) })).json();
     const e4 = plan.entries.find((e) => e.reference === r4);
     t(e4.found && e4.differs && e4.lines.some((l) => /Pad 1 size differs/.test(l)), `the plan lists it: ${JSON.stringify(e4.lines)}`);
-    t(plan.entries.find((e) => e.reference === r5).found === false, `${r5} is a built-in package: no library copy`);
+    const e5 = plan.entries.find((e) => e.reference === r5);
+    t(e5.found === true && e5.from === e5.to && e5.from.includes(":"), `${r5}'s built-in package is the installed footprint the board names, whose library copy an update takes: ${e5.from}`);
     await select([r4]);
     await __eda.run("pcbnew.GlobalEdit.updateFootprint");
     await sleep(500);
