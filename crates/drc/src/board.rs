@@ -335,8 +335,9 @@ pub struct DrcBoard {
     /// `BOARD::GetBoardPolygonOutlines( .., true )` of the Edge.Cuts: every outline with its holes, whether they are well-formed, and what
     /// KiCad's outline handler would have been told (`crate::outline`).
     pub board_outline: crate::outline::BoardOutline,
-    /// The board's Edge.Cuts items (`eda_model::outline::edge_cuts_shapes`): the items themselves, for what is measured to an edge -- the zone
-    /// fill's knockout, the router's obstacle -- as opposed to the polygon they chain into.
+    /// The board's Edge.Cuts items as their effective shapes (`eda_model::outline::edge_cuts_effective_shapes`: a rounded rectangle is its sides and corner arcs)
+    /// and the footprints' own Edge.Cuts: the items themselves, for what is measured to an edge -- the zone fill's knockout, the router's obstacle -- as opposed
+    /// to the polygon they chain into.
     pub edge_cuts: Vec<IrShape>,
     pub pads: Vec<DrcPad>,
     pub tracks: Vec<DrcTrackSeg>,
@@ -550,8 +551,8 @@ pub fn footprint_text_draw_rotation(t: &eda_model::ir::FootprintText) -> f64 {
 pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
     let outline = design.placement.as_ref().map(|p| p.outline.clone()).unwrap_or_default();
     let board_outline = crate::outline::board_outline_with(design, Some(model), true);
-    // A rounded rectangle is measured as the rounded polygon KiCad makes of it; a footprint's own Edge.Cuts are edges too.
-    let mut edge_cuts = eda_model::outline::edge_cuts_outline_shapes(design);
+    // A rounded rectangle is measured as its sides and corner arcs (`MakeEffectiveShapes`); a footprint's own Edge.Cuts are edges too.
+    let mut edge_cuts = eda_model::outline::edge_cuts_effective_shapes(design);
     edge_cuts.extend(crate::outline::footprint_edge_cuts_shapes(design, model));
     let layers = model.board.layers.clone();
 
