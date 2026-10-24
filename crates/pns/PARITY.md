@@ -955,6 +955,21 @@ written, then fixed.
   gap), KiCad's Default class sizes as the fallback (0.2 / 0.25 / 0.25 mm), "Cannot start a differential pair in the middle of nowhere.".
 - **The tuner:** the skew box's range is the skew's; a track of another pattern does not start one.
 
+After the review of 2026-10-24: no net is one net (`same_net`: `None` and `""` are KiCad's `OrphanedItem()`), a route starts on a no-net
+item and not on a non-plated hole; Backspace takes a leg that ended in a via back with the via armed again (`UnfixRoute`'s
+`m_placingVia`); Cancel Current Item refreshes the board after its commit. **Differs:** the outline, copper text and NPTH pads carry
+`not_a_net()`, so a no-net route keeps its clearance from them. Lows the review found, left:
+
+- `Router::commit_fixed` cuts the track the route ended in the middle of (`session_splits( true )`) also in Shove mode, where the
+  commit is the newest locked frame's (`RewindToLastLockedNode`), which may not have reached that end.
+- `F` (AttemptFinish) with a via armed fixes the head with its via and goes on on the other layer instead of finishing on the anchor.
+- `F` in a diff pair still finishes at the cursor (no `ROUTER::Finish` for the pair placer).
+- A via placed with no run before it (V at the start pad) continues the route where KiCad's `FixRoute` ends it (`m_idle = true`), and
+  Backspace cannot take it back by itself.
+- `simplifyNewLine`'s `MERGE_COLINEAR` and its first stage (removing a dangling collinear segment the new one subsumes,
+  `processJoint`) are not ported; `Simplify()` does the merge.
+- `Node::colliding_with` (the node's queries) lacks `collideSimple`'s `clearance - 1`; only the shove's line and via tests have it.
+
 Left, with the reason, in the findings file: F2-11 (KiCad's grab radius is the grid size, which the router is not told), F4-2 (arcs in
 the pair router and tuners), and the lows F1-7, F1-8, F1-9, F1-10 (in part), F2-15 (the `line_walk.rs` tolerances, FANOUT_CLEANUP, the
 mark-obstacles hull snap, the cluster timeout), F3-10 (by decision), F3-13, F4-9.
