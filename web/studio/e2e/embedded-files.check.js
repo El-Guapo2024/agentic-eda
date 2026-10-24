@@ -95,7 +95,7 @@
     await upload([["notes.txt", "hello, embedded world"], ["part.pdf", "%PDF-1.4 a datasheet"]]);
     const l = await listing("owner=board");
     const notes = l.files.find((f) => f.name === "notes.txt");
-    t(!!notes && notes.link === "kicad-embed://notes.txt" && notes.status === "ok" && notes.size === 21_000, `notes.txt is embedded: ${JSON.stringify(notes)}`);
+    t(!!notes && notes.link === "kicad-embed://notes.txt" && notes.status === "ok" && notes.size === 21, `notes.txt is embedded: ${JSON.stringify(notes)}`);
     t(l.files.find((f) => f.name === "part.pdf")?.type === "datasheet", "a PDF is a datasheet");
     t(rows().includes("notes.txt") && rows().includes("part.pdf"), `the grid shows them: ${rows()}`);
     const linkCell = panel().querySelector('tr[data-name="notes.txt"] code')?.textContent;
