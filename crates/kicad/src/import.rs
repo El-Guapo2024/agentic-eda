@@ -131,6 +131,10 @@ pub struct ImportNotes {
     /// (`eda_kicad::zone_fills::entries_of_imported_file`) files them beside `design.json`, so an imported board shows the fills it was saved with.
     #[serde(skip)]
     pub zone_fills: Vec<crate::zone_fills::ScannedFill>,
+    /// The id each item of the file has in the design, by the uuid the file gave it (`(uuid ..)`, `(tstamp ..)`): footprints, pads (`REF.NUM`), tracks, vias, zones,
+    /// shapes, texts and the other items. What a project's DRC exclusions name their items by (`eda_kicad::drc_exclusions::from_project`).
+    #[serde(skip)]
+    pub item_ids: BTreeMap<String, String>,
 }
 
 /// Parse a `.kicad_pcb` file's text into our own design + constraint
@@ -301,6 +305,9 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
     // uuid, and `locked` rides on each item (`BOARD_ITEM::IsLocked()`).
     let (groups, locked_ids) = refs.resolve(&design, &import_items::import_groups(root));
+    for (uuid, id) in refs.item_ids(&design) {
+        notes.item_ids.entry(uuid).or_insert(id);
+    }
     if !groups.is_empty() || !locked_ids.is_empty() {
         let dr = design.drawings.get_or_insert_with(Default::default);
         dr.groups = groups;
@@ -1604,6 +1611,9 @@ fn import_footprints(
                     pin_nets.push((format!("{reference}.{}", p.number), name));
                 }
                 pins.push(Pin { number: p.number.clone(), name: None, kind: PinKind::Signal });
+            }
+            if let Some(u) = import_items::item_uuid(pad) {
+                notes.item_ids.entry(u).or_insert_with(|| format!("{reference}.{}", p.number));
             }
             pads.push(p);
         }

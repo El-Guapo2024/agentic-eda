@@ -277,3 +277,39 @@ fn an_extruded_body_survives_import_and_export() {
     let written = eda_kicad::export_kicad_mod(&parsed.footprint);
     assert!(written.contains(body), "{written}");
 }
+
+/// p13-p16 F6: a KiCad project's own DRC exclusions (`board.design_settings.drc_exclusions`) are the design's, in each form KiCad wrote them (a record of KiCad 10,
+/// in proto or camel-case names; a `[ marker, comment ]` pair of KiCad 8 and 9; the bare text of KiCad 7), their items found by the ids the import gave them and named by
+/// the uuids the derived board gives them.
+#[test]
+fn importing_a_project_keeps_its_drc_exclusions() {
+    let text = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+        (net 0 "") (net 1 "A")
+        (footprint "L:R" (layer "F.Cu") (uuid "fp-r1") (at 10 10)
+            (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS") (uuid "p1"))
+            (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask") (net 1 "A") (uuid "pad-r1-1"))
+            (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Mask") (uuid "pad-r1-2")))
+        (segment (start 9 10) (end 9 14) (width 0.05) (layer "F.Cu") (net 1) (uuid "trk-1"))
+        (via (at 9 14) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "via-1"))
+    )"#;
+    let pro = r#"{ "board": { "design_settings": { "drc_exclusions": [
+        { "marker": { "error_type": "DRCET_TRACK_WIDTH", "position": { "x_nm": "9000000", "y_nm": "12000000" }, "items": [ { "value": "trk-1" } ] }, "comment": "thin on purpose" },
+        { "marker": { "errorType": "DRCET_CLEARANCE", "position": { "xNm": "9000000", "yNm": "10000000" }, "items": [ { "value": "trk-1" }, { "value": "pad-r1-2" } ] } },
+        [ "annular_width|9000000|14000000|via-1|00000000-0000-0000-0000-000000000000", "small ring" ],
+        "via_dangling|9000000|14000000|via-1|00000000-0000-0000-0000-000000000000",
+        { "marker": { "error_type": "DRCET_TRACK_WIDTH", "position": { "x_nm": "1", "y_nm": "1" }, "items": [ { "value": "not-on-the-board" } ] } }
+    ] } } }"#;
+    let (design, model, notes) = import_kicad_pcb(text).expect("parses");
+    let (out, derived) = eda_kicad::export_kicad_pcb_mapped(&design, &model, &ExportMeta { date: "2026-01-01", title: "x" }).expect("export");
+    let waived = eda_kicad::drc_exclusions::from_project(pro, &notes.item_ids, &derived);
+    let checks: Vec<&str> = waived.iter().map(|e| e.check.as_str()).collect();
+    assert_eq!(checks, vec!["annular_width", "clearance", "track_width", "via_dangling"], "the one naming an item the board lacks is left out");
+    let width = waived.iter().find(|e| e.check == "track_width").unwrap();
+    let track_id = &design.routing.as_ref().unwrap().tracks[0].id;
+    assert_eq!((&width.ids, width.positions_nm.clone(), width.comment.as_str()), (&vec![track_id.clone()], vec![[9_000_000, 12_000_000]], "thin on purpose"));
+    assert!(out.contains(&format!("(uuid \"{}\")", width.items[0])), "the item is named as the derived board names it");
+    let clearance = waived.iter().find(|e| e.check == "clearance").unwrap();
+    assert_eq!(clearance.ids, vec![track_id.clone(), "R1.2".to_string()]);
+    assert_eq!(waived.iter().find(|e| e.check == "annular_width").unwrap().comment, "small ring");
+}

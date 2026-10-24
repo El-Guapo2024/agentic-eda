@@ -86,6 +86,32 @@ pub(crate) struct Refs {
 impl Refs {
     /// The groups of the file, resolved to this design's item ids, and every locked item's id.
     /// `design` has had its ids assigned already; `raw_groups` come from [`import_groups`].
+    /// The id each item has in `design` by its file uuid (the first item of a uuid), for the kinds [`Self::resolve`] names.
+    pub(crate) fn item_ids(&self, design: &Design) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut note = |refs: &[ItemRef], ids: Vec<&str>| {
+            for (r, id) in refs.iter().zip(ids) {
+                if let (Some(u), false) = (&r.uuid, id.is_empty()) {
+                    out.push((u.clone(), id.to_string()));
+                }
+            }
+        };
+        if let Some(pl) = &design.placement {
+            note(&self.footprints, pl.footprints.iter().map(|f| f.id.as_str()).collect());
+        }
+        if let Some(rt) = &design.routing {
+            note(&self.tracks, rt.tracks.iter().map(|t| t.id.as_str()).collect());
+            note(&self.vias, rt.vias.iter().map(|v| v.id.as_str()).collect());
+            note(&self.zones, rt.zones.iter().map(|z| z.id.as_str()).collect());
+        }
+        if let Some(dr) = &design.drawings {
+            note(&self.shapes, dr.shapes.iter().map(|s| s.id()).collect());
+            note(&self.texts, dr.texts.iter().map(|t| t.id.as_str()).collect());
+            note(&self.dimensions, dr.dimensions.iter().map(|d| d.id.as_str()).collect());
+        }
+        out
+    }
+
     pub(crate) fn resolve(&self, design: &Design, raw_groups: &[RawGroup]) -> (Vec<Group>, Vec<String>) {
         let mut by_uuid: HashMap<String, Vec<String>> = HashMap::new();
         let mut locked: Vec<String> = Vec::new();
