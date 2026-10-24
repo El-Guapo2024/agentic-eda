@@ -32,7 +32,7 @@ import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad
 import { carryPress } from "../kicad-port/pcbCarry";
 import { itemKind, padById, padParent } from "../kicad-port/pcbItems";
 import { padsOnly } from "../kicad-port/gateSwap";
-import { extraDeleteCmd, extraItemById } from "../kicad-port/pcbExtraItems";
+import { extraItemById } from "../kicad-port/pcbExtraItems";
 import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { nextAngleSnapMode } from "../kicad-port/pcbParityState";
 import { cancelEditPattern, cancelTune, finishEditPattern, removeTuningPatterns, startEditPattern, stepTune, updateEditPattern } from "../components/canvas/tuneRouting";
@@ -615,8 +615,17 @@ export function useActionRunner() {
     );
     // Undo/Redo run in the active editor's OWN scope: the Footprint and Symbol editors have their
     // own undo domains (footprint_editor / symbol_editor); only the PCB/Schematic/3D tabs use the board's.
-    m.set("common.Interactive.undo", () => void (state.tab === "footprint" ? fpApi.undo() : state.tab === "symbol" ? symApi.undo() : api.undo()));
-    m.set("common.Interactive.redo", () => void (state.tab === "footprint" ? fpApi.redo() : state.tab === "symbol" ? symApi.redo() : api.redo()));
+    // `EDIT_TOOL::doMoveSelection`: Undo while the board's Move is running cancels the move ("Perform undo locally": `restore_state`), leaving the undo
+    // stack alone -- a carried Duplicate or Paste is reverted as Escape reverts it, with no redo entry -- and Redo is refused (`wxBell()`).
+    const boardMoving = () => state.tab === "pcb" && (state.activeTool === "move" || state.movePreview?.kind === "pcb");
+    m.set("common.Interactive.undo", () => {
+      if (boardMoving()) return void m.get("common.Interactive.cancel")?.();
+      void (state.tab === "footprint" ? fpApi.undo() : state.tab === "symbol" ? symApi.undo() : api.undo());
+    });
+    m.set("common.Interactive.redo", () => {
+      if (boardMoving()) return;
+      void (state.tab === "footprint" ? fpApi.redo() : state.tab === "symbol" ? symApi.redo() : api.redo());
+    });
     // EDIT_TOOL::Duplicate: the board editor duplicates tracks/vias/zones/shapes/text; the footprint editor
     // pads/graphics/text (state/footprintEditorStore.tsx `duplicateSelection`).
     m.set("common.Interactive.duplicate", () => {
@@ -1700,30 +1709,15 @@ export function useActionRunner() {
       m.set("pcbnew.EditorControl.lock", modifyLock("on"));
       m.set("pcbnew.EditorControl.unlock", modifyLock("off"));
 
-      // ---- deleteFull (Shift+Del) -- edit_tool.cpp EDIT_TOOL::Remove with REMOVE_FLAGS::ALT: "we expand selected track items to their full connection" (RunAction(selectConnection)), then DeleteItems.
-      const deleteItems = async (ids: string[]) => {
-        dispatch({ type: "SET_SELECTION", refs: [] });
-        const trackIds = ids.filter((id) => api.trackById(id));
-        const viaIds = ids.filter((id) => api.viaById(id));
-        // One Cmd for all copper, so the whole delete is one undo step (as one BOARD_COMMIT::Push in source).
-        if (trackIds.length || viaIds.length) await api.cmd({ op: "commit_route", remove_track_ids: trackIds, remove_via_ids: viaIds });
-        for (const id of ids) {
-          if (api.trackById(id) || api.viaById(id)) continue;
-          if (api.zoneById(id)) await api.cmd({ op: "delete_zone", id });
-          else if (api.shapeById(id)) await api.cmd({ op: "delete_shape", id });
-          else if (api.textById(id)) await api.cmd({ op: "delete_text", id });
-          else if (api.dimensionById(id)) await api.cmd({ op: "delete_dimension", id });
-          else if (extraItemById(board, id)) await api.cmd(extraDeleteCmd(extraItemById(board, id)!));
-          else if (api.partByRef(id)?.placed) await api.cmd({ op: "rip", part: id });
-        }
-      };
+      // ---- deleteFull (Shift+Del) -- edit_tool.cpp EDIT_TOOL::Remove with REMOVE_FLAGS::ALT: "we expand selected track items to their full connection" (RunAction(selectConnection)),
+      // then the one `DeleteItems` -- one `commit.Push( _( "Delete" ) )`, locked items skipped, groups, tables, fields and tuning patterns as Delete takes them (`deleteRefs`).
       m.set(
         "pcbnew.InteractiveEdit.deleteFull",
         pcbOnly(() => {
           let ids = requestSelection();
           if (ids.length === 0) return;
           if (ids.some((id) => api.trackById(id) || api.viaById(id))) ids = computeConnectionRefs(new Set(ids)) ?? ids;
-          void deleteItems(ids);
+          deleteRefs(ids);
         })
       );
 

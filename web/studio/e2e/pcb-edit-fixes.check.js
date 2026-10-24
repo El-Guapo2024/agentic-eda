@@ -213,6 +213,53 @@
       t((await snapshot()) === base, "undone, the board is as it was");
     });
 
+    // ----- p6 F5, F7
+    await scenario("Undo during a Move cancels it and keeps the step before; Shift+Del is one undo step", async (t) => {
+      toScreen = (await screenOf()) ?? toScreen;
+      const mm = (x, y) => ({ x: Math.round(x * 1e6), y: Math.round(y * 1e6) });
+      const [x0, y0] = [two.at[0] / 1e6 + 5, two.at[1] / 1e6 - 6];
+      const before = new Set(((await state()).drawings?.shapes ?? []).map((s) => s.id));
+      await post({ op: "add_shape", shape: { kind: "segment", layer: "F.SilkS", stroke_width: 150_000, filled: false, start: mm(x0, y0), end: mm(x0 + 3, y0) } });
+      await sleep(400);
+      const line = ((await state()).drawings?.shapes ?? []).find((s) => !before.has(s.id));
+      t(!!line, "a line drawn (the step before)");
+      const p0 = await partOf(two.ref);
+      await select([two.ref]);
+      await hover(toScreen, p0.at[0] / 1e6, p0.at[1] / 1e6);
+      await __eda.run("pcbnew.InteractiveMove.move"); await sleep(400);
+      await hover(toScreen, p0.at[0] / 1e6 + 3, p0.at[1] / 1e6 + 2);
+      await __eda.run("common.Interactive.undo"); await sleep(800);
+      t(__eda.state().tool === "select", `the Move ended (${__eda.state().tool})`);
+      t(JSON.stringify((await partOf(two.ref)).at) === JSON.stringify(p0.at), "the footprint is where it was");
+      t(((await state()).drawings?.shapes ?? []).some((s) => s.id === line?.id), "and the line is still there");
+      // a carried Duplicate: Undo takes the copy away and leaves no redo entry
+      const refs0 = (await state()).parts.filter((p) => p.placed).map((p) => p.ref).sort().join();
+      await select([two.ref]);
+      await __eda.run("common.Interactive.duplicate"); await sleep(900);
+      await __eda.run("common.Interactive.undo"); await sleep(900);
+      t((await state()).parts.filter((p) => p.placed).map((p) => p.ref).sort().join() === refs0, "Undo during the carried Duplicate takes the copy away");
+      await __eda.run("common.Interactive.redo"); await sleep(900);
+      const st1 = await state();
+      t(st1.parts.filter((p) => p.placed).map((p) => p.ref).sort().join() === refs0 && (st1.drawings?.shapes ?? []).some((s) => s.id === line?.id), "Redo brings no copy back (and the line stays)");
+      // Shift+Del of a track, a zone and the line: one Delete, one undo step
+      const net = two.pads.find((q) => q.net)?.net;
+      await post({ op: "add_track", net, layer: "B.Cu", width: 200_000, pts: [mm(x0, y0 + 2), mm(x0 + 3, y0 + 2)] });
+      await post({ op: "add_zone", net, layer: "B.Cu", outline: [mm(x0, y0 + 4), mm(x0 + 3, y0 + 4), mm(x0 + 3, y0 + 6), mm(x0, y0 + 6)] });
+      await sleep(500);
+      const st2 = await state();
+      const trk = (st2.routing?.tracks ?? []).find((x) => x.pts[0][1] === mm(x0, y0 + 2).y && x.layer === "B.Cu");
+      const zone = (st2.routing?.zones ?? []).find((z) => z.outline[0][1] === mm(x0, y0 + 4).y);
+      const snapBefore = await snapshot();
+      await select([trk.id, zone.id, line.id]);
+      await __eda.run("pcbnew.InteractiveEdit.deleteFull"); await sleep(1000);
+      const st3 = await state();
+      t(!(st3.routing?.tracks ?? []).some((x) => x.id === trk.id) && !(st3.routing?.zones ?? []).some((z) => z.id === zone.id) && !(st3.drawings?.shapes ?? []).some((s) => s.id === line.id), "Shift+Del deletes the three");
+      await undo();
+      t((await snapshot()) === snapBefore, "one Undo brings all three back");
+      for (let i = 0; i < 6 && (await snapshot()) !== base; i++) await undo();
+      t((await snapshot()) === base, "undone, the board is as it was");
+    });
+
     // ----- p6 F2
     await scenario("a handle drag of a grouped line and Mirror of a grouped track keep them in their group", async (t) => {
       const [x0, y0] = [two.at[0] / 1e6 + 4, two.at[1] / 1e6 + 6];
