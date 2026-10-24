@@ -15,7 +15,7 @@ import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port
 import { revisionOf } from "../kicad-port/checkRevision";
 import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type CarryStep, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -24,9 +24,10 @@ import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "
 import { subItemIds } from "../kicad-port/pcbItems";
 import { tableCellIds } from "../kicad-port/tables";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
+import type { CarryOp } from "../kicad-port/pcbCarry";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
-import { modificationSnapFor } from "./modificationSnap";
+import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
@@ -379,6 +380,10 @@ export interface MovePreview {
    */
   pivotNm?: [number, number];
   flipPivotNm?: [number, number];
+  /** `"pcb"`: the point the items were grabbed by (`BestDragOrigin`, the move's snapped origin), before the move: what R turns them about (kicad-port/pcbCarry.ts `carryPress`). */
+  grabNm?: [number, number];
+  /** `"pcb"`: R, Shift+R and F pressed while carrying, in order, each about its own point (kicad-port/pcbCarry.ts `CarryOp`); committed in that order with the move. */
+  ops?: CarryOp[];
   /**
    * edit_tool.cpp Rotate/Flip during an active Move: both act on the
    * live preview instead of committing immediately (updateModificationPoint's
@@ -1717,7 +1722,7 @@ export interface StudioApi {
   /** pcbnew.AlignAndDistribute.distribute* -- same placed-footprints-only scope. A no-op under 3 placed parts. */
   distributeSelection: (axis: "x" | "y", mode: "gaps" | "centers") => Promise<void>;
   /** Commit a completed drag: each ref moves by (dxNm, dyNm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
-  commitMove: (refs: string[], dxNm: number, dyNm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetNm?: MovePreview["perRefOffsetNm"]) => Promise<void>;
+  commitMove: (refs: string[], dxNm: number, dyNm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetNm?: MovePreview["perRefOffsetNm"], ops?: MovePreview["ops"]) => Promise<void>;
   placeArmedAt: (xNm: number, yNm: number) => Promise<void>;
   /** Place Footprint's click: the footprint of a library armed in the Footprint Chooser becomes a part of its own at this point (`place_footprint`, one undo step). */
   placeLibraryFootprintAt: (xNm: number, yNm: number) => Promise<void>;
@@ -2098,7 +2103,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   }, [refresh, refreshSchematic, refreshRatsnest, refreshLint, refreshFill, applyRemoteView]);
 
   const runCmd = useCallback(
-    async (cmd: Parameters<typeof postCmd>[0], carry?: "begin" | "commit") => {
+    async (cmd: Parameters<typeof postCmd>[0], carry?: CarryStep) => {
       // On a nested sheet every schematic edit is addressed to that sheet (`Cmd::OnSheet`), as KiCad edits whichever sheet is open.
       // With a group entered on the board, what a command adds joins it (`BOARD_COMMIT::Push`: `Cmd::InGroup`).
       const st = stateRef.current;
@@ -2121,7 +2126,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   );
 
   /** One undo step for N Cmds (`Cmd::Batch`); a lone Cmd is sent as itself. */
-  const runBatch = async (cmds: Cmd[], carry?: "begin" | "commit"): Promise<boolean> => {
+  const runBatch = async (cmds: Cmd[], carry?: CarryStep): Promise<boolean> => {
     if (cmds.length === 0) return true;
     return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds }, carry);
   };
@@ -2130,7 +2135,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const gridSnap = () => modificationSnapFor(stateRef.current);
 
   /** Sends a transform plan (kicad-port/pcbTransform.ts) as one undo step; says so when the locks left nothing to do (`ReportFilteredLockedItems`). */
-  const runPlan = async (plan: TransformPlan, carry?: "begin" | "commit"): Promise<boolean> => {
+  const runPlan = async (plan: TransformPlan, carry?: CarryStep): Promise<boolean> => {
     if (plan.cmds.length === 0) {
       if (plan.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
       return false;
@@ -2162,7 +2167,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const advanceMoveQueue = (queue: readonly string[] = stateRef.current.pcbx.moveQueue) => {
     const board = stateRef.current.board;
     if (queue.length === 0 || !board) {
-      // Last item dropped/skipped: Move Individually is over.
+      // Last item dropped/skipped: Move Individually is over. The drops held open are one step (a skip of the last item ends it with nothing more to send).
+      if (stateRef.current.pcbx.movingIndividually && carriedPlacementRef.current) {
+        carriedPlacementRef.current = false;
+        void postCarry("commit");
+      }
       if (stateRef.current.pcbx.movingIndividually) {
         dispatch({ type: "PCBX", patch: { movingIndividually: false } });
         dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
@@ -2279,7 +2288,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const st = stateRef.current;
       if (!st.board) return;
       const cursor: [number, number] | null = st.cursorNm ? [st.cursorNm.x, st.cursorNm.y] : null;
-      const cmds = planAlignSelection(st.board, [...st.selection], edge, cursor);
+      const cmds = planAlignSelection(st.board, [...st.selection], edge, cursor, st.bcx.boardFlipped);
       if (cmds.length > 0) await runBatch(cmds);
     },
     distributeSelection: async (axis, mode) => {
@@ -2288,13 +2297,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const cmds = planDistributeSelection(st.board, [...st.selection], axis, mode);
       if (cmds.length > 0) await runBatch(cmds);
     },
-    commitMove: async (refs, dxNm, dyNm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetNm) => {
+    commitMove: async (refs, dxNm, dyNm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetNm, ops) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       // The drop ends a carried Duplicate or Paste: it joins the step the duplicate or the paste began (`carry: "commit"`), so both are one undo step. A drop that
       // sends nothing, or one the backend refuses, leaves the duplicate or the paste standing as a step of its own.
       const carrying = carriedPlacementRef.current;
       carriedPlacementRef.current = false;
-      const carry = carrying ? ("commit" as const) : undefined;
+      // Move Individually: every drop but the last joins one held-open step (`doMoveSelection` picks the next item up into the same `aCommit`, pushed
+      // once), so the whole of it is one undo step and Escape reverts every drop (`revertCarriedPlacement`).
+      const individually = kind === "pcb" && stateRef.current.pcbx.movingIndividually && stateRef.current.pcbx.moveQueue.length > 0;
+      const carry: CarryStep | undefined = individually ? "hold" : carrying ? "commit" : undefined;
       const settle = async (sent: boolean, ok: boolean) => {
         if (carrying && (!sent || !ok)) await postCarry("commit");
       };
@@ -2302,9 +2314,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (kind === "pcb") {
         const board = stateRef.current.board;
         const prefs = stateRef.current.prefs;
-        const plan = board ? planCarry(board, refs, dxNm, dyNm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap(), prefs.rotationStepDeg, prefs.flipDirection) : null;
+        const plan = board ? planCarry(board, refs, dxNm, dyNm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap(), prefs.rotationStepDeg, prefs.flipDirection, ops) : null;
         const ok = plan ? await runPlan(plan, carry) : false;
-        await settle(plan !== null && plan.cmds.length > 0, ok);
+        if (individually) {
+          // the step stays open for the next item (a drop that sent nothing leaves it as it was)
+          carriedPlacementRef.current = carrying || (plan !== null && plan.cmds.length > 0 && ok);
+        } else await settle(plan !== null && plan.cmds.length > 0, ok);
         advanceMoveQueue();
         // a placement that asked to go on after its drop (Place Design Block with repeated copies) goes on
         const next = afterDropRef.current;
@@ -2414,7 +2429,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     duplicateSelection: async () => {
       const board = stateRef.current.board;
       if (!board) return;
-      // `Duplicate` filters markers, groups and free pads only: a locked item is copied too (the copy is not locked), a pad stands for its footprint.
+      // `Duplicate` filters markers, groups and free pads only: a locked item is copied too, and its copy is locked (`BOARD_ITEM::Duplicate` is a `Clone()`), a
+      // pad stands for its footprint.
       const { ids } = editableSelection(board, [...stateRef.current.selection], { respectLocks: false });
       if (ids.length === 0) return;
       const before = allItemIds(board);
@@ -2426,6 +2442,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const newIds = after ? newItemIds(before, after) : [];
       if (newIds.length === 0) {
         await postCarry("commit"); // nothing to carry: the duplicate stands
+        return;
+      }
+      // `doMoveSelection` leaves the locked copies out (`FilterCollectorForLockedItems`); with nothing left to carry it returns false and the commit is reverted.
+      if (after && editableSelection(after, newIds).ids.length === 0) {
+        await postCarry("cancel");
+        await refresh();
+        dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
         return;
       }
       carriedPlacementRef.current = true;
@@ -2494,7 +2517,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!st.board) return;
       const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false });
       if (ids.length === 0) return;
-      const at = reference ?? (st.cursorNm ? (([x, y]) => ({ x, y }))(snapPoint(st.cursorNm.x, st.cursorNm.y, st.gridNm)) : null);
+      // `copyToClipboard`: `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )` -- the anchor of the copied items nearest the cursor, so a paste puts it on the cursor.
+      const at = reference ?? (st.cursorNm ? (([x, y]) => ({ x, y }))(dragOriginFor(st, ids, [st.cursorNm.x, st.cursorNm.y])) : null);
       const reply = await postClipboardCopy(ids, at);
       if (!reply.ok) {
         dispatch({ type: "TOAST", message: reply.message, kind: "error" });

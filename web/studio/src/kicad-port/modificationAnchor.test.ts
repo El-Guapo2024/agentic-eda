@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Pad, Part } from "../api/types";
-import { modificationAnchor, modificationSnap, type ModificationView } from "./modificationAnchor";
+import { dragOriginAnchor, modificationAnchor, modificationSnap, type ModificationView } from "./modificationAnchor";
 import { DEFAULT_PCB_MAGNETIC } from "./snapAnchors";
 import { modificationPoint, planRotate, rotationPivot } from "./pcbTransform";
 
@@ -54,4 +54,12 @@ test("the snap the planners take: a rotation about several items turns about the
 test("a single item turns about its own position, snapped to nothing", () => {
   const b = board([part("U1", [10_130_000, 10_070_000])]);
   assert.deepEqual(modificationPoint(b, ["U1"], modificationSnap(view(b))), [10_130_000, 10_070_000]);
+});
+
+test("a copy's reference point is BestDragOrigin: the footprint origin nearest the cursor, not the cursor's grid point (EDIT_TOOL::copyToClipboard)", () => {
+  const b = board([part("U1", [10_300_000, 10_300_000])]);
+  // the cursor 0.3 mm from the origin on a 1 mm grid: the grid point would be (10, 10) mm, the anchor is the origin
+  assert.deepEqual(dragOriginAnchor(view(b), [10_000_000, 10_100_000], ["U1"]), [10_300_000, 10_300_000]);
+  // with nothing of the copy to hold, the cursor itself
+  assert.deepEqual(dragOriginAnchor(view(b), [10_000_000, 10_100_000], []), [10_000_000, 10_100_000]);
 });

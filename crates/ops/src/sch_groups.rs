@@ -134,7 +134,8 @@ impl Board<'_> {
         for g in sch.extras.groups.iter_mut() {
             g.member_ids.retain(|m| !gone.contains(m));
         }
-        eda_model::groups::prune_groups(&mut sch.extras.groups);
+        // `SCH_COMMIT::Push` takes a removed item out of its group and dissolves nothing: a group of one stays, an empty one goes.
+        eda_model::groups::drop_empty_groups(&mut sch.extras.groups);
     }
 
     /// `Cmd::InGroup` for a schematic command: `cmd`, then every item it added that is in no group joins `group` (`SCH_COMMIT::Push`'s

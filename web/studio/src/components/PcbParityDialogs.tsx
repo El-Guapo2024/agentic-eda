@@ -20,7 +20,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
 import { movableItem, polarTranslation, positionRelativeSelectionAnchor, relativeMoveVector, toPolarDeg, type MovableKind } from "../kicad-port/pcbEditActions";
-import { editableSelection } from "../kicad-port/pcbTransform";
+import { editableSelection, isLocked } from "../kicad-port/pcbTransform";
+import { itemKind, padById } from "../kicad-port/pcbItems";
 import { itemPosition } from "../kicad-port/pcbReference";
 import { picker, pickItem, pickPoint } from "../actions/pcbPicker";
 import { FootprintChooserDialog } from "./FootprintChooserDialog";
@@ -111,6 +112,9 @@ function FindMoveDialog() {
 
 type AnchorKind = "origin" | "grid" | "item" | "point";
 
+/** `DIALOG_POSITION_RELATIVE::s_anchorType` (`= ANCHOR_ITEM`). */
+let lastAnchorKind: AnchorKind = "item";
+
 /** `DIALOG_POSITION_RELATIVE` -- see this file's header. */
 function PositionRelativeDialog() {
   const state = useStudioState();
@@ -131,10 +135,31 @@ function PositionRelativeDialog() {
     return out;
   }, [board, state.selection]);
 
-  // PositionRelative: "We prefer footprints, then pads, then anything else".
-  const selectionAnchor = useMemo(() => positionRelativeSelectionAnchor(movables.map((m) => ({ isFootprint: m.kind === "part", x: m.at[0], y: m.at[1] }))), [movables]);
+  // PositionRelative: "We prefer footprints, then pads, then anything else" -- over the selection as it is (`RequestSelection` there has no free-pad
+  // filter): a pad selected on its own anchors at its own position, while the move takes its footprint.
+  const selectionAnchor = useMemo(() => {
+    if (!board) return null;
+    const items: { isFootprint: boolean; isPad: boolean; x: number; y: number }[] = [];
+    for (const id of state.selection) {
+      const pad = itemKind(board, id) === "pad" ? padById(board, id) : null;
+      if (pad) {
+        if (!isLocked(board, pad.part.ref)) items.push({ isFootprint: false, isPad: true, x: pad.pad.x, y: pad.pad.y });
+        continue;
+      }
+      const m = movables.find((q) => q.ref === id);
+      if (m) items.push({ isFootprint: m.kind === "part", isPad: false, x: m.at[0], y: m.at[1] });
+    }
+    // what the selection lost to the promotion (a group's members, ...) still anchors as before
+    if (items.length === 0) for (const m of movables) items.push({ isFootprint: m.kind === "part", isPad: false, x: m.at[0], y: m.at[1] });
+    return positionRelativeSelectionAnchor(items);
+  }, [board, movables, state.selection]);
 
-  const [anchorKind, setAnchorKind] = useState<AnchorKind>("origin");
+  // `s_anchorType`: static, so the dialog opens on the anchor of last time, Item the first time.
+  const [anchorKind, setAnchorKindState] = useState<AnchorKind>(lastAnchorKind);
+  const setAnchorKind = (k: AnchorKind) => {
+    lastAnchorKind = k;
+    setAnchorKindState(k);
+  };
   const [itemRef, setItemRef] = useState("");
   /** An item picked on the canvas ("Select Item..."): any board item, anchored on its position (`UpdatePickedItem`). */
   const [pickedItem, setPickedItem] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -184,8 +209,11 @@ function PositionRelativeDialog() {
     switch (anchorKind) {
       case "origin":
         return state.localOriginNm ?? { x: 0, y: 0 };
-      case "grid":
-        return { x: 0, y: 0 }; // BOARD_DESIGN_SETTINGS grid origin: this model has no grid-origin setting, so it is the board origin.
+      case "grid": {
+        // `GetDesignSettings().GetGridOrigin()`: the board's grid origin (`set_grid_origin`), (0, 0) when none is set.
+        const g = board?.grid_origin;
+        return g ? { x: g[0], y: g[1] } : { x: 0, y: 0 };
+      }
       case "item": {
         if (pickedItem && !itemRef) return { x: pickedItem.x, y: pickedItem.y };
         const p = placed.find((q) => q.ref === itemRef);

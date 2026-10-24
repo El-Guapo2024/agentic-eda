@@ -150,9 +150,9 @@ fn a_locked_table_does_not_move_and_a_table_can_be_locked_and_grouped_like_any_i
     let group = on_sheet(&b, |s| s.extras.groups[0].id.clone());
     b.apply(&Cmd::SchMove(SchMoveCmd::Move { ids: vec![group], dx: 5_000_000, dy: 0, turns: vec![], about: None })).unwrap();
     assert_eq!(on_sheet(&b, |s| (s.extras.tables[0].at, s.texts[0].at)), (p(25_000_000, 30_000_000), p(5_000_000, 0)));
-    // deleting the table takes it out of the group, which then dissolves (a group holds two or more)
+    // deleting the table takes it out of the group, which keeps the text (`SCH_COMMIT::Push` dissolves nothing)
     b.apply(&Cmd::SchTable(TableCmd::Delete { id })).unwrap();
-    assert!(on_sheet(&b, |s| s.extras.groups.is_empty()), "{:?}", on_sheet(&b, |s| s.extras.groups.clone()));
+    assert_eq!(on_sheet(&b, |s| s.extras.groups.iter().map(|g| g.member_ids.clone()).collect::<Vec<_>>()), vec![vec!["txt_a".to_string()]]);
 }
 
 #[test]

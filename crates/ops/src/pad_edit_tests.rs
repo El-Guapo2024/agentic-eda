@@ -136,6 +136,48 @@ fn recombining_takes_in_the_graphics_that_touch_the_pad_and_leaves_the_others() 
     assert!(f.graphics.iter().any(|g| g.layer() == "F.SilkS") && f.graphics.iter().any(|g| g.layer() == "F.Cu"));
 }
 
+/// `PAD::Recombine`'s `findNext` takes the pad as it has grown, so a chain of graphics is merged whole, in either list order.
+#[test]
+fn recombining_follows_a_chain_of_shapes_that_touch_through_each_other() {
+    let m = ConstraintModel::default();
+    let circle = || pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [500_000, 500_000], "shape": "circle", "kind": "smd" }));
+    let a = line("F.Cu", (0, 0), (2_000_000, 0), 200_000);
+    let b = line("F.Cu", (2_000_000, 0), (2_000_000, 2_000_000), 200_000);
+    for graphics in [vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]] {
+        let mut bd = with_footprint(&m, vec![circle()], graphics);
+        explode(&mut bd).unwrap();
+        recombine(&mut bd).unwrap();
+        let f = fp(&bd);
+        let custom = f.pads[0].custom.as_ref().unwrap();
+        assert_eq!(custom.primitives.len(), 2, "{:?}", custom.primitives);
+        assert!(f.graphics.is_empty(), "{:?}", f.graphics);
+        // The segment that touches the anchor is merged first, the one that touches only it second (`AddPrimitive`'s order).
+        assert!(matches!(&custom.primitives[0].shape, Shape::Segment { end: Point { x: 2_000_000, y: 0 }, .. }), "{:?}", custom.primitives[0].shape);
+    }
+}
+
+/// The finding's repro: an L-shaped custom pad (anchor, then a segment off it, then a segment off that) explodes and
+/// recombines to itself, with no loose copper left in the footprint.
+#[test]
+fn recombining_merges_shapes_that_touch_the_pad_only_through_another_merged_shape() {
+    let m = ConstraintModel::default();
+    let mut p = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [800_000, 800_000], "shape": "custom", "kind": "smd" }));
+    p.custom = Some(PadCustom {
+        anchor: PadAnchor::Circle,
+        zone: CustomZoneMode::Outline,
+        primitives: vec![prim(line("", (0, 0), (1_000_000, 0), 200_000), false), prim(line("", (1_000_000, 0), (1_000_000, 3_000_000), 200_000), false)],
+    });
+    let mut b = with_footprint(&m, vec![p.clone()], vec![]);
+    explode(&mut b).unwrap();
+    recombine(&mut b).unwrap();
+    let f = fp(&b);
+    assert!(f.graphics.is_empty(), "{:?}", f.graphics);
+    assert_eq!(f.pads[0].custom.as_ref().unwrap().primitives.len(), 2);
+    let mut expected = p;
+    expected.id = f.pads[0].id.clone();
+    assert_eq!(f.pads[0], expected);
+}
+
 #[test]
 fn a_rectangle_pad_is_its_own_anchor_and_a_rounded_one_becomes_a_polygon_round_a_circular_anchor() {
     let m = ConstraintModel::default();

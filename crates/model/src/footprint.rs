@@ -304,6 +304,23 @@ pub fn placed_courtyard(model: &ConstraintModel, part: &Part, fp: &FootprintInst
     Some((fp.at.x - w / 2, fp.at.y - h / 2, fp.at.x + w / 2, fp.at.y + h / 2))
 }
 
+/// The box of the placed footprint's courtyard as KiCad has it: `FOOTPRINT::GetBoundingBox` merges the footprint's `F.CrtYd`/`B.CrtYd`
+/// drawings as they are, so an off-centre courtyard (a pin header with its origin at pin 1) gives an off-centre box. That is the real
+/// outlines ([`Footprint::courtyard_outlines`]) put on the board, else the rectangle the board file is written with (`courtyard_half`,
+/// symmetric, turned with the footprint: the box of its four corners). [`placed_courtyard`] is the placer's symmetric box.
+pub fn placed_courtyard_box(model: &ConstraintModel, part: &Part, fp: &FootprintInstance) -> Option<(Nm, Nm, Nm, Nm)> {
+    let footprint = model.footprint_of(part)?;
+    let pts: Vec<Point> = if footprint.courtyard_outlines.iter().any(|o| !o.is_empty()) {
+        footprint.courtyard_outlines.iter().flatten().map(|&p| to_board(fp, p)).collect()
+    } else {
+        let (hw, hh) = footprint.courtyard_half();
+        [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].into_iter().map(|p| to_board(fp, p)).collect()
+    };
+    let (x0, y0) = (pts.iter().map(|p| p.x).min()?, pts.iter().map(|p| p.y).min()?);
+    let (x1, y1) = (pts.iter().map(|p| p.x).max()?, pts.iter().map(|p| p.y).max()?);
+    Some((x0, y0, x1, y1))
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Footprint {
@@ -1177,6 +1194,22 @@ mod tests {
 
     fn fp_instance(rot: crate::ir::Millideg, side: Side) -> FootprintInstance {
         FootprintInstance { id: "U1".into(), at: Point { x: 10_000_000, y: 10_000_000 }, rot, side, label: Default::default() }
+    }
+
+    /// `FOOTPRINT::GetBoundingBox` merges the courtyard drawings as they are: a `PinHeader_1x04_P2.54mm_Vertical` (origin at pin 1, courtyard
+    /// y from -1.77 to 9.39 mm) has a box from -1.77 mm, not the symmetric -9.39 mm the placer's box is.
+    #[test]
+    fn an_off_centre_courtyard_gives_kicads_box_not_a_symmetric_one() {
+        let ring = vec![(-1_770_000, -1_770_000), (1_770_000, -1_770_000), (1_770_000, 9_390_000), (-1_770_000, 9_390_000)];
+        let header = Footprint { name: "HDR".into(), pads: vec![Pad::simple("1", (0, 0), (1_700_000, 1_700_000), PadShape::Rect, PadKind::ThroughHole, None)], courtyard: Some((1_770_000, 9_390_000)), model: None, courtyard_outlines: vec![ring], models3d: vec![], art: Default::default() };
+        let (model, part) = part_with("HDR", header);
+        let (x, y) = (10_000_000, 10_000_000);
+        assert_eq!(placed_courtyard_box(&model, &part, &fp_instance(0, Side::Top)), Some((x - 1_770_000, y - 1_770_000, x + 1_770_000, y + 9_390_000)));
+        // turned a quarter (clockwise on the screen, `to_board`), the long side points left
+        assert_eq!(placed_courtyard_box(&model, &part, &fp_instance(90_000, Side::Top)), Some((x - 9_390_000, y - 1_770_000, x + 1_770_000, y + 1_770_000)));
+        // the placer's box (the importer's symmetric enclosure) stays symmetric
+        let sym = placed_courtyard(&model, &part, &fp_instance(0, Side::Top)).unwrap();
+        assert_eq!(sym.1, y - 9_390_000);
     }
 
     #[test]

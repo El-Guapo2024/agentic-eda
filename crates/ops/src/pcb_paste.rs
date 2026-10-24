@@ -20,7 +20,8 @@ use super::Board;
 use eda_kicad::{ClipRef, Clipboard};
 use eda_model::fp_edit::FootprintEdit;
 use eda_model::ir::{next_item_id, BoardPart, Dimension, FootprintExtra, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, LibraryFootprint, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
-use eda_model::pcb_items::ShapeStyle;
+use eda_model::barcode::Barcode;
+use eda_model::pcb_items::{PcbPoint, ShapeStyle};
 use eda_model::{CheckResult, Footprint, Part};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,6 +35,9 @@ pub(crate) enum Member {
     Text(usize),
     Dimension(usize),
     Footprint(usize),
+    /// A `PCB_POINT` (`Copies::points`) and a `PCB_BARCODE` (`Copies::barcodes`): `EDIT_TOOL::Duplicate` duplicates them like any item.
+    Point(usize),
+    Barcode(usize),
     /// A group copy (`Copies::groups`); the groups a group holds are listed before it.
     Group(usize),
 }
@@ -104,9 +108,15 @@ pub(crate) struct Copies {
     pub(crate) texts: Vec<Text>,
     pub(crate) dimensions: Vec<Dimension>,
     pub(crate) footprints: Vec<FootprintCopy>,
+    pub(crate) points: Vec<PcbPoint>,
+    pub(crate) barcodes: Vec<Barcode>,
     pub(crate) groups: Vec<GroupCopy>,
     /// A copy of a member of a group that is not itself copied joins that group (`addToParentGroup`).
     pub(crate) join: Vec<(Member, String)>,
+    /// The copies of locked items (`BOARD_ITEM::Duplicate` is a `Clone()`: the lock comes along). Only Duplicate fills it.
+    pub(crate) locked: Vec<Member>,
+    /// Each copy [`Board::collect_copies`] made, with the id of what it is a copy of.
+    pub(crate) sources: Vec<(Member, String)>,
 }
 
 impl Copies {
@@ -121,12 +131,16 @@ impl Copies {
                 Member::Text(i) => Member::Text(i + this.texts.len()),
                 Member::Dimension(i) => Member::Dimension(i + this.dimensions.len()),
                 Member::Footprint(i) => Member::Footprint(i + this.footprints.len()),
+                Member::Point(i) => Member::Point(i + this.points.len()),
+                Member::Barcode(i) => Member::Barcode(i + this.barcodes.len()),
                 // A group copy that holds another group copy (nested groups).
                 Member::Group(i) => Member::Group(i + this.groups.len()),
             }
         };
         let groups: Vec<GroupCopy> = other.groups.iter().map(|g| GroupCopy { name: g.name.clone(), members: g.members.iter().map(|m| shift(*m, self)).collect(), design_block: g.design_block.clone() }).collect();
         let join: Vec<(Member, String)> = other.join.iter().map(|(m, g)| (shift(*m, self), g.clone())).collect();
+        let locked: Vec<Member> = other.locked.iter().map(|m| shift(*m, self)).collect();
+        let sources: Vec<(Member, String)> = other.sources.iter().map(|(m, id)| (shift(*m, self), id.clone())).collect();
         self.tracks.extend(other.tracks);
         self.vias.extend(other.vias);
         self.zones.extend(other.zones);
@@ -139,12 +153,16 @@ impl Copies {
         self.texts.extend(other.texts);
         self.dimensions.extend(other.dimensions);
         self.footprints.extend(other.footprints);
+        self.points.extend(other.points);
+        self.barcodes.extend(other.barcodes);
         self.groups.extend(groups);
         self.join.extend(join);
+        self.locked.extend(locked);
+        self.sources.extend(sources);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.footprints.is_empty()
+        self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.footprints.is_empty() && self.points.is_empty() && self.barcodes.is_empty()
     }
 }
 
@@ -243,8 +261,14 @@ impl Board<'_> {
     /// `Cmd::Duplicate`: exact copies of the named items, at the same place, under new ids -- footprints as new parts, a group
     /// with copies of its members. See the module doc.
     pub(crate) fn duplicate_all(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        let copies = self.collect_copies(ids)?;
+        let mut copies = self.collect_copies(ids)?;
+        // `BOARD_ITEM::Duplicate` is a `Clone()` with a new uuid: a locked item's copy is locked (the Move tool that carries the copies then leaves it out).
+        copies.locked = copies.sources.iter().filter(|(_, id)| self.is_locked_id(id)).map(|(m, _)| *m).collect();
         self.insert_copies_all(copies).map(|_| ())
+    }
+
+    fn is_locked_id(&self, id: &str) -> bool {
+        self.design.drawings.as_ref().is_some_and(|d| d.locked_ids.iter().any(|l| l == id))
     }
 
     /// The copies `Cmd::Duplicate` would make of `ids`, not yet on the board: exact copies at the same place, a group with copies of
@@ -263,6 +287,7 @@ impl Board<'_> {
             if self.design.drawings.as_ref().is_some_and(|d| d.is_group(id)) {
                 // A group is copied with everything below it, into a group of its own, which joins the group the original is in.
                 if let Some(copy) = self.copy_group(id, &mut copies, &mut done, &mut Vec::new()) {
+                    copies.sources.push((copy, id.clone()));
                     if let Some(above) = group_of(id) {
                         copies.join.push((copy, above));
                     }
@@ -271,6 +296,7 @@ impl Board<'_> {
                 // An id that is nothing duplicable is skipped, as in `Duplicate` over a mixed selection.
                 if let Some(m) = self.copy_of(id, &mut copies) {
                     done.insert(id.clone(), m);
+                    copies.sources.push((m, id.clone()));
                     // A copy that is not part of a copied group joins the group its original is in.
                     if let Some(g) = group_of(id) {
                         copies.join.push((m, g));
@@ -279,7 +305,7 @@ impl Board<'_> {
             }
         }
         if copies.is_empty() {
-            return Err(vec![CheckResult::fail("ops_unknown_duplicate", "duplicate", "none of the given ids name a footprint, track, via, zone, shape, text or dimension")]);
+            return Err(vec![CheckResult::fail("ops_unknown_duplicate", "duplicate", "none of the given ids name a footprint, track, via, zone, shape, text, dimension, point or barcode")]);
         }
         Ok(copies)
     }
@@ -296,13 +322,18 @@ impl Board<'_> {
         let mut members: Vec<Member> = Vec::new();
         for m in &g.member_ids {
             let copy = if dr.is_group(m) {
-                self.copy_group(m, copies, done, visiting)
+                let c = self.copy_group(m, copies, done, visiting);
+                if let Some(c) = c {
+                    copies.sources.push((c, m.clone()));
+                }
+                c
             } else if let Some(c) = done.get(m) {
                 Some(*c)
             } else {
                 let c = self.copy_of(m, copies);
                 if let Some(c) = c {
                     done.insert(m.clone(), c);
+                    copies.sources.push((c, m.clone()));
                 }
                 c
             };
@@ -372,6 +403,14 @@ impl Board<'_> {
                 copies.dimensions.push(d.clone());
                 return Some(Member::Dimension(copies.dimensions.len() - 1));
             }
+            if let Some(p) = dr.board_items.points.iter().find(|p| p.id == id) {
+                copies.points.push(p.clone());
+                return Some(Member::Point(copies.points.len() - 1));
+            }
+            if let Some(b) = dr.barcodes.iter().find(|b| b.id == id) {
+                copies.barcodes.push(b.clone());
+                return Some(Member::Barcode(copies.barcodes.len() - 1));
+            }
         }
         None
     }
@@ -400,11 +439,17 @@ impl Board<'_> {
     }
 
     pub(super) fn copies_from_clipboard(&self, clip: &Clipboard, at: Point, mode: PasteMode, clear_nets: bool) -> Copies {
+        self.copies_from_clipboard_on(clip, at, mode, clear_nets, &self.model.board.layers, &BTreeSet::new())
+    }
+
+    /// [`Board::copies_from_clipboard`] onto a board whose copper layers are `layers` and which also knows the nets `more_nets` (Place Design
+    /// Block grows both first, as `AppendBoard` does).
+    pub(super) fn copies_from_clipboard_on(&self, clip: &Clipboard, at: Point, mode: PasteMode, clear_nets: bool, layers: &[String], more_nets: &BTreeSet<String>) -> Copies {
         let mv = |p: Point| Point { x: p.x + at.x, y: p.y + at.y };
-        let layers = &self.model.board.layers;
         let copper_ok = |l: &str| !is_copper_layer(l) || layers.iter().any(|b| b == l);
         // The nets a pasted footprint brings with it count as the board's own for the copper pasted alongside.
-        let new_nets: BTreeSet<String> = clip.footprints.iter().flat_map(|f| f.pad_nets.iter().map(|(_, n)| n.clone())).collect();
+        let mut new_nets: BTreeSet<String> = clip.footprints.iter().flat_map(|f| f.pad_nets.iter().map(|(_, n)| n.clone())).collect();
+        new_nets.extend(more_nets.iter().cloned());
         // "Clear net assignments" (`item->SetNet( NETINFO_LIST::OrphanedItem() )` for every connected item of a pasted board; the dialog does
         // not offer it for a lone footprint, whose copy has no nets anyway).
         let clear = clear_nets && !clip.bare_footprint;
@@ -565,6 +610,16 @@ impl Board<'_> {
             d.id = mint("dim", format!("copy{i}|{:?}|{},{}|{},{}", d.kind, d.start.x, d.start.y, d.end.x, d.end.y));
             dim_ids.push(d.id.clone());
         }
+        let mut point_ids: Vec<String> = Vec::new();
+        for (i, p) in copies.points.iter_mut().enumerate() {
+            p.id = mint("pnt", format!("copy{i}|{}|{},{}", p.layer, p.at.x, p.at.y));
+            point_ids.push(p.id.clone());
+        }
+        let mut barcode_ids: Vec<String> = Vec::new();
+        for (i, b) in copies.barcodes.iter_mut().enumerate() {
+            b.id = mint("bar", format!("copy{i}|{}|{},{}", b.layer, b.at.x, b.at.y));
+            barcode_ids.push(b.id.clone());
+        }
 
         // Footprints: placed again, or new parts under references nobody has.
         let mut references = self.all_references();
@@ -632,6 +687,8 @@ impl Board<'_> {
                 Member::Text(i) => Some(text_ids[i].clone()),
                 Member::Dimension(i) => Some(dim_ids[i].clone()),
                 Member::Footprint(i) => Some(fp_refs[i].clone()),
+                Member::Point(i) => Some(point_ids[i].clone()),
+                Member::Barcode(i) => Some(barcode_ids[i].clone()),
                 Member::Group(i) => group_ids.get(i).cloned().flatten(),
             }
         };
@@ -649,8 +706,9 @@ impl Board<'_> {
         }
         // the top of what is coming in: no new group holds it
         let held: BTreeSet<&str> = new_groups.iter().flat_map(|g| g.member_ids.iter().map(String::as_str)).collect();
-        let top: Vec<String> = track_ids.iter().chain(&via_ids).chain(&zone_ids).chain(&shape_ids).chain(&text_ids).chain(&dim_ids).chain(&fp_refs).chain(new_groups.iter().map(|g| &g.id)).filter(|id| !held.contains(id.as_str())).cloned().collect();
+        let top: Vec<String> = track_ids.iter().chain(&via_ids).chain(&zone_ids).chain(&shape_ids).chain(&text_ids).chain(&dim_ids).chain(&point_ids).chain(&barcode_ids).chain(&fp_refs).chain(new_groups.iter().map(|g| &g.id)).filter(|id| !held.contains(id.as_str())).cloned().collect();
         let joins: Vec<(String, String)> = copies.join.iter().filter_map(|(m, g)| id_of(m, &group_ids).map(|id| (id, g.clone()))).collect();
+        let locked_copies: Vec<String> = copies.locked.iter().filter_map(|m| id_of(m, &group_ids)).collect();
 
         // Land them.
         if !copies.tracks.is_empty() || !copies.vias.is_empty() || !copies.zones.is_empty() {
@@ -660,8 +718,15 @@ impl Board<'_> {
             rt.zones.append(&mut copies.zones);
             self.sort_routing();
         }
-        if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() || !new_edits.is_empty() || !new_extras.is_empty() {
+        if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !copies.points.is_empty() || !copies.barcodes.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() || !new_edits.is_empty() || !new_extras.is_empty() || !locked_copies.is_empty() {
             let dr = self.drawings_mut();
+            dr.board_items.points.append(&mut copies.points);
+            dr.barcodes.append(&mut copies.barcodes);
+            if !locked_copies.is_empty() {
+                dr.locked_ids.extend(locked_copies);
+                dr.locked_ids.sort();
+                dr.locked_ids.dedup();
+            }
             dr.shapes.append(&mut copies.shapes);
             // A copy of a hatched shape is hatched the same way, and has the same line endings and net.
             for (id, style) in shape_ids.iter().zip(&copies.shape_style) {
