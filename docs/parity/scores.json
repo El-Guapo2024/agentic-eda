@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-23T08:54:45.064550+00:00",
+  "generated_at": "2026-10-24T04:08:11.164798+00:00",
   "metrics": [
     {
       "name": "connectivity_boards_evaluated",
@@ -8,8 +8,8 @@
     },
     {
       "name": "connectivity_exact_match_rate",
-      "current": 0.978494623655914,
-      "floor": 0.978494623655914
+      "current": 0.989247311827957,
+      "floor": 0.989247311827957
     },
     {
       "name": "roundtrip_own_footprint_pose_survival_rate",
