@@ -4,7 +4,7 @@
 // cursor, turn a click/move into the right `/api/route/drag_*` call and
 // `DrawState` update), not a second copy of `eda_pns::dragger::Dragger`'s
 // own algorithm.
-import type { BoardState } from "../../api/types";
+import type { BoardState, CmdReply } from "../../api/types";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
 import { routeDragFinish, routeDragStart } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
@@ -67,9 +67,15 @@ export function findDraggableAt(
  * mark-obstacles choice, and the rest of the router's settings, a route session does. `freeAngle` is `G`
  * (`PCB_ACTIONS::dragFreeAngle` -> `DM_ANY | DM_FREE_ANGLE`): the drag only
  * marks obstacles, whatever `mode` says. */
-export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, settings: RouterSettings, dispatch: Dispatch<Action>, freeAngle = false): Promise<void> {
+export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, settings: RouterSettings, dispatch: Dispatch<Action>, freeAngle = false, fromRouterTool = false): Promise<void> {
   let preview = await routeDragStart(x, y, hit.layer, settings, freeAngle);
-  // `ROUTER_TOOL::performDragging`: a locked item asks first, and "Drag Anyway" unlocks it for the drag
+  // `D` from the selection tool is `EDIT_TOOL::Drag`, whose selection filter drops a locked item (`FilterCollectorForLockedItems`): the
+  // selection comes out empty and the tool only warns (`ReportFilteredLockedItems`; this studio has no "Override locks"). (findings p5 F3-3)
+  if (!preview.ok && preview.locked && !fromRouterTool) {
+    dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+    return;
+  }
+  // `ROUTER_TOOL::performDragging` (`D` while the router tool is active): a locked item asks first, and "Drag Anyway" unlocks it for the drag
   if (!preview.ok && preview.locked) {
     const anyway = await askConfirm({ title: "Confirmation", message: "The selected item is locked.", okLabel: "Drag Anyway" });
     if (!anyway) return;
@@ -106,7 +112,7 @@ export async function startInlineDrag(x: number, y: number, hit: DraggableHit, b
 }
 
 /** `ROUTER_STATUS_VIEW_ITEM`'s message while a drag only marks obstacles and the position violates DRC (router_tool.cpp `InlineDrag`). */
-export const DRAG_VIOLATION_HINT = "Track violates DRC. (Ctrl+click to commit anyway.)";
+export const DRAG_VIOLATION_HINT = "Track violates DRC. (Ctrl+Click to commit anyway.)";
 
 /** A click while dragging: commit at `(x, y)` -- a drag has no multi-leg
  * concept the way a route does, so (unlike `fixInteractiveRoute`) this is
@@ -119,8 +125,10 @@ export const DRAG_VIOLATION_HINT = "Track violates DRC. (Ctrl+click to commit an
  * (`DRAGGER::FixRoute`); `forceCommit` (Ctrl+click) commits the violation of a
  * drag that only marks obstacles. */
 export async function finishInlineDrag(x: number, y: number, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">, forceCommit = false): Promise<void> {
-  const reply = await routeDragFinish(x, y, forceCommit);
+  const reply = (await routeDragFinish(x, y, forceCommit)) as CmdReply & { dragging?: boolean };
   if (!reply.ok) dispatch({ type: "TOAST", message: reply.message || "Can't drop it there -- still colliding.", kind: "error" });
+  // `performDragging`: a click `FixRoute` refuses leaves the drag going (`if( m_router->FixRoute( .. ) ) break;`)
+  if (!reply.ok && reply.dragging) return;
   dispatch({ type: "SET_DRAW_STATE", draw: null });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
   await api.refresh();

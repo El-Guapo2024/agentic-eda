@@ -756,7 +756,8 @@ export function Canvas() {
         const draw = state.drawState;
         if (!draw || draw.kind !== "diffpair") {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
-          const custom = state.pcbx.customDiffPair;
+          // `ImportSizes`: the board's custom pair dimensions only while `UseCustomDiffPairDimensions()`
+          const custom = state.pcbx.useCustomDiffPair ? state.pcbx.customDiffPair : null;
           void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : undefined, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks));
           return;
         }

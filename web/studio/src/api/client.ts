@@ -569,7 +569,8 @@ export function routeFix(x: Nm, y: Nm): Promise<RouteFixReply> {
   return postJson("/api/route/fix", { x, y });
 }
 
-export function routeUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
+/** Backspace. `placing_via` / `via_to_layer`: the via the undone leg ended in is armed again (`UnfixRoute`). */
+export function routeUndoSegment(): Promise<{ ok: boolean; popped: boolean; placing_via?: boolean; via_to_layer?: string | null }> {
   return postJson("/api/route/undo_segment", {});
 }
 
@@ -582,7 +583,13 @@ export function routeFinish(x: Nm, y: Nm): Promise<CmdReply> {
   return postJson("/api/route/finish", { x, y });
 }
 
-export function routeCancel(): Promise<{ ok: boolean }> {
+/** AttemptFinish (`F`, `ROUTER::Finish`): route to the nearest unconnected anchor of the net and commit (`finished`), or go on routing with the head where it got (`warp`, `preview`). */
+export function routeAttemptFinish(x: Nm, y: Nm): Promise<{ ok: boolean; message?: string; finished?: boolean; warp?: [Nm, Nm]; preview?: RoutePreview }> {
+  return postJson("/api/route/attempt_finish", { x: Math.round(x), y: Math.round(y) });
+}
+
+/** Esc: a route or a pair commits what its clicks fixed (`committed`); a drag leaves the board as it was. */
+export function routeCancel(): Promise<{ ok: boolean; committed?: boolean }> {
   return postJson("/api/route/cancel", {});
 }
 

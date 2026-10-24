@@ -55,19 +55,14 @@ struct Session {
     splits: Vec<TrackSplit>,
     /// The type of the via armed with [`Router::toggle_via_typed`] (`SIZES_SETTINGS::ViaType()`), for the next fix.
     pending_via_kind: ViaKind,
-    /// The vias the session's fixes placed, in order: where, on which layers, how big, and of which type (`VIA::ViaType()`, which
-    /// `PNS_KICAD_IFACE::AddItem` gives the board via: "`via_board->SetViaType( via->ViaType() )`"). The commit finds the via of each change of
-    /// layer here; one Backspace took away is no longer at a run's end, and so is not found.
+    /// The type of each via the session placed (`VIA::ViaType()`, which `PNS_KICAD_IFACE::AddItem` gives the board via: "`via_board->SetViaType(
+    /// via->ViaType() )`"), one per [`LinePlacer::fixed_vias`], in the same order (Backspace takes both away together).
     placed_vias: Vec<PlacedVia>,
 }
 
 /// A via a fix of the session placed: see [`Session::placed_vias`].
 #[derive(Debug, Clone, Copy)]
 struct PlacedVia {
-    at: Point,
-    layers: LayerRange,
-    diameter: Nm,
-    drill: Nm,
     kind: ViaKind,
 }
 
@@ -142,13 +137,19 @@ pub struct Router {
     /// The type of every via of the board that is not a through via, by id (`DrawingsSection::via_extras`): a via a shove or a drag moves
     /// is removed and put back, and keeps its type (`PNS_KICAD_IFACE::syncVia` reads `aVia->GetViaType()` into the router's via).
     via_kinds: HashMap<String, ViaKind>,
+    /// The `pins` of every board track that has some, by id: a track [`Self::simplify_new_lines`] takes into a new one hands them on.
+    track_pins: HashMap<String, Vec<String>>,
+    /// The mode the drag in progress started in (`DRAGGER::Start`: `m_currentMode = Settings().Mode()`, and a shove made only for Shove): a
+    /// mode changed in the middle of a drag waits for the next one (findings p5 F3-12). The other settings are read live, as KiCad's are.
+    drag_mode: Option<crate::settings::Mode>,
 }
 
 impl Router {
     pub fn new(design: &Design, model: &ConstraintModel) -> Self {
         let (world, layers) = crate::from_ir::build_node(design, model);
         let via_kinds = design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|e| e.kind != ViaKind::Through).map(|e| (e.id.clone(), e.kind)).collect();
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, via_kinds }
+        let track_pins = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| !t.pins.is_empty()).map(|t| (t.id.clone(), t.pins.clone())).collect();
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, via_kinds, track_pins, drag_mode: None }
     }
 
     /// The type of the board's via `id` (a through via unless the board says otherwise).
@@ -195,22 +196,45 @@ impl Router {
     /// a pad, a via or a track end, or -- in the middle of a track --
     /// the track itself, which is split there (`LINE_PLACER::initPlacement`:
     /// `SplitAdjacentSegments( rootNode, m_startItem, m_currentStart )`; nothing
-    /// is committed unless the route places something). This port requires
-    /// starting on a connectable item (a real net), unlike upstream, which
-    /// also allows starting from bare space onto an orphaned net; starting
-    /// mid-air has no obvious net to resolve to in this project's model and
-    /// isn't a mode the task asked for. Replaces any route already in
-    /// progress (matching `StopRouting()` + fresh `StartRouting()`, not an
-    /// error).
+    /// is committed unless the route places something). With nothing there the
+    /// route starts in empty space on no net (`LINE_PLACER::Start`: `m_currentNet =
+    /// aStartItem ? aStartItem->Net() : GetOrphanedNetHandle()`), and commits
+    /// tracks on no net, as KiCad's recorded `simple-shove-1` session does.
+    /// An item of no net starts a route of no net (KiCad's no-net items share
+    /// `OrphanedItem()`, [`crate::item::same_net`]); a non-plated hole is
+    /// refused ("Cannot start routing from a non-plated hole.").
+    /// `ROUTER::isStartingPointRoutable` first, unless
+    /// violations are allowed: a start whose dot of track collides at the
+    /// route's width and at the board's minimum width is refused ("The routing
+    /// start point violates DRC.", findings p5 F2-8). Replaces any route
+    /// already in progress (matching `StopRouting()` + fresh `StartRouting()`,
+    /// not an error).
     pub fn start(&mut self, at: Point, layer_name: &str, width: Nm) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
-        let Some(pick) = self.pick_start(at, layer) else {
-            return Err("no pad, via, or track end there to route from".into());
+        let pick = self.pick_start(at, layer);
+        if let Some(Item::Solid(s)) = pick.as_ref().and_then(|p| self.world.get(p.item)) {
+            if self.world.is_npth(&s.source) {
+                return Err("Cannot start routing from a non-plated hole.".into());
+            }
+        }
+        // the item's net, or none (`OrphanedItem()`: every item of no net is that one net, `same_net`), and none in empty space
+        let net = pick.as_ref().and_then(|p| self.world.get(p.item)).and_then(|i| i.net().clone());
+        let start_pos = pick.as_ref().map_or(at, |p| p.pos);
+        if !self.settings.allow_drc_violations() {
+            // `isStartingPointRoutable`: "If the only reason we collide is track width; it's better to allow the user to start anyway and just
+            // highlight the resulting collisions, so they can change width later."
+            let collides = |w: Nm| self.world.first_colliding(&eda_drc::kimath::Shape::Stadium { a: start_pos, b: start_pos, r: w / 2 }, &net, LayerRange::single(layer), &self.rules, &[]).is_some();
+            if collides(width) && collides(self.rules.track_width_min_nm) {
+                return Err("The routing start point violates DRC.".into());
+            }
+        }
+        let mut placer = LinePlacer::start(&self.world, start_pos, pick.as_ref().map(|p| p.item), net, layer, width);
+        let Some(pick) = pick else {
+            self.drag = None;
+            self.diff = None;
+            self.session = Some(Session { placer, pending_via_layer: None, world: None, splits: Vec::new(), pending_via_kind: ViaKind::Through, placed_vias: Vec::new() });
+            return Ok(());
         };
-        let Some(net) = self.world.get(pick.item).map(|i| i.net().clone()).filter(|n| n.is_some()) else {
-            return Err("that item has no net to route".into());
-        };
-        let mut placer = LinePlacer::start(&self.world, pick.pos, Some(pick.item), net, layer, width);
         let (mut world, mut splits) = (None, Vec::new());
         if let Some(seg) = pick.split {
             // the track is cut in two in the session's own copy of the world; it stays whole in the router's
@@ -338,10 +362,9 @@ impl Router {
         let world = s.world.as_ref().unwrap_or(&self.world);
         if let Some(to_layer) = s.pending_via_layer.take() {
             let (diameter, drill) = (s.placer.via_diameter, s.placer.via_drill);
-            let layers = s.placer.via_span.unwrap_or_else(|| LayerRange::new(s.placer.current_layer, to_layer));
             s.placer.switch_layer(world, &self.rules, &self.settings, at, to_layer, diameter, drill);
             let kind = std::mem::take(&mut s.pending_via_kind);
-            s.placed_vias.push(PlacedVia { at: s.placer.fixed_start(), layers, diameter, drill, kind });
+            s.placed_vias.push(PlacedVia { kind });
             return Some(FixOutcome::Fixed { real_end: false });
         }
         Some(s.placer.fix(world, &self.rules, &self.settings, at))
@@ -358,6 +381,25 @@ impl Router {
     /// (`CurrentNode( true )`), so the far end is the other side of the connection, not the pad the route began at.
     pub fn continue_from_end(&self, at: Point) -> Result<Continuation, String> {
         let s = self.session().ok_or("not routing")?;
+        let placer = &s.placer;
+        let net = placer.net.clone();
+        let (from, layers, current_end) = self.nearest_ratsnest_anchor(at)?;
+        let runs = placer.placed_runs();
+        let layer = if layers.overlaps_layer(placer.current_layer) { placer.current_layer } else { layers.start() };
+        let mut commit = self.build_commit(&net, runs, placer.current_layer, placer.width);
+        if !commit.tracks.is_empty() || !commit.vias.is_empty() {
+            let splits = self.session_splits(false);
+            self.apply_splits(&splits, &mut commit);
+        }
+        self.drop_redundant(&mut commit);
+        self.simplify_new_lines(&mut commit);
+        Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width: placer.width, from, to: current_end, gap: 0, via_gap: 0 })
+    }
+
+    /// `ROUTER::GetNearestRatnestAnchor` for the head a `Move` to `at` gives: the far end of the connection and its layers, and where the
+    /// head ends (`placer->CurrentEnd()`). See [`Self::continue_from_end`].
+    fn nearest_ratsnest_anchor(&self, at: Point) -> Result<(Point, LayerRange, Point), String> {
+        let s = self.session().ok_or("not routing")?;
         let world = s.world.as_ref().unwrap_or(&self.world);
         let placer = &s.placer;
         let net = placer.net.clone();
@@ -369,11 +411,8 @@ impl Router {
         for run in &runs {
             node.add_line(run, None, false);
         }
-        for w in runs.windows(2) {
-            if w[0].layer != w[1].layer && w[0].last() == w[1].first() {
-                let (l0, l1) = (w[0].layer, w[1].layer);
-                node.add(Item::Via(crate::item::Via { net: net.clone(), layers: LayerRange::new(l0, l1), pos: w[0].last().unwrap(), diameter: placer.via_diameter.max(1), drill: placer.via_drill.max(1), source_via: None, locked: false, is_virtual: false }));
-            }
+        for (v, _) in &placer.fixed_vias {
+            node.add(Item::Via(crate::item::Via { diameter: v.diameter.max(1), drill: v.drill.max(1), ..v.clone() }));
         }
         let current_end = head.last().unwrap_or_else(|| placer.fixed_start());
         let (from, layers) = if head.segment_count() > 0 {
@@ -396,14 +435,36 @@ impl Router {
             let (id, anchor) = node.nearest_unconnected_item(start, &net).ok_or("Route From Other End: nothing is left to connect to.")?;
             (anchor, node.get(id).map_or(LayerRange::single(placer.current_layer), |i| i.layers()))
         };
-        let layer = if layers.overlaps_layer(placer.current_layer) { placer.current_layer } else { layers.start() };
-        let mut commit = self.build_commit(&net, runs, placer.current_layer, placer.width);
-        if !commit.tracks.is_empty() || !commit.vias.is_empty() {
-            let splits = self.session_splits(false);
-            self.apply_splits(&splits, &mut commit);
+        Ok((from, layers, current_end))
+    }
+
+    /// `ROUTER::Finish` (AttemptFinish, `F`): route to the nearest unconnected anchor of the net (`GetNearestRatnestAnchor`), moving the head
+    /// there until its end stops changing (at most five `Move`s), and when it gets there on a layer of the anchor, fix it there (`FixRoute(
+    /// otherEnd, otherEndItem, false, false )`) and finish. `Ok` with the commit when it did; `Err` with where the head ended otherwise --
+    /// the route goes on, and the tool warps the cursor there (`WarpMouseCursor( m_router->Placer()->CurrentEnd() )`). (findings p5 F2-9)
+    pub fn attempt_finish(&mut self, at: Point) -> Result<RouteCommit, Point> {
+        let fallback = self.preview(at).and_then(|pv| pv.head.last()).unwrap_or(at);
+        let Ok((other_end, layers, mut current_end)) = self.nearest_ratsnest_anchor(at) else { return Err(fallback) };
+        let mut tries = 5;
+        let mut move_result;
+        loop {
+            move_result = current_end;
+            let Some(pv) = self.preview(other_end) else { return Err(fallback) };
+            current_end = pv.head.last().unwrap_or(move_result);
+            tries -= 1;
+            if current_end == move_result || tries == 0 {
+                break;
+            }
         }
-        self.drop_redundant(&mut commit);
-        Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width: placer.width, from, to: current_end, gap: 0, via_gap: 0 })
+        let layer = self.session().map_or(0, |s| s.placer.current_layer);
+        if move_result == other_end && layers.overlaps_layer(layer) {
+            if let Some(FixOutcome::Fixed { real_end: true }) = self.fix(other_end) {
+                if let Some(commit) = self.finish(other_end) {
+                    return Ok(commit);
+                }
+            }
+        }
+        Err(current_end)
     }
 
     /// `ROUTER::ContinueFromEnd` for a pair (Ctrl+E while routing one): KiCad restarts "the placer of the same mode" at the other end, so a pair continues from the
@@ -449,7 +510,22 @@ impl Router {
 
     /// `ROUTER::UndoLastSegment` (Backspace).
     pub fn undo_last_segment(&mut self) -> bool {
-        self.session.as_mut().map(|s| s.placer.undo_last_segment()).unwrap_or(false)
+        self.session.as_mut().is_some_and(|s| {
+            let undone = s.placer.undo_last_segment();
+            let left = s.placer.fixed_vias.len();
+            // `UnfixRoute`: the via the undone run ended in is armed again, of its type, to the layer it went on to
+            let kind = s.placed_vias.get(left).map(|v| v.kind);
+            s.placed_vias.truncate(left);
+            if undone {
+                (s.pending_via_layer, s.pending_via_kind) = if s.placer.placing_via { (s.placer.via_to_layer, kind.unwrap_or(ViaKind::Through)) } else { (None, ViaKind::Through) };
+            }
+            undone
+        })
+    }
+
+    /// The layer the armed via goes on to, if one is armed (`IsPlacingVia()`).
+    pub fn pending_via_layer(&self) -> Option<i32> {
+        self.session().and_then(|s| s.pending_via_layer)
     }
 
     /// `ROUTER::StopRouting()` without committing.
@@ -472,7 +548,14 @@ impl Router {
         let runs = {
             let s = self.session.as_mut()?;
             let world = s.world.as_ref().unwrap_or(&self.world);
-            s.placer.finish(world, &self.rules, &self.settings, at)?
+            let runs = s.placer.finish(world, &self.rules, &self.settings, at)?;
+            // a via armed at the finish is committed (`FixRoute`: the head ends in it)
+            if s.placer.fixed_vias.len() > s.placed_vias.len() {
+                let kind = std::mem::take(&mut s.pending_via_kind);
+                s.placed_vias.push(PlacedVia { kind });
+                s.pending_via_layer = None;
+            }
+            runs
         };
         let mut commit = self.build_commit(&net_name, runs, layer, width);
         // nothing placed, nothing committed (`CommitRouting`: "if( m_state == ROUTE_TRACK && !m_placer->HasPlacedAnything() ) return"),
@@ -482,6 +565,39 @@ impl Router {
             self.apply_splits(&splits, &mut commit);
         }
         self.drop_redundant(&mut commit);
+        self.simplify_new_lines(&mut commit);
+        self.session = None;
+        Some(commit)
+    }
+
+    /// `ROUTER::CommitRouting()` where the route ends without a last fix -- Esc, or a finish that was refused because the head still collides
+    /// (`router_tool.cpp::performRouting`: the cancel branch only does `break;`, the finish branch `FixRoute( .. ); break;`, and after the loop
+    /// `m_router->CommitRouting()`): what the clicks have fixed is committed, as `LINE_PLACER::CommitPlacement` / `DIFF_PAIR_PLACER::CommitPlacement`
+    /// commit `m_lastNode`, and the session ends. `None` when nothing was fixed ("`if( m_state == ROUTE_TRACK && !m_placer->HasPlacedAnything() )
+    /// return;`"), or no route or pair is in progress.
+    pub fn commit_fixed(&mut self) -> Option<RouteCommit> {
+        if let Some(dp) = self.diff.as_mut() {
+            let c = dp.commit();
+            self.diff = None;
+            if c.legs.is_empty() {
+                return None;
+            }
+            let mut commit = self.build_dp_commit(&c);
+            self.drop_redundant(&mut commit);
+            return Some(commit);
+        }
+        let s = self.session.as_mut()?;
+        let runs = s.placer.commit_fixed();
+        if runs.is_empty() && s.placer.fixed_vias.is_empty() {
+            self.session = None;
+            return None;
+        }
+        let (net, layer, width) = (s.placer.net.clone(), s.placer.current_layer, s.placer.width);
+        let mut commit = self.build_commit(&net, runs, layer, width);
+        let splits = self.session_splits(true);
+        self.apply_splits(&splits, &mut commit);
+        self.drop_redundant(&mut commit);
+        self.simplify_new_lines(&mut commit);
         self.session = None;
         Some(commit)
     }
@@ -632,31 +748,22 @@ impl Router {
         for run in &runs {
             commit.tracks.extend(self.line_tracks(run, Some(&net_name)));
         }
-        // Vias this session placed sit at the shared endpoint between two
-        // consecutive runs (see `LinePlacer::switch_layer`'s doc comment);
-        // reconstruct them from the run boundaries rather than threading a
-        // separate via list through `LinePlacer`, since a run's own first/
-        // last point already says exactly where one must be.
+        // Every via the session's fixes placed (`FixRoute` adds the via a head ends in to `m_lastNode`, whose diff `CommitRouting` writes): between
+        // two runs, at the very start of the route (a via before any segment), or at its end (a route finished on a via). A via is where the
+        // walk or the shove left it, which is where the run before it ends and the run after it starts.
         if let Some(s) = self.session() {
-            for w in runs.windows(2) {
-                // A real via changes layer; a same-layer shared endpoint is
-                // just an intermediate fix click (D1).
-                if w[0].layer != w[1].layer && w[0].last() == w[1].first() {
-                    let at = w[0].last().unwrap();
-                    // the via the fix placed there, with its own layers, size and type (the last one, should Backspace have taken one back there)
-                    let placed = s.placed_vias.iter().rev().find(|v| v.at == at && v.layers.overlaps(&LayerRange::single(w[0].layer)) && v.layers.overlaps(&LayerRange::single(w[1].layer)));
-                    let (layers, diameter, drill, kind) = placed.map_or((LayerRange::new(w[0].layer, w[1].layer), s.placer.via_diameter, s.placer.via_drill, ViaKind::Through), |v| (v.layers, v.diameter, v.drill, v.kind));
-                    commit.vias.push(eda_model::ir::Via {
-                        id: String::new(),
-                        net: net_name.clone(),
-                        at,
-                        drill: drill.max(1),
-                        diameter: diameter.max(1),
-                        from_layer: self.layer_name(layers.start()).to_string(),
-                        to_layer: self.layer_name(layers.end()).to_string(),
-                    });
-                    Self::note_via_kind(&mut commit, kind);
-                }
+            for (k, (v, _)) in s.placer.fixed_vias.iter().enumerate() {
+                let kind = s.placed_vias.get(k).map_or(ViaKind::Through, |p| p.kind);
+                commit.vias.push(eda_model::ir::Via {
+                    id: String::new(),
+                    net: net_name.clone(),
+                    at: v.pos,
+                    drill: v.drill.max(1),
+                    diameter: v.diameter.max(1),
+                    from_layer: self.layer_name(v.layers.start()).to_string(),
+                    to_layer: self.layer_name(v.layers.end()).to_string(),
+                });
+                Self::note_via_kind(&mut commit, kind);
             }
             for (track_id, lines) in s.placer.displaced_tracks() {
                 commit.remove_track_ids.push(track_id.to_string());
@@ -673,6 +780,96 @@ impl Router {
             }
         }
         commit
+    }
+
+    /// `LINE_PLACER::simplifyNewLine`, which every `FixRoute` runs on what it added: the new segments are assembled into one line with the
+    /// tracks they continue (`AssembleLine( aLatest, nullptr, false, false, false )`: no locked segment followed, no change of width; a joint
+    /// that is not a line corner -- a pad, a via, a branch -- ends it), `Simplify()` and `MERGE_COLINEAR` drop the points where it goes straight
+    /// on, and if that changed the line it replaces the old one (`aNode->Remove( l_orig ); aNode->Add( l )`). Here on the board as the commit
+    /// leaves it: for each new track, the line it is part of; when simplifying that line drops a point, the line's tracks -- new ones, and old
+    /// ones the commit then removes -- become the one simplified track. So a route that goes straight on from a track's end, or a click in the
+    /// middle of a straight run, leaves one segment where KiCad does (findings p5 F2-6). **Differs:** an old track is taken in only when the
+    /// whole of its polyline is in the line, and a commit with an arc track is left as it is (`Simplify` keeps an arc's points anyway).
+    fn simplify_new_lines(&self, commit: &mut RouteCommit) {
+        if commit.tracks.is_empty() || commit.tracks.iter().any(|t| t.arc().is_some()) {
+            return;
+        }
+        const NEW: &str = "\u{1}new";
+        let mut w = self.world.branch();
+        let removed: std::collections::HashSet<&str> = commit.remove_track_ids.iter().map(String::as_str).collect();
+        let doomed: Vec<ItemId> = w.iter().filter(|(_, it)| it.source_track_id().is_some_and(|t| removed.contains(t))).map(|(id, _)| id).collect();
+        for id in doomed {
+            w.remove(id);
+        }
+        let gone_vias: std::collections::HashSet<&str> = commit.remove_via_ids.iter().map(String::as_str).collect();
+        let doomed: Vec<ItemId> = w.iter().filter(|(_, it)| matches!(it, Item::Via(v) if v.source_via.as_deref().is_some_and(|s| gone_vias.contains(s)))).map(|(id, _)| id).collect();
+        for id in doomed {
+            w.remove(id);
+        }
+        for v in &commit.vias {
+            let layers = LayerRange::new(self.layer_index(&v.from_layer).unwrap_or(0), self.layer_index(&v.to_layer).unwrap_or(0));
+            w.add(Item::Via(crate::item::Via { net: net_of(&v.net), layers, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: None, locked: false, is_virtual: false }));
+        }
+        let mut new_ids: Vec<Vec<ItemId>> = Vec::with_capacity(commit.tracks.len());
+        for (i, t) in commit.tracks.iter().enumerate() {
+            let Some(layer) = self.layer_index(&t.layer) else {
+                new_ids.push(Vec::new());
+                continue;
+            };
+            let line = Line::from_points(net_of(&t.net), layer, t.width, t.pts.clone());
+            new_ids.push(w.add_line(&line, Some((format!("{NEW}{i}"), 0)), commit.lock_tracks.contains(&i)));
+        }
+        let count_of = |w: &Node, track: &str| w.iter().filter(|(_, it)| it.source_track_id() == Some(track)).count();
+        let opts = crate::node::AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false };
+        let mut consumed: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        let mut merged: Vec<eda_model::ir::Track> = Vec::new();
+        for i in 0..commit.tracks.len() {
+            if consumed.contains(&i) || commit.lock_tracks.contains(&i) {
+                continue;
+            }
+            let Some(&seg) = new_ids[i].first() else { continue };
+            let Some(line) = w.assemble_line_with(seg, opts) else { continue };
+            let mut simplified = line.clone();
+            simplified.simplify();
+            if simplified.pts.len() >= line.pts.len() {
+                continue;
+            }
+            // the tracks of the line, each wholly in it
+            let mut members: Vec<&str> = line.segment_ids.iter().filter_map(|id| w.get(*id).and_then(|it| it.source_track_id())).collect();
+            members.sort_unstable();
+            members.dedup();
+            let whole = members.iter().all(|t| line.segment_ids.iter().filter(|id| w.get(**id).and_then(|it| it.source_track_id()) == Some(*t)).count() == count_of(&w, t));
+            let news: Vec<usize> = members.iter().filter_map(|t| t.strip_prefix(NEW).and_then(|k| k.parse().ok())).collect();
+            if !whole || news.iter().any(|k| consumed.contains(k) || commit.lock_tracks.contains(k)) {
+                continue;
+            }
+            consumed.extend(news.iter().copied());
+            let olds: Vec<&str> = members.iter().copied().filter(|t| !t.starts_with(NEW)).collect();
+            commit.remove_track_ids.extend(olds.iter().map(|t| t.to_string()));
+            // the pads the tracks it takes in land on, it lands on
+            let mut pins: Vec<String> = olds.iter().flat_map(|t| self.track_pins.get(*t).into_iter().flatten().cloned()).chain(news.iter().flat_map(|&k| commit.tracks[k].pins.iter().cloned())).collect();
+            pins.sort();
+            pins.dedup();
+            let template = &commit.tracks[i];
+            merged.push(eda_model::ir::Track { id: String::new(), net: template.net.clone(), pins, layer: template.layer.clone(), width: template.width, pts: simplified.pts, arc_mid_offset: None });
+        }
+        if consumed.is_empty() {
+            return;
+        }
+        let mut tracks = Vec::with_capacity(commit.tracks.len());
+        let mut locks = Vec::new();
+        for (i, t) in std::mem::take(&mut commit.tracks).into_iter().enumerate() {
+            if consumed.contains(&i) {
+                continue;
+            }
+            if commit.lock_tracks.contains(&i) {
+                locks.push(tracks.len());
+            }
+            tracks.push(t);
+        }
+        tracks.extend(merged);
+        commit.tracks = tracks;
+        commit.lock_tracks = locks;
     }
 
     fn net_name_of(&self, line: &Line) -> String {
@@ -733,14 +930,21 @@ impl Router {
         self.session = None;
         self.diff = None;
         self.drag = Some(dragger);
+        self.drag_mode = Some(self.settings.mode);
         Ok(())
     }
 
     /// `ROUTER::Move`/`moveDragging`: the live drag preview, `DRAGGER::Drag` at `at`. The drag remembers the last position that
     /// worked: one that does not shows that one again (`DragPreview::restored`).
     pub fn drag_preview(&mut self, at: Point) -> Option<crate::dragger::DragPreview> {
-        let (world, rules, settings) = (&self.world, &self.rules, &self.settings);
-        self.drag.as_mut().map(|d| d.drag(world, rules, settings, at))
+        let settings = self.drag_settings();
+        let (world, rules) = (&self.world, &self.rules);
+        self.drag.as_mut().map(|d| d.drag(world, rules, &settings, at))
+    }
+
+    /// The router's settings with the mode the drag started in.
+    fn drag_settings(&self) -> RoutingSettings {
+        RoutingSettings { mode: self.drag_mode.unwrap_or(self.settings.mode), ..self.settings.clone() }
     }
 
     /// The IR tracks the dragged line stands on: what the cursor must not snap to while dragging (`checkSnap`).
@@ -780,7 +984,8 @@ impl Router {
     /// and `force_commit` (Ctrl+click) is not set -- and the drag session stays
     /// open, so the caller can keep adjusting or explicitly cancel.
     pub fn drag_finish_with(&mut self, at: Point, force_commit: bool) -> Option<RouteCommit> {
-        let drag_commit = self.drag.as_mut()?.finish(&self.world, &self.rules, &self.settings, at, force_commit)?;
+        let settings = self.drag_settings();
+        let drag_commit = self.drag.as_mut()?.finish(&self.world, &self.rules, &settings, at, force_commit)?;
         let mut commit = RouteCommit { remove_track_ids: drag_commit.remove_track_ids, remove_via_ids: drag_commit.remove_via_ids, ..RouteCommit::default() };
         for line in &drag_commit.tracks {
             commit.tracks.extend(self.line_tracks(line, None));
@@ -823,15 +1028,45 @@ impl Router {
     /// in progress. The error is KiCad's own message.
     pub fn start_diff_pair(&mut self, at: Point, layer_name: &str) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
-        let hit = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_NM, None);
-        let Some((start_item, _)) = hit else {
-            return Err("no pad, via, or track end there to route from".into());
+        // the pad, via or track end there, else the track under the cursor (`isStartingPointRoutable` with `aStartItem` the item picked:
+        // `FindDpPrimitivePair` then finds its free end, or says "Can't find a suitable starting point. ..."), else nothing (findings p5 F4-6)
+        let hit = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_NM, None).map(|(id, _)| id).or_else(|| self.world.segment_at(at, layer, None, None, &[]));
+        let Some(start_item) = hit else {
+            return Err("Cannot start a differential pair in the middle of nowhere.".into());
         };
-        let placer = crate::dp_placer::DiffPairPlacer::start(&self.world, &self.rules, &self.settings, start_item, layer, self.layers.all())?;
+        let mut placer = crate::dp_placer::DiffPairPlacer::start(&self.world, &self.rules, &self.settings, start_item, layer, self.layers.all())?;
+        // `ImportSizes`: "First try to pick up diff pair width from starting track" (`m_UseConnectedTrackWidth`, on by default) -- also off a
+        // pad or via with a stub (findings p5 F4-5)
+        if let Some(w) = self.inherit_track_width(start_item, at, layer) {
+            placer.set_dimensions(Some(w), None, None);
+        }
         self.session = None;
         self.drag = None;
         self.diff = Some(placer);
         Ok(())
+    }
+
+    /// `PNS_KICAD_IFACE_BASE::inheritTrackWidth( aItem, .., aStartPosition )`: a track's own width; for a pad or via, of the tracks joined to it
+    /// on the start layer the one whose far end is nearest the cursor ("the far-end direction is a proxy for which exit stub the user is
+    /// pointing at"), else the narrowest on the start layer, else the narrowest of all; none with no track joined.
+    fn inherit_track_width(&self, item: ItemId, at: Point, layer: i32) -> Option<Nm> {
+        let it = self.world.get(item)?;
+        if it.is_track() {
+            return Some(it.width());
+        }
+        let p = match it {
+            Item::Via(v) => v.pos,
+            Item::Solid(s) => s.pos,
+            _ => return None,
+        };
+        let joint = self.world.joint_at(p, it.net())?;
+        let linked: Vec<&Item> = joint.links.iter().filter(|&&id| id != item).filter_map(|&id| self.world.get(id)).filter(|i| i.is_track()).collect();
+        let sq = |a: Point, b: Point| ((a.x - b.x) as i128).pow(2) + ((a.y - b.y) as i128).pow(2);
+        let closest = linked.iter().filter(|i| i.layers().start() == layer).filter_map(|i| i.track_ends().map(|(a, b)| (i, if sq(a, p) > sq(b, p) { a } else { b }))).min_by_key(|(_, far)| sq(*far, at));
+        if let Some((i, _)) = closest {
+            return Some(i.width());
+        }
+        linked.iter().filter(|i| i.layers().start() == layer).map(|i| i.width()).min().or_else(|| linked.iter().map(|i| i.width()).min())
     }
 
     /// `ROUTER::UpdateSizes` for a pair (the "Differential Pair Dimensions..." dialog,
@@ -1163,7 +1398,32 @@ mod tests {
         let pv = router.preview(Point { x: 8_000_000, y: 3_000_000 }).unwrap();
         assert_eq!(pv.head.first(), Some(Point { x: 4_000_000, y: 0 }));
         let commit = router.finish(Point { x: 8_000_000, y: 3_000_000 }).unwrap();
-        assert!(!commit.remove_track_ids.contains(&"trkA".to_string()), "the track is not touched: {commit:?}");
+        // not cut: the route goes straight on from the track's end, so the two are one line (`simplifyNewLine`), the end point gone
+        assert_eq!(commit.remove_track_ids, vec!["trkA".to_string()], "{commit:?}");
+        assert_eq!(commit.tracks.len(), 1, "{commit:?}");
+        assert_eq!(commit.tracks[0].pts, vec![Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 0 }, Point { x: 8_000_000, y: 3_000_000 }]);
+    }
+
+    /// findings p5 F2-6: `simplifyNewLine` -- a route that continues a track straight on is merged with it, and so is a click in the middle of
+    /// a straight run; a route that turns at the track's end leaves the track alone.
+    #[test]
+    fn a_route_continuing_a_track_straight_is_merged_with_it() {
+        let (design, model) = track_and_a_via_of_the_same_net();
+        let mut router = Router::new(&design, &model);
+        router.settings.auto_posture = false;
+        router.start(Point { x: 4_000_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        router.preview(Point { x: 6_000_000, y: 0 });
+        router.fix(Point { x: 6_000_000, y: 0 });
+        router.preview(Point { x: 7_000_000, y: 0 });
+        let commit = router.finish(Point { x: 7_000_000, y: 0 }).unwrap();
+        assert_eq!(commit.remove_track_ids, vec!["trkA".to_string()]);
+        assert_eq!(commit.tracks.iter().map(|t| t.pts.clone()).collect::<Vec<_>>(), vec![vec![Point { x: 0, y: 0 }, Point { x: 7_000_000, y: 0 }]], "one segment");
+        // a turn at the end: nothing merged
+        let mut router = Router::new(&design, &model);
+        router.start(Point { x: 4_000_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        router.preview(Point { x: 4_000_000, y: -3_000_000 });
+        let commit = router.finish(Point { x: 4_000_000, y: -3_000_000 }).unwrap();
+        assert!(commit.remove_track_ids.is_empty(), "{commit:?}");
     }
 
     /// A point on the track that the studio's snapping put there exactly wins over a pad within the generous 500 um; one that was not
@@ -1276,12 +1536,112 @@ mod tests {
         assert!(err.contains("nothing is left"), "{err}");
     }
 
+    /// findings p5 F4-5: a pair started on a pad with a stub takes the stub's width (`inheritTrackWidth`), not the class's.
     #[test]
-    fn start_fails_off_any_item() {
+    fn a_pair_started_on_a_pad_with_a_stub_takes_the_stubs_width() {
+        let (mut design, mut model) = two_pad_board();
+        model.nets = vec![IrNet { name: "USB_DP".into(), pins: vec!["R1.1".into(), "R2.1".into()] }, IrNet { name: "USB_DN".into(), pins: vec!["R1.2".into(), "R2.2".into()] }];
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "stub".into(), net: "USB_DP".into(), pins: vec![], layer: "F.Cu".into(), width: 150_000, pts: vec![Point { x: -825_000, y: 0 }, Point { x: -825_000, y: -2_000_000 }], arc_mid_offset: None });
+        let mut router = Router::new(&design, &model);
+        router.start_diff_pair(Point { x: -825_000, y: 0 }, "F.Cu").expect("R1.1 and R1.2 are a pair");
+        assert_eq!(router.diff_pair_preview(Point { x: 3_000_000, y: 0 }).expect("preview").width, 150_000);
+    }
+
+    /// findings p5 F4-6: a pair started where nothing is gets KiCad's own refusal.
+    #[test]
+    fn a_pair_started_in_the_middle_of_nowhere_is_refused_with_kicads_message() {
         let (design, model) = two_pad_board();
         let mut router = Router::new(&design, &model);
-        assert!(router.start(Point { x: 50_000_000, y: 50_000_000 }, "F.Cu", 200_000).is_err());
+        assert_eq!(router.start_diff_pair(Point { x: 50_000_000, y: 50_000_000 }, "F.Cu"), Err("Cannot start a differential pair in the middle of nowhere.".to_string()));
+    }
+
+    /// findings p5 F3-12: a drag keeps the mode it started in (`m_currentMode = Settings().Mode()` in `DRAGGER::Start`).
+    #[test]
+    fn a_drag_keeps_the_mode_it_started_in() {
+        let (design, model) = track_and_via_board();
+        let mut router = Router::new(&design, &model);
+        router.settings.mode = crate::settings::Mode::MarkObstacles;
+        router.drag_start(Point { x: 1_000_000, y: 0 }, "F.Cu").expect("the track's end");
+        router.settings.mode = crate::settings::Mode::Shove;
+        // dragged onto the GND via: marked, not shoved
+        let pv = router.drag_preview(Point { x: 5_000_000, y: 0 }).unwrap();
+        assert!(pv.colliding && pv.displaced_vias.is_empty(), "{pv:?}");
+    }
+
+    /// findings p5 F2-9: AttemptFinish routes to the nearest unconnected anchor of the net (`ROUTER::Finish`), not to the cursor.
+    #[test]
+    fn attempt_finish_routes_to_the_ratsnest_anchor() {
+        let (design, model) = two_pad_board();
+        let mut router = Router::new(&design, &model);
+        router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        let cursor = Point { x: 1_000_000, y: 2_000_000 };
+        router.preview(cursor);
+        let commit = router.attempt_finish(cursor).expect("R2.1 is free to reach");
+        let end = commit.tracks.last().and_then(|t| t.pts.last().copied());
+        assert_eq!(end, Some(Point { x: 6_000_000 - 825_000, y: 0 }), "ends on R2.1: {commit:?}");
         assert!(!router.is_routing());
+        // a wall the walk cannot get round: the route goes on, and the cursor goes to where the head got
+        let (mut design, model) = two_pad_board();
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "wall".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_500_000, y: -40_000_000 }, Point { x: 2_500_000, y: 40_000_000 }], arc_mid_offset: None });
+        let mut router = Router::new(&design, &model);
+        router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        router.preview(cursor);
+        let warp = router.attempt_finish(cursor).expect_err("blocked");
+        assert!(warp.x < 2_500_000, "short of the wall: {warp:?}");
+        assert!(router.is_routing(), "the route goes on");
+    }
+
+    /// findings p5 F2-8 / P-2: with nothing under the cursor the route starts in empty space on no net (`m_currentNet =
+    /// GetOrphanedNetHandle()`) and commits a track on no net.
+    #[test]
+    fn start_in_empty_space_routes_an_unconnected_track() {
+        let (design, model) = two_pad_board();
+        let mut router = Router::new(&design, &model);
+        let at = Point { x: 50_000_000, y: 50_000_000 };
+        router.start(at, "F.Cu", 200_000).expect("a route in empty space");
+        assert!(router.is_routing() && router.current_net().is_none());
+        router.preview(Point { x: 53_000_000, y: 50_000_000 });
+        let commit = router.finish(Point { x: 53_000_000, y: 50_000_000 }).expect("nothing in the way");
+        assert_eq!(commit.tracks.len(), 1);
+        assert_eq!((commit.tracks[0].net.as_str(), commit.tracks[0].pts.first().copied()), ("", Some(at)));
+    }
+
+    /// A track routed in empty space is on no net, and so is what starts from its end: the two join (KiCad's no-net items share
+    /// `OrphanedItem()`), and a later no-net route next to it is no violation of it.
+    #[test]
+    fn a_route_from_the_end_of_a_no_net_track_joins_it() {
+        let (mut design, model) = two_pad_board();
+        let mut router = Router::new(&design, &model);
+        let (a, b) = (Point { x: 50_000_000, y: 50_000_000 }, Point { x: 53_000_000, y: 50_000_000 });
+        router.start(a, "F.Cu", 200_000).unwrap();
+        router.preview(b);
+        let commit = router.finish(b).unwrap();
+        design.routing.as_mut().unwrap().tracks.extend(commit.tracks);
+        design.assign_missing_ids();
+        let mut router = Router::new(&design, &model);
+        router.start(b, "F.Cu", 200_000).expect("the end of the no-net track");
+        assert!(router.current_net().is_none());
+        let c = Point { x: 53_000_000, y: 53_000_000 };
+        let pv = router.preview(c).unwrap();
+        assert!(!pv.colliding && pv.head.first() == Some(b), "{pv:?}");
+        // a route of no net along it, 100 um away: no collision
+        router.start(Point { x: 50_000_000, y: 50_300_000 }, "F.Cu", 200_000).expect("empty space");
+        let pv = router.preview(Point { x: 53_000_000, y: 50_300_000 }).unwrap();
+        assert!(!pv.colliding && pv.head.pts.len() == 2, "{pv:?}");
+    }
+
+    /// findings p5 F2-8 / F3-4: `isStartingPointRoutable` refuses a start whose dot of track collides at the route's width and at the board's
+    /// minimum width -- unless violations are allowed (Highlight collisions with "Allow DRC violations").
+    #[test]
+    fn a_start_point_that_violates_drc_is_refused() {
+        let (mut design, model) = track_and_via_board();
+        // a GND track ending 300 um from the end of the SIG track: 100 um of copper gap at 200 um widths, under the 200 um clearance
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "trkG".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 1_300_000, y: 0 }, Point { x: 1_300_000, y: 3_000_000 }], arc_mid_offset: None });
+        let mut router = Router::new(&design, &model);
+        assert_eq!(router.start(Point { x: 1_000_000, y: 0 }, "F.Cu", 200_000), Err("The routing start point violates DRC.".to_string()));
+        assert!(!router.is_routing());
+        router.settings = RoutingSettings { mode: crate::settings::Mode::MarkObstacles, can_violate_drc: true, ..RoutingSettings::default() };
+        assert!(router.start(Point { x: 1_000_000, y: 0 }, "F.Cu", 200_000).is_ok());
     }
 
     #[test]
@@ -1330,7 +1690,10 @@ mod tests {
         router.fix(Point { x: 2_000_000, y: 0 });
         router.fix(Point { x: 2_000_000, y: 1_000_000 });
         let commit = router.finish(Point { x: 5_175_000, y: 0 }).expect("must finish");
-        assert!(commit.tracks.len() >= 3);
+        // (the walk round R1.2 ends the first leg going straight down onto the second: the line of the three legs loses that point and is
+        // one track, `simplifyNewLine`)
+        assert!(!commit.tracks.is_empty(), "{:?}", commit.tracks);
+        assert!(!commit.tracks.iter().any(|t| t.pts.contains(&Point { x: 2_000_000, y: 0 })), "the straight-on click point is gone: {:?}", commit.tracks);
         assert!(commit.vias.is_empty(), "got vias: {:?}", commit.vias);
     }
 
@@ -1353,16 +1716,15 @@ mod tests {
         router.start_diff_pair(Point { x: -825_000, y: 0 }, "F.Cu").expect("R1.1 and R1.2 are a pair");
         let at = Point { x: 3_000_000, y: 0 };
         let before = router.diff_pair_preview(at).expect("preview");
-        // the model's own 125 um width is under the board's 200 um minimum track width, and its 180 um gap under the 200 um clearance:
-        // the pair is raised to both
-        assert_eq!(before.width, 200_000, "the net class's own width (raised to the minimum) until the dialog says otherwise");
+        // no class: KiCad's Default class sizes, 200 um wide, 250 um apart
+        assert_eq!(before.width, 200_000, "the net class's own width until the dialog says otherwise");
         let pitch_of = |p: &crate::dp_placer::DiffPairPreview| {
             let (a, b) = (p.head_a.last().unwrap(), p.head_b.last().unwrap());
             (((a.x - b.x) as f64).powi(2) + ((a.y - b.y) as f64).powi(2)).sqrt()
         };
         // the pair ends a pitch apart (the gateways' offsets are whole micrometres: within a few of it)
         let near = |actual: f64, pitch: i64| actual >= pitch as f64 - 10.0 && actual <= pitch as f64 + 10.0;
-        assert!(near(pitch_of(&before), 200_000 + 200_000), "{}", pitch_of(&before));
+        assert!(near(pitch_of(&before), 200_000 + 250_000), "{}", pitch_of(&before));
         assert!(router.set_diff_pair_dimensions(Some(200_000), Some(300_000)));
         let after = router.diff_pair_preview(at).expect("preview");
         assert_eq!(after.width, 200_000);

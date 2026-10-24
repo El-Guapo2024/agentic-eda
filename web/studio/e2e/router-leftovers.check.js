@@ -15,7 +15,7 @@
 //   arcs         D on an arc track drags an arc (`drag: "arc"`, `DM_ARC`): the arc passes through the cursor, the two runs next to it follow tangent to it, it stays an `(arc ..)` track, and one
 //                Undo puts it back; a route that pushes a run of the line the arc is on leaves the arc an arc (the very arc, the run a polyline); a route that ends in the middle of an arc
 //                of its net cuts it into two arcs there, and one that starts in the middle of one does too (`SplitAdjacentArcs`);
-//   locked       D on a locked track asks "The selected item is locked." and Drag Anyway starts the drag (`drag_locked`); a route in Shove mode is walked round a locked track and pushes
+//   locked       D on a locked track from the selection tool only warns; with the router tool active it asks "The selected item is locked." and Drag Anyway starts the drag (`drag_locked`); a route in Shove mode is walked round a locked track and pushes
 //                nothing;
 //   via head     `V` while routing in Shove mode: the track under the head's via, on the other layer, is pushed aside with the via in the preview, and the committed route (tracks on both layers,
 //                the via) leaves the gates no clearance failure and is one undo step;
@@ -361,7 +361,7 @@
     await clickAt(8_000_000, 10_000_000);
     await waitReply("fix", n);
     await quiet();
-    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
     await waitReply("finish", n);
     await sleep(600);
     const st = await state();
@@ -416,7 +416,7 @@
     await clickAt(20_000_000, 12_000_000);
     await waitReply("fix", n);
     await quiet();
-    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
     await waitReply("finish", n);
     await sleep(600);
     st = await state();
@@ -445,9 +445,19 @@
     t(m && m.body.displaced.length === 0, `and nothing is pushed: ${m && JSON.stringify(m.body.displaced.map((d) => d.source_track))}`);
     t(m && Math.max(...m.body.head.map((p) => p[1])) >= 21_000_000, `it goes round the end of the run: ${m && JSON.stringify(m.body.head)}`);
     await leaveTool();
-    // D asks -- once the selection filter allows a locked item to be taken hold of (KiCad's own default does not: `m_filter.lockedItems = false`)
+    // D from the selection tool (`EDIT_TOOL::Drag`): the locked item is filtered out of the selection and the tool only warns
+    // (`FilterCollectorForLockedItems`, `ReportFilteredLockedItems`) -- it does not ask (findings p5 F3-3)
     t((await lockedFilter(false)) === false, "the selection filter's Locked items is off, as KiCad's default is");
     await lockedFilter(true);
+    await pointerTo(17_000_000, 18_000_000);
+    n = replies.length;
+    await E.run("pcbnew.InteractiveRouter.Drag45Degree");
+    await waitReply("drag_start", n);
+    await sleep(500);
+    t(!dialog() && E.state().tool === "select", `from the selection tool D does not ask and drags nothing: ${dialogText().slice(0, 80)} tool ${E.state().tool}`);
+    // D while the router tool is active (`ROUTER_TOOL::performDragging`) asks
+    await E.run("pcbnew.InteractiveRouter.SingleTrack");
+    await sleep(300);
     await pointerTo(17_000_000, 18_000_000);
     n = replies.length;
     await E.run("pcbnew.InteractiveRouter.Drag45Degree");
@@ -460,7 +470,7 @@
     // not now
     const noWay = buttons.find((b) => /cancel|no/i.test(b));
     if (noWay) await press(noWay);
-    t(!dialog() && E.state().tool === "select", `declining drags nothing: tool ${E.state().tool}`);
+    t(!dialog() && E.state().tool !== "drag", `declining drags nothing: tool ${E.state().tool}`);
     // Drag Anyway
     n = replies.length;
     await pointerTo(17_000_000, 18_000_000);
@@ -508,7 +518,7 @@
     t(fx && fx.body.ok === true && fx.body.blocked === false && fx.body.preview.layer === "B.Cu", `a click places it and the route goes on on B.Cu: ${fx && JSON.stringify([fx.body.ok, fx.body.blocked, fx.body.preview && fx.body.preview.layer])}`);
     await moveTo(28_000_000, 19_000_000);
     n = replies.length;
-    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
     await waitReply("finish", n);
     await sleep(700);
     const st = await state();
@@ -658,7 +668,7 @@
     await waitReply("fix", n);
     for (const y of [31_000_000, 32_000_000]) await moveTo(25_000_000, y);
     n = replies.length;
-    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
     await waitReply("finish", n);
     await sleep(700);
     const st = await state();
@@ -696,7 +706,7 @@
     await clickAt(11_000_000, 28_000_000);
     await waitReply("fix", n);
     n = replies.length;
-    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
     await waitReply("finish", n);
     await sleep(700);
     let st = await state();
@@ -863,7 +873,7 @@
       t(fx && fx.body.blocked === false && fx.body.preview.layer === "F.Cu", `the route goes on on F.Cu: ${fx && fx.body.preview && fx.body.preview.layer}`);
       await moveTo(18_000_000, 5_000_000);
       n = replies.length;
-      await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+      await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
       await waitReply("finish", n);
       await sleep(700);
       const st = await state();

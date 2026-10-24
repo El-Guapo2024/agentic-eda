@@ -51,7 +51,7 @@ impl LengthEnv {
     /// The board's rules and its stackup (the default one for its copper layers when it has none: `BuildDefaultStackupList`).
     pub fn of(model: &eda_model::ConstraintModel) -> LengthEnv {
         let rules = model.board.clone();
-        let stackup = model.stackup.clone().unwrap_or_else(|| eda_model::rules::default_stackup(rules.layers.len(), 1_600));
+        let stackup = model.stackup.clone().unwrap_or_else(|| eda_model::rules::default_stackup(rules.layers.len(), 1_600_000));
         LengthEnv { rules, stackup }
     }
 }
