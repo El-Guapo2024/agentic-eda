@@ -2416,7 +2416,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     duplicateSelection: async () => {
       const board = stateRef.current.board;
       if (!board) return;
-      // `Duplicate` filters markers, groups and free pads only: a locked item is copied too (the copy is not locked), a pad stands for its footprint.
+      // `Duplicate` filters markers, groups and free pads only: a locked item is copied too, and its copy is locked (`BOARD_ITEM::Duplicate` is a `Clone()`), a
+      // pad stands for its footprint.
       const { ids } = editableSelection(board, [...stateRef.current.selection], { respectLocks: false });
       if (ids.length === 0) return;
       const before = allItemIds(board);
@@ -2428,6 +2429,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const newIds = after ? newItemIds(before, after) : [];
       if (newIds.length === 0) {
         await postCarry("commit"); // nothing to carry: the duplicate stands
+        return;
+      }
+      // `doMoveSelection` leaves the locked copies out (`FilterCollectorForLockedItems`); with nothing left to carry it returns false and the commit is reverted.
+      if (after && editableSelection(after, newIds).ids.length === 0) {
+        await postCarry("cancel");
+        await refresh();
+        dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
         return;
       }
       carriedPlacementRef.current = true;

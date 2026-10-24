@@ -393,6 +393,8 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
             Member::Dimension(i) => (5, i),
             Member::Footprint(i) => (6, i),
             Member::Group(i) => (7, i),
+            Member::Point(i) => (8, i),
+            Member::Barcode(i) => (9, i),
         }
     };
     let position = |block: &Copies, m: &Member| -> Option<Point> {
@@ -404,6 +406,8 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
             Member::Text(i) => Some(block.texts[i].at),
             Member::Dimension(i) => Some(block.dimensions[i].start),
             Member::Footprint(i) => Some(block.footprints[i].at),
+            Member::Point(i) => Some(block.points[i].at),
+            Member::Barcode(i) => Some(block.barcodes[i].at),
             // A group copy is moved through its leaves (below), never as a point of its own.
             Member::Group(_) => None,
         }
@@ -416,6 +420,8 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
         Member::Shape(i) => transform_shape(&mut block.shapes[i], x, copper),
         Member::Text(i) => transform_text(&mut block.texts[i], x, copper),
         Member::Dimension(i) => transform_dimension(&mut block.dimensions[i], x, copper),
+        Member::Point(i) => super::pcb_items::transform_point(&mut block.points[i], x, copper),
+        Member::Barcode(i) => super::pcb_items::transform_barcode(&mut block.barcodes[i], x, copper),
         Member::Footprint(i) => {
             let f = &mut block.footprints[i];
             let pose = FootprintInstance { id: f.reference.clone(), at: f.at, rot: f.rot, side: f.side, label: f.label };
@@ -457,6 +463,8 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
     each.extend((0..block.texts.len()).map(Member::Text));
     each.extend((0..block.dimensions.len()).map(Member::Dimension));
     each.extend((0..block.footprints.len()).map(Member::Footprint));
+    each.extend((0..block.points.len()).map(Member::Point));
+    each.extend((0..block.barcodes.len()).map(Member::Barcode));
     for m in each.into_iter().filter(|m| !in_group.contains(&key(m))) {
         let Some(pos) = position(block, &m) else { continue };
         let (offset, turn) = g.transform(index, pos);
