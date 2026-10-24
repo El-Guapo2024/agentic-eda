@@ -58,6 +58,10 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names, one footprint name, `(path)`, fields, pinfunction, flip frame | started 2026-10-24 | all |
+| `task-fix-bc-board-io` (`~/work/agentic-eda-exports`) | Batches B and C: board reader/writer losses, teardrop fills | started 2026-10-24 | all |
+| `task-fix-e-router` (`~/work/agentic-eda-router`) | Batch E: router | started 2026-10-24 | all |
+| `task-fix-f-editing` (`~/work/agentic-eda-rules`) | Batch F: editing operations | started 2026-10-24 | all |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -79,7 +83,9 @@ The 2026-10-21 list is done: Specctra, embedded files and the pad-details fix, t
    - **E. Router:** the walk-around detour, lost end vias, Walk-around via violations, Esc discarding fixed segments, the diff-pair gap, and the replay tests' macOS default path.
    - **F. Editing:** point edit and Mirror dropping items from groups, footprint bounding boxes, the carry's rotate pivot, Position Relative's angle, Recombine, Repeat Layout's nets and groups, design-block copper, the Net Inspector.
    - Then the mediums and lows, and the wrong doc claims listed at the end of `INDEX.md`.
-3. **Leftovers named in the merges** (each in GAPS.md): springback in the dragger and the pair placer, a shared screen inside a shared screen, the Symbol Editor's pin and New Symbol dialogs, Both sides placement files, the checks P20 left uncovered.
+   - Order as run (2026-10-24, the user: "do all"): A, B+C, E and F in parallel (agents' extra brief: `~/work/briefs/fix/common-fix.md`); D after A merges (both touch `crates/engine` naming); then the length newtype below.
+3. **The length newtype** (the user, 2026-10-24: do it): make `Nm` a newtype so the compiler catches unit mixing, with `mm()`/`mil()` test helpers and conversions only at the boundaries, done in waves by crate (model, then kicad/drc/engine, then ops/pns, then cli/studio). Run it last, on a quiet main, since it touches every crate.
+4. **Leftovers named in the merges** (each in GAPS.md): springback in the dragger and the pair placer, a shared screen inside a shared screen, the Symbol Editor's pin and New Symbol dialogs, Both sides placement files, the checks P20 left uncovered.
 
 TODO (the user, 2026-10-23: not now): check the kicad-cli fallbacks on a kicad-cli without `pcb export specctra`, `idf` or `gencad` (the Mac's 10.99.0-5334); delete the deprecated Specctra exporter once every machine has the command (scope in GAPS.md P19).
 
