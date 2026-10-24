@@ -72,7 +72,7 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
     return { item, points, active: activeEditPoint(points, [cursor.x, cursor.y], handleToleranceNm(state.view.scale)), at: [cursor.x, cursor.y] };
   };
 
-  /** Replace the item's geometry: a zone outline in place, a shape as a new shape (its id is its geometry's). */
+  /** Replace the item's geometry in place: a zone's outline, a shape's geometry (`replace_shape`: it keeps its id and its group). */
   const applyGeometry = (item: PointItem, next: { ring: [number, number][] } | { shape: ReturnType<typeof shapeToCmd> }): void => {
     if ("ring" in next) {
       if (item.kind === "zone") {
