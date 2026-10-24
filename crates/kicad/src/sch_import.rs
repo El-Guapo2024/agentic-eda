@@ -44,6 +44,11 @@ pub struct SchImportNotes {
     /// entry -- its pins/electrical types could not be recovered, so it was
     /// dropped.
     pub unresolved_symbols: usize,
+    /// Each item's uuid in the file -> the id the import gave it (a symbol's and a power symbol's reference, a pin's `REF.PIN`, a wire's, a
+    /// label's, ...), the first one where a uuid stands for several: what a project's ERC exclusions name their items by
+    /// (`crate::erc_exclusions::from_project`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub item_ids: BTreeMap<String, String>,
 }
 
 /// How a file is read, beyond what a file says.
@@ -689,6 +694,23 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         for id in sch.bus_entries.iter().map(|b| &b.id).chain(sch.sheets.iter().map(|s| &s.id)) {
             note(Some(id.clone()), id);
         }
+        // the pins of the placed symbols (`(pin "1" (uuid ..))`) as `REF.PIN`, and the sheets' pins, for the items an ERC marker names
+        for item in sexpr::find_all(root, "symbol") {
+            let Some(reference) = uuid_of(item).and_then(|u| by_uuid.get(&u)).and_then(|ids| ids.first()).cloned() else { continue };
+            for pin in sexpr::find_all(item, "pin") {
+                if let (Some(number), Some(u)) = (sexpr::txt(pin, 1), uuid_of(pin)) {
+                    notes.item_ids.entry(u).or_insert_with(|| format!("{reference}.{number}"));
+                }
+            }
+        }
+        for pin in sch.sheets.iter().flat_map(|s| s.pins.iter()).filter(|p| !p.id.is_empty()) {
+            notes.item_ids.entry(pin.id.clone()).or_insert_with(|| pin.id.clone());
+        }
+        for (u, ids) in &by_uuid {
+            if let Some(id) = ids.first() {
+                notes.item_ids.entry(u.clone()).or_insert_with(|| id.clone());
+            }
+        }
         let (groups, locked_groups) = crate::import_items::build_groups(&by_uuid, &crate::import_items::import_groups(root), std::collections::BTreeSet::new());
         sch.extras.groups = groups;
         for id in locked_groups {
@@ -749,6 +771,9 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
         let Ok((child_design, child_model, child_notes)) = import_kicad_sch_with(&child_text, opts) else { continue };
         symbol_places.insert(file.clone(), symbol_places_of(&child_text));
         notes.unresolved_symbols += child_notes.unresolved_symbols;
+        for (u, id) in child_notes.item_ids {
+            notes.item_ids.entry(u).or_insert(id);
+        }
         model.parts.extend(child_model.parts);
         model.symbols.extend(child_model.symbols);
         // Bus aliases (GAPS.md #20) are project-wide, not per-screen (see

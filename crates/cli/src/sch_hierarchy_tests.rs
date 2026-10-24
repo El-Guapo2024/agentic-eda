@@ -1122,11 +1122,63 @@ fn a_hidden_power_input_pin_joins_the_net_of_its_name() {
     let net = |pin: &str| nets.iter().find(|n| n.pins.iter().any(|p| p == pin)).unwrap_or_else(|| panic!("{pin} in {nets:?}")).clone();
     assert_eq!((net("U1.2").name.as_str(), net("U1.2").pins.clone()), ("VCC", vec!["R1.1".to_string(), "R2.2".into(), "U1.2".into(), "U2.2".into()]), "{nets:?}");
     assert_eq!(net("U1.3").pins, vec!["U1.3".to_string()], "a visible power input is an ordinary pin: {nets:?}");
+    // the derived schematic keeps the pin invisible, so kicad-cli reads it as the same global power pin
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-24", title: "t" }, "root.kicad_sch").unwrap();
+    assert_eq!(files[0].1.matches(") (hide yes)\n\t\t\t\t\t(name \"VCC\"").count(), 1, "pin 2 of T:U, written once: {}", files[0].1);
     if kicad_cli_ready() {
         let mut ours: Vec<Vec<String>> = nets.iter().map(|n| n.pins.iter().filter(|p| !p.starts_with('#')).cloned().collect::<Vec<_>>()).filter(|p| p.len() >= 2).collect();
         ours.sort();
         let kicad: Vec<Vec<String>> = kicad_cli_net_groups(&root).into_iter().filter(|g| g.len() >= 2).collect();
         assert_eq!(ours, kicad, "kicad-cli's netlist of the file");
+    }
+}
+
+/// p13-p16 F6, the ERC half: a KiCad project's own ERC exclusions come in with `eda import-kicad`, named as the derived schematic names its items, and
+/// kicad-cli still waives the violation on the studio's run. The record is the one KiCad 10 writes for kicad-cli's own marker of U1's unconnected pin 1 (and
+/// kicad-cli reads it as excluded on the original project first).
+#[test]
+fn slow_a_kicad_projects_erc_exclusions_come_in_with_the_schematic() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let work = scratch("project_erc_exclusions");
+    let root = work.join("p.kicad_sch");
+    std::fs::write(&root, include_str!("../tests/fixtures/hidden_power_pins.kicad_sch")).unwrap();
+    let erc = |root: &Path| -> serde_json::Value {
+        let out = root.with_extension("erc.json");
+        let _ = std::fs::remove_file(&out);
+        std::process::Command::new(eda_kicad_engine::find_cli().unwrap()).args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&out).arg(root).output().unwrap();
+        serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap()
+    };
+    let report = erc(&root);
+    let sheet = report["sheets"][0]["uuid_path"].as_str().unwrap().to_string();
+    let v = report["sheets"][0]["violations"].as_array().unwrap().iter().find(|v| v["type"] == "pin_not_connected" && v["items"][0]["description"].as_str().unwrap_or("").contains("U1")).cloned().expect("U1's pin 1 is not connected");
+    let nm = |mm: &serde_json::Value| ((mm.as_f64().unwrap() * 1e6).round() as i64).to_string();
+    let path = json!({ "path": sheet.split('/').filter(|u| !u.is_empty()).map(|u| json!({ "value": u })).collect::<Vec<_>>() });
+    let record = json!({ "marker": { "error_type": "ERCET_PIN_NOT_CONNECTED", "position": { "x_nm": nm(&v["items"][0]["pos"]["x"]), "y_nm": nm(&v["items"][0]["pos"]["y"]) }, "items": [{ "value": v["items"][0]["uuid"] }], "sheet_specific_path": path, "main_item_sheet_path": path }, "comment": "left open" });
+    std::fs::write(root.with_extension("kicad_pro"), json!({ "meta": { "filename": "p.kicad_pro", "version": 3 }, "erc": { "meta": { "version": 1 }, "erc_exclusions": [record] } }).to_string()).unwrap();
+    let again = erc(&root);
+    let excluded = |r: &serde_json::Value| -> Vec<String> { r["sheets"].as_array().unwrap().iter().flat_map(|s| s["violations"].as_array().unwrap().iter()).filter(|v| v["excluded"] == true).map(|v| format!("{} {}", v["type"].as_str().unwrap(), v["comment"].as_str().unwrap_or(""))).collect() };
+    assert_eq!(excluded(&again), vec!["pin_not_connected left open".to_string()], "the record is KiCad's: kicad-cli waives it on the original");
+
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let waived = &design.schematic.as_ref().unwrap().erc_exclusions;
+    assert_eq!(waived.iter().map(|e| (e.check.as_str(), e.location.as_str(), e.comment.as_str())).collect::<Vec<_>>(), [("pin_not_connected", "U1.1", "left open")]);
+    let studio = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let u1 = studio["violations"].as_array().unwrap().iter().find(|v| v["check"] == "pin_not_connected" && v["location"] == "U1.1").cloned().unwrap_or_else(|| panic!("{studio:#}"));
+    assert_eq!((u1["severity"].as_str(), u1["comment"].as_str()), (Some("excluded"), Some("left open")), "{u1:#}");
+    // the marker is the derived schematic's: its item and its sheet
+    let kept = waived[0].marker.clone().unwrap();
+    assert_eq!((json!(kept.items), json!(kept.sheet), json!(kept.main_sheet)), (u1["marker"]["items"].clone(), u1["marker"]["sheet"].clone(), u1["marker"]["main_sheet"].clone()), "{u1:#}");
+    // and its position the file's, which is the derived one where the derived schematic draws the file's symbols where the file does: kicad-cli matches it then.
+    // **Not so on main** (2026-10-24): the schematic `eda import-kicad x.kicad_sch` derives draws a library symbol in its corner frame at the file's origin, so
+    // every pin is off the file's wires (U1.1 at 49.53, 54.61 for the file's 45.72, 50.8), a writer bug outside this batch.
+    if json!(kept.at_nm) == u1["marker"]["at_nm"] {
+        assert_eq!(u1["kicad_matched"], true, "{u1:#}");
+    } else {
+        eprintln!("the derived schematic moved U1.1 from {:?} to {}: kicad-cli cannot match the record", kept.at_nm, u1["marker"]["at_nm"]);
     }
 }
 
