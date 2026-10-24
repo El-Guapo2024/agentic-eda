@@ -579,6 +579,11 @@ export function routeFinish(x: Nm, y: Nm): Promise<CmdReply> {
   return postJson("/api/route/finish", { x, y });
 }
 
+/** AttemptFinish (`F`, `ROUTER::Finish`): route to the nearest unconnected anchor of the net and commit (`finished`), or go on routing with the head where it got (`warp`, `preview`). */
+export function routeAttemptFinish(x: Nm, y: Nm): Promise<{ ok: boolean; message?: string; finished?: boolean; warp?: [Nm, Nm]; preview?: RoutePreview }> {
+  return postJson("/api/route/attempt_finish", { x: Math.round(x), y: Math.round(y) });
+}
+
 /** Esc: a route or a pair commits what its clicks fixed (`committed`); a drag leaves the board as it was. */
 export function routeCancel(): Promise<{ ok: boolean; committed?: boolean }> {
   return postJson("/api/route/cancel", {});

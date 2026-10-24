@@ -12,7 +12,7 @@
 // own, much simpler, single-segment preview.
 import type { BoardState } from "../../api/types";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
-import { routeCancel, routeContinueFromEnd, routeFinish, routeFix, routeStart } from "../../api/client";
+import { routeAttemptFinish, routeCancel, routeContinueFromEnd, routeFinish, routeFix, routeStart } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { drawStateFromPreview, type RouteDrawState } from "../../kicad-port/routeTool";
@@ -75,6 +75,26 @@ export async function finishInteractiveRoute(x: number, y: number, dispatch: Dis
   await api.refresh();
   // RouteSelected's loop: the next queued connection starts once this one is done.
   await advanceRouteQueue();
+}
+
+/**
+ * `F`, AttemptFinish (`ROUTER_TOOL`'s `routerAttemptFinish` -> `ROUTER::Finish`): the route is taken to the nearest unconnected anchor of
+ * its net and committed when it gets there; otherwise it goes on, drawn to where the head got (KiCad warps the cursor there,
+ * `WarpMouseCursor( m_router->Placer()->CurrentEnd() )`; a page cannot move the pointer, so the next mouse move takes the head on).
+ */
+export async function attemptFinishInteractiveRoute(x: number, y: number, draw: RouteDrawState, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">): Promise<void> {
+  const reply = await routeAttemptFinish(x, y);
+  if (!reply.ok) {
+    dispatch({ type: "TOAST", message: reply.message ?? "Could not finish the route.", kind: "error" });
+    return;
+  }
+  if (reply.finished) {
+    dispatch({ type: "SET_DRAW_STATE", draw: null });
+    await api.refresh();
+    await advanceRouteQueue();
+    return;
+  }
+  if (reply.preview?.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, reply.preview) });
 }
 
 /**

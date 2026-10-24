@@ -374,6 +374,24 @@ impl Router {
     /// (`CurrentNode( true )`), so the far end is the other side of the connection, not the pad the route began at.
     pub fn continue_from_end(&self, at: Point) -> Result<Continuation, String> {
         let s = self.session().ok_or("not routing")?;
+        let placer = &s.placer;
+        let net = placer.net.clone();
+        let (from, layers, current_end) = self.nearest_ratsnest_anchor(at)?;
+        let runs = placer.placed_runs();
+        let layer = if layers.overlaps_layer(placer.current_layer) { placer.current_layer } else { layers.start() };
+        let mut commit = self.build_commit(&net, runs, placer.current_layer, placer.width);
+        if !commit.tracks.is_empty() || !commit.vias.is_empty() {
+            let splits = self.session_splits(false);
+            self.apply_splits(&splits, &mut commit);
+        }
+        self.drop_redundant(&mut commit);
+        Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width: placer.width, from, to: current_end, gap: 0, via_gap: 0 })
+    }
+
+    /// `ROUTER::GetNearestRatnestAnchor` for the head a `Move` to `at` gives: the far end of the connection and its layers, and where the
+    /// head ends (`placer->CurrentEnd()`). See [`Self::continue_from_end`].
+    fn nearest_ratsnest_anchor(&self, at: Point) -> Result<(Point, LayerRange, Point), String> {
+        let s = self.session().ok_or("not routing")?;
         let world = s.world.as_ref().unwrap_or(&self.world);
         let placer = &s.placer;
         let net = placer.net.clone();
@@ -409,14 +427,36 @@ impl Router {
             let (id, anchor) = node.nearest_unconnected_item(start, &net).ok_or("Route From Other End: nothing is left to connect to.")?;
             (anchor, node.get(id).map_or(LayerRange::single(placer.current_layer), |i| i.layers()))
         };
-        let layer = if layers.overlaps_layer(placer.current_layer) { placer.current_layer } else { layers.start() };
-        let mut commit = self.build_commit(&net, runs, placer.current_layer, placer.width);
-        if !commit.tracks.is_empty() || !commit.vias.is_empty() {
-            let splits = self.session_splits(false);
-            self.apply_splits(&splits, &mut commit);
+        Ok((from, layers, current_end))
+    }
+
+    /// `ROUTER::Finish` (AttemptFinish, `F`): route to the nearest unconnected anchor of the net (`GetNearestRatnestAnchor`), moving the head
+    /// there until its end stops changing (at most five `Move`s), and when it gets there on a layer of the anchor, fix it there (`FixRoute(
+    /// otherEnd, otherEndItem, false, false )`) and finish. `Ok` with the commit when it did; `Err` with where the head ended otherwise --
+    /// the route goes on, and the tool warps the cursor there (`WarpMouseCursor( m_router->Placer()->CurrentEnd() )`). (findings p5 F2-9)
+    pub fn attempt_finish(&mut self, at: Point) -> Result<RouteCommit, Point> {
+        let fallback = self.preview(at).and_then(|pv| pv.head.last()).unwrap_or(at);
+        let Ok((other_end, layers, mut current_end)) = self.nearest_ratsnest_anchor(at) else { return Err(fallback) };
+        let mut tries = 5;
+        let mut move_result;
+        loop {
+            move_result = current_end;
+            let Some(pv) = self.preview(other_end) else { return Err(fallback) };
+            current_end = pv.head.last().unwrap_or(move_result);
+            tries -= 1;
+            if current_end == move_result || tries == 0 {
+                break;
+            }
         }
-        self.drop_redundant(&mut commit);
-        Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width: placer.width, from, to: current_end, gap: 0, via_gap: 0 })
+        let layer = self.session().map_or(0, |s| s.placer.current_layer);
+        if move_result == other_end && layers.overlaps_layer(layer) {
+            if let Some(FixOutcome::Fixed { real_end: true }) = self.fix(other_end) {
+                if let Some(commit) = self.finish(other_end) {
+                    return Ok(commit);
+                }
+            }
+        }
+        Err(current_end)
     }
 
     /// `ROUTER::ContinueFromEnd` for a pair (Ctrl+E while routing one): KiCad restarts "the placer of the same mode" at the other end, so a pair continues from the
@@ -1320,6 +1360,29 @@ mod tests {
         router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
         let err = router.continue_from_end(Point { x: 1_000_000, y: 0 }).expect_err("everything is connected");
         assert!(err.contains("nothing is left"), "{err}");
+    }
+
+    /// findings p5 F2-9: AttemptFinish routes to the nearest unconnected anchor of the net (`ROUTER::Finish`), not to the cursor.
+    #[test]
+    fn attempt_finish_routes_to_the_ratsnest_anchor() {
+        let (design, model) = two_pad_board();
+        let mut router = Router::new(&design, &model);
+        router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        let cursor = Point { x: 1_000_000, y: 2_000_000 };
+        router.preview(cursor);
+        let commit = router.attempt_finish(cursor).expect("R2.1 is free to reach");
+        let end = commit.tracks.last().and_then(|t| t.pts.last().copied());
+        assert_eq!(end, Some(Point { x: 6_000_000 - 825_000, y: 0 }), "ends on R2.1: {commit:?}");
+        assert!(!router.is_routing());
+        // a wall the walk cannot get round: the route goes on, and the cursor goes to where the head got
+        let (mut design, model) = two_pad_board();
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "wall".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_500_000, y: -40_000_000 }, Point { x: 2_500_000, y: 40_000_000 }], arc_mid_offset: None });
+        let mut router = Router::new(&design, &model);
+        router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        router.preview(cursor);
+        let warp = router.attempt_finish(cursor).expect_err("blocked");
+        assert!(warp.x < 2_500_000, "short of the wall: {warp:?}");
+        assert!(router.is_routing(), "the route goes on");
     }
 
     /// findings p5 F2-8 / P-2: with nothing under the cursor the route starts in empty space on no net (`m_currentNet =

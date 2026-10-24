@@ -291,6 +291,31 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     }
 }
 
+/// `POST /api/route/attempt_finish`: `{x, y}` -- `ROUTER_TOOL`'s `routerAttemptFinish` (`F`) -> `ROUTER::Finish`: the route is taken to the
+/// nearest unconnected anchor of its net and, when it gets there, committed (`finished`, one undo step, as `finish`'s); otherwise the
+/// route goes on and the reply carries where the head got (`warp`, where KiCad warps the cursor) and the preview there.
+pub fn attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let at = point_of(&req);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing") };
+    match router.attempt_finish(at) {
+        Ok(commit) => {
+            let append_undo = router.append_undo;
+            *guard = None;
+            drop(guard);
+            match commit_route(dir, commit, append_undo) {
+                Ok(summary) => json!({ "ok": true, "finished": true, "message": summary }),
+                Err(e) => err(e),
+            }
+        }
+        Err(end) => {
+            let preview = router.preview(end).map(|p| preview_json(router, &p)).unwrap_or_else(|| json!({}));
+            json!({ "ok": true, "finished": false, "warp": [end.x, end.y], "preview": preview })
+        }
+    }
+}
+
 /// `POST /api/route/continue_from_end`: `{x, y}` -- `ROUTER_TOOL::routerContinueFromEnd` (Ctrl+E, Route From Other End): what the
 /// route has fixed so far is committed (`CommitRouting()`; one `Cmd::CommitRoute`, nothing at all if nothing was fixed), and a new
 /// route starts at the far end of the connection and heads for where the old head ended (`ROUTER::ContinueFromEnd`: `StartRouting`,
@@ -802,6 +827,25 @@ mod tests {
     fn start_with(dir: &Path, cell: &RouteCell, settings: Value) {
         let reply = start(dir, cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 200_000, "settings": settings })));
         assert_eq!(reply["ok"], json!(true), "{reply}");
+    }
+
+    /// findings p5 F2-9: `F` routes to the nearest unconnected anchor and commits, or leaves the route going with the head where it got.
+    #[test]
+    fn attempt_finish_commits_at_the_nearest_unconnected_anchor() {
+        let dir = scratch("attempt_finish");
+        // a SIG stub to reach, and the GND via of `setup` out of the way
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)], arc_mid_offset: None };
+        let other = Track { id: "sig2".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![p(15_000_000, 12_000_000), p(16_000_000, 12_000_000)], arc_mid_offset: None };
+        setup_board(&dir, vec![stub, other], vec![]);
+        let cell: RouteCell = Mutex::new(None);
+        start_with(&dir, &cell, json!({ "mode": "walkaround" }));
+        mv(&cell, &body(json!({ "x": 12_000_000, "y": 8_000_000 })));
+        let reply = attempt_finish(&dir, &cell, &body(json!({ "x": 12_000_000, "y": 8_000_000 })));
+        assert_eq!((reply["ok"].clone(), reply["finished"].clone()), (json!(true), json!(true)), "{reply}");
+        let (_, design, _) = board::load(&dir).unwrap();
+        let reached = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.id != "sig" && t.id != "sig2").any(|t| t.pts.contains(&p(15_000_000, 12_000_000)));
+        assert!(reached, "the new track ends on the other stub: {:?}", design.routing.as_ref().unwrap().tracks);
+        assert!(cell.lock().unwrap().is_none());
     }
 
     /// findings p5 F2-3: Esc commits what the clicks fixed (`ROUTER_TOOL::performRouting`: the cancel branch breaks out of the loop, and

@@ -19,7 +19,7 @@ import { toCmdDimension } from "../kicad-port/dimensionConvert";
 import type { Cmd, CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
-import { finishInteractiveRoute, cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteractiveRoute } from "../components/canvas/routing";
+import { cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteractiveRoute, attemptFinishInteractiveRoute } from "../components/canvas/routing";
 import { withTrackSnapping } from "../kicad-port/routerSettings";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
 import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic, postSwapPreview } from "../api/client";
@@ -360,7 +360,7 @@ export function useActionRunner() {
       };
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
-        pcbOnly(() => void finishInteractiveRoute(cursor.x, cursor.y, dispatch, api))
+        pcbOnly(() => void attemptFinishInteractiveRoute(cursor.x, cursor.y, draw, dispatch, api))
       );
       // V: arm "drop a via here, continue on the other layer" for the next
       // fix (see Router::toggle_via's own doc comment) -- not an immediate
