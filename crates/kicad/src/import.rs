@@ -2148,9 +2148,11 @@ pub(crate) fn graphic_shape(item: &[Sexpr], tag: &str, at: impl Fn(Point) -> Poi
         "gr_rect" => Shape::Rect { id: String::new(), layer, stroke_width, filled, start: pt("start")?, end: pt("end")? },
         "gr_circle" => Shape::Circle { id: String::new(), layer, stroke_width, filled, center: pt("center")?, end: pt("end")? },
         "gr_poly" => Shape::Polygon { id: String::new(), layer, stroke_width, filled, pts: poly_points(item)?.into_iter().map(&at).collect() },
-        // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`), never filled.
+        // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`), never filled. The four points as they are (`parsePCB_SHAPE`,
+        // `case T_pts` then `SetStart`, `SetBezierC1`, `SetBezierC2`, `SetEnd`): a control point on an end point, which KiCad's curve tool leaves until it is dragged, is no
+        // repeated point to drop as in a polygon.
         "gr_curve" => {
-            let pts: Vec<Point> = poly_points(item)?.into_iter().map(&at).collect();
+            let pts: Vec<Point> = sexpr::find(item, "pts")?.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l) == Some("xy")).filter_map(xy_point).map(&at).collect();
             let [start, c1, c2, end] = pts[..] else { return None };
             Shape::Bezier { id: String::new(), layer, stroke_width, filled: false, start, c1, c2, end }
         }

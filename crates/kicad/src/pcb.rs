@@ -1443,9 +1443,11 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
             .unwrap();
         }
         Shape::Rect { stroke_width, filled, start, end, .. } => {
+            // `if( aShape->GetCornerRadius() > 0 ) m_out->Print( " (radius %s)", .. )`, after the end.
+            let radius = style.map(|st| st.corner_radius).filter(|&r| r > 0).map(|r| format!(" (radius {})", mm(r))).unwrap_or_default();
             writeln!(
                 out,
-                "\t(gr_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_rect (start {} {}) (end {} {}){radius} (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();

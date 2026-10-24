@@ -68,6 +68,56 @@ pub fn edge_cuts_shapes(design: &Design) -> Vec<Shape> {
     items
 }
 
+/// [`edge_cuts_shapes`] as the outline builder takes them: a rectangle with a corner radius
+/// ([`crate::pcb_items::BoardItems::corner_radius_of`]) is the polygon of its rounded rectangle, as
+/// `convert_shape_list_to_polygon.cpp::processClosedShape` makes it (`case SHAPE_T::RECTANGLE: if( aShape->GetCornerRadius() > 0 )`:
+/// `ROUNDRECT( .. ).TransformToPolygon( poly, aShape->GetMaxError() )`, appended as the contour); every other shape as it is.
+pub fn edge_cuts_outline_shapes(design: &Design) -> Vec<Shape> {
+    let radius_of = |id: &str| design.drawings.as_ref().map(|d| d.board_items.corner_radius_of(id)).unwrap_or(0);
+    edge_cuts_shapes(design)
+        .into_iter()
+        .map(|s| match &s {
+            Shape::Rect { id, layer, stroke_width, filled, start, end } if radius_of(id) > 0 => {
+                Shape::Polygon { id: id.clone(), layer: layer.clone(), stroke_width: *stroke_width, filled: *filled, pts: rounded_rect_ring(*start, *end, radius_of(id), MAX_ERROR_NM as f64) }
+            }
+            _ => s,
+        })
+        .collect()
+}
+
+/// `ROUNDRECT::TransformToPolygon( aBuffer, aMaxError )` of the rectangle `a`-`b` (normalised) with corners of `radius` (clamped to half the smaller side, as the
+/// `ROUNDRECT` constructor does): from the right of the top-left corner, clockwise on screen (y down), each corner a 90 degree arc flattened at `aMaxError / 5`
+/// ("Roundrects won't have a gazillion points, so we use a higher definition than the typical maxError"). A radius of half both sides is the circle.
+pub fn rounded_rect_ring(a: Point, b: Point, radius: Nm, max_error: f64) -> Vec<Point> {
+    let (x0, y0, x1, y1) = (a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
+    let r = radius.min((x1 - x0).min(y1 - y0) / 2).max(0);
+    if r == 0 {
+        return vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }];
+    }
+    let err = max_error / 5.0;
+    let d = (r as f64 * std::f64::consts::FRAC_1_SQRT_2).round() as Nm;
+    let p = |x: Nm, y: Nm| Point { x, y };
+    // (start, mid, end) of each corner, clockwise: NE, SE, SW, NW (`MakeCornerArcCw90`).
+    let corners = [
+        (p(x1 - r, y0), p(x1 - r + d, y0 + r - d), p(x1, y0 + r)),
+        (p(x1, y1 - r), p(x1 - r + d, y1 - r + d), p(x1 - r, y1)),
+        (p(x0 + r, y1), p(x0 + r - d, y1 - r + d), p(x0, y1 - r)),
+        (p(x0, y0 + r), p(x0 + r - d, y0 + r - d), p(x0 + r, y0)),
+    ];
+    let mut out: Vec<Point> = vec![p(x0 + r, y0)];
+    for (s, m, e) in corners {
+        for q in std::iter::once(s).chain(Arc::through(s, m, e).polyline(err)) {
+            if out.last() != Some(&q) {
+                out.push(q);
+            }
+        }
+    }
+    if out.len() > 1 && out.last() == out.first() {
+        out.pop();
+    }
+    out
+}
+
 impl DrawingsSection {
     /// The shapes of this section drawn on Edge.Cuts.
     pub fn edge_cuts(&self) -> impl Iterator<Item = &Shape> {

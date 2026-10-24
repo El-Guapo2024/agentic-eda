@@ -550,7 +550,8 @@ pub fn footprint_text_draw_rotation(t: &eda_model::ir::FootprintText) -> f64 {
 pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
     let outline = design.placement.as_ref().map(|p| p.outline.clone()).unwrap_or_default();
     let board_outline = crate::outline::board_outline(design, true);
-    let edge_cuts = eda_model::outline::edge_cuts_shapes(design);
+    // A rounded rectangle is measured as the rounded polygon KiCad makes of it.
+    let edge_cuts = eda_model::outline::edge_cuts_outline_shapes(design);
     let layers = model.board.layers.clone();
 
     // "REF.PIN" -> net name, exactly `eda_kicad::pcb`'s own `pin_net` lookup.

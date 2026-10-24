@@ -28,6 +28,8 @@ pub(crate) struct ItemRef {
     pub endings: eda_model::line_ending::LineEndings,
     /// The net of a shape on copper (`(net ..)`), set by the reader of the shapes, which knows the file's net table.
     pub net: Option<String>,
+    /// A rectangle's corner radius (`(radius r)`, `parsePCB_SHAPE`'s `case T_radius: shape->SetCornerRadius( parseBoardUnits( "corner radius" ) )`), nm.
+    pub corner_radius: Nm,
 }
 
 impl ItemRef {
@@ -39,12 +41,13 @@ impl ItemRef {
             hatch: sexpr::find(item, "fill").and_then(|f| sexpr::txt(f, 1)).and_then(eda_model::pcb_items::HatchKind::from_token),
             endings: crate::line_ending_io::read(item),
             net: None,
+            corner_radius: if sexpr::tag(item) == Some("gr_rect") { sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::mm_to_nm).unwrap_or(0).max(0) } else { 0 },
         }
     }
 
     /// The shape's style as the file gave it, by the id `id` the shape now has; `None` when it says nothing.
     pub(crate) fn shape_style(&self, id: &str) -> Option<eda_model::pcb_items::ShapeStyle> {
-        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), ..eda_model::pcb_items::ShapeStyle::empty(id) };
+        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), corner_radius: self.corner_radius, ..eda_model::pcb_items::ShapeStyle::empty(id) };
         (!st.is_empty()).then_some(st)
     }
 }

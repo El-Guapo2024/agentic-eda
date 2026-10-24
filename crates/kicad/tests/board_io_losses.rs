@@ -149,3 +149,57 @@ fn a_paste_only_custom_pad_survives_import_and_export() {
     let paste = blocks(&out, "pad").into_iter().find(|p| p.contains("paste1")).unwrap().to_string();
     assert!(paste.contains("(at 1 1 90)"), "{paste}");
 }
+
+/// p12 O1: a `gr_curve` whose control point sits on an end point (KiCad's curve tool leaves it there until dragged) is read with its four points as they are
+/// (`parsePCB_SHAPE`, `SetBezierC1`), so the slot it closes stays closed and the curve is written back.
+#[test]
+fn a_curve_with_a_control_point_on_its_end_is_kept() {
+    let text = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+        (gr_rect (start -10 -10) (end 20 20) (stroke (width 0.1) (type default)) (fill none) (layer "Edge.Cuts") (uuid "r"))
+        (gr_curve (pts (xy 0 0) (xy 0 0) (xy 3 2) (xy 3 0)) (stroke (width 0.1) (type default)) (layer "Edge.Cuts") (uuid "c"))
+        (gr_line (start 3 0) (end 0 0) (stroke (width 0.1) (type default)) (layer "Edge.Cuts") (uuid "l"))
+    )"#;
+    let (design, model, notes) = import_kicad_pcb(text).expect("parses");
+    let shapes = &design.drawings.as_ref().unwrap().shapes;
+    let curve = shapes.iter().find_map(|s| match s {
+        eda_model::ir::Shape::Bezier { start, c1, c2, end, .. } => Some((*start, *c1, *c2, *end)),
+        _ => None,
+    });
+    assert_eq!(curve, Some((p(0, 0), p(0, 0), p(3 * MM, 2 * MM), p(3 * MM, 0))), "{shapes:?}");
+    assert!(notes.outline_errors.is_empty(), "the slot is closed: {:?}", notes.outline_errors);
+    let out = export(&design, &model);
+    assert!(out.contains("(gr_curve (pts (xy 0 0) (xy 0 0) (xy 3 2) (xy 3 0))"), "{out}");
+}
+
+/// p12 O3 / p13-p16 F16-1: a board rectangle's `(radius r)` (`SetCornerRadius`) is read, written back after its end (`format( const PCB_SHAPE* )`), and the board
+/// outline is the rounded rectangle (`processClosedShape`: `ROUNDRECT( .. ).TransformToPolygon`): 50 x 40 mm less four 5 mm corners is 1978.54 mm^2, KiCad's
+/// `export stats` area for it.
+#[test]
+fn a_board_rectangles_corner_radius_is_read_and_written_back() {
+    let text = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (37 "F.SilkS" user) (44 "Edge.Cuts" user))
+        (gr_rect (start 0 0) (end 50 40) (radius 5) (stroke (width 0.1) (type default)) (fill none) (layer "Edge.Cuts") (uuid "r"))
+        (gr_rect (start 20 20) (end 40 30) (radius 3) (stroke (width 0.2) (type solid)) (fill hatch) (layer "F.SilkS") (uuid "h"))
+    )"#;
+    let (design, model, _) = import_kicad_pcb(text).expect("parses");
+    let out = export(&design, &model);
+    assert!(out.contains("(gr_rect (start 0 0) (end 50 40) (radius 5)"), "{out}");
+    assert!(out.contains("(gr_rect (start 20 20) (end 40 30) (radius 3)"), "{out}");
+    let outline = eda_drc::outline::board_outline(&design, true);
+    assert!(outline.valid && !outline.inferred);
+    let area = outline.polys.area() / 1e12;
+    let kicad = 2000.0 - (100.0 - 25.0 * std::f64::consts::PI);
+    assert!((area - kicad).abs() < 0.05, "{area} mm^2, KiCad {kicad}");
+    // The hatch stays inside the rounded outline: no hatch line reaches the sharp corner's box.
+    let hatched = design.drawings.as_ref().unwrap().shapes.iter().find(|s| s.layer() == "F.SilkS").unwrap().clone();
+    let lines = eda_drc::hatch::hatching(&design, Some(&model), &hatched, eda_model::pcb_items::HatchKind::Hatch).lines;
+    assert!(!lines.is_empty());
+    // Outside the rounded rectangle: beyond a corner's arc (centres 3 mm in from each corner), by more than the flattening.
+    let outside = |q: Point| {
+        let cx = q.x.clamp(23 * MM, 37 * MM);
+        let cy = q.y.clamp(23 * MM, 27 * MM);
+        (((q.x - cx) as f64).hypot((q.y - cy) as f64)) > 3.0 * MM as f64 + 20_000.0
+    };
+    assert!(lines.iter().all(|(a, b)| !outside(*a) && !outside(*b)), "a hatch line in a rounded-off corner: {lines:?}");
+}

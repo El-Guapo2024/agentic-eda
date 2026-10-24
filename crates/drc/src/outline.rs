@@ -902,7 +902,7 @@ pub fn board_outline(design: &Design, infer: bool) -> BoardOutline {
             return BoardOutline { polys: ShapePolySet::from_outline(to_line_chain(ring)), valid: true, inferred: false, errors: Vec::new() };
         }
     }
-    board_outline_of(&edge::edge_cuts_shapes(design), infer)
+    board_outline_of(&edge::edge_cuts_outline_shapes(design), infer)
 }
 
 /// [`board_outline`] of a list of Edge.Cuts items.
@@ -1114,7 +1114,7 @@ fn chained_loops(shapes: &[Shape], open: &[usize], max_error: f64, epsilon: Nm) 
 /// `kicad-cli pcb drc` reports `invalid_outline` ("Board has malformed outline") on the exported file. Empty when the outline is
 /// well-formed, and for a board that has none (`kicad-cli` has its own "(no edges found on Edge.Cuts layer)" for that).
 pub fn check_board_outline(design: &Design) -> Vec<OutlineError> {
-    check_edge_cuts(&edge::edge_cuts_shapes(design))
+    check_edge_cuts(&edge::edge_cuts_outline_shapes(design))
 }
 
 /// [`check_board_outline`] of a list of Edge.Cuts items.
