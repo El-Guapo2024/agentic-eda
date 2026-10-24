@@ -1006,13 +1006,10 @@ fn unconnected_pin_nets(design: &Design, model: &ConstraintModel, footprints: &[
 /// shape with no offset, deltas, chamfers, primitives or padstack of its own): its own angle stays, and the file's absolute angle then turns with the
 /// footprint, as KiCad's flip turns it. **Differs**: a pad with any of those keeps its absolute angle and is turned by its own angle instead -- the same copper,
 /// the pad's own frame half a turn from KiCad's.
-fn half_turned(footprint: &eda_model::Footprint) -> eda_model::Footprint {
+pub(crate) fn half_turned(footprint: &eda_model::Footprint) -> eda_model::Footprint {
     let mut f = footprint.clone();
     for pad in f.pads.iter_mut() {
-        pad.at = (-pad.at.0, -pad.at.1);
-        if !pad.ext.is_default() {
-            pad.rot = (pad.rot + 180_000) % 360_000;
-        }
+        half_turn_pad(pad);
     }
     for outline in f.courtyard_outlines.iter_mut() {
         for p in outline.iter_mut() {
@@ -1022,6 +1019,20 @@ fn half_turned(footprint: &eda_model::Footprint) -> eda_model::Footprint {
     let half_turn = FootprintInstance { id: String::new(), at: eda_model::ir::Point { x: 0, y: 0 }, rot: 180_000, side: Side::Top, label: Default::default() };
     f.art = f.art.moved(&half_turn);
     f
+}
+
+/// A pad turned half a turn with its footprint's frame (see [`half_turned`]): its own angle kept when a half turn maps its shape onto itself.
+pub(crate) fn half_turn_pad(pad: &mut Pad) {
+    pad.at = (-pad.at.0, -pad.at.1);
+    if !pad.ext.is_default() {
+        pad.rot = (pad.rot + 180_000) % 360_000;
+    }
+}
+
+/// A field's place turned half a turn with its footprint's frame: the same place on the board once the footprint's orientation turns back.
+pub(crate) fn half_turn_layout(l: &mut eda_model::fp_edit::FieldLayout) {
+    l.at = eda_model::ir::Point { x: -l.at.x, y: -l.at.y };
+    l.angle = (l.angle + 180_000).rem_euclid(360_000);
 }
 
 /// One footprint; returns the uuid it was written with (a group's `(members ..)` names it).
@@ -1046,8 +1057,9 @@ pub(crate) fn write_footprint(
     // writer mirrors in x comes out mirrored in y. KiCad's Change Footprint and Update from Library, which flip the library's footprint and give it the old
     // orientation (`ExchangeFootprint`), then put it where it was, and its 3D models need no turn of their own. A footprint read from a KiCad file is in
     // that frame already (the reader keeps the file's numbers), and is written as it was read.
-    let read_from_a_file = design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == fp.id));
-    let turn = fp.side == Side::Bottom && !read_from_a_file;
+    // (one read in the library's frame, `FootprintExtra::library_frame`, is turned as one made here)
+    let read_in_the_files_frame = design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == fp.id && !e.library_frame));
+    let turn = fp.side == Side::Bottom && !read_in_the_files_frame;
     let (as_placed, footprint_as_placed) = (fp, footprint);
     let (turned_fp, turned_footprint);
     let (fp, footprint) = if turn {
@@ -1422,7 +1434,12 @@ pub(crate) fn write_footprint(
     // and kicad-cli's zone fill would not keep clear of them.
     let holes: &[eda_model::ir::FootprintHole] = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id)).map(|e| e.holes.as_slice()).unwrap_or_default();
     for (i, hole) in holes.iter().enumerate() {
-        let pad = &hole.pad;
+        // (in the footprint's frame as the model holds it: turned with it when it is written in KiCad's frame)
+        let mut turned_pad = hole.pad.clone();
+        if turn {
+            half_turn_pad(&mut turned_pad);
+        }
+        let pad = &turned_pad;
         let drill = match (pad.drill, pad.drill_slot) {
             (Some(d), _) => format!("(drill {})", mm(d)),
             (None, Some((w, h))) => format!("(drill oval {} {})", mm(w), mm(h)),
@@ -1526,9 +1543,9 @@ pub(crate) fn write_footprint(
     // board's own), else the one its generic package name stands for -- the installed KiCad footprint's model with its own placement, fitted to the pads
     // this footprint has (`part_models`). Without a `(model ...)` kicad-cli's 3D export leaves the part out altogether.
     //
-    // A bottom-side footprint is written the way KiCad stores one: mirrored in y and turned by `Ry(pi) Rz(pi)` in 3D, where this studio mirrors x. The
-    // half turn between the two goes into the model's own placement (`Model3d::flipped_frame`), so the model stands on the pads in KiCad's render as it
-    // does in the studio's. The path is written exactly as stored (`${KICADn_3DMODEL_DIR}/Lib.3dshapes/File.step`).
+    // A bottom-side footprint is written the way KiCad stores one (`turn` above), its models as held. One a reader of before
+    // `FootprintExtra::library_frame` read is in its file's frame mirrored in x: the half turn between the two goes into the model's own placement
+    // (`Model3d::flipped_frame`). The path is written exactly as stored (`${KICADn_3DMODEL_DIR}/Lib.3dshapes/File.step`).
     let placed: Vec<eda_model::footprint::Model3d> = crate::part_models(model, part, footprint_as_placed).map(|p| p.models).unwrap_or_default().into_iter().map(|m| if fp.side == Side::Bottom && !turn { m.flipped_frame() } else { m }).collect();
     crate::footprint_lib::write_models(out, &placed, 2);
 
@@ -1929,14 +1946,11 @@ mod tests {
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let got = back.drawings.as_ref().unwrap().footprint_edits.iter().find(|e| e.id == "C1").unwrap().reference.clone().unwrap();
-        // The footprint is written in KiCad's frame (`write_footprint`'s half turn) and read back in the reader's: the field is where it was on the board,
-        // at the angle it had, its own numbers half a turn apart with the footprint's.
+        // The footprint is written in KiCad's frame (`write_footprint`'s half turn) and read back in the library's (`FootprintExtra::library_frame`): the
+        // field comes back as it was, and the footprint's orientation too.
         let instance = |d: &Design| d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "C1").unwrap().clone();
-        let (was, now) = (instance(&design), instance(&back));
-        assert_eq!((now.rot + 180_000) % 360_000, was.rot, "the orientation carries the half turn");
-        assert_eq!((got.board_position(&now), got.board_angle(&now)), (l.board_position(&was), l.board_angle(&was)));
-        assert_eq!((got.at, got.angle), (Point { x: -l.at.x, y: -l.at.y }, (l.angle + 180_000) % 360_000));
-        assert_eq!((got.layer.as_str(), got.mirror), (l.layer.as_str(), l.mirror));
+        assert_eq!(instance(&back).rot, instance(&design).rot);
+        assert_eq!(got, l);
     }
 
     #[test]
@@ -3144,9 +3158,8 @@ mod tests {
 
     /// What kicad-cli draws a footprint's 3D model at is the footprint's `(model ...)` placement, and KiCad turns a flipped footprint's model with
     /// `Ry(pi) Rz(pi)` where this studio mirrors x. A bottom footprint made here is written in KiCad's frame (mirrored in y, the half turn in its
-    /// orientation, `write_footprint`), so its model is written as it is held, as KiCad's Flip leaves a model. Read back, a bottom footprint is held as the
-    /// reader holds every KiCad bottom footprint: in its file's frame mirrored in x, the half turn in its model (`Model3d::flipped_frame`) -- the same model
-    /// on the board.
+    /// orientation, `write_footprint`), so its model is written as it is held, as KiCad's Flip leaves a model; the reader reads it back in the library's frame
+    /// (`FootprintExtra::library_frame`), the model as it was.
     #[test]
     fn a_footprints_models_are_written_with_their_placement_and_a_bottom_one_in_kicads_frame() {
         use eda_model::footprint::Model3d;
@@ -3177,7 +3190,7 @@ mod tests {
             back.footprint_of(part).unwrap().models3d
         };
         assert_eq!(held("U1"), vec![placed.clone()]);
-        assert_eq!(held("C1"), vec![placed.flipped_frame()], "read back, the bottom footprint's model is held in the reader's frame");
+        assert_eq!(held("C1"), vec![placed], "read back, the bottom footprint's model is the one it was written from (the reader undoes the frame)");
     }
 
     /// Two pads of one footprint on the same point with the same number (`complex_hierarchy`'s MIRE: crossed bars, every pad numbered "", two of them on one

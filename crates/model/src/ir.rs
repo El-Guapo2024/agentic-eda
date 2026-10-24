@@ -2961,6 +2961,12 @@ pub struct FootprintExtra {
     /// The footprint's rotation (`FootprintInstance::rot`) when [`Self::aux_pads`] were read.
     #[serde(default, skip_serializing_if = "is_zero_millideg")]
     pub aux_pads_rot: Millideg,
+    /// A footprint on the back read in the library's frame: its pads, art, courtyard, holes and field places as the library footprint has them, the half
+    /// turn KiCad's flip puts in a back footprint's orientation (`FOOTPRINT::Flip`) taken off [`FootprintInstance::rot`] -- as a footprint flipped here,
+    /// which the writer writes back in KiCad's frame. False for a footprint a reader of before 2026-10-25 read: its geometry is half a turn from the
+    /// library's, its orientation the file's, and it is written as it was read. Additive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub library_frame: bool,
     /// The name the footprint had in the file when it had no library link (`(footprint "D5" ..)`: `LIB_ID::GetLibNickname()` empty, which `LIB_ID::Format` writes as the bare
     /// item name). The writer gives a footprint the `eda` library unless the footprint it writes is this one: a board that came from a KiCad file keeps its footprints as
     /// unlinked as it had them, and kicad-cli's library check (`lib_footprint_issues`) has no `eda` library to report as missing. `None` for a footprint that was linked.

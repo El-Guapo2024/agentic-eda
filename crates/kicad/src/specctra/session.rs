@@ -265,7 +265,8 @@ pub fn from_session(text: &str, source: &str, design: &Design, model: &Constrain
     let mut out = from_session_db(&session, &board, b.via_drill, &|net: &str| b.via_drill_of(net))?;
     // A footprint on the back made here is in the board file turned half a turn in its own frame and back in its orientation (`pcb::write_footprint`, KiCad's
     // frame): the orientation the session gives is the file's, half a turn from the design's.
-    let read_from_a_file: std::collections::BTreeSet<&str> = design.drawings.iter().flat_map(|d| d.footprint_extras.iter().map(|e| e.id.as_str())).collect();
+    // (a footprint read in the file's frame, by a reader of before `FootprintExtra::library_frame`, is written as it was read)
+    let read_from_a_file: std::collections::BTreeSet<&str> = design.drawings.iter().flat_map(|d| d.footprint_extras.iter().filter(|e| !e.library_frame).map(|e| e.id.as_str())).collect();
     for p in out.placements.iter_mut().filter(|p| p.side == IrSide::Bottom && !read_from_a_file.contains(p.reference.as_str())) {
         p.rot = (p.rot + 180_000) % 360_000;
     }

@@ -1652,17 +1652,38 @@ fn import_footprints(
         if !edit.is_empty() {
             edits.push(edit);
         }
-        // The 3D models with their placement, in the studio's frame: KiCad turns a back-side footprint's model with `Ry(pi) Rz(pi)` and the studio keeps
-        // that footprint mirrored in x, which is a half turn about z apart (`Model3d::flipped_frame`). A slot is shared only by instances whose models
-        // agree, like their pads.
-        let models3d: Vec<eda_model::footprint::Model3d> = crate::footprint_lib::models_from(fp).into_iter().map(|m| if side == Side::Bottom { m.flipped_frame() } else { m }).collect();
+        // The 3D models with their placement as the file has them: a back-side footprint is read in the library's frame below, where its models are the
+        // library's placement (KiCad's flip turns the model with the footprint, not the placement). A slot is shared only by instances whose models agree,
+        // like their pads.
+        let models3d: Vec<eda_model::footprint::Model3d> = crate::footprint_lib::models_from(fp);
         // The footprint's silkscreen, fab drawings and texts, in the definition's frame (`crate::fp_art_io`): an instance whose own differ from another's of the
         // same lib id gets a slot of its own, like one whose pads differ.
         let art = crate::fp_art_io::read_art(fp, side, rot);
-        let key = dedup_footprint_key(&mut explicit, &lib_id, &pads, &models3d, &art);
         let courtyard = footprint_courtyard_half(fp, side);
         let courtyard_outlines = footprint_courtyard_outlines(fp, side);
-        explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, courtyard_outlines, model: crate::footprint_lib::model_from(fp), models3d, art });
+        let mut definition = Footprint { name: String::new(), pads, courtyard, courtyard_outlines, model: crate::footprint_lib::model_from(fp), models3d, art };
+        // A footprint on the back is in KiCad's frame in the file (`FOOTPRINT::Flip`: y mirrored, the half turn in its orientation); the pieces above are
+        // read mirrored in x (`to_board`'s frame), half a turn from the library's. Turned half a turn, and the orientation half a turn back, they are the
+        // library's footprint and its 3D models as the library places them -- as a footprint flipped here -- and the writer turns them back
+        // (`pcb::write_footprint`, `FootprintExtra::library_frame`).
+        let mut rot = rot;
+        if side == Side::Bottom {
+            definition = crate::pcb::half_turned(&definition);
+            rot = (rot + 180_000) % 360_000;
+            if let Some(e) = extras.last_mut().filter(|e| e.id == reference) {
+                e.library_frame = true;
+                for h in e.holes.iter_mut() {
+                    crate::pcb::half_turn_pad(&mut h.pad);
+                }
+            }
+            if let Some(e) = edits.last_mut().filter(|e| e.id == reference) {
+                e.reference.iter_mut().chain(e.value.iter_mut()).for_each(crate::pcb::half_turn_layout);
+                e.fields.iter_mut().for_each(|f| crate::pcb::half_turn_layout(&mut f.layout));
+            }
+        }
+        let key = dedup_footprint_key(&mut explicit, &lib_id, &definition.pads, &definition.models3d, &definition.art);
+        definition.name = key.clone();
+        explicit.entry(key.clone()).or_insert(definition);
 
         parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(key), pins, body_nm: None, symbol: None, datasheet: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });

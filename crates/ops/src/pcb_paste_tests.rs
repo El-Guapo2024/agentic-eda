@@ -308,3 +308,25 @@ fn paste_clipboard_round_trips_through_json_and_everything_has_a_subject() {
     assert!(!c.clears_routing());
     assert_eq!(id("x"), "x");
 }
+
+/// p13-p16 P14-2's other half: a footprint on the back is copied in KiCad's frame (y mirrored, the half turn in its orientation) and pasted on the
+/// footprint the model knows by its name -- the library's pads: it lands where it was, every pad on the point of the board it had, and turned as it was.
+#[test]
+fn a_footprint_copied_from_the_back_is_pasted_where_it_was() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    let u2 = d.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == "U2").unwrap();
+    u2.side = Side::Bottom;
+    let source = Board::new(d.clone(), &m, 100_000, 300_000);
+    let text = eda_kicad::export_pcb_clipboard(&d, &m, &ids(&["U2"]), p(0, 0)).unwrap();
+    let mut b = target(&m);
+    b.apply(&Cmd::PasteClipboard { text, at: p(0, 0) }).unwrap();
+    let (was, now) = (pose(&source, "U2"), pose(&b, "U2"));
+    assert_eq!((now.at, now.rot, now.side), (was.at, was.rot, was.side), "the pose it had");
+    let pads = |b: &Board<'_>| -> Vec<(String, Point)> {
+        let mut v: Vec<(String, Point)> = super::pcb_transform_tests::pads_of(b, &m, "U2").into_iter().map(|p| (p.number, p.center)).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(pads(&b), pads(&source), "every pad where it was");
+}
