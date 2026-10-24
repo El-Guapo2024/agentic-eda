@@ -62,6 +62,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-fix-d-sch-connectivity` (`~/work/agentic-eda-router`) | Batch D: schematic connectivity (p12 S1-S4, P25-2, p13-p16 F5 and F6's ERC half), PARITY-sch section 41 | all seven fixed and pushed, slow kicad-cli proofs pass; nets.rs edits small and separate (S1, S2, S3) | merge main once batch A is in (nets.rs: `Driver::new` and A's names on the new drivers, `escape_net_name` on the hidden pin and power value names), re-run gates; the import-kicad schematic writer bug (section 41 "Left") is for batch A's area |
 | `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names (option 1), one footprint name, `(path)`, fields, pinfunction, flip frame | paused mid-work 2026-10-24: 5 commits pushed, worktree clean; was running browser checks (diff-pairs failing) | reviewed vs KiCad; fixing the review (R1-R6) plus the user's 2026-10-24 call: **the derived schematic labels every net the intent names**, so the names survive KiCad's naming; then gate, merge; then batch D |
 
 Gates for any of them:

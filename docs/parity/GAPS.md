@@ -274,9 +274,14 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   their look; Duplicate carries a sheet by its pin; Sheet Pin Properties and Cleanup Sheet Pins as KiCad's; the library-link check; Annotate's final check of a selection.
   The practical check: KiCad's 130 QA schematic roots imported, written back and judged by kicad-cli, 87 alike (53 before). Left: a duplicate sheet name, "Untitled Sheet"
   and the "Link?" prompt, first-free page numbers, the sheet's fill colour.
+- Done 2026-10-24 (`task-fix-d-sch-connectivity`, fix batch D; `PARITY-sch.md` section 41): two buses on one sheet that share a member name are one net (`generateBusAliasMembers`);
+  an invisible power input of an ordinary symbol is a global power pin; a power symbol's `${#}` is resolved per placement; bus aliases come from the `.kicad_pro` and with a
+  sheet file; a library pin common to every unit stays unit 0; an ERC exclusion of one placement of a shared screen leaves the other's; a KiCad project's own ERC exclusions
+  come in with `eda import-kicad`. 22 of KiCad's QA hierarchies trace as kicad-cli reads them (`bus_connection`, `issue17771`, `netlists/video`, `ERC_dynamic_power_symbol_test` added).
+  Found, not fixed (the writer's): the schematic `eda import-kicad x.kicad_sch` derives draws a library symbol in its corner frame at the file's origin (pins off the wires in kicad-cli).
 - Left: a screen that has sheets of its own is still pasted as a copy, and a screen shown twice inside a screen shown twice has one reference per symbol for both (an override is filed
   under the placement just above the symbol, which nested placements share; KiCad's `qa/data/eeschema/issue10926_1`, `hierarchy_aliases`); Annotate numbers the screen's own
-  references only, not the other placements' (it leaves no duplicate); two buses on one sheet that share only a member name are not joined (`bus_connection`, `issue17771`);
+  references only, not the other placements' (it leaves no duplicate);
   Find does not match a sheet's name, file or pins; Clear Annotation (a design names a part by its reference, so two cannot be `R?`); "Place as group" and a ghost of the contents while they are carried;
   of the drop, one file is imported at a time (the others of the drop that the first does not place are said to be left out; KiCad runs Import Sheet for each in turn) and Choose Schematic opens on the file, where KiCad, given a file, has no chooser and has the sheet or its contents in the hand at once;
   the attribute, library-link and Update / Change Symbol tools act on the sheet in view; a footprint already placed keeps
