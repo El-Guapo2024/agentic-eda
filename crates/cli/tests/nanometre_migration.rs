@@ -61,9 +61,14 @@ fn pt(v: &Value) -> (i64, i64) {
 /// schematic's symbols and wires.
 fn lengths(d: &Value, k: i64) -> Vec<String> {
     let mut out = Vec::new();
-    // not the net: the board's loader gives a track the KiCad name of its net (`/FB` for the label FB on the root, `Net-(C1-Pad1)` for a net no label
-    // names), which this test does not hold the old file to
-    let net = |_: &Value| -> &str { "" };
+    // the net by its pins: the board's loader gives a track the KiCad name of its net (`/FB` for the label FB on the root, `Net-(C1-Pad1)` for a
+    // net the old binary's stored schematic draws with no label) and keeps the nets by those names in `design.nets`; the old file held the intent's
+    // names, whose pins are the intent's
+    let pins_of = pins_by_net(d);
+    let net = |v: &Value| -> String {
+        let name = v.as_str().unwrap_or("");
+        pins_of.get(name).cloned().unwrap_or_else(|| panic!("the net {name} is a net of the design or of its intent"))
+    };
     let s = |p: (i64, i64)| format!("{} {}", p.0 * k, p.1 * k);
     for f in d["placement"]["footprints"].as_array().into_iter().flatten() {
         out.push(format!("fp {} {} {} {}", f["id"], s(pt(&f["at"])), f["rot"], f["side"]));
@@ -91,10 +96,37 @@ fn lengths(d: &Value, k: i64) -> Vec<String> {
     }
     for w in d["schematic"]["wires"].as_array().into_iter().flatten() {
         let pts: Vec<String> = w["pts"].as_array().unwrap().iter().map(|p| s(pt(p))).collect();
-        out.push(format!("wire {} {}", net(&w["net"]), pts.join(",")));
+        // (a wire's `net` is the drawing's note, which the loader leaves as the stored drawing has it: the wires join by their ends)
+        out.push(format!("wire {}", pts.join(",")));
     }
     out.sort();
     out
+}
+
+/// Each net's pins, `REF.PIN` sorted and joined, by the net's name: the design's own nets when it keeps them, else its intent's
+/// (`examples/opamp_filter.yaml`).
+fn pins_by_net(d: &Value) -> std::collections::BTreeMap<String, String> {
+    let nets: Vec<(String, Vec<String>)> = match d["nets"].as_array() {
+        Some(nets) => nets.iter().map(|n| (n["name"].as_str().unwrap().to_string(), n["pins"].as_array().unwrap().iter().map(|p| p.as_str().unwrap().to_string()).collect())).collect(),
+        None => {
+            let intent = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/opamp_filter.yaml");
+            let model: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(intent).unwrap()).unwrap();
+            model["nets"].as_sequence().unwrap().iter().map(|n| (n["name"].as_str().unwrap().to_string(), n["pins"].as_sequence().unwrap().iter().map(|p| p.as_str().unwrap().to_string()).collect())).collect()
+        }
+    };
+    nets.into_iter()
+        .map(|(name, mut pins)| {
+            pins.sort();
+            (name, pins.join(" "))
+        })
+        .collect()
+}
+
+/// `lengths` of two designs are the same, what differs shown alone.
+fn assert_same(now: Vec<String>, was: Vec<String>, what: &str) {
+    let only_now: Vec<&String> = now.iter().filter(|l| !was.contains(l)).collect();
+    let only_was: Vec<&String> = was.iter().filter(|l| !now.contains(l)).collect();
+    assert!(now == was, "{what}: only now {only_now:#?}\nonly before {only_was:#?}");
 }
 
 /// The old binary's snapshots in `.history/undo`, oldest first.
@@ -124,12 +156,12 @@ fn a_board_the_micrometre_binary_wrote_is_read_in_nanometres_and_undo_crosses_th
     let undone = json(&dir.join("design.json"));
     assert_eq!(undone["schema"], 2, "what is written is nanometres");
     assert!(undone["drawings"]["texts"].as_array().is_none_or(|t| t.is_empty()), "the text is undone: {}", undone["drawings"]);
-    assert_eq!(lengths(&undone, 1), lengths(&before_text, 1000), "the snapshot before the text, x1000");
+    assert_same(lengths(&undone, 1), lengths(&before_text, 1000), "the snapshot before the text, x1000");
 
     // Redo brings it back: the board as the old binary left it, x1000, the text's size included.
     eda(&["board", "redo", "-C", dir.to_str().unwrap()]);
     let redone = json(&dir.join("design.json"));
-    assert_eq!(lengths(&redone, 1), lengths(&old, 1000), "the old board, every length x1000");
+    assert_same(lengths(&redone, 1), lengths(&old, 1000), "the old board, every length x1000");
     let text = &redone["drawings"]["texts"][0];
     assert_eq!((pt(&text["at"]), text["size_nm"].as_i64(), text["stroke_width"].as_i64()), ((5_000_000, 3_000_000), Some(1_000_000), Some(100_000)));
     assert_eq!(redone["routing"]["zones"][0]["outline"][2], serde_json::json!({ "x": 40_000_000, "y": 30_000_000 }));
@@ -140,9 +172,9 @@ fn a_board_the_micrometre_binary_wrote_is_read_in_nanometres_and_undo_crosses_th
     eda(&["board", "undo", "-C", dir.to_str().unwrap()]);
     let before_zone = json(&dir.join("design.json"));
     assert!(before_zone["routing"]["zones"].as_array().is_none_or(|z| z.is_empty()), "the zone is undone");
-    assert_eq!(lengths(&before_zone, 1), lengths(&snaps[1], 1000), "the snapshot before the zone, x1000");
+    assert_same(lengths(&before_zone, 1), lengths(&snaps[1], 1000), "the snapshot before the zone, x1000");
     eda(&["board", "redo", "-C", dir.to_str().unwrap()]);
-    assert_eq!(lengths(&json(&dir.join("design.json")), 1), lengths(&snaps[2], 1000));
+    assert_same(lengths(&json(&dir.join("design.json")), 1), lengths(&snaps[2], 1000), "the snapshot, x1000");
 
     // board.json is written with its grid in nanometres the first time it is written; read, the old keys are x1000.
     let meta = json(&dir.join("board.json"));
