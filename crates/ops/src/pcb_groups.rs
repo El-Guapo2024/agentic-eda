@@ -29,19 +29,13 @@
 
 use super::{Board, Cmd};
 use eda_model::groups::{GroupHost, GroupRefusal};
-use eda_model::ir::{Design, DrawingsSection};
+use eda_model::ir::Design;
 use eda_model::CheckResult;
 use std::collections::BTreeSet;
 
 /// A refusal of a group edit as the command's failure (`CheckResult`).
 pub(crate) fn refused(r: GroupRefusal) -> Vec<CheckResult> {
     vec![CheckResult::fail(r.check, &r.subject, r.why)]
-}
-
-/// A group with fewer than two members is meaningless and dissolves (`GROUP_TOOL::RemoveFromGroup`'s
-/// `if( group->GetItems().size() < 2 )`); the group above it loses it as a member, and may fall under two in turn.
-pub(crate) fn prune_groups(dr: &mut DrawingsSection) {
-    eda_model::groups::prune_groups(&mut dr.groups);
 }
 
 /// Every id an item of the board can be listed under: placed footprints, copper, graphics, dimensions and the groups themselves.
