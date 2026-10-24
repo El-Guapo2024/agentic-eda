@@ -461,11 +461,11 @@ mod tests {
                 // across: from the nearest pad of another net, 2 to 9 mm from the arc's middle, straight at the arc and 0.15 mm past its middle, where the head's end sits on the
                 // arc's stroke: Shove mode has to push the arc away (a try in which it does not, the router walked or the arc was not in the way, is not judged)
                 if across < 2 && tries[0] < 30 {
-                    let from = pads.iter().filter(|(p, n, l)| n != net && l.overlaps_layer(*layer) && (2_000.0..9_000.0).contains(&dist(*p, arc.mid))).min_by(|a, b| dist(a.0, arc.mid).total_cmp(&dist(b.0, arc.mid)));
+                    let from = pads.iter().filter(|(p, n, l)| n != net && l.overlaps_layer(*layer) && (2_000_000.0..9_000_000.0).contains(&dist(*p, arc.mid))).min_by(|a, b| dist(a.0, arc.mid).total_cmp(&dist(b.0, arc.mid)));
                     if let Some((pad, _, _)) = from {
                         tries[0] += 1;
                         let d = dist(*pad, arc.mid);
-                        let target = eda_model::ir::Point { x: arc.mid.x + (((arc.mid.x - pad.x) as f64 / d) * 150.0).round() as i64, y: arc.mid.y + (((arc.mid.y - pad.y) as f64 / d) * 150.0).round() as i64 };
+                        let target = eda_model::ir::Point { x: arc.mid.x + (((arc.mid.x - pad.x) as f64 / d) * 150_000.0).round() as i64, y: arc.mid.y + (((arc.mid.y - pad.y) as f64 / d) * 150_000.0).round() as i64 };
                         let mut router = Router::new(&design, &model);
                         router.settings.mode = Mode::Shove;
                         if router.start(*pad, &layer_name, model.board.track_width).is_ok() && router.preview(target).is_some_and(|pv| !pv.colliding) {
@@ -482,7 +482,7 @@ mod tests {
                 }
                 // onto: from a pad of the arc's own net to the middle of the arc, which the route ends on (and so splits there)
                 if onto < 2 && tries[1] < 16 {
-                    let from = pads.iter().filter(|(p, n, l)| n == net && l.overlaps_layer(*layer) && (1_500.0..12_000.0).contains(&dist(*p, arc.mid))).min_by(|a, b| dist(a.0, arc.mid).total_cmp(&dist(b.0, arc.mid)));
+                    let from = pads.iter().filter(|(p, n, l)| n == net && l.overlaps_layer(*layer) && (1_500_000.0..12_000_000.0).contains(&dist(*p, arc.mid))).min_by(|a, b| dist(a.0, arc.mid).total_cmp(&dist(b.0, arc.mid)));
                     if let Some((pad, _, _)) = from {
                         tries[1] += 1;
                         let mut router = Router::new(&design, &model);
@@ -502,7 +502,7 @@ mod tests {
                 if dragged < 2 && tries[2] < 16 {
                     tries[2] += 1;
                     let (c, r) = (arc.center_f(), arc.radius());
-                    let to = eda_model::ir::Point { x: arc.mid.x + (((arc.mid.x as f64 - c.0) / r) * 400.0).round() as i64, y: arc.mid.y + (((arc.mid.y as f64 - c.1) / r) * 400.0).round() as i64 };
+                    let to = eda_model::ir::Point { x: arc.mid.x + (((arc.mid.x as f64 - c.0) / r) * 400_000.0).round() as i64, y: arc.mid.y + (((arc.mid.y as f64 - c.1) / r) * 400_000.0).round() as i64 };
                     let mut router = Router::new(&design, &model);
                     router.settings.mode = Mode::Shove;
                     if router.drag_start(arc.mid, &layer_name).is_ok() && matches!(router.drag_kind(), Some(DragKind::Arc)) && router.drag_preview(to).is_some_and(|pv| !pv.colliding) {

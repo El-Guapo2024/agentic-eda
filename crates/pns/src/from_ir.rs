@@ -146,6 +146,11 @@ pub fn locked_ids_with(design: &Design, lock_pattern_members: bool) -> std::coll
 fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: &LayerMap) {
     let mut i = 0usize;
     for shape in &board.edge_cuts {
+        // KiCad keeps an Edge.Cuts arc a `SHAPE_ARC`; the chords here lie up to the flattening error inside it, so copper on the arc's
+        // outer side (a cutout's rim, a notch) could come that much nearer the real arc than the clearance. A flattened side is
+        // therefore given the error as its radius: the band holds the true curve, and the clearance is kept from all of it.
+        let curved = matches!(shape, eda_model::ir::Shape::Arc { .. } | eda_model::ir::Shape::Circle { .. } | eda_model::ir::Shape::Bezier { .. });
+        let band = if curved { eda_model::outline::MAX_ERROR_NM } else { 0 };
         for chain in eda_model::outline::shape_chains(shape, eda_model::outline::MAX_ERROR_NM as f64) {
             let n = chain.pts.len();
             let sides = if chain.closed { n } else { n.saturating_sub(1) };
@@ -157,7 +162,7 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
                     continue;
                 }
                 let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-                node.add(Item::Solid(Solid { net: None, layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: 0 }, source: format!("edge:{index}"), edge: true }));
+                node.add(Item::Solid(Solid { net: None, layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: format!("edge:{index}"), edge: true }));
             }
         }
     }

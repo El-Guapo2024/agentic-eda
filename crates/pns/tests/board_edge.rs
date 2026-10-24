@@ -47,8 +47,9 @@ fn edges(node: &Node) -> Vec<(Point, Point)> {
         .iter()
         .filter_map(|(_, it)| match it {
             Item::Solid(s) if s.edge => match &s.shape {
-                Shape2::Stadium { a, b, r: 0 } => Some((*a, *b)),
-                other => panic!("an edge is a zero-width segment, not {other:?}"),
+                // a straight side is a zero-width segment; a chord of a curve carries the flattening error as its radius (`add_board_outline`)
+                Shape2::Stadium { a, b, r } if *r == 0 || *r == eda_model::outline::MAX_ERROR_NM => Some((*a, *b)),
+                other => panic!("an edge is a zero-width segment or a flattened curve's chord, not {other:?}"),
             },
             _ => None,
         })

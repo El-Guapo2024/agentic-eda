@@ -56,8 +56,8 @@ fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
         }
         let nums: Vec<f64> = d.split(|c: char| c == 'L' || c.is_whitespace()).filter(|s| !s.is_empty()).filter_map(|s| s.parse().ok()).collect();
         if let [x0, y0, x1, y1] = nums[..] {
-            let um = |v: f64| (v * 1000.0).round() as i64;
-            let (a, b) = ((um(x0), um(y0)), (um(x1), um(y1)));
+            let nm = |v: f64| (v * 1e6).round() as i64;
+            let (a, b) = ((nm(x0), nm(y0)), (nm(x1), nm(y1)));
             let (a, b) = if a <= b { (a, b) } else { (b, a) };
             out.push([a.0, a.1, b.0, b.1]);
         }

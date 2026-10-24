@@ -493,8 +493,8 @@ mod tests {
         // The nets of the schematic reach the board's pads: the part U1 is on the board and on the sheet.
         assert!(model.part("U1").is_some() && model.nets.iter().any(|n| n.pins.iter().any(|p| p.starts_with("U1."))));
         // The design rules and the net classes Eagle's board has are in the project kicad-cli makes of it, not in the board file: the board is judged by them.
-        assert!(model.board.net_classes.iter().any(|c| c.name == "highpower" && c.track_width == Some(305_000)), "{:?}", model.board.net_classes.iter().map(|c| &c.name).collect::<Vec<_>>());
-        assert_eq!(model.board.min_clearance_nm, 203_000, "Eagle's 8 mil minimum clearance");
+        assert!(model.board.net_classes.iter().any(|c| c.name == "highpower" && c.track_width == Some(304_800)), "{:?}", model.board.net_classes.iter().map(|c| &c.name).collect::<Vec<_>>());
+        assert_eq!(model.board.min_clearance_nm, 203_200, "Eagle's 8 mil minimum clearance");
         assert!(out.join("fp-lib-table").is_file() && out.join("sym-lib-table").is_file(), "the tables that name the libraries");
         assert!(std::fs::read_dir(&out).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with("-import-fps.pretty")));
         assert!(std::fs::read_dir(&out).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with(".kicad_sym")));
@@ -503,8 +503,8 @@ mod tests {
         let report: Value = serde_json::from_str(&std::fs::read_to_string(&report_file).unwrap()).unwrap();
         let formats: Vec<&str> = report["imports"].as_array().unwrap().iter().map(|i| i["format"].as_str().unwrap()).collect();
         assert_eq!(formats, vec!["Eagle", "EAGLE"], "the board, then its schematic: {report}");
-        assert_eq!(report["imports"][0]["statistics"]["footprints"], 19_000);
-        assert_eq!(report["imports"][1]["statistics"]["symbols"], 36_000);
+        assert_eq!(report["imports"][0]["statistics"]["footprints"], 19);
+        assert_eq!(report["imports"][1]["statistics"]["symbols"], 36);
         let _ = std::fs::remove_file(&report_file);
 
         // The schematic alone, from the other file of the pair, brings the board; --no-pair keeps to the one file.
@@ -534,7 +534,7 @@ mod tests {
         let root = design.schematic.as_ref().expect("a schematic");
         let names: Vec<(&str, &str)> = root.sheets.iter().map(|s| (s.name.as_str(), s.page.as_str())).collect();
         assert_eq!(names, vec![("it6251_core", "2"), ("power", "3")], "in the order the project lists them, from page 2");
-        assert_eq!(placed_symbols(&design), 124_000 + 49_000, "every symbol of both sheets");
+        assert_eq!(placed_symbols(&design), 124 + 49, "every symbol of both sheets");
         assert_eq!(design.sheet_contents.as_ref().map(|c| c.len()), Some(2));
         let _ = std::fs::remove_dir_all(&out);
     }
