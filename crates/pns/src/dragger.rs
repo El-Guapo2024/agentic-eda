@@ -250,8 +250,9 @@ impl Dragger {
                         index += 1;
                     }
                 } else if free_angle {
-                    // "( m_draggedSegmentIndex < PointCount() - 2 )": the line's own last vertex is not taken by a grab in the middle
-                    if dist_b < dist_a && (index as isize) < line.point_count() as isize - 2 {
+                    // "( m_draggedSegmentIndex < PointCount() - 2 ) && ( !IsPtOnArc( m_draggedSegmentIndex + 1 ) )": the line's own last vertex,
+                    // and the vertex an arc starts at, are not taken by a grab in the middle (findings p5 F3-11)
+                    if dist_b < dist_a && (index as isize) < line.point_count() as isize - 2 && !line.is_pt_on_arc(index + 1) {
                         index += 1;
                     }
                     kind = DragKind::Corner;
