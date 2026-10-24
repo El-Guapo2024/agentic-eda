@@ -277,6 +277,28 @@
       t((await snapshot()) === base, "undone, the board is as it was");
     });
 
+    // ----- p6 F15
+    await scenario("Copy's reference point is the footprint's origin (BestDragOrigin), so a paste puts the origin on the cursor", async (t) => {
+      toScreen = (await screenOf()) ?? toScreen;
+      const p0 = await partOf(two.ref);
+      const refs0 = (await state()).parts.filter((p) => p.placed).map((p) => p.ref);
+      await select([two.ref]);
+      await hover(toScreen, p0.at[0] / 1e6 + 0.3, p0.at[1] / 1e6 + 0.2);
+      await __eda.run("common.Interactive.copy"); await sleep(600);
+      // somewhere empty above the board's parts, on the grid
+      const ys = (await state()).parts.filter((p) => p.placed).map((p) => p.at[1]);
+      const P = [Math.round(p0.at[0] / 1e6), Math.floor(Math.min(...ys) / 1e6) - 6];
+      await hover(toScreen, P[0], P[1]);
+      await __eda.run("common.Interactive.paste"); await sleep(1200);
+      await hover(toScreen, P[0] + 0.0001, P[1]);
+      await click(toScreen, P[0], P[1]);
+      const copy = (await state()).parts.find((p) => p.placed && !refs0.includes(p.ref));
+      t(!!copy, `the paste put a copy down (${copy?.ref})`);
+      if (copy) t(near(copy.at[0], P[0] * 1e6, 60_000) && near(copy.at[1], P[1] * 1e6, 60_000), `its origin is on the cursor (${copy.at} for ${P})`);
+      for (let i = 0; i < 4 && (await snapshot()) !== base; i++) await undo();
+      t((await snapshot()) === base, "undone, the board is as it was");
+    });
+
     // ----- p6 F2
     await scenario("a handle drag of a grouped line and Mirror of a grouped track keep them in their group", async (t) => {
       const [x0, y0] = [two.at[0] / 1e6 + 4, two.at[1] / 1e6 + 6];

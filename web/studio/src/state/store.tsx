@@ -27,7 +27,7 @@ import { planAlignSelection, planDistributeSelection } from "../kicad-port/align
 import type { CarryOp } from "../kicad-port/pcbCarry";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
-import { modificationSnapFor } from "./modificationSnap";
+import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
@@ -2496,7 +2496,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!st.board) return;
       const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false });
       if (ids.length === 0) return;
-      const at = reference ?? (st.cursorNm ? (([x, y]) => ({ x, y }))(snapPoint(st.cursorNm.x, st.cursorNm.y, st.gridNm)) : null);
+      // `copyToClipboard`: `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )` -- the anchor of the copied items nearest the cursor, so a paste puts it on the cursor.
+      const at = reference ?? (st.cursorNm ? (([x, y]) => ({ x, y }))(dragOriginFor(st, ids, [st.cursorNm.x, st.cursorNm.y])) : null);
       const reply = await postClipboardCopy(ids, at);
       if (!reply.ok) {
         dispatch({ type: "TOAST", message: reply.message, kind: "error" });
