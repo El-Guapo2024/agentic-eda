@@ -9,8 +9,9 @@
 // Locks are KiCad's two rules (`GetSelections`, `selectTarget`, `DistributeItems`): Align leaves a locked item where it is and moves
 // everything else onto IT -- "prefer locked items to unlocked items" -- while Distribute leaves locked items out altogether
 // (`FilterCollectorForLockedItems`). Without a locked item the alignment target is the extreme item of the selection unless the cursor sits
-// inside one item's box, in which case that item is the target ("secondly, prefer items under the cursor"). Source's mirrored-view swap of Align
-// Left/Right is not ported: this app's view never mirrors a PCB.
+// inside one item's box, in which case that item is the target ("secondly, prefer items under the cursor"). In a flipped board view (View >
+// Flip Board View) Align Left is Align Right and the other way round: "Because this tool uses bounding boxes and they aren't mirrored even when
+// the view is mirrored, we need to call the other one if mirrored." (`AlignLeft`: `if( getView()->IsMirroredX() ) return doAlignRight();`).
 import type { BoardState, Cmd, Nm } from "../api/types";
 import { itemBounds, itemKind, padParent } from "./pcbItems";
 import { editableSelection, groupOf, isLocked } from "./pcbTransform";
@@ -216,8 +217,9 @@ export function alignItems(board: BoardState, selection: readonly string[]): Ali
 const moveCmds = (moves: readonly AlignMove[]): Cmd[] => moves.map((m): Cmd => ({ op: "move_items", ids: [m.id], dx: Math.round(m.dx), dy: Math.round(m.dy) }));
 
 /** Align the selection (`cursor` is where the pointer is, which can pick the target): the commands, to be sent as one undo step. */
-export function planAlignSelection(board: BoardState, selection: readonly string[], edge: AlignEdge, cursor?: Pt | null): Cmd[] {
-  return moveCmds(planAlign(alignItems(board, selection), edge, cursor));
+export function planAlignSelection(board: BoardState, selection: readonly string[], edge: AlignEdge, cursor?: Pt | null, mirroredView = false): Cmd[] {
+  const e: AlignEdge = mirroredView && edge === "left" ? "right" : mirroredView && edge === "right" ? "left" : edge;
+  return moveCmds(planAlign(alignItems(board, selection), e, cursor));
 }
 
 /** Distribute the selection: locked items left out, a pad standing for its footprint. */

@@ -209,3 +209,11 @@ test("planAlignSelection / planDistributeSelection: one move_items per moved ite
   const free = board({ parts: [part("U1", [0, 0]), part("U2", [1_000_000, 0]), part("U3", [6_000_000, 0])] });
   assert.deepEqual(planDistributeSelection(free, ["U1", "U2", "U3"], "x", "centers"), [{ op: "move_items", ids: ["U2"], dx: 2_000_000, dy: 0 }]);
 });
+
+test("a flipped view swaps left and right (ALIGN_DISTRIBUTE_TOOL::AlignLeft: IsMirroredX)", () => {
+  const b = board({ parts: [part("U1", [0, 0]), part("U2", [3_000_000, 0])] });
+  assert.deepEqual(planAlignSelection(b, ["U1", "U2"], "left", null, true), planAlignSelection(b, ["U1", "U2"], "right"));
+  assert.deepEqual(planAlignSelection(b, ["U1", "U2"], "right", null, true), planAlignSelection(b, ["U1", "U2"], "left"));
+  assert.deepEqual(planAlignSelection(b, ["U1", "U2"], "top", null, true), planAlignSelection(b, ["U1", "U2"], "top"));
+  assert.notDeepEqual(planAlignSelection(b, ["U1", "U2"], "left"), planAlignSelection(b, ["U1", "U2"], "right"));
+});

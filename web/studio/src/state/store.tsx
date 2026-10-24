@@ -2281,7 +2281,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const st = stateRef.current;
       if (!st.board) return;
       const cursor: [number, number] | null = st.cursorNm ? [st.cursorNm.x, st.cursorNm.y] : null;
-      const cmds = planAlignSelection(st.board, [...st.selection], edge, cursor);
+      const cmds = planAlignSelection(st.board, [...st.selection], edge, cursor, st.bcx.boardFlipped);
       if (cmds.length > 0) await runBatch(cmds);
     },
     distributeSelection: async (axis, mode) => {
