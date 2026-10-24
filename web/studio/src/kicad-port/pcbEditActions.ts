@@ -336,16 +336,25 @@ export function relativeMoveVector(referenceAnchor: { x: number; y: number }, tr
   return { x: Math.round(referenceAnchor.x + translation.x - selectionAnchor.x), y: Math.round(referenceAnchor.y + translation.y - selectionAnchor.y) };
 }
 
-/** `DIALOG_POSITION_RELATIVE::ToPolarDeg` -- `r = hypot`, angle = atan2(y, x) in board (Y-down) coordinates, 0 for r == 0. */
+/**
+ * `DIALOG_POSITION_RELATIVE::ToPolarDeg` (`r = hypot`, `q = atan2( y, x )` in board, Y-down, coordinates, 0 for r == 0) and the
+ * angle field's `SetAngleValue( q )`: the field is `REL_Y_COORD`, and `PCB_ORIGIN_TRANSFORMS::ToDisplay( const EDA_ANGLE&, .. )`
+ * negates a relative angle while the Y axis is not inverted ("if( !invertYAxis() && ( aCoordType == REL_X_COORD || .. REL_Y_COORD ) )
+ * return -aValue.AsDegrees();"), so the angle shown runs counter-clockwise on the screen: (0, -1000), straight up, is 90.
+ * (DIALOG_OFFSET_ITEM's polar fields are the same.)
+ */
 export function toPolarDeg(x: number, y: number): { r: number; deg: number } {
   const r = Math.hypot(x, y);
-  return { r, deg: r === 0 ? 0 : (Math.atan2(y, x) * 180) / Math.PI };
+  return { r, deg: r === 0 ? 0 : -(Math.atan2(y, x) * 180) / Math.PI + 0 };
 }
 
-/** `DIALOG_POSITION_RELATIVE::getTranslationInIU`, polar branch: `x = KiROUND(r cos q), y = KiROUND(r sin q)`. */
+/**
+ * `DIALOG_POSITION_RELATIVE::getTranslationInIU`, polar branch: `q = m_yOffset.GetAngleValue()`, which is `FromDisplay` of the angle typed
+ * (negated, as in [`toPolarDeg`]), then `x = KiROUND(r cos q), y = KiROUND(r sin q)`: 90 degrees moves up the screen.
+ */
 export function polarTranslation(r: number, deg: number): { x: number; y: number } {
-  const q = (deg * Math.PI) / 180;
-  return { x: Math.round(r * Math.cos(q)), y: Math.round(r * Math.sin(q)) };
+  const q = (-deg * Math.PI) / 180;
+  return { x: Math.round(r * Math.cos(q)) + 0, y: Math.round(r * Math.sin(q)) + 0 };
 }
 
 // ----------------------------------------------------------- route selected

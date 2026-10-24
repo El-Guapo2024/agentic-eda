@@ -146,13 +146,16 @@ test("relativeMoveVector: reference + offset - selection anchor (RelativeItemSel
   assert.deepEqual(relativeMoveVector({ x: 5000, y: 5000 }, { x: 0, y: 0 }, { x: 5000, y: 5000 }), { x: 0, y: 0 });
 });
 
-test("polar conversions round-trip in board (Y-down) coordinates", () => {
-  const p = toPolarDeg(0, 1000);
-  assert.equal(p.r, 1000);
-  assert.equal(p.deg, 90);
+test("polarTranslation follows DIALOG_POSITION_RELATIVE's REL_Y_COORD angle: counter-clockwise on the screen", () => {
+  // 90 degrees is straight up (board Y runs down), as `FromDisplay( const EDA_ANGLE&, REL_Y_COORD )` negates the angle typed
+  assert.deepEqual(polarTranslation(1000, 90), { x: 0, y: -1000 });
+  assert.deepEqual(polarTranslation(1000, -90), { x: 0, y: 1000 });
+  assert.equal(toPolarDeg(0, -1000).deg, 90);
+  assert.equal(toPolarDeg(0, 1000).deg, -90);
+  assert.equal(toPolarDeg(0, -1000).r, 1000);
   assert.deepEqual(toPolarDeg(0, 0), { r: 0, deg: 0 });
-  assert.deepEqual(polarTranslation(1000, 90), { x: 0, y: 1000 });
   assert.deepEqual(polarTranslation(1000, 0), { x: 1000, y: 0 });
+  assert.deepEqual(toPolarDeg(1000, 0), { r: 1000, deg: 0 });
   const back = polarTranslation(toPolarDeg(-3000, 4000).r, toPolarDeg(-3000, 4000).deg);
   assert.deepEqual(back, { x: -3000, y: 4000 });
 });
