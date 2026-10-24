@@ -1022,11 +1022,39 @@ impl Router {
         let Some(start_item) = hit else {
             return Err("Cannot start a differential pair in the middle of nowhere.".into());
         };
-        let placer = crate::dp_placer::DiffPairPlacer::start(&self.world, &self.rules, &self.settings, start_item, layer, self.layers.all())?;
+        let mut placer = crate::dp_placer::DiffPairPlacer::start(&self.world, &self.rules, &self.settings, start_item, layer, self.layers.all())?;
+        // `ImportSizes`: "First try to pick up diff pair width from starting track" (`m_UseConnectedTrackWidth`, on by default) -- also off a
+        // pad or via with a stub (findings p5 F4-5)
+        if let Some(w) = self.inherit_track_width(start_item, at, layer) {
+            placer.set_dimensions(Some(w), None, None);
+        }
         self.session = None;
         self.drag = None;
         self.diff = Some(placer);
         Ok(())
+    }
+
+    /// `PNS_KICAD_IFACE_BASE::inheritTrackWidth( aItem, .., aStartPosition )`: a track's own width; for a pad or via, of the tracks joined to it
+    /// on the start layer the one whose far end is nearest the cursor ("the far-end direction is a proxy for which exit stub the user is
+    /// pointing at"), else the narrowest on the start layer, else the narrowest of all; none with no track joined.
+    fn inherit_track_width(&self, item: ItemId, at: Point, layer: i32) -> Option<Nm> {
+        let it = self.world.get(item)?;
+        if it.is_track() {
+            return Some(it.width());
+        }
+        let p = match it {
+            Item::Via(v) => v.pos,
+            Item::Solid(s) => s.pos,
+            _ => return None,
+        };
+        let joint = self.world.joint_at(p, it.net())?;
+        let linked: Vec<&Item> = joint.links.iter().filter(|&&id| id != item).filter_map(|&id| self.world.get(id)).filter(|i| i.is_track()).collect();
+        let sq = |a: Point, b: Point| ((a.x - b.x) as i128).pow(2) + ((a.y - b.y) as i128).pow(2);
+        let closest = linked.iter().filter(|i| i.layers().start() == layer).filter_map(|i| i.track_ends().map(|(a, b)| (i, if sq(a, p) > sq(b, p) { a } else { b }))).min_by_key(|(_, far)| sq(*far, at));
+        if let Some((i, _)) = closest {
+            return Some(i.width());
+        }
+        linked.iter().filter(|i| i.layers().start() == layer).map(|i| i.width()).min().or_else(|| linked.iter().map(|i| i.width()).min())
     }
 
     /// `ROUTER::UpdateSizes` for a pair (the "Differential Pair Dimensions..." dialog,
@@ -1494,6 +1522,17 @@ mod tests {
         router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
         let err = router.continue_from_end(Point { x: 1_000_000, y: 0 }).expect_err("everything is connected");
         assert!(err.contains("nothing is left"), "{err}");
+    }
+
+    /// findings p5 F4-5: a pair started on a pad with a stub takes the stub's width (`inheritTrackWidth`), not the class's.
+    #[test]
+    fn a_pair_started_on_a_pad_with_a_stub_takes_the_stubs_width() {
+        let (mut design, mut model) = two_pad_board();
+        model.nets = vec![IrNet { name: "USB_DP".into(), pins: vec!["R1.1".into(), "R2.1".into()] }, IrNet { name: "USB_DN".into(), pins: vec!["R1.2".into(), "R2.2".into()] }];
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "stub".into(), net: "USB_DP".into(), pins: vec![], layer: "F.Cu".into(), width: 150_000, pts: vec![Point { x: -825_000, y: 0 }, Point { x: -825_000, y: -2_000_000 }], arc_mid_offset: None });
+        let mut router = Router::new(&design, &model);
+        router.start_diff_pair(Point { x: -825_000, y: 0 }, "F.Cu").expect("R1.1 and R1.2 are a pair");
+        assert_eq!(router.diff_pair_preview(Point { x: 3_000_000, y: 0 }).expect("preview").width, 150_000);
     }
 
     /// findings p5 F4-6: a pair started where nothing is gets KiCad's own refusal.

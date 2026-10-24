@@ -361,7 +361,7 @@
     await clickAt(8_000_000, 10_000_000);
     await waitReply("fix", n);
     await quiet();
-    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
     await waitReply("finish", n);
     await sleep(600);
     const st = await state();
@@ -416,7 +416,7 @@
     await clickAt(20_000_000, 12_000_000);
     await waitReply("fix", n);
     await quiet();
-    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
     await waitReply("finish", n);
     await sleep(600);
     st = await state();
@@ -518,7 +518,7 @@
     t(fx && fx.body.ok === true && fx.body.blocked === false && fx.body.preview.layer === "B.Cu", `a click places it and the route goes on on B.Cu: ${fx && JSON.stringify([fx.body.ok, fx.body.blocked, fx.body.preview && fx.body.preview.layer])}`);
     await moveTo(28_000_000, 19_000_000);
     n = replies.length;
-    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
     await waitReply("finish", n);
     await sleep(700);
     const st = await state();
@@ -668,7 +668,7 @@
     await waitReply("fix", n);
     for (const y of [31_000_000, 32_000_000]) await moveTo(25_000_000, y);
     n = replies.length;
-    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
     await waitReply("finish", n);
     await sleep(700);
     const st = await state();
@@ -706,7 +706,7 @@
     await clickAt(11_000_000, 28_000_000);
     await waitReply("fix", n);
     n = replies.length;
-    await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+    await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
     await waitReply("finish", n);
     await sleep(700);
     let st = await state();
@@ -873,7 +873,7 @@
       t(fx && fx.body.blocked === false && fx.body.preview.layer === "F.Cu", `the route goes on on F.Cu: ${fx && fx.body.preview && fx.body.preview.layer}`);
       await moveTo(18_000_000, 5_000_000);
       n = replies.length;
-      await E.run("pcbnew.InteractiveRouter.AttemptFinish");
+      await E.run("common.Interactive.finish"); // End (`finishInteractive`): finish at the cursor -- `F` (AttemptFinish) routes to the nearest unconnected anchor
       await waitReply("finish", n);
       await sleep(700);
       const st = await state();
