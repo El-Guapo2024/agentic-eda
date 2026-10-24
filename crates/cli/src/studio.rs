@@ -36,7 +36,7 @@ use crate::sch_move_api;
 use crate::sch_output_api;
 use crate::inspect_api;
 use crate::tune_api;
-use eda_model::footprint::{placed_courtyard, placed_pads};
+use eda_model::footprint::{placed_courtyard_box, placed_pads};
 use eda_model::ir::{LabelSide, Shape, Side};
 use eda_model::{CheckResult, CheckStatus};
 use serde_json::{json, Value};
@@ -1195,7 +1195,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 LabelSide::Left => "left",
                 LabelSide::Right => "right",
             });
-            p["courtyard"] = json!(placed_courtyard(&model, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
+            // The box of the courtyard the board file has (`FOOTPRINT::GetBoundingBox` merges the `F.CrtYd` drawings as they are): an off-centre one stays off-centre,
+            // so Align, Distribute, the Rotate and Flip pivot and a click's hit test measure the footprint as KiCad does (not the placer's symmetric box).
+            p["courtyard"] = json!(placed_courtyard_box(&model, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's body (the box of its footprint's `F.Fab` graphics, board space) for the 3D view's fallback boxes -- the courtyard is the body plus its
             // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
             // The footprint's own fab drawings first (they are what the board draws), else the library's.

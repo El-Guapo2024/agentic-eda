@@ -286,6 +286,7 @@ export interface Part {
   rot?: Degrees;
   side?: Side;
   label?: LabelSide;
+  /** The box of the courtyard the board file has, board space (`eda_model::footprint::placed_courtyard_box`): an off-centre courtyard stays off-centre. */
   courtyard?: CourtyardBox | null;
   /**
    * The part's body, board-space nm: the box of its footprint's `F.Fab` graphics (crates/cli/src/body_api.rs). The 3D tab sizes its placeholder boxes from this
