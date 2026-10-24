@@ -90,7 +90,7 @@ test("the kinds, their error correction and the levels Micro QR has", () => {
 });
 
 test("a new barcode is the QR code of PCB_BARCODE( parent ), 40 mm, level L, text shown; the verbs take it back from the state's record", () => {
-  assert.deepEqual(newBarcode("F.SilkS", { x: 5, y: 6 }, 1_000), { layer: "F.SilkS", at: { x: 5, y: 6 }, angle: 0, width_nm: 40_000, height_nm: 40_000, text: "", text_height_nm: 1_000, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_nm: 0, margin_y_nm: 0 });
+  assert.deepEqual(newBarcode("F.SilkS", { x: 5, y: 6 }, 1_000), { layer: "F.SilkS", at: { x: 5, y: 6 }, angle: 0, width_nm: 40_000_000, height_nm: 40_000_000, text: "", text_height_nm: 1_000, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_nm: 0, margin_y_nm: 0 });
   const cmd = barcodeToCmd(code({ angle: 90_000, knockout: true, margin_x: 700, margin_y: 800, ecc: "Q" }));
   assert.deepEqual(cmd, { layer: "F.SilkS", at: { x: 20_000, y: 30_000 }, angle: 90_000, width_nm: 10_000, height_nm: 6_000, text: "HELLO", text_height_nm: 1_500, kind: "qr", ecc: "Q", show_text: true, knockout: true, margin_x_nm: 700, margin_y_nm: 800 });
   // a knockout is at least a tenth of the smaller side, rounded up to 0.1 mm (`AssembleBarcode`)

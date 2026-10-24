@@ -79,7 +79,7 @@
   const menuClose = async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(200); };
 
   // the board
-  const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  const near = (a, b, tol = 2_000) => Math.abs(a - b) <= tol;
   const poseOf = (b, ref) => { const p = b.parts.find((q) => q.ref === ref); return p && p.placed ? { x: p.at[0], y: p.at[1], rot: p.rot, side: p.side } : null; };
   /** The place of pad `num` of footprint `ref`, as the server works it out from the footprint's pose. */
   const padOf = (b, ref, num) => { const q = b.parts.find((x) => x.ref === ref)?.pads?.find((x) => x.num === num); return q ? { x: q.x, y: q.y } : null; };
@@ -125,11 +125,11 @@
   };
   const ROLES = ["U", "Rin", "Rf", "C"];
   const refsOf = (k) => ROLES.map((r) => CH[k][r]);
-  // where the footprints are put: channel 1 compact, the others scattered in ways of their own (mm * 1000)
+  // where the footprints are put: channel 1 compact, the others scattered in ways of their own (nm)
   const PLACE = [
-    ["U1", 5500, 9000], ["R1", 3500, 4200], ["R2", 7700, 4200], ["C1", 5500, 13200],
-    ["U2", 18000, 9000], ["R3", 20200, 4200], ["R4", 15800, 4200], ["C2", 18000, 14000],
-    ["U3", 30500, 9000], ["R5", 30500, 4200], ["R6", 32500, 13500], ["C3", 28000, 13500],
+    ["U1", 5_500_000, 9_000_000], ["R1", 3_500_000, 4_200_000], ["R2", 7_700_000, 4_200_000], ["C1", 5_500_000, 13_200_000],
+    ["U2", 18_000_000, 9_000_000], ["R3", 20_200_000, 4_200_000], ["R4", 15_800_000, 4_200_000], ["C2", 18_000_000, 14_000_000],
+    ["U3", 30_500_000, 9_000_000], ["R5", 30_500_000, 4_200_000], ["R6", 32_500_000, 13_500_000], ["C3", 28_000_000, 13_500_000],
   ];
   /** Channel `k` of board `b` is channel 1 moved by one vector: the vector, or null when it is not. */
   const shiftOf = (b, k) => {
@@ -426,17 +426,17 @@
       const out = [];
       // the track of the middle net ends on pad 2 of the amplifier, so what a copy of it ends on says whether the copper turns the way the footprints do
       const pad2 = padOf(await board(), "U1", "2");
-      out.push(await post({ op: "add_track", net: "SUM1", layer: "F.Cu", width: 200, pts: [{ x: 3500, y: 4200 }, { x: 3500, y: 6500 }, { x: pad2.x, y: pad2.y }] }));
-      out.push(await post({ op: "add_track", net: "OUT1", layer: "F.Cu", width: 250, pts: [{ x: 7700, y: 4200 }, { x: 7700, y: 7000 }] }));
-      out.push(await post({ op: "add_track", net: "GND", layer: "F.Cu", width: 300, pts: [{ x: 3000, y: 9000 }, { x: 3000, y: 10500 }] }));
-      out.push(await post({ op: "add_via", net: "SUM1", x: 5500, y: 11000, drill: 300, diameter: 600, from_layer: "F.Cu", to_layer: "B.Cu" }));
-      out.push(await post({ op: "add_zone", net: "GND", layer: "B.Cu", outline: [{ x: 2500, y: 7000 }, { x: 8500, y: 7000 }, { x: 8500, y: 10500 }, { x: 2500, y: 10500 }] }));
-      out.push(await post({ op: "add_text", text: { content: "CH", at: { x: 6500, y: 12500 }, angle: 0, layer: "F.Cu", size_nm: 1000, stroke_width: 150, justify: "center", mirror: false } }));
-      out.push(await post({ op: "add_text", text: { content: "SILK", at: { x: 4000, y: 12000 }, angle: 0, layer: "F.SilkS", size_nm: 800, stroke_width: 150, justify: "center", mirror: false } }));
+      out.push(await post({ op: "add_track", net: "SUM1", layer: "F.Cu", width: 200_000, pts: [{ x: 3_500_000, y: 4_200_000 }, { x: 3_500_000, y: 6_500_000 }, { x: pad2.x, y: pad2.y }] }));
+      out.push(await post({ op: "add_track", net: "OUT1", layer: "F.Cu", width: 250_000, pts: [{ x: 7_700_000, y: 4_200_000 }, { x: 7_700_000, y: 7_000_000 }] }));
+      out.push(await post({ op: "add_track", net: "GND", layer: "F.Cu", width: 300_000, pts: [{ x: 3_000_000, y: 9_000_000 }, { x: 3_000_000, y: 10_500_000 }] }));
+      out.push(await post({ op: "add_via", net: "SUM1", x: 5_500_000, y: 11_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu", to_layer: "B.Cu" }));
+      out.push(await post({ op: "add_zone", net: "GND", layer: "B.Cu", outline: [{ x: 2_500_000, y: 7_000_000 }, { x: 8_500_000, y: 7_000_000 }, { x: 8_500_000, y: 10_500_000 }, { x: 2_500_000, y: 10_500_000 }] }));
+      out.push(await post({ op: "add_text", text: { content: "CH", at: { x: 6_500_000, y: 12_500_000 }, angle: 0, layer: "F.Cu", size_nm: 1_000_000, stroke_width: 150_000, justify: "center", mirror: false } }));
+      out.push(await post({ op: "add_text", text: { content: "SILK", at: { x: 4_000_000, y: 12_000_000 }, angle: 0, layer: "F.SilkS", size_nm: 800_000, stroke_width: 150_000, justify: "center", mirror: false } }));
       // channel 2's own: a track and a text in its area, a track outside every area
-      out.push(await post({ op: "add_track", net: "SUM2", layer: "F.Cu", width: 200, pts: [{ x: 15000, y: 8000 }, { x: 16000, y: 8000 }] }));
-      out.push(await post({ op: "add_text", text: { content: "OLD", at: { x: 19000, y: 12500 }, angle: 0, layer: "F.Cu", size_nm: 800, stroke_width: 150, justify: "center", mirror: false } }));
-      out.push(await post({ op: "add_track", net: "GND", layer: "F.Cu", width: 300, pts: [{ x: 2000, y: 20000 }, { x: 8000, y: 20000 }] }));
+      out.push(await post({ op: "add_track", net: "SUM2", layer: "F.Cu", width: 200_000, pts: [{ x: 15_000_000, y: 8_000_000 }, { x: 16_000_000, y: 8_000_000 }] }));
+      out.push(await post({ op: "add_text", text: { content: "OLD", at: { x: 19_000_000, y: 12_500_000 }, angle: 0, layer: "F.Cu", size_nm: 800_000, stroke_width: 150_000, justify: "center", mirror: false } }));
+      out.push(await post({ op: "add_track", net: "GND", layer: "F.Cu", width: 300_000, pts: [{ x: 2_000_000, y: 20_000_000 }, { x: 8_000_000, y: 20_000_000 }] }));
       t(out.every((o) => o.ok), `ten edits made (${out.filter((o) => !o.ok).map((o) => o.message)})`);
       await sleep(500);
       const b = await board();
@@ -444,7 +444,7 @@
       const a1 = ruleAreas(b).find((z) => z.id === AREA[1]);
       const ch1 = (pts) => pts.every((p) => inside(a1.outline, p));
       COPPER.ch1Tracks = tracksOf(b).filter((x) => ch1(x.pts)).map((x) => x.id);
-      COPPER.outside = tracksOf(b).filter((x) => x.pts[0][1] === 20000).map((x) => x.id);
+      COPPER.outside = tracksOf(b).filter((x) => x.pts[0][1] === 20_000_000).map((x) => x.id);
       COPPER.ch2Old = tracksOf(b).filter((x) => x.net === "SUM2").map((x) => x.id);
       t(COPPER.ch1Tracks.length === 3 && COPPER.outside.length === 1 && COPPER.ch2Old.length === 1, "three tracks are inside channel 1's area, one outside every area, and channel 2 has one of its own");
     });
@@ -499,7 +499,7 @@
       const centre = (poly) => { const xs = poly.map((p) => p[0]); const ys = poly.map((p) => p[1]); return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2]; };
       const c1 = centre(ruleAreas(before).find((z) => z.id === AREA[1]).outline);
       const c2 = centre(ruleAreas(before).find((z) => z.id === AREA[2]).outline);
-      t(!!v2 && near(v2.x, c2[0] - c1[0], 60) && near(v2.y, c2[1] - c1[1], 60), `the vector is the difference of the areas' centres, within the snap (${JSON.stringify(v2)} against ${Math.round(c2[0] - c1[0])},${Math.round(c2[1] - c1[1])})`);
+      t(!!v2 && near(v2.x, c2[0] - c1[0], 60_000) && near(v2.y, c2[1] - c1[1], 60_000), `the vector is the difference of the areas' centres, within the snap (${JSON.stringify(v2)} against ${Math.round(c2[0] - c1[0])},${Math.round(c2[1] - c1[1])})`);
       // the routing
       const a1 = ruleAreas(after).find((z) => z.id === AREA[1]);
       const ch1Tracks = tracksOf(after).filter((x) => COPPER.ch1Tracks.includes(x.id));
@@ -511,15 +511,15 @@
         const got = mine.map((x) => JSON.stringify([x.net, x.layer, x.width, x.pts])).sort();
         t(JSON.stringify(want) === JSON.stringify(got), `channel ${k} has channel 1's three tracks on its own nets, moved (${got.length} tracks${JSON.stringify(want) === JSON.stringify(got) ? "" : `: ${got.join(" ")}`})`);
         const vias = viasOf(after).filter((x) => inside(ak.outline, [x.x, x.y]));
-        t(vias.length === 1 && vias[0].net === CH[k].sum && near(vias[0].x, 5500 + v.x) && near(vias[0].y, 11000 + v.y) && vias[0].from === "F.Cu" && vias[0].to === "B.Cu", `and the via on ${CH[k].sum} (${JSON.stringify(vias.map((x) => [x.net, x.x, x.y]))})`);
+        t(vias.length === 1 && vias[0].net === CH[k].sum && near(vias[0].x, 5_500_000 + v.x) && near(vias[0].y, 11_000_000 + v.y) && vias[0].from === "F.Cu" && vias[0].to === "B.Cu", `and the via on ${CH[k].sum} (${JSON.stringify(vias.map((x) => [x.net, x.x, x.y]))})`);
         const zones = copperZones(after).filter((z) => z.outline.every((p) => inside(ak.outline, p)));
         t(zones.length === 1 && zones[0].net === "GND" && zones[0].layer === "B.Cu" && JSON.stringify(zones[0].outline) === JSON.stringify(shifted(copperZones(before)[0].outline, v)), `and the zone, on the shared net (${zones.length})`);
         const texts = textsOf(after).filter((x) => inside(ak.outline, [x.x, x.y]));
-        t(texts.length === 1 && texts[0].content === "CH" && near(texts[0].x, 6500 + v.x) && near(texts[0].y, 12500 + v.y), `and the text on a copper layer, and not the silkscreen one, which is on no layer of the area (${JSON.stringify(texts.map((x) => [x.content, x.x, x.y]))})`);
+        t(texts.length === 1 && texts[0].content === "CH" && near(texts[0].x, 6_500_000 + v.x) && near(texts[0].y, 12_500_000 + v.y), `and the text on a copper layer, and not the silkscreen one, which is on no layer of the area (${JSON.stringify(texts.map((x) => [x.content, x.x, x.y]))})`);
         t(ak.outline.length === a1.outline.length && JSON.stringify(ak.outline) === JSON.stringify(shifted(a1.outline, v)), "the target's area takes the reference area's shape");
         const toPad = tracksOf(after).find((x) => x.net === CH[k].sum && x.pts.length === 3);
         const pad = padOf(after, CH[k].U, "2");
-        t(!!toPad && !!pad && near(toPad.pts[2][0], pad.x, 2) && near(toPad.pts[2][1], pad.y, 2), `the copy of the track that ends on pad 2 of the amplifier ends on pad 2 of the amplifier of channel ${k} (${JSON.stringify(toPad?.pts[2])} against ${JSON.stringify(pad)})`);
+        t(!!toPad && !!pad && near(toPad.pts[2][0], pad.x, 2000) && near(toPad.pts[2][1], pad.y, 2000), `the copy of the track that ends on pad 2 of the amplifier ends on pad 2 of the amplifier of channel ${k} (${JSON.stringify(toPad?.pts[2])} against ${JSON.stringify(pad)})`);
       }
       // what the target had of its own in the area goes, what it had outside stays
       t(!tracksOf(after).some((x) => COPPER.ch2Old.includes(x.id)), "the track channel 2 had in its area is gone");
@@ -569,7 +569,7 @@
       await ensureSame(afterSetup);
       // restrict to the routing connected within the area: the track of net GND is on a net of the area's footprints (the pads of U1.3 and U1.4), so it is copied, one on a net
       // of no footprint of the area is not
-      const out = await post({ op: "add_track", net: "IN2", layer: "F.Cu", width: 200, pts: [{ x: 8000, y: 8000 }, { x: 8500, y: 8500 }] });
+      const out = await post({ op: "add_track", net: "IN2", layer: "F.Cu", width: 200_000, pts: [{ x: 8_000_000, y: 8_000_000 }, { x: 8_500_000, y: 8_500_000 }] });
       t(out.ok, "a track on a net none of channel 1's footprints is on, in its area");
       const withStray = await snapshot();
       await openRepeat(AREA[1], { connected_routing_only: true });
@@ -621,7 +621,7 @@
       const after = await board();
       t(moved(before, after, ["U2", "U3"]).length === 0, "the anchors' counterparts stay where they are");
       const v2 = shiftOf(after, 2);
-      t(!!v2 && near(v2.x, 18000 - 5500) && near(v2.y, 9000 - 9000), `channel 2, with the amplifier unturned, is channel 1 moved to it (${JSON.stringify(v2)})`);
+      t(!!v2 && near(v2.x, 18_000_000 - 5_500_000) && near(v2.y, 9_000_000 - 9_000_000), `channel 2, with the amplifier unturned, is channel 1 moved to it (${JSON.stringify(v2)})`);
       const turn = turnedBy(after, 3);
       t(turn !== null && near(angle(turn), angle(poseOf(before, "U3").rot - poseOf(before, "U1").rot), 0.01) && !near(angle(turn), 0, 0.01), `channel 3 is channel 1 turned about its amplifier by the angle between the two amplifiers (${turn})`);
       t(tracksOf(after).filter((x) => x.net === "SUM3").length === 1, "and its routing is copied onto its nets");
@@ -629,7 +629,7 @@
       for (const k of [2, 3]) {
         const toPad = tracksOf(after).find((x) => x.net === CH[k].sum && x.pts.length === 3);
         const pad = padOf(after, CH[k].U, "2");
-        t(!!toPad && !!pad && near(toPad.pts[2][0], pad.x, 2) && near(toPad.pts[2][1], pad.y, 2), `channel ${k}: the copy of the track that ends on pad 2 of the amplifier ends on pad 2 of the amplifier (${JSON.stringify(toPad?.pts[2])} against ${JSON.stringify(pad)})`);
+        t(!!toPad && !!pad && near(toPad.pts[2][0], pad.x, 2000) && near(toPad.pts[2][1], pad.y, 2000), `channel ${k}: the copy of the track that ends on pad 2 of the amplifier ends on pad 2 of the amplifier (${JSON.stringify(toPad?.pts[2])} against ${JSON.stringify(pad)})`);
       }
       await ensureSame(turned);
       await undo(); // the turn
@@ -722,8 +722,8 @@
       await post({ op: "group", ids: refsOf(2) });
       const g2 = groupsOf(await board()).find((x) => x.member_ids.includes("U2"));
       await post({ op: "edit_group", id: g2.id, name: "Ch2", member_ids: g2.member_ids, design_block: `${LIB}:Channel` });
-      await post({ op: "move_items", ids: ["R3"], dx: 2600, dy: 1800 });
-      await post({ op: "move_items", ids: ["C2"], dx: -2000, dy: -500 });
+      await post({ op: "move_items", ids: ["R3"], dx: 2_600_000, dy: 1_800_000 });
+      await post({ op: "move_items", ids: ["C2"], dx: -2_000_000, dy: -500_000 });
       await sleep(400);
       const prepared = await snapshot();
       const before = await board();
@@ -737,7 +737,7 @@
       t(unmoved.length >= 3, `the footprints of the group are laid out (${unmoved})`);
       const v = shiftOf(after, 2);
       t(!!v, `they are channel 1's layout moved by one vector (${JSON.stringify(v)})`);
-      t(refsOf(2).filter((x) => !unmoved.includes(x)).length === 1 || (v && v.x === 12500 && v.y === 0) || refsOf(2).every((x) => unmoved.includes(x)), "the first pair is the anchor");
+      t(refsOf(2).filter((x) => !unmoved.includes(x)).length === 1 || (v && v.x === 12_500_000 && v.y === 0) || refsOf(2).every((x) => unmoved.includes(x)), "the first pair is the anchor");
       // the copper
       const mine = segmentsOf(tracksOf(after).filter((x) => x.pts.every((p) => v && inside(shifted(a1.outline, v), p)) && !COPPER.ch2Old.includes(x.id)));
       const want = segmentsOf(tracksOf(setup).filter((x) => COPPER.ch1Tracks.includes(x.id)), (n) => (n === "SUM1" ? "SUM2" : n === "OUT1" ? "OUT2" : n), v ?? { x: 0, y: 0 });

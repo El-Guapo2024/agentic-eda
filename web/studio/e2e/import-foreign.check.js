@@ -186,7 +186,7 @@
     await waitFor(async () => (await refs()).length !== 30, 30000);
     const classes = await netClasses();
     check("an Eagle board's net class (highpower) is the board's, from the project kicad-cli made with it", classes.some((c) => c.name === "highpower") && !classesBefore.includes("highpower"), JSON.stringify({ classesBefore, now: classes.map((c) => c.name) }));
-    check("and highpower is 12 mil wide, as Eagle has it", classes.find((c) => c.name === "highpower")?.track_width === 305, JSON.stringify(classes.find((c) => c.name === "highpower")));
+    check("and highpower is 12 mil wide, as Eagle has it", classes.find((c) => c.name === "highpower")?.track_width === 304_800, JSON.stringify(classes.find((c) => c.name === "highpower")));
     check("the toast does not say the rules were missed", !/design rules and net classes of the file could not be read/.test(toastText()), toastText());
     await E.run("common.Interactive.undo");
     applied--;

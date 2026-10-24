@@ -106,7 +106,7 @@ function TextBoxDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind
     close();
   };
   return (
-    <Shell title="Text Box Properties" onCancel={close} onOk={submit} okLabel="OK" canOk={text.trim().length > 0 && size >= 10 && size <= 1_000_000}>
+    <Shell title="Text Box Properties" onCancel={close} onOk={submit} okLabel="OK" canOk={text.trim().length > 0 && size >= 10_000 && size <= 1_000_000_000}>
       <span>Text</span>
       <textarea autoFocus rows={4} value={text} onChange={(e) => setText(e.target.value)} />
       <span>Text size (um)</span>

@@ -92,7 +92,7 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const title = label.scope === "global" ? "Global Label Properties" : label.scope === "hierarchical" ? "Hierarchical Label Properties" : "Label Properties";
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
-  const sizeOk = sizeNm !== null && sizeNm >= 10 && sizeNm <= 1_000_000;
+  const sizeOk = sizeNm !== null && sizeNm >= 10_000 && sizeNm <= 1_000_000_000;
   // "Label can not be empty." (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`)
   const canOk = text.trim().length > 0 && sizeOk;
   // while "Auto" is on the label takes the spin of what it is connected to (`AutoRotateItem`): the select shows the one it will get
@@ -214,7 +214,7 @@ function TextForm({ text }: { text: SchematicText }) {
   const [v, setV] = useState<SchVAlign>(lie.v);
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
-  const sizeOk = sizeNm !== null && sizeNm >= 10 && sizeNm <= 1_000_000;
+  const sizeOk = sizeNm !== null && sizeNm >= 10_000 && sizeNm <= 1_000_000_000;
   const canOk = content.length > 0 && sizeOk;
   const submit = () => canOk && void send(textEditCmd(text, { content, sizeNm, vertical, h, v }));
   return (

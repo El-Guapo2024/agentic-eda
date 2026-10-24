@@ -85,13 +85,13 @@
     await scenario("an edit elsewhere leaves the fills as they are, and an edit to a zone empties that zone only; Undo gives it back", async (t) => {
       const before = byZone(await fill());
       const net = A.net;
-      const added = await post({ op: "add_track", net, layer: "F.Cu", width: 250, pts: [{ x: 6000, y: 8000 }, { x: 9000, y: 8000 }] });
+      const added = await post({ op: "add_track", net, layer: "F.Cu", width: 250_000, pts: [{ x: 6_000_000, y: 8_000_000 }, { x: 9_000_000, y: 8_000_000 }] });
       t(added.ok, `a track is added (${added.message})`);
       await sleep(1200);
       t(JSON.stringify(byZone(await fill())) === JSON.stringify(before), "the fills are what they were: a pour is not refilled by an edit, as in KiCad with auto-refill off");
       await undo();
       const zA = (await zonesOf()).find((z) => z.id === A.id);
-      const e = await editZone(zA, { min_thickness: zA.min_thickness + 10 });
+      const e = await editZone(zA, { min_thickness: zA.min_thickness + 10_000 });
       t(e.ok, `zone A's minimum width is changed (${e.message})`);
       const f = await waitFill((x) => x.zones.some((z) => z.id === A.id && !z.filled));
       const now = byZone(f);
@@ -109,7 +109,7 @@
 
     await scenario("Fill Selected Zones fills the selected zone only, Unfill Selected Zones takes only the selected one away, Unfill All Zones takes the rest", async (t) => {
       const zA = (await zonesOf()).find((z) => z.id === A.id);
-      await editZone(zA, { min_thickness: zA.min_thickness + 10 });
+      await editZone(zA, { min_thickness: zA.min_thickness + 10_000 });
       await waitFill((x) => x.zones.some((z) => z.id === A.id && !z.filled));
       const bBefore = byZone(await fill());
       await select([A.id]);
@@ -137,7 +137,7 @@
       // A third pour of another net over the first two: the overlap the priorities are about.
       const nets = [...new Set((await state()).parts.flatMap((p) => (p.pads ?? []).map((q) => q.net)).filter(Boolean))].filter((n) => n !== A.net);
       const other = nets[0];
-      const added = await post({ op: "add_zone", net: other, layer: A.layer, outline: [{ x: 5000, y: 8000 }, { x: 15000, y: 8000 }, { x: 15000, y: 14000 }, { x: 5000, y: 14000 }] });
+      const added = await post({ op: "add_zone", net: other, layer: A.layer, outline: [{ x: 5_000_000, y: 8_000_000 }, { x: 15_000_000, y: 8_000_000 }, { x: 15_000_000, y: 14_000_000 }, { x: 5_000_000, y: 14_000_000 }] });
       t(added.ok, `a small pour of ${other} is added over the first (${added.message})`);
       await sleep(800);
       const small = (await zonesOf()).find((z) => !startZones.some((s) => s.id === z.id));

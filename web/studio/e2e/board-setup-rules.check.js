@@ -91,7 +91,7 @@
       const clr = aria(p, "Minimum clearance"), trk = aria(p, "Minimum track width");
       t(!!clr && !!trk, "the page has Minimum clearance and Minimum track width");
       const want = { clr: (c0?.min_clearance_nm ?? 200) + 50, trk: (c0?.min_track_width_nm ?? 200) + 25 };
-      setValue(clr, want.clr / 1000); setValue(trk, want.trk / 1000);
+      setValue(clr, want.clr / 1e6); setValue(trk, want.trk / 1e6);
       await sleep(150);
       const { st } = await apply(p, (s) => s.board_rules?.constraints?.min_clearance_nm === want.clr);
       t(st?.board_rules?.constraints?.min_clearance_nm === want.clr && st?.board_rules?.constraints?.min_track_width_nm === want.trk, `the board has ${want.clr} and ${want.trk} um (${J(st?.board_rules?.constraints).slice(0, 160)})`);
@@ -120,9 +120,9 @@
       const dia = nums[nums.length - 2], drill = nums[nums.length - 1];
       setValue(dia, 0.9); setValue(drill, 0.45);
       await sleep(150);
-      const { st } = await apply(p, (s) => (s.routing?.track_width_presets ?? []).includes(350) && (s.routing?.via_presets ?? []).some((v) => v.diameter === 900));
-      t((st?.routing?.track_width_presets ?? []).includes(350), `the track widths have 0.35 mm (${J(st?.routing?.track_width_presets)})`);
-      t((st?.routing?.via_presets ?? []).some((v) => v.diameter === 900 && v.drill === 450), `the via sizes have 0.9 / 0.45 mm (${J(st?.routing?.via_presets)})`);
+      const { st } = await apply(p, (s) => (s.routing?.track_width_presets ?? []).includes(350_000) && (s.routing?.via_presets ?? []).some((v) => v.diameter === 900_000));
+      t((st?.routing?.track_width_presets ?? []).includes(350_000), `the track widths have 0.35 mm (${J(st?.routing?.track_width_presets)})`);
+      t((st?.routing?.via_presets ?? []).some((v) => v.diameter === 900_000 && v.drill === 450_000), `the via sizes have 0.9 / 0.45 mm (${J(st?.routing?.via_presets)})`);
       const back = await undoAfter();
       t(J(back.routing?.track_width_presets ?? []) === J(w0) && J(back.routing?.via_presets ?? []) === J(v0), "one undo takes both away");
     });
@@ -136,9 +136,9 @@
       const front = [...p.querySelectorAll("label")].find((l) => l.textContent.trim() === "Front")?.querySelector("input");
       front?.click();
       await sleep(150);
-      const { st } = await apply(p, (s) => s.board_rules?.mask_paste?.expansion_nm === 50);
+      const { st } = await apply(p, (s) => s.board_rules?.mask_paste?.expansion_nm === 50_000);
       const m = st?.board_rules?.mask_paste;
-      t(m?.expansion_nm === 50 && m?.paste_margin_nm === -30, `expansion 50 um, paste clearance -30 um (${J(m)})`);
+      t(m?.expansion_nm === 50_000 && m?.paste_margin_nm === -30_000, `expansion 50 um, paste clearance -30 um (${J(m)})`);
       t(!!front && m?.tent_vias_front === !m0?.tent_vias_front, `Tent vias: Front was switched (${m0?.tent_vias_front} -> ${m?.tent_vias_front})`);
       const back = await undoAfter();
       t(J(back.board_rules?.mask_paste) === J(m0), "one undo gives them back");
@@ -151,9 +151,9 @@
       setValue(aria(p, "Silk Layers Line Thickness"), 0.15);
       setValue(aria(p, "Silk Layers Text Height"), 1.2);
       await sleep(150);
-      const { st } = await apply(p, (s) => s.board_rules?.text_graphics?.silk?.line_width_nm === 150);
+      const { st } = await apply(p, (s) => s.board_rules?.text_graphics?.silk?.line_width_nm === 150_000);
       const silk = st?.board_rules?.text_graphics?.silk;
-      t(silk?.line_width_nm === 150 && silk?.text_height_nm === 1200, `silk: line 150 um, text height 1200 um (${J(silk)})`);
+      t(silk?.line_width_nm === 150_000 && silk?.text_height_nm === 1_200_000, `silk: line 150 um, text height 1200 um (${J(silk)})`);
       t(J(st?.board_rules?.text_graphics?.copper) === J(d0?.copper), "the other rows are as they were");
       const back = await undoAfter();
       t(J(back.board_rules?.text_graphics) === J(d0), "one undo gives them back");
@@ -171,7 +171,7 @@
       await sleep(150);
       const { st } = await apply(p, (s) => s.drawings?.dimension_settings?.units === "mil", "Apply Settings");
       const d = st?.drawings?.dimension_settings;
-      t(d?.units === "mil" && d?.precision === 2 && d?.arrow_length === 1500, `mils, 2 places, a 1.5 mm arrow (${J(d)})`);
+      t(d?.units === "mil" && d?.precision === 2 && d?.arrow_length === 1_500_000, `mils, 2 places, a 1.5 mm arrow (${J(d)})`);
       const back = await undoAfter();
       t(J(back.drawings?.dimension_settings ?? null) === J(d0), "one undo gives the old ones back");
     });

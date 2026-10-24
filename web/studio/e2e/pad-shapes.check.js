@@ -41,7 +41,7 @@
   const closeDialogs = async () => { for (let i = 0; i < 3; i++) { const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Cancel"); if (!b) break; b.click(); await sleep(150); } };
   const openDialog = async (padId) => { await select([padId]); await __eda.run("pcbnew.InteractiveEdit.properties"); await sleep(400); };
   const ok = async () => { await click("board-pad-properties-ok"); await sleep(1300); };
-  const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  const near = (a, b, tol = 2_000) => Math.abs(a - b) <= tol;
   const scenario = async (name, fn) => {
     const entry = { name, ok: true, notes: [] };
     const t = (cond, msg) => { entry.notes.push(`${cond ? "ok" : "FAIL"}: ${msg}`); if (!cond) entry.ok = false; };
@@ -90,8 +90,8 @@
     await type("pad-trap-axis", "vertical");
     await ok();
     const after = await padOf(a);
-    t(after.shape === "trapezoid" && JSON.stringify(after.delta) === "[0,300]", `shape ${after.shape}, delta ${JSON.stringify(after.delta)}`);
-    t(after.edit?.trapezoid_delta?.[1] === 300 && !("size" in after.edit), `the edit holds the delta only: ${JSON.stringify(after.edit)}`);
+    t(after.shape === "trapezoid" && JSON.stringify(after.delta) === "[0,300000]", `shape ${after.shape}, delta ${JSON.stringify(after.delta)}`);
+    t(after.edit?.trapezoid_delta?.[1] === 300_000 && !("size" in after.edit), `the edit holds the delta only: ${JSON.stringify(after.edit)}`);
     const [contour] = after.outline ?? [];
     t(contour?.length === 4, `the outline is four corners: ${JSON.stringify(contour)}`);
     if (contour) {
@@ -100,7 +100,7 @@
       const bottom = contour.filter((p) => p[1] === ys[1]);
       const len = (side) => Math.abs(side[0][0] - side[1][0]);
       // KiCad's delta: half of it squeezes one side and half expands the other, so the two parallel sides differ by twice the delta.
-      t(near(len(bottom) - len(top), 600, 2), `the sides differ by twice the delta: ${len(bottom)} and ${len(top)} um`);
+      t(near(len(bottom) - len(top), 600_000, 2000), `the sides differ by twice the delta: ${len(bottom)} and ${len(top)} um`);
       t(near(area(contour), (len(bottom) + len(top)) / 2 * (ys[1] - ys[0]), 3), `its area is the trapezoid's: ${Math.round(area(contour))} um2`);
     }
     t(after.w > before.w, `the box about the pad holds the wide side: ${before.w} -> ${after.w}`);
@@ -129,8 +129,8 @@
     const [contour] = p.outline ?? [];
     t(contour?.length > 8, `the outline has the arcs of the rounded corners and the cut: ${contour?.length} points`);
     // KiCad's own numbers: the polygon of a 0.8 x 0.95 mm pad, 0.3 of the 0.8 shorter side chamfered at one corner, 0.2 of it rounded at the others.
-    const r = 0.2 * 800, ch = 0.3 * 800;
-    const exact = 800 * 950 - ch * ch / 2 - 3 * (1 - Math.PI / 4) * r * r;
+    const r = 0.2 * 800_000, ch = 0.3 * 800_000;
+    const exact = 800_000 * 950_000 - ch * ch / 2 - 3 * (1 - Math.PI / 4) * r * r;
     t(contour && Math.abs(area(contour) - exact) / exact < 0.01, `the area is the rectangle less the cut and the three corners: ${Math.round(area(contour))} against ${Math.round(exact)}`);
     await undo();
     t(!(await padOf(b)).edited, "undone");
@@ -179,7 +179,7 @@
     const p = await padOf(c);
     t(p.shape === "custom" && p.custom?.anchor === "circle" && p.custom?.zone === "convex_hull" && p.custom?.primitives?.length === 2, `${p.shape}, ${p.custom?.anchor}, ${p.custom?.zone}, ${p.custom?.primitives?.map((q) => q.shape.kind)}`);
     t((p.outline ?? []).length === 2, `one outline and one hole (the ring's): ${p.outline?.map((q) => q.length)}`);
-    t(p.w > 4000, `the box about the pad holds the ring: ${p.w} x ${p.h} um`);
+    t(p.w > 4_000_000, `the box about the pad holds the ring: ${p.w} x ${p.h} um`);
     // The state is what the next dialog opens on.
     await openDialog(c);
     t(tid("pad-shape").value === "custom_circle" && document.querySelectorAll('[data-testid^="pad-prim-row-"]').length === 2 && tid("pad-knockout").value === "convex_hull", "the dialog opens on the custom pad as it is");

@@ -92,7 +92,7 @@ export function LabelDialog() {
 
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
-  const sizeOk = sizeNm !== null && sizeNm >= 10 && sizeNm <= 1_000_000;
+  const sizeOk = sizeNm !== null && sizeNm >= 10_000 && sizeNm <= 1_000_000_000;
   const canAdd = text.trim().length > 0 && sizeOk;
 
   const submit = () => {

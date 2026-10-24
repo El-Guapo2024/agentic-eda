@@ -109,7 +109,7 @@
     t(action("eeschema.EditorControl.showSimulator")?.enabled === true, "Inspect > Simulator is enabled on the schematic");
     t((await E.run("eeschema.Simulation.runSimulation")).ok === false, "the simulator's own actions wait for its window");
     // a `.tran` directive on the sheet (`GetSchTextSimCommand`), taken away again after
-    const added = await post("/api/cmd", { cmd: { op: "add_sch_text", content: ".tran 10u 5m 0 10u uic", at: { x: 20_000, y: 20_000 }, angle_millideg: 0, size_nm: 1270 }, strict: false });
+    const added = await post("/api/cmd", { cmd: { op: "add_sch_text", content: ".tran 10u 5m 0 10u uic", at: { x: 20_000_000, y: 20_000_000 }, angle_millideg: 0, size_nm: 1_270_000 }, strict: false });
     t(added.ok !== false, "a .tran text on the sheet");
     await sleep(800);
     const r = await E.run("eeschema.EditorControl.showSimulator");

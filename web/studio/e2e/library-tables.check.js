@@ -209,7 +209,7 @@
     check("the footprint tree lists the library", !!document.querySelector('[data-library="LtMount"]') && fpItems.names && fpItems.names.includes("MountingHole_3.2mm_M3"), JSON.stringify(fpItems).slice(0, 100));
     await clickTab("PCB");
     const partsBefore = (await get("/api/state")).parts.length;
-    const hole = await cmd({ op: "place_footprint", footprint: "LtMount:MountingHole_3.2mm_M3", at: { x: 60000, y: 60000 }, reference: "", value: "", definition: null });
+    const hole = await cmd({ op: "place_footprint", footprint: "LtMount:MountingHole_3.2mm_M3", at: { x: 60_000_000, y: 60_000_000 }, reference: "", value: "", definition: null });
     await sleep(500);
     const st = await get("/api/state");
     const part = st.parts.find((p) => p.footprint === "LtMount:MountingHole_3.2mm_M3");

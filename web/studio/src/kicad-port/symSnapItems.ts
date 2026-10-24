@@ -36,7 +36,7 @@ export function symbolSnapItems(sym: LibrarySymbol | null, unit: number, bodySty
   // the fields on show (`SCH_FIELD_T`): like a text, an anchor to hold a move by
   for (const f of fields) {
     if (!f.id) continue;
-    const size = f.size_nm && f.size_nm > 0 ? f.size_nm : 1270;
+    const size = f.size_nm && f.size_nm > 0 ? f.size_nm : 1_270_000;
     const r = Math.max(size, (size * f.text.length) / 2);
     out.push({ id: f.id, owner: f.id, kind: "field", connectable: false, position: [f.at[0], f.at[1]], connectionPoints: [], bbox: box(f.at[0] - r, f.at[1] - r, f.at[0] + r, f.at[1] + r) });
   }

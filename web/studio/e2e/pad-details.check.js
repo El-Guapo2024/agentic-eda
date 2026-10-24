@@ -75,7 +75,7 @@
 
   // A pin header (through-hole pads, no nets) from the installed libraries.
   const before = new Set((await state()).parts.map((p) => p.ref));
-  const placed = await cmd({ op: "place_footprint", footprint: "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical", at: { x: 5000, y: 5000 } });
+  const placed = await cmd({ op: "place_footprint", footprint: "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical", at: { x: 5_000_000, y: 5_000_000 } });
   const header = (await state()).parts.find((p) => !before.has(p.ref))?.ref;
   const th = header ? `${header}.1` : null;
   const afterPlace = await snapshot();
@@ -111,12 +111,12 @@
     await type("pad-size-y", 2.2);
     await ok();
     const p = await padOf(th);
-    t(p.stack?.mode === "front_inner_back" && p.stack?.back?.size?.[0] === 2600 && p.stack?.back?.size?.[1] === 2200, `stack: ${JSON.stringify(p.stack?.back)} (${p.stack?.mode})`);
+    t(p.stack?.mode === "front_inner_back" && p.stack?.back?.size?.[0] === 2_600_000 && p.stack?.back?.size?.[1] === 2_200_000, `stack: ${JSON.stringify(p.stack?.back)} (${p.stack?.mode})`);
     t(p.size[0] === was.size[0] && p.shape === was.shape, `the front is as it was: ${p.shape} ${p.size}`);
     const groups = p.stack_layers ?? [];
     const back = groups.find((g) => g.layers.includes("B.Cu"));
     const front = groups.find((g) => g.layers.includes("F.Cu"));
-    t(groups.length >= 2 && back && front && back.w === 2600 && back.h === 2200 && front.w === was.w, `the copper of each layer: back ${back?.w}x${back?.h}, front ${front?.w}x${front?.h} (${groups.length} groups)`);
+    t(groups.length >= 2 && back && front && back.w === 2_600_000 && back.h === 2_200_000 && front.w === was.w, `the copper of each layer: back ${back?.w}x${back?.h}, front ${front?.w}x${front?.h} (${groups.length} groups)`);
     // The dialog opens on the stack as it is.
     await openPadDialog(th);
     t(tid("pad-stack-mode").value === "front_inner_back", "the dialog opens on the stack");
@@ -221,7 +221,7 @@
   await scenario("copper that reaches pads nobody selected raises KiCad's question, and the two answers differ in what they do to those pads", async (t) => {
     t(!!a && !!b && !!c, "a third pad on the first one's net");
     // A track from a to c on the net, so that c is in a's cluster.
-    const added = await cmd({ op: "add_track", net: a.net, layer: "F.Cu", width: 200, pts: [{ x: a.x, y: a.y }, { x: c.x, y: c.y }] });
+    const added = await cmd({ op: "add_track", net: a.net, layer: "F.Cu", width: 200_000, pts: [{ x: a.x, y: a.y }, { x: c.x, y: c.y }] });
     t(added.ok === true, `a track joins ${a.id} and ${c.id}: ${added.message}`);
     const withTrack = await snapshot();
     await select([a.id, b.id]);

@@ -724,12 +724,12 @@ impl Problem<'_> {
             for j in i + 1..self.items.len() {
                 let ov = overlap(ci, self.keepout(j, poses[j]));
                 if ov > 0 {
-                    b[1] += W_OVERLAP * ((ov as f64).sqrt() + 500.0);
+                    b[1] += W_OVERLAP * ((ov as f64).sqrt() + 500_000.0);
                 }
             }
             let out = outside_area(ci, self.bounds(i));
             if out > 0 {
-                b[1] += W_OUTSIDE * ((out as f64).sqrt() + 500.0);
+                b[1] += W_OUTSIDE * ((out as f64).sqrt() + 500_000.0);
             }
             b[3] += self.escape_cost(i, poses);
             b[4] += self.edge_cost(i, poses);
@@ -908,7 +908,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
                 return None;
             }
             let area: f64 = parts.iter().map(|&i| ((items[i].half.0 - opts.spacing) * 2) as f64 * ((items[i].half.1 - opts.spacing) * 2) as f64).sum();
-            Some((COMPACT_RATIO * 2.0 * area.sqrt()).max(6000.0))
+            Some((COMPACT_RATIO * 2.0 * area.sqrt()).max(6_000_000.0))
         })
         .collect();
 
@@ -1770,7 +1770,7 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
             o.iter().map(|p| p.x).max().unwrap_or(0),
             o.iter().map(|p| p.y).max().unwrap_or(0),
         );
-        let fp = eda_model::floorplan::plan(model, bb, opts.snap.max(100), opts.seed)
+        let fp = eda_model::floorplan::plan(model, bb, opts.snap.max(100_000), opts.seed)
             .map_err(|e| vec![CheckResult::fail("floorplan_arrange", "modules", e)])?;
         planned = PlaceOptions { floorplan: Some(fp), ..opts.clone() };
         &planned

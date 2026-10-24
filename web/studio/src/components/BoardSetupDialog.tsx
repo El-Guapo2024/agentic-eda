@@ -103,7 +103,7 @@ const DEFAULT_DIMENSION_SETTINGS: DimensionSettings = {
   stroke_width: 200_000,
   arrow_length: 1_270_000,
   extension_offset: 500_000,
-  extension_height: 586,
+  extension_height: 586_421, // arrow_length * sin(27.5 deg), as DimensionSettings::default()
 };
 
 const DEFAULT_TEARDROP_SETTINGS: TeardropSettings = {

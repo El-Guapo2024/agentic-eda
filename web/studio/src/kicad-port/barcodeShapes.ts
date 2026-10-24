@@ -170,7 +170,7 @@ export function barcodeToCmd(b: BoardBarcode): CmdBarcode {
 
 /** A barcode as the Add Barcode tool starts one (`PCB_BARCODE( parent )`: 40 mm square, a QR code of level L, the text shown, no knockout; `DRAWING_TOOL::DrawBarcode` sets the layer, the place and the layer's text size). */
 export function newBarcode(layer: string, at: { x: number; y: number }, textHeightNm: number): CmdBarcode {
-  return { layer, at: { x: at.x, y: at.y }, angle: 0, width_nm: 40_000, height_nm: 40_000, text: "", text_height_nm: textHeightNm, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_nm: 0, margin_y_nm: 0 };
+  return { layer, at: { x: at.x, y: at.y }, angle: 0, width_nm: 40_000_000, height_nm: 40_000_000, text: "", text_height_nm: textHeightNm, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_nm: 0, margin_y_nm: 0 };
 }
 
 /** `transferDataToBarcode`'s `SetMargin` and the knockout's minimum (`AssembleBarcode`: at least a tenth of the smaller side, rounded up to 0.1 mm). */

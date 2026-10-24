@@ -165,7 +165,7 @@
   // The schematic examples/mcu_board_30plus.yaml draws has nothing ERC finds: a resistor with nothing on its pins gives it two errors (pin_not_connected).
   const ercNow = await (await fetch("/api/erc")).json();
   if (!(ercNow.violations ?? []).length) {
-    const seeded = await (await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd: { op: "add_symbol", id: "R99", lib_id: "Device:R", at: { x: 101600, y: 139700 }, rot_millideg: 0, value: "R", footprint: "", unit: 1 }, strict: false }) })).json();
+    const seeded = await (await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd: { op: "add_symbol", id: "R99", lib_id: "Device:R", at: { x: 101_600_000, y: 139_700_000 }, rot_millideg: 0, value: "R", footprint: "", unit: 1 }, strict: false }) })).json();
     check("a lone resistor is put on the sheet for the ERC to find something", seeded.ok, seeded.message);
     await sleep(800);
   }

@@ -90,7 +90,7 @@
     const at = screenOf(60_000, 20_000);
     fire("pointermove", at[0], at[1]); await sleep(200);
     fire("pointermove", at[0] + 4, at[1] + 4); await sleep(200);
-    await clickAt(60_000 + 4 / __eda.state().view.scale, 20_000 + 4 / __eda.state().view.scale);
+    await clickAt(60_000_000 + 4 / __eda.state().view.scale, 20_000_000 + 4 / __eda.state().view.scale);
     await sleep(900);
   };
 
@@ -121,10 +121,10 @@
 
   await scenario("board: Draw Table (two clicks, Table Properties) and the structure edits", async (t) => {
     await run("pcbnew.InteractiveDrawing.drawTable");
-    await clickAt(50_000, 30_000);
+    await clickAt(50_000_000, 30_000_000);
     const [qx, qy] = screenOf(110_000, 52_000);
     fire("pointermove", qx, qy); await sleep(200);
-    await clickAt(110_000, 52_000);
+    await clickAt(110_000_000, 52_000_000);
     const ok = buttonText(document, "OK");
     t(!!ok, "the second click opens Table Properties");
     ok?.click();
@@ -198,10 +198,10 @@
   await scenario("sheet: Draw Table, the structure edits and the table's panel rows", async (t) => {
     await run("eeschema.InteractiveDrawing.drawTable");
     t(__eda.state().tool === "sch_table", "the Draw Table tool is armed");
-    await clickAt(40_000, 150_000);
+    await clickAt(40_000_000, 150_000_000);
     const [qx, qy] = screenOf(100_000, 165_000);
     fire("pointermove", qx, qy); await sleep(250);
-    await clickAt(100_000, 165_000);
+    await clickAt(100_000_000, 165_000_000);
     const ok = buttonText(document, "OK");
     t(!!ok, "the second click opens Table Properties");
     ok?.click();
@@ -256,7 +256,7 @@
 
   await scenario("sheet: the context menu of a cell offers the table edits, and Merge Cells only for a block", async (t) => {
     // a table to ask the menu on (made by the verb, as the dialog would)
-    const draw = { op: "sch_table", verb: "draw", layer: "", at: { x: 40_000, y: 150_000 }, cols: 3, rows: 3, cell_w_nm: 20_320, cell_h_nm: 5_080, line_width_nm: 0 };
+    const draw = { op: "sch_table", verb: "draw", layer: "", at: { x: 40_000_000, y: 150_000_000 }, cols: 3, rows: 3, cell_w_nm: 20_320_000, cell_h_nm: 5_080_000, line_width_nm: 0 };
     const res = await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd: draw, strict: false }) }).then((r) => r.json());
     await sleep(900);
     const tables = await sheetTables();

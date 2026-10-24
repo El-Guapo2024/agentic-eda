@@ -169,7 +169,7 @@
   await leave();
   await fit();
   const view0 = __eda.state().view;
-  if (!view0 || !Number.isFinite(view0.x) || !Number.isFinite(view0.scale) || view0.scale < 1e-4) { results.push({ name: "setup", ok: false, notes: [`FAIL: the canvas has no size (view ${JSON.stringify(view0)}): in a hidden pane take a screenshot after loading the page`] }); check.done = true; return "no canvas size"; }
+  if (!view0 || !Number.isFinite(view0.x) || !Number.isFinite(view0.scale) || view0.scale < 1e-7) { results.push({ name: "setup", ok: false, notes: [`FAIL: the canvas has no size (view ${JSON.stringify(view0)}): in a hidden pane take a screenshot after loading the page`] }); check.done = true; return "no canvas size"; }
   SHEETS = [mcu.id, led.id];
   const base = await snapshotOf(SHEETS);
   const prefs0 = await readPrefs();
@@ -186,7 +186,7 @@
       t(sel.length === 1 && sel[0].id === "pin:R1:1" && sel[0].kind === "pin", `a pin is an item of the selection (${JSON.stringify(sel)})`);
       // R1's pin 1 is on the PA0 net: its end is at (49530, 83820), its wire runs up from there to a hierarchical label
       await select([]);
-      await hoverAt(49530, 83820);
+      await hoverAt(49_530_000, 83_820_000);
       await __eda.run("eeschema.EditorControl.highlightNet");
       await sleep(600);
       t(__eda.state().highlight.includes("PA0"), `Highlight Net with the cursor on a pin highlights its net (${__eda.state().highlight})`);
@@ -196,7 +196,7 @@
       await __eda.run("eeschema.InteractiveSelection.SelectNode");
       await sleep(500);
       t(__eda.state().selection.map((x) => x.id).join() === "pin:R1:1", `Select Node on a pin's end selects the pin (an exact hit on a pin wins over the wire there): ${__eda.state().selection.map((x) => x.id)}`);
-      await hoverAt(49530, 82550);
+      await hoverAt(49_530_000, 82_550_000);
       await __eda.run("eeschema.InteractiveSelection.SelectNode");
       await sleep(500);
       const ids = __eda.state().selection.map((x) => x.id);
@@ -236,19 +236,19 @@
       await enter(mcu.id);
       const m0 = await sch(mcu.id);
       const lbl = (s, at) => s.labels.find((l) => l.at[0] === at[0] && l.at[1] === at[1])?.net;
-      t(lbl(m0, [135890, 69850]) === "PA0" && lbl(m0, [135890, 72390]) === "PA1", "U1.3 has the label PA0 and U1.4 the label PA1");
+      t(lbl(m0, [135_890_000, 69_850_000]) === "PA0" && lbl(m0, [135_890_000, 72_390_000]) === "PA1", "U1.3 has the label PA0 and U1.4 the label PA1");
       await select(["pin:U1:3", "pin:U1:4"]);
       const swapLabels = __eda.actions().find((a) => a.id === "eeschema.InteractiveEdit.swapPinLabels");
       t(swapLabels?.enabled === true, `Swap Pin Labels is offered for two pins that each have a label (${swapLabels?.reason ?? "enabled"})`);
       await __eda.run("eeschema.InteractiveEdit.swapPinLabels");
       await sleep(1200);
       const m1 = await sch(mcu.id);
-      t(lbl(m1, [135890, 69850]) === "PA1" && lbl(m1, [135890, 72390]) === "PA0", `the labels traded their text (${lbl(m1, [135890, 69850])}, ${lbl(m1, [135890, 72390])})`);
+      t(lbl(m1, [135_890_000, 69_850_000]) === "PA1" && lbl(m1, [135_890_000, 72_390_000]) === "PA0", `the labels traded their text (${lbl(m1, [135890, 69850])}, ${lbl(m1, [135890, 72390])})`);
       const u1 = m1.symbols.find((x) => x.id === "U1");
       t(u1.pins.find((p) => p.number === "3").net === "PA1" && u1.pins.find((p) => p.number === "4").net === "PA0", "and the pins are on each other's nets");
       t(JSON.stringify(u1.pin_swaps ?? null) === JSON.stringify(m0.symbols.find((x) => x.id === "U1").pin_swaps ?? null), "the pins did not move");
       await undo();
-      t(lbl(await sch(mcu.id), [135890, 69850]) === "PA0", "one Undo puts the labels back");
+      t(lbl(await sch(mcu.id), [135_890_000, 69_850_000]) === "PA0", "one Undo puts the labels back");
       await setPrefs({ pinSwaps: prefs0.pinSwaps });
     });
 
@@ -263,9 +263,9 @@
       t(sel.length === 1 && sel[0].id === pin.id && sel[0].kind === "sheet_pin", `a sheet pin is an item of its own (${JSON.stringify(sel)})`);
       // a move along the right border: the part of the move that leaves the border is dropped (SCH_SHEET_PIN::ConstrainOnEdge)
       const onRight = (p) => p.at[0] === sheet.at[0] + sheet.size[0];
-      const moved = await post({ op: "sch_move", verb: "move", ids: [pin.id], dx: 6000, dy: 5080 });
+      const moved = await post({ op: "sch_move", verb: "move", ids: [pin.id], dx: 6_000_000, dy: 5_080_000 });
       const p1 = (await sch("")).sheets.find((s) => s.id === mcu.id).pins.find((p) => p.id === pin.id);
-      t(moved.ok === true && onRight(p1) && p1.at[1] === pin.at[1] + 5080, `the pin slid down the right border and kept its side (${JSON.stringify(pin.at)} -> ${JSON.stringify(p1.at)})`);
+      t(moved.ok === true && onRight(p1) && p1.at[1] === pin.at[1] + 5_080_000, `the pin slid down the right border and kept its side (${JSON.stringify(pin.at)} -> ${JSON.stringify(p1.at)})`);
       await undo();
       // Sheet Pin Properties
       await select([pin.id]);
@@ -289,17 +289,17 @@
     // ----- labels and text
     await scenario("Auto-rotate: a global label with Auto takes the spin of the wire it is on, when placed, edited and moved", async (t) => {
       await enter(led.id);
-      const y0 = 38100;
+      const y0 = 38_100_000;
       // two wires in an empty corner of the sheet: a horizontal one (ends at 60.96, 38.1) and a vertical one down from (83.82, 38.1)
-      await post({ op: "add_wire", pts: [{ x: 38100, y: y0 }, { x: 60960, y: y0 }] }, led.id);
-      await post({ op: "add_wire", pts: [{ x: 83820, y: y0 }, { x: 83820, y: 60960 }] }, led.id);
-      const place = await post({ op: "sch_edit", verb: "place_label", net: "CLK_E2E", at: { x: 60960, y: y0 }, kind: { scope: "global", shape: "output" }, spin: "up", auto_rotate: true }, led.id);
+      await post({ op: "add_wire", pts: [{ x: 38_100_000, y: y0 }, { x: 60_960_000, y: y0 }] }, led.id);
+      await post({ op: "add_wire", pts: [{ x: 83_820_000, y: y0 }, { x: 83_820_000, y: 60_960_000 }] }, led.id);
+      const place = await post({ op: "sch_edit", verb: "place_label", net: "CLK_E2E", at: { x: 60_960_000, y: y0 }, kind: { scope: "global", shape: "output" }, spin: "up", auto_rotate: true }, led.id);
       let l = (await sch(led.id)).labels.find((x) => x.net === "CLK_E2E");
       t(place.ok === true && l?.auto_rotate === true, `the label is placed with Auto on (${l?.auto_rotate})`);
       t((l?.spin ?? "right") === "right", `at the end of a wire that runs to the right it reads on to the right, not up as the dialog said (${l?.spin})`);
-      const moved = await post({ op: "sch_move", verb: "move", ids: [l.id], dx: 22860, dy: 0 }, led.id);
+      const moved = await post({ op: "sch_move", verb: "move", ids: [l.id], dx: 22_860_000, dy: 0 }, led.id);
       l = (await sch(led.id)).labels.find((x) => x.net === "CLK_E2E");
-      t(moved.ok === true && JSON.stringify(l.at) === JSON.stringify([83820, y0]) && l.spin === "up", `moved to the top of the vertical wire it reads up (${JSON.stringify(l.at)}, ${l.spin})`);
+      t(moved.ok === true && JSON.stringify(l.at) === JSON.stringify([83_820_000, y0]) && l.spin === "up", `moved to the top of the vertical wire it reads up (${JSON.stringify(l.at)}, ${l.spin})`);
       // Label Properties with Auto off keeps the spin picked; with it on the wire decides again
       await post({ op: "sch_edit", verb: "edit_label", id: l.id, auto_rotate: false, spin: "left" }, led.id);
       l = (await sch(led.id)).labels.find((x) => x.net === "CLK_E2E");
@@ -314,13 +314,13 @@
       t(!!aria("Auto") && aria("Auto").checked === true && aria("Orientation")?.disabled === true, "Label Properties shows Auto checked and the orientation fixed by it");
       await closeDialogs();
       // a local label has no Auto
-      const refused = await post({ op: "sch_edit", verb: "place_label", net: "LOC_E2E", at: { x: 38100, y: y0 }, kind: { scope: "local" }, auto_rotate: true }, led.id);
+      const refused = await post({ op: "sch_edit", verb: "place_label", net: "LOC_E2E", at: { x: 38_100_000, y: y0 }, kind: { scope: "local" }, auto_rotate: true }, led.id);
       t(refused.ok === false, "a plain label cannot rotate itself: refused");
     });
 
     await scenario("A free text: placed centred, turned and mirrored as KiCad turns and mirrors it, its justification in the file's terms", async (t) => {
       await enter(led.id);
-      const place = await post({ op: "sch_edit", verb: "place_text", content: "e2e note", at: { x: 40640, y: 50800 }, size_nm: 1270 }, led.id);
+      const place = await post({ op: "sch_edit", verb: "place_text", content: "e2e note", at: { x: 40_640_000, y: 50_800_000 }, size_nm: 1_270_000 }, led.id);
       const x = (await sch(led.id)).texts.find((q) => q.content === "e2e note");
       t(place.ok === true && x.h === "center" && x.v === "center" && x.vertical === false, `a new text is centred on its anchor, as KiCad's last-used justification starts (${x?.h}, ${x?.v})`);
       await post({ op: "sch_edit", verb: "edit_text", id: x.id, h: "left", v: "bottom" }, led.id);
@@ -346,23 +346,23 @@
     // ----- the net-collision overlay
     await scenario("The net-collision overlay: where a held wire would join two nets, and where it pulls a connection apart", async (t) => {
       await enter(led.id);
-      await post({ op: "add_wire", pts: [{ x: 38100, y: 38100 }, { x: 60960, y: 38100 }] }, led.id);
-      await post({ op: "add_wire", pts: [{ x: 83820, y: 38100 }, { x: 83820, y: 60960 }] }, led.id);
+      await post({ op: "add_wire", pts: [{ x: 38_100_000, y: 38_100_000 }, { x: 60_960_000, y: 38_100_000 }] }, led.id);
+      await post({ op: "add_wire", pts: [{ x: 83_820_000, y: 38_100_000 }, { x: 83_820_000, y: 60_960_000 }] }, led.id);
       const s = await sch(led.id);
       const ends = (w, x, y) => w.pts.some((p) => p[0] === x && p[1] === y);
-      const wh = s.wires.find((w) => ends(w, 38100, 38100) && ends(w, 60960, 38100));
-      const wv = s.wires.find((w) => ends(w, 83820, 38100) && ends(w, 83820, 60960));
+      const wh = s.wires.find((w) => ends(w, 38_100_000, 38_100_000) && ends(w, 60_960_000, 38_100_000));
+      const wv = s.wires.find((w) => ends(w, 83_820_000, 38_100_000) && ends(w, 83_820_000, 60_960_000));
       t(!!wh && !!wv, "two wires of different nets stand in an empty corner");
       // the horizontal wire carried onto the middle of the vertical one: a T of two different nets
-      const hit = await preview([{ op: "sch_move", verb: "move", ids: [wh.id], dx: 22860, dy: 7620 }], led.id);
-      t(JSON.stringify(hit.net_collision?.collisions.map((c) => c.at)) === JSON.stringify([[83820, 45720]]), `a circle where the T would be (${JSON.stringify(hit.net_collision?.collisions)})`);
-      t(Math.abs((hit.net_collision?.collisions[0]?.radius_nm ?? 0) - 1371.6) < 1, `1.5 times the 36 mil junction (${hit.net_collision?.collisions[0]?.radius_nm} um)`);
-      const clear = await preview([{ op: "sch_move", verb: "move", ids: [wh.id], dx: 0, dy: 5080 }], led.id);
+      const hit = await preview([{ op: "sch_move", verb: "move", ids: [wh.id], dx: 22_860_000, dy: 7_620_000 }], led.id);
+      t(JSON.stringify(hit.net_collision?.collisions.map((c) => c.at)) === JSON.stringify([[83_820_000, 45_720_000]]), `a circle where the T would be (${JSON.stringify(hit.net_collision?.collisions)})`);
+      t(Math.abs((hit.net_collision?.collisions[0]?.radius_nm ?? 0) - 1_371_600) < 1, `1.5 times the 36 mil junction (${hit.net_collision?.collisions[0]?.radius_nm} um)`);
+      const clear = await preview([{ op: "sch_move", verb: "move", ids: [wh.id], dx: 0, dy: 5_080_000 }], led.id);
       t(clear.net_collision?.collisions.length === 0 && clear.net_collision?.disconnections.length === 0, "short of the other wire nothing is marked");
       // a symbol carried off its wires: a mark at each pin it left
-      const off = await preview([{ op: "sch_move", verb: "move", ids: ["R1"], dx: 20320, dy: 0 }], led.id);
+      const off = await preview([{ op: "sch_move", verb: "move", ids: ["R1"], dx: 20_320_000, dy: 0 }], led.id);
       t(off.net_collision?.disconnections.length === 2, `R1 carried off its two wires: a mark for each (${off.net_collision?.disconnections.length})`);
-      const stretched = await preview([{ op: "sch_move", verb: "drag", ids: ["R1"], dx: 20320, dy: 0, ortho: true }], led.id);
+      const stretched = await preview([{ op: "sch_move", verb: "drag", ids: ["R1"], dx: 20_320_000, dy: 0, ortho: true }], led.id);
       t(stretched.net_collision?.disconnections.length === 0, "dragged, the wires follow and nothing comes apart");
     });
 
@@ -425,7 +425,7 @@
       const real = navigator.clipboard.writeText.bind(navigator.clipboard);
       navigator.clipboard.writeText = (txt) => { copied.push(txt); return Promise.resolve(); };
       try {
-        await post({ op: "sch_edit", verb: "place_text", content: "e2e copy", at: { x: 40640, y: 50800 }, size_nm: 1270 }, led.id);
+        await post({ op: "sch_edit", verb: "place_text", content: "e2e copy", at: { x: 40_640_000, y: 50_800_000 }, size_nm: 1_270_000 }, led.id);
         const x = (await sch(led.id)).texts.find((q) => q.content === "e2e copy");
         const label = (await sch(led.id)).labels[0];
         await select([x.id, label.id, "pin:R1:1"]);

@@ -3227,7 +3227,9 @@ impl<'a> Board<'a> {
         } else {
             (anchor_keep.3 - anchor_keep.1) / 2 + half_h + self.spacing
         };
-        let base = (ax + dx * stand_off, ay + dy * stand_off);
+        // A stand-off that falls half way between two grid points takes the one nearer the anchor (`- 1`): in micrometres the
+        // halving above truncated the half away, and the placer's results were made on that rule.
+        let base = (ax + dx * (stand_off - 1), ay + dy * (stand_off - 1));
 
         // Slide perpendicular to the placement direction.
         let (sx, sy) = if dx != 0 { (0, 1) } else { (1, 0) };

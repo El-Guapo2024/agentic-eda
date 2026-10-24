@@ -81,8 +81,8 @@ export function menuContext(state: StudioState, board: BoardState, refs: readonl
 /** `TRACK_WIDTH_MENU::update`: "Use Starting Track Width", "Use Net Class Values", "Use Custom Values...", the track widths, the via sizes -- the current one checked. */
 export function trackViaWidthMenu(state: StudioState, board: BoardState): MenuNode[] {
   const rules = board.board_rules;
-  const widths = [rules?.track_width ?? 250, ...(board.routing?.track_width_presets ?? [])];
-  const vias = [{ diameter: rules?.via_diameter ?? 600, drill: rules?.via_drill ?? 300 }, ...(board.routing?.via_presets ?? [])];
+  const widths = [rules?.track_width ?? 250_000, ...(board.routing?.track_width_presets ?? [])];
+  const vias = [{ diameter: rules?.via_diameter ?? 600_000, drill: rules?.via_drill ?? 300_000 }, ...(board.routing?.via_presets ?? [])];
   // `useIndex = !bds.m_UseConnectedTrackWidth && !bds.UseCustomTrackViaSize()`
   const custom = state.pcbx.useCustomTrackVia;
   const auto = state.bcx.autoTrackWidth && !custom;
