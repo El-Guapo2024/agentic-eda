@@ -152,14 +152,23 @@ fn point_inside_swept(p: Point, obstacle: &[Point], shoved: &[Point]) -> bool {
     crate::walkaround::point_in_polygon(&poly, p)
 }
 
-/// `SHAPE_LINE_CHAIN::SelfIntersecting`: any two non-adjacent segments cross.
+/// `SHAPE_LINE_CHAIN::SelfIntersecting` of an open chain: for each segment and every later one, the later one's start on it (`SEG::Contains`,
+/// squared distance <= 3) unless they are neighbours, its end on it -- a neighbour that folds back over it, such as (0,0),(10,0),(5,0) --
+/// or the two crossing away from their ends (`seg1.Intersect( SEG( a2, b2 ), true )`). (findings p5 F1-4: the fold-back was missed.)
 fn self_intersecting(pts: &[Point]) -> bool {
-    let n = pts.len();
-    for i in 0..n.saturating_sub(1) {
-        for j in (i + 2)..n.saturating_sub(1) {
-            let (a, b) = (Seg::new(pts[i], pts[i + 1]), Seg::new(pts[j], pts[j + 1]));
-            if a.intersect(&b).is_some() {
-                // Closed chains touch at the shared endpoint; this chain is open.
+    let seg_count = pts.len().saturating_sub(1);
+    if seg_count < 2 {
+        return false;
+    }
+    for s1 in 0..seg_count {
+        let (a1, b1) = (pts[s1], pts[s1 + 1]);
+        let (min_x, max_x, min_y, max_y) = (a1.x.min(b1.x) - 2, a1.x.max(b1.x) + 2, a1.y.min(b1.y) - 2, a1.y.max(b1.y) + 2);
+        for s2 in (s1 + 1)..seg_count {
+            let (a2, b2) = (pts[s2], pts[s2 + 1]);
+            if max_x < a2.x.min(b2.x) || a2.x.max(b2.x) < min_x || max_y < a2.y.min(b2.y) || a2.y.max(b2.y) < min_y {
+                continue;
+            }
+            if (s1 + 1 != s2 && crate::seg_ops::contains((a1, b1), a2)) || crate::seg_ops::contains((a1, b1), b2) || crate::seg_ops::intersect((a1, b1), (a2, b2), true, false).is_some() {
                 return true;
             }
         }
@@ -356,9 +365,11 @@ fn via_pushout_from(rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> 
 }
 
 /// `VIA::PushoutForce( aNode, aDirection, aForce, aCollisionMask, aMaxIterations )`: push the via out of whatever of
-/// `mask`'s kinds it sits on, one obstacle at a time by that obstacle's minimum translation vector (at most a quarter of the
-/// via's diameter per step, "to make the algorithm more predictable and less jumpy"), and after half the iterations along
-/// `direction` -- the lead, usually back toward the cursor -- instead, in case the barycentric force goes the wrong way.
+/// `mask`'s kinds it sits on, one obstacle at a time by that obstacle's whole minimum translation vector, and after half the
+/// iterations, while the force is above a quarter of the diameter, a quarter of the diameter along `direction` -- the lead, usually
+/// back toward the cursor -- instead, in case the barycentric force goes the wrong way. KiCad's "Limit the force magnitude to,
+/// say, 25% of the via diameter" (`if( forceMag > threshold ) force.Resize( threshold );`) limits nothing: `VECTOR2::Resize` is
+/// `const` and its result is thrown away (8303b2ad and 25ec2335 alike), so the step is the full MTV here too (findings p5 F1-3).
 /// `max_iterations` is `ROUTING_SETTINGS::ViaForcePropIterationLimit`. `None` when it does not come free within that many
 /// steps, or an obstacle's MTV is zero ("force propagation has failed").
 pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, direction: (i64, i64), mask: u8, max_iterations: i32, exclude: &[ItemId]) -> Option<(i64, i64)> {
@@ -382,9 +393,6 @@ pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, dire
         let step = if iter > max_iterations / 2 && magnitude > threshold as f64 {
             let l = crate::hull::resize(direction.0 as Nm, direction.1 as Nm, threshold);
             (l.0 as i64, l.1 as i64)
-        } else if magnitude > threshold as f64 {
-            let f = crate::hull::resize(force.0 as Nm, force.1 as Nm, threshold);
-            (f.0 as i64, f.1 as i64)
         } else {
             force
         };
@@ -1213,6 +1221,11 @@ impl<'a> Shove<'a> {
         if !self.settings.shove_vias || via.locked {
             return Status::TryWalk;
         }
+        // `if( jt->IsLocked() ) return SH_INCOMPLETE;`: the joint `SHOVE::Run` locked -- the via the route starts from, or the head ends
+        // on -- does not move (findings p5 F1-2)
+        if joint.locked {
+            return Status::Incomplete;
+        }
         // "make sure pushed via does not overlap with any existing joint"
         let step = crate::hull::resize(force.0 as Nm, force.1 as Nm, 2);
         for _ in 0..10_000 {
@@ -1867,6 +1880,31 @@ mod tests {
 
     fn rules() -> BoardRules {
         serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\n").unwrap()
+    }
+
+    /// `SelfIntersecting` flags a neighbour that folds back over the segment before it, and a crossing; a plain corner is not one.
+    #[test]
+    fn self_intersecting_flags_a_fold_back() {
+        let p = |x, y| Point { x, y };
+        assert!(self_intersecting(&[p(0, 0), p(10, 0), p(5, 0)]));
+        assert!(self_intersecting(&[p(0, 0), p(10, 0), p(10, 10), p(5, -5)]));
+        assert!(!self_intersecting(&[p(0, 0), p(10, 0), p(10, 10)]));
+        assert!(!self_intersecting(&[p(0, 0), p(10, 0), p(20, 10), p(30, 10)]));
+    }
+
+    /// findings p5 F1-2: `pushOrShoveVia` refuses a via whose joint is locked (`if( jt->IsLocked() ) return SH_INCOMPLETE;`) -- the via a
+    /// route starts from, which `SHOVE::Run` locks with the head's start (`LockJoint( head.CPoint( 0 ), &head, true )`).
+    #[test]
+    fn a_via_on_a_locked_joint_is_not_shoved() {
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("A"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 3_000_000, y: 0 }, width: 200_000, source_track: Some(("trkA".into(), 0)), locked: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, diameter: 600_000, drill: 300_000, source_via: Some("vA".into()), locked: false, is_virtual: false }));
+        let (rules, settings) = (rules(), RoutingSettings::default());
+        let mut free = Shove::new(&node, &rules, &settings);
+        assert_eq!(free.push_or_shove_via(via_id, (500_000, 0), 0, false), Status::Ok, "a free via is pushed");
+        node.lock_joint(Point { x: 0, y: 0 }, &net_of("A"));
+        let mut locked = Shove::new(&node, &rules, &settings);
+        assert_eq!(locked.push_or_shove_via(via_id, (500_000, 0), 0, false), Status::Incomplete, "the route's start via stays");
     }
 
     /// findings p5 F1-1: an F.Cu head ending in a through via meets a B.Cu track through its via only. KiCad's `ShoveObstacleLine` shoves

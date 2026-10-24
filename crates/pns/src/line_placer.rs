@@ -957,8 +957,12 @@ mod tests {
         let placed = placer.place_via(&node, &rules, &settings, on_the_pad, 1);
         let centre_distance = ((placed.x as f64).powi(2) + (placed.y as f64).powi(2)).sqrt();
         assert!(centre_distance >= 1_000_000.0 - 500.0, "the 600 um via is {centre_distance} um from the 500 um pad's centre: {placed:?}");
-        // four steps of a quarter of the via are not enough to leave this pad
-        let tight = RoutingSettings { via_force_prop_iteration_limit: 4, ..settings.clone() };
+        // one step of the whole MTV leaves the pad (KiCad's quarter-diameter limit is a no-op, findings p5 F1-3), and the next
+        // iteration finds it free -- two iterations; with one, the loop ends at the limit and the push counts as failed
+        let two = RoutingSettings { via_force_prop_iteration_limit: 2, ..settings.clone() };
+        let placed = placer.place_via(&node, &rules, &two, on_the_pad, 1);
+        assert!(((placed.x as f64).powi(2) + (placed.y as f64).powi(2)).sqrt() >= 1_000_000.0 - 500.0, "{placed:?}");
+        let tight = RoutingSettings { via_force_prop_iteration_limit: 1, ..settings.clone() };
         assert_eq!(placer.place_via(&node, &rules, &tight, on_the_pad, 1), on_the_pad, "out of steps: the via stays where the cursor put it");
         // Highlight collisions never moves a via.
         let marking = RoutingSettings { mode: Mode::MarkObstacles, ..settings };
