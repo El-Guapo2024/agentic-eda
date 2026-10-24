@@ -8,7 +8,8 @@
 //!   carries the block's `Lib:Name` and Place as group. With the file's contents the group holds what the paste put at the top; with the file as a sheet, the sheet alone, in
 //!   a group of one (`DrawSheet`: `sheetGroup->AddItem( sheet )`) -- and only for a block: a sheet drawn from a plain file is not grouped.
 //! * On the board, Place Design Block is Append Board (`PCB_CONTROL::AppendDesignBlock` -> `AppendBoard( .., designBlock )`): [`Cmd::PlaceDesignBlock`] is the paste of
-//!   the block's board file, and `placeAsGroup` puts what came in a group when there are at least two things at its top (`groupableCount >= 2`).
+//!   the block's board file, and `placeAsGroup` puts what came in a group when there are at least two things at its top (`groupableCount >= 2`). As `AppendBoard`
+//!   loads the file into the board, nothing of the block is dropped: the board grows to the block's copper layers and takes its nets (`DrawingsSection::board_nets`).
 //!
 //! The group's name is the block's (`designBlock->GetLibId().GetLibItemName()`), or, for a plain file, the file's stem (`wxFileName( sheetFileName ).GetName()`); "Place repeated
 //! copies" numbers the names (`group->GetName() + wxString::Format( "%d", suffix++ )`), which the caller does by passing `group_name`.
@@ -16,7 +17,9 @@
 use super::Board;
 use eda_model::groups::GroupHost;
 use eda_model::ir::{Group, Point};
+use eda_model::rules::StackupSettings;
 use eda_model::CheckResult;
+use std::collections::BTreeSet;
 
 /// How the schematic file a sheet import reads is being placed: grouped or not, under what name, and as which design block.
 pub(crate) struct Placement<'a> {
@@ -61,9 +64,14 @@ impl Board<'_> {
             return Err(vec![CheckResult::fail("ops_bad_design_block", block, why)]);
         }
         let clip = eda_kicad::parse_pcb_clipboard(text).map_err(|e| vec![CheckResult::fail("ops_bad_clipboard", "design block", e.iter().map(|c| c.hint.clone().unwrap_or_else(|| c.check.clone())).collect::<Vec<_>>().join("; "))])?;
-        let copies = self.copies_from_clipboard(&clip, at, super::pcb_paste_special::PasteMode::Keep, false);
+        // `AppendBoard` loads the block's file into the board itself, so nothing of it is left out: the copper layers grow to the block's
+        // (`if( copperLayerCount > initialCopperLayerCount ) brd->SetCopperLayerCount( copperLayerCount );`) and every net of the file is
+        // the board's by name (`BuildListOfNets`).
+        let layers = self.grow_copper_layers_for(text)?;
+        let nets = self.add_block_nets(&clip);
+        let copies = self.copies_from_clipboard_on(&clip, at, super::pcb_paste_special::PasteMode::Keep, false, &layers, &nets);
         if copies.is_empty() {
-            return Err(vec![CheckResult::fail("ops_bad_clipboard", "design block", "nothing in the design block's board fits this board: its copper is on layers the board does not have")]);
+            return Err(vec![CheckResult::fail("ops_bad_clipboard", "design block", "the design block's board is empty")]);
         }
         let top = self.insert_copies_all(copies)?;
         // `AppendBoard`: `if( groupableCount >= 2 )`
@@ -74,5 +82,56 @@ impl Board<'_> {
             dr.assign_group_ids();
         }
         Ok(())
+    }
+
+    /// `AppendBoard`'s "Synchronize layers": the board takes the block file's copper layer count when it is the larger
+    /// (`BOARD_STACKUP::SynchronizeWithBoard` keeps what the stackup says of the layers both have, [`StackupSettings::with_copper_layers`]).
+    /// The file's count is read from the copper layer names it uses -- its `(layers ..)` table names every one of them -- as the highest
+    /// `In<n>.Cu` plus the two outer layers. Returns the board's copper layers after.
+    fn grow_copper_layers_for(&mut self, text: &str) -> Result<Vec<String>, Vec<CheckResult>> {
+        let have = self.model.board.layers.len().max(2);
+        let mut inner = 0usize;
+        let mut rest = text;
+        while let Some(i) = rest.find("In") {
+            rest = &rest[i + 2..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !digits.is_empty() && rest[digits.len()..].starts_with(".Cu") {
+                inner = inner.max(digits.parse().unwrap_or(0));
+            }
+        }
+        let mut want = (inner + 2).min(32);
+        want += want % 2;
+        if want <= have {
+            return Ok(self.model.board.layers.clone());
+        }
+        let current = self.design.drawings.as_ref().and_then(|d| d.rules.as_ref()).and_then(|r| r.stackup.clone()).unwrap_or_else(|| match &self.model.stackup {
+            Some(st) => StackupSettings { copper_layers: have as u8, stackup: st.clone() },
+            None => StackupSettings::new(have, self.model.board.board_thickness_nm),
+        });
+        let grown = current.with_copper_layers(want);
+        super::board_setup::set_stackup(&mut self.design, self.model, &grown)?;
+        Ok(eda_model::rules::copper_layer_names(want))
+    }
+
+    /// The nets of the block's file that the board has not got (`BuildListOfNets` after the load): kept as the board's own
+    /// ([`eda_model::ir::DrawingsSection::board_nets`]). Returns every net name of the block, for the copy to keep.
+    fn add_block_nets(&mut self, clip: &eda_kicad::Clipboard) -> BTreeSet<String> {
+        let mut nets: BTreeSet<String> = BTreeSet::new();
+        nets.extend(clip.tracks.iter().map(|t| t.net.clone()));
+        nets.extend(clip.vias.iter().map(|v| v.net.clone()));
+        nets.extend(clip.zones.iter().filter(|z| !z.is_rule_area).map(|z| z.net.clone()));
+        nets.extend(clip.shape_style.iter().flatten().filter_map(|st| st.net.clone()));
+        nets.extend(clip.footprints.iter().flat_map(|f| f.pad_nets.iter().map(|(_, n)| n.clone())));
+        nets.remove("");
+        // A pad's net comes with its footprint's part (`board_parts`); only a net no pad of the block is on needs a place of its own.
+        let pad_nets: BTreeSet<&String> = clip.footprints.iter().flat_map(|f| f.pad_nets.iter().map(|(_, n)| n)).collect();
+        let fresh: Vec<String> = nets.iter().filter(|n| !pad_nets.contains(n) && !self.model.nets.iter().any(|m| &m.name == *n)).cloned().collect();
+        if !fresh.is_empty() {
+            let dr = self.drawings_mut();
+            dr.board_nets.extend(fresh);
+            dr.board_nets.sort();
+            dr.board_nets.dedup();
+        }
+        nets
     }
 }

@@ -400,11 +400,17 @@ impl Board<'_> {
     }
 
     pub(super) fn copies_from_clipboard(&self, clip: &Clipboard, at: Point, mode: PasteMode, clear_nets: bool) -> Copies {
+        self.copies_from_clipboard_on(clip, at, mode, clear_nets, &self.model.board.layers, &BTreeSet::new())
+    }
+
+    /// [`Board::copies_from_clipboard`] onto a board whose copper layers are `layers` and which also knows the nets `more_nets` (Place Design
+    /// Block grows both first, as `AppendBoard` does).
+    pub(super) fn copies_from_clipboard_on(&self, clip: &Clipboard, at: Point, mode: PasteMode, clear_nets: bool, layers: &[String], more_nets: &BTreeSet<String>) -> Copies {
         let mv = |p: Point| Point { x: p.x + at.x, y: p.y + at.y };
-        let layers = &self.model.board.layers;
         let copper_ok = |l: &str| !is_copper_layer(l) || layers.iter().any(|b| b == l);
         // The nets a pasted footprint brings with it count as the board's own for the copper pasted alongside.
-        let new_nets: BTreeSet<String> = clip.footprints.iter().flat_map(|f| f.pad_nets.iter().map(|(_, n)| n.clone())).collect();
+        let mut new_nets: BTreeSet<String> = clip.footprints.iter().flat_map(|f| f.pad_nets.iter().map(|(_, n)| n.clone())).collect();
+        new_nets.extend(more_nets.iter().cloned());
         // "Clear net assignments" (`item->SetNet( NETINFO_LIST::OrphanedItem() )` for every connected item of a pasted board; the dialog does
         // not offer it for a lone footprint, whose copy has no nets anyway).
         let clear = clear_nets && !clip.bare_footprint;

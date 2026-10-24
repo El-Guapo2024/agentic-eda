@@ -467,6 +467,12 @@ fn fold_board_parts(design: &eda_model::ir::Design, model: &mut ConstraintModel)
             }
         }
     }
+    // The nets a placed design block brought that no pad is on (`DrawingsSection::board_nets`): nets of their own, with no pins.
+    for net in &dr.board_nets {
+        if !model.nets.iter().any(|n| &n.name == net) {
+            model.nets.push(eda_model::Net { name: net.clone(), pins: vec![] });
+        }
+    }
 }
 
 /// "REF.PIN" -> the pin's name, for the names KiCad gives a net nothing drives (`Net-(U1-PA0)`): the part's own pin names.
@@ -1243,14 +1249,16 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
 
     // A command that made footprints of its own (Duplicate, Paste) added parts the model loaded before it ran has not heard of;
     // the board that results is judged against a model that has them, as the next load will have.
-    let board_parts = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.board_parts.clone()).unwrap_or_default();
+    let board_parts = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| (dr.board_parts.clone(), dr.board_nets.clone())).unwrap_or_default();
     // Likewise a pad edit changes the footprint its part has (`fold_footprint_edits`).
     let pad_edits = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.footprint_edits.iter().map(|e| (e.id.clone(), e.pads.clone(), e.models3d.clone())).collect::<Vec<_>>()).unwrap_or_default();
     // A rename moves the intent's part under a new reference and an exchange puts a part on another footprint: the model is built again for the design that
     // results, as the next load will build it.
     let renames = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| (dr.renamed_parts.clone(), dr.footprint_assignments.clone())).unwrap_or_default();
     let intent_file = |d: &eda_model::ir::Design| d.drawings.as_ref().and_then(|dr| dr.intent_file.clone());
-    let refolded: Option<ConstraintModel> = if renames(board.design()) != renames(was.design()) || intent_file(board.design()) != intent_file(was.design()) {
+    // A new stackup (Board Setup's, or the copper layers a placed design block grows, `AppendBoard`'s `SetCopperLayerCount`): the copper is judged on the layers that result.
+    let stackup = |d: &eda_model::ir::Design| d.drawings.as_ref().and_then(|dr| dr.rules.as_ref()).and_then(|r| r.stackup.clone());
+    let refolded: Option<ConstraintModel> = if renames(board.design()) != renames(was.design()) || intent_file(board.design()) != intent_file(was.design()) || stackup(board.design()) != stackup(was.design()) {
         build_model(dir, &meta, board.design()).ok()
     } else {
         (board_parts(board.design()) != board_parts(was.design()) || pad_edits(board.design()) != pad_edits(was.design())).then(|| {

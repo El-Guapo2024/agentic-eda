@@ -171,6 +171,43 @@ fn a_board_saved_as_a_block_is_placed_as_a_linked_group_in_one_undo_step() {
     let _ = std::fs::remove_dir_all(&m.root);
 }
 
+/// P18-1: `AppendBoard` loads the block's file into the board, so a block of four copper layers makes a two-layer board a four-layer one, and a net the
+/// board has not got (one no pad is on) becomes the board's; the next load, and the `.kicad_pcb` the studio writes, have both. One undo takes both back.
+#[test]
+fn a_block_on_more_copper_layers_grows_the_board_and_brings_its_nets() {
+    let dir = super::tests::scratch("db_grow");
+    setup(&dir);
+    let text = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+	(general (thickness 1.6) (legacy_teardrops no))
+	(paper "A4")
+	(layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+	(setup (pad_to_mask_clearance 0))
+	(net 0 "")
+	(net 1 "BLK_NET")
+	(segment (start 1 1) (end 5 1) (width 0.2) (layer "In1.Cu") (net 1) (uuid "6a4d6c3e-0d55-4a4f-9a41-6f7c2a2f0001"))
+	(segment (start 1 2) (end 5 2) (width 0.2) (layer "F.Cu") (net 1) (uuid "6a4d6c3e-0d55-4a4f-9a41-6f7c2a2f0002"))
+	(via (blind) (at 5 1) (size 0.6) (drill 0.3) (layers "In1.Cu" "In2.Cu") (net 1) (uuid "6a4d6c3e-0d55-4a4f-9a41-6f7c2a2f0003"))
+)"#;
+    let (_, _, model_before) = load(&dir).unwrap();
+    assert_eq!(model_before.board.layers.len(), 2);
+    let placed = Cmd::PlaceDesignBlock { text: text.to_string(), at: Point { x: 30_000_000, y: 20_000_000 }, block: "Power:Four".into(), as_group: true, group_name: String::new() };
+    step(&dir, placed, false, "test").unwrap();
+    let (_, after, model) = load(&dir).unwrap();
+    assert_eq!(model.board.layers, ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+    assert!(model.nets.iter().any(|n| n.name == "BLK_NET"), "the block's net is the board's");
+    let rt = after.routing.as_ref().unwrap();
+    assert_eq!(rt.tracks.iter().filter(|t| t.net == "BLK_NET").count(), 2, "{:?}", rt.tracks);
+    assert!(rt.tracks.iter().any(|t| t.layer == "In1.Cu"));
+    assert!(rt.vias.iter().any(|v| v.net == "BLK_NET" && v.to_layer == "In2.Cu"), "{:?}", rt.vias);
+    let pcb = eda_kicad::export_kicad_pcb(&after, &model, &eda_kicad::ExportMeta { date: "2026-10-24", title: "grow" }).unwrap();
+    assert!(pcb.contains("\"In1.Cu\" signal") && pcb.contains("\"BLK_NET\""), "the derived board has the layers and the net");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    let (_, back, model_back) = load(&dir).unwrap();
+    assert_eq!(model_back.board.layers.len(), 2);
+    assert!(!model_back.nets.iter().any(|n| n.name == "BLK_NET") && back.drawings.as_ref().is_none_or(|d| d.board_nets.is_empty()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_selection_of_the_board_saved_as_a_block_is_grouped_and_linked_in_one_undo_step_and_update_writes_over_its_layout() {
     let (m, env, lib) = with_library("db_board_sel", setup);

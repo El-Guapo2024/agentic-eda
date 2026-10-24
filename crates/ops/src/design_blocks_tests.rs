@@ -80,3 +80,41 @@ fn the_selection_saved_as_a_block_is_grouped_and_linked_or_its_group_takes_the_l
 fn routing_len(b: &Board<'_>) -> usize {
     b.design().routing.as_ref().map_or(0, |r| r.tracks.len())
 }
+
+/// `AppendBoard` loads the block's file into the board: the copper layers grow to the block's and its nets are the board's by name, so
+/// nothing of the block's copper is dropped.
+#[test]
+fn place_design_block_grows_the_copper_layers_and_keeps_the_nets() {
+    // the block: a four-layer board with a track on In1.Cu and a via, both on a net no pad of the block is on
+    let mut block_model = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+    block_model.nets.push(eda_model::Net { name: "BLK".into(), pins: vec![] });
+    let mut block = design();
+    {
+        let rt = block.routing.as_mut().unwrap();
+        let mut t = super::pcb_transform_tests::track("trk_in", "In1.Cu", &[(10_000_000, 10_000_000), (20_000_000, 10_000_000)]);
+        t.net = "BLK".into();
+        rt.tracks.push(t);
+        let mut v = super::pcb_transform_tests::via("via_in", (20_000_000, 10_000_000), "F.Cu", "In2.Cu");
+        v.net = "BLK".into();
+        rt.vias.push(v);
+    }
+    let text = eda_kicad::export_pcb_clipboard(&block, &block_model, &ids(&["trk_in", "via_in", "trk_a"]), p(0, 0)).unwrap();
+
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&place(&text, p(0, 0), true, "")).unwrap();
+    let dr = drawings(&b);
+    assert_eq!(dr.rules.as_ref().and_then(|r| r.stackup.as_ref()).map(|s| s.copper_layers), Some(4), "the board has the block's four copper layers");
+    assert_eq!(dr.board_nets, vec!["BLK".to_string()], "the block's net is the board's");
+    let rt = super::pcb_transform_tests::routing(&b);
+    assert!(rt.tracks.iter().any(|t| t.layer == "In1.Cu" && t.net == "BLK"), "{:?}", rt.tracks);
+    assert!(rt.vias.iter().any(|v| v.to_layer == "In2.Cu" && v.net == "BLK"), "{:?}", rt.vias);
+    // a net the board has is not added again
+    assert!(rt.tracks.iter().filter(|t| t.id != "trk_a").any(|t| t.net == "GND"));
+
+    // a two-layer block leaves a two-layer board as it is
+    let mut b = board(&m);
+    b.apply(&place(&block_text(&["trk_a", "shp_seg"]), p(0, 0), true, "")).unwrap();
+    assert!(drawings(&b).rules.as_ref().and_then(|r| r.stackup.as_ref()).is_none());
+    assert!(drawings(&b).board_nets.is_empty());
+}
