@@ -1,11 +1,11 @@
 // The small icon beside the name of a pin that has alternate functions (View > Show Pin Alternate Icons, `eeschema.EditorControl.togglePinAltIcons`).
 // Ports of `PIN_LAYOUT_CACHE::getUntransformedAltIconBox` + `transformBoxForPin` (eeschema/pin_layout_cache.cpp) and `drawAltPinModesIcon`
 // (eeschema/sch_painter.cpp, called from `SCH_PAINTER::draw( SCH_PIN )` with the base style selected and the pin name's colour). All lengths are
-// µm in the canvas' internal space (+y down). Pure: no DOM (compiled by `npm run test:unit`).
+// nm in the canvas' internal space (+y down). Pure: no DOM (compiled by `npm run test:unit`).
 import { pinTextOffsetNm } from "./symPinText";
 
 /** `schIUScale.mmToIU( 1.5 )`: the icon is never larger than this. */
-export const MAX_ALT_ICON_SIZE_NM = 1500;
+export const MAX_ALT_ICON_SIZE_NM = 1_500_000;
 
 export interface PinAltIcon {
   /** The icon's centre, in the canvas' space. */

@@ -52,7 +52,7 @@ function resolveGraphic(g: Exclude<LibrarySymbolGraphic, { kind: "text_box" }>):
   const pt = (p: { x: number; y: number }) => resolveLibPoint([p.x, p.y], IDENTITY, [0, 0]);
   switch (g.kind) {
     case "rectangle":
-      return { kind: "rectangle", start: pt(g.start), end: pt(g.end), strokeWidthNm: g.stroke_mm * 1000, fill: g.fill };
+      return { kind: "rectangle", start: pt(g.start), end: pt(g.end), strokeWidthNm: g.stroke_mm * 1e6, fill: g.fill };
     case "polyline":
       return { kind: "polyline", pts: g.pts.map(pt), strokeWidthNm: g.stroke_mm * 1e6, fill: g.fill };
     case "circle":
@@ -60,7 +60,7 @@ function resolveGraphic(g: Exclude<LibrarySymbolGraphic, { kind: "text_box" }>):
     case "arc":
       return { kind: "arc", start: pt(g.start), mid: pt(g.mid), end: pt(g.end), strokeWidthNm: g.stroke_mm * 1e6, fill: g.fill };
     case "text":
-      return { kind: "text", content: g.text, at: pt(g.at), angleDeg: g.angle_deg, sizeNm: g.size_mm * 1000 };
+      return { kind: "text", content: g.text, at: pt(g.at), angleDeg: g.angle_deg, sizeNm: g.size_mm * 1e6 };
   }
 }
 
@@ -270,7 +270,7 @@ export function paintSymbol(
 
   const labels = pinLabelsShown(symbol, opts.showPinNumbers);
   // `(pin_names (offset x))`: the names are inside the body from `x` on, over the pin line when it is zero (`GetPinNameInfo`)
-  const texts: PinTexts = { ...DEFAULT_PIN_TEXTS, nameOffsetNm: symbol.pin_name_offset_mm === undefined ? DEFAULT_PIN_TEXTS.nameOffsetNm : symbol.pin_name_offset_mm * 1000 };
+  const texts: PinTexts = { ...DEFAULT_PIN_TEXTS, nameOffsetNm: symbol.pin_name_offset_mm === undefined ? DEFAULT_PIN_TEXTS.nameOffsetNm : symbol.pin_name_offset_mm * 1e6 };
   const hiddenColor = layerColor("LAYER_HIDDEN");
   for (const p of symbol.pins) {
     // `SCH_PAINTER::draw( SCH_PIN )`: a pin marked invisible is drawn only while hidden pins are shown, and then in the hidden colour
@@ -319,6 +319,6 @@ export function paintSymbol(
   if (opts.pendingText && opts.cursorNm) {
     // (the canvas hands over the cursor its grid helper gave -- on the text grid, or an anchor -- while the Text tool runs)
     const [x, y] = [opts.cursorNm.x, opts.cursorNm.y];
-    drawRealGraphic(ctx, { kind: "text", content: opts.pendingText.text, at: [x, y], angleDeg: opts.pendingText.angleDeg, sizeNm: opts.pendingText.sizeMm * 1000 }, layerColor("selection"));
+    drawRealGraphic(ctx, { kind: "text", content: opts.pendingText.text, at: [x, y], angleDeg: opts.pendingText.angleDeg, sizeNm: opts.pendingText.sizeMm * 1e6 }, layerColor("selection"));
   }
 }

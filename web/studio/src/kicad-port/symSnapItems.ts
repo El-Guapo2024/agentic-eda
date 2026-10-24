@@ -23,14 +23,14 @@ export function symbolSnapItems(sym: LibrarySymbol | null, unit: number, bodySty
     if (!pinShown(p.hidden, showHiddenPins) || !visibleHere(p.unit, p.body_style, unit, bodyStyle)) return;
     const id = p.id ?? `pin#${i}`;
     const tip = libPointToInternalNm([p.at.x, p.at.y]);
-    const reach = Math.max(p.length_mm * 1000, 1);
+    const reach = Math.max(p.length_mm * 1e6, 1);
     out.push({ id, owner: id, kind: "pin", connectable: true, position: tip, connectionPoints: [], bbox: box(tip[0] - reach, tip[1] - reach, tip[0] + reach, tip[1] + reach) });
   });
   sym.graphics.forEach((g, i) => {
     if (g.kind !== "text" || !visibleHere(g.unit, g.body_style, unit, bodyStyle)) return;
     const id = g.id ?? `text#${i}`;
     const at = libPointToInternalNm([g.at.x, g.at.y]);
-    const r = Math.max(g.size_mm * 1000, (g.size_mm * 1000 * g.text.length) / 2);
+    const r = Math.max(g.size_mm * 1e6, (g.size_mm * 1e6 * g.text.length) / 2);
     out.push({ id, owner: id, kind: "text", connectable: false, position: at, connectionPoints: [], bbox: box(at[0] - r, at[1] - r, at[0] + r, at[1] + r) });
   });
   // the fields on show (`SCH_FIELD_T`): like a text, an anchor to hold a move by

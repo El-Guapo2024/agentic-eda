@@ -973,7 +973,7 @@
     const d = diffBox(withIcon, without);
     t(d.n >= 20, `Show Pin Alternate Icons draws an icon (${d.n} px)`);
     // pin 1 runs right from (-5.08, 0) to the body at (-2.54, 0); the name is inside from 0.508 mm on, the icon after it, level with the line
-    t(!!d.from && d.from[0] > -2540 && d.to[0] < 9000 && d.from[1] > -1500 && d.to[1] < 1500, `the icon is beside the first pin's name, level with its line: ${JSON.stringify([d.from, d.to])}`);
+    t(!!d.from && d.from[0] > -2_540_000 && d.to[0] < 9_000_000 && d.from[1] > -1_500_000 && d.to[1] < 1_500_000, `the icon is beside the first pin's name, level with its line: ${JSON.stringify([d.from, d.to])}`);
     await __eda.run("eeschema.EditorControl.togglePinAltIcons");
     await sleep(300);
     t(diffBox(withIcon, shot()).n === 0, "and back on, it is drawn again");
@@ -1120,8 +1120,8 @@
     t(b0?.unit === 1 && b0.margin_mm === 1.016 && b0.stroke_mm === 0, `on the unit being edited, with the margin of four fifths of the text and the default width: ${JSON.stringify([b0?.unit, b0?.margin_mm, b0?.stroke_mm])}`);
     const text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
     t(text.includes('(text_box "10V\\nREF" (at -7.62 5.08 0) (size 15.24 -10.16) (margins 1.016 1.016 1.016 1.016)'), "the exported .kicad_sym has the box as KiCad writes it, the line break as \\n");
-    t(inkIn(-7000, -4500, 7000, -3000) > 40, `the text is drawn in the box (${inkIn(-7000, -4500, 7000, -3000)} px)`);
-    t(inkIn(-8200, -5800, 8200, -5600) > 40, "and the border is drawn");
+    t(inkIn(-7_000_000, -4_500_000, 7_000_000, -3_000_000) > 40, `the text is drawn in the box (${inkIn(-7_000_000, -4_500_000, 7_000_000, -3_000_000)} px)`);
+    t(inkIn(-8_200_000, -5_800_000, 8_200_000, -5_600_000) > 40, "and the border is drawn");
     // a click in the box picks it, anywhere in it (not on the border alone)
     await __eda.run("common.InteractiveSelection.selectionTool");
     await sleep(200);
