@@ -497,8 +497,12 @@ fn append(v: &mut Vec<eda_model::ir::Point>, more: &[eda_model::ir::Point]) {
 /// `OPTIMIZER::computeBreakouts` for a pad: `rectBreakouts` for a plain
 /// rectangle (and an oval, via `ApproximateSegmentAsRect`),
 /// `circleBreakouts` for a circle, `customBreakouts` for a polygon. A
-/// rounded rectangle reaches KiCad's router as a compound shape, which
-/// has no breakouts -- so none here either.
+/// rounded rectangle is a polygon in KiCad's router (`syncPad`: "For anything
+/// that's not a single shape we use a polygon", `SHAPE_SIMPLE(
+/// GetEffectivePolygon( aLayer, ERROR_OUTSIDE )->Outline( 0 ) )`), so it gets
+/// `customBreakouts` of its outline (findings p5 F2-10); the outline here is
+/// `TransformRoundChamferedRectToPolygon`'s at the board's 5 um error, inside
+/// the corners where KiCad's is outside them.
 fn breakouts(width: Nm, item: &crate::item::Item) -> Vec<Vec<eda_model::ir::Point>> {
     use eda_model::ir::Point;
     let crate::item::Item::Solid(solid) = item else { return Vec::new() };
@@ -542,23 +546,33 @@ fn breakouts(width: Nm, item: &crate::item::Item) -> Vec<Vec<eda_model::ir::Poin
                 vec![c, Point { x: c.x + (l * a.cos()).round() as Nm, y: c.y + (l * a.sin()).round() as Nm }]
             })
             .collect(),
-        Shape::Polygon { ref pts } => {
-            let (x0, x1) = (pts.iter().map(|p| p.x).min().unwrap_or(0), pts.iter().map(|p| p.x).max().unwrap_or(0));
-            let (y0, y1) = (pts.iter().map(|p| p.y).min().unwrap_or(0), pts.iter().map(|p| p.y).max().unwrap_or(0));
-            let p0 = solid.pos;
-            let length = (x1 - x0).max(y1 - y0) / 2 + 1;
-            let n = pts.len();
-            (0..8)
-                .filter_map(|i| {
-                    let a = i as f64 * std::f64::consts::FRAC_PI_4;
-                    let v0 = Point { x: p0.x + (length as f64 * a.cos()).round() as Nm, y: p0.y + (length as f64 * a.sin()).round() as Nm };
-                    let ray = eda_drc::kimath::Seg::new(p0, v0);
-                    (0..n).find_map(|k| ray.intersect(&eda_drc::kimath::Seg::new(pts[k], pts[(k + 1) % n]))).map(|hit| vec![p0, hit])
-                })
-                .collect()
+        Shape::Polygon { ref pts } => custom_breakouts(solid.pos, pts),
+        Shape::RoundRect { x0, y0, x1, y1, r } => {
+            let c = ((x0 + x1) as f64 / 2.0, (y0 + y1) as f64 / 2.0);
+            let outline = eda_model::pad_geom::chamfered_rect_polygon((x1 - x0, y1 - y0), r, 0.0, eda_model::ir::ChamferCorners::default(), eda_model::outline::MAX_ERROR_NM as f64);
+            let pts: Vec<Point> = outline.iter().map(|&(x, y)| Point { x: (c.0 + x).round() as Nm, y: (c.1 + y).round() as Nm }).collect();
+            custom_breakouts(solid.pos, &pts)
         }
         _ => Vec::new(),
     }
+}
+
+/// `OPTIMIZER::customBreakouts( aWidth, aItem, aPermitDiagonal = true )`: from the pad's position, a ray every 45 degrees "large enough to guarantee
+/// intersecting the convex polygon" (`std::max( bbox.GetWidth(), bbox.GetHeight() ) / 2 + 5`), each breakout ending where it first meets the outline.
+fn custom_breakouts(p0: eda_model::ir::Point, pts: &[eda_model::ir::Point]) -> Vec<Vec<eda_model::ir::Point>> {
+    use eda_model::ir::Point;
+    let (x0, x1) = (pts.iter().map(|p| p.x).min().unwrap_or(0), pts.iter().map(|p| p.x).max().unwrap_or(0));
+    let (y0, y1) = (pts.iter().map(|p| p.y).min().unwrap_or(0), pts.iter().map(|p| p.y).max().unwrap_or(0));
+    let length = (x1 - x0).max(y1 - y0) / 2 + 5;
+    let n = pts.len();
+    (0..8)
+        .filter_map(|i| {
+            let a = i as f64 * std::f64::consts::FRAC_PI_4;
+            let v0 = Point { x: p0.x + (length as f64 * a.cos()).round() as Nm, y: p0.y + (length as f64 * a.sin()).round() as Nm };
+            let ray = eda_drc::kimath::Seg::new(p0, v0);
+            (0..n).find_map(|k| ray.intersect(&eda_drc::kimath::Seg::new(pts[k], pts[(k + 1) % n]))).map(|hit| vec![p0, hit])
+        })
+        .collect()
 }
 
 /// `OPTIMIZER::findPadOrVia`: the pad or via of this net at `p` on `layer`.
@@ -1011,6 +1025,23 @@ mod tests {
         // KiCad prefers the longer breakout on a tie: out along +x (the long axis).
         assert_eq!(out.pts[1].y, 0, "first leg runs along the pad's long axis: {:?}", out.pts);
         assert!(out.pts[1].x > 0);
+    }
+
+    /// findings p5 F2-10: a rounded-rectangle pad is a polygon to KiCad's router, so Smart Pads breaks out of it (`customBreakouts`: rays every
+    /// 45 degrees, each ending on the outline). The line drawn straight down off the pad and across leaves it on the diagonal breakout instead,
+    /// the cheapest variant; before, a rounded rectangle had no breakouts and the line stayed as drawn.
+    #[test]
+    fn smart_pads_breaks_out_of_a_roundrect_pad() {
+        use crate::item::{Item, Solid};
+        use crate::layer::LayerRange;
+        let net = net_of("SIG");
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: 0, y: 0 }, shape: Shape::RoundRect { x0: -1_000_000, y0: -250_000, x1: 1_000_000, y1: 250_000, r: 125_000 }, source: "U1.1".into(), edge: false }));
+        let line = Line::from_points(net, 0, 200_000, vec![Point { x: 0, y: 0 }, Point { x: 0, y: 3_000_000 }, Point { x: 5_000_000, y: 3_000_000 }, Point { x: 8_000_000, y: 3_000_000 }]);
+        let out = optimize_with(&line, &node, &rules(), &[], effort::SMART_PADS);
+        assert_eq!(out.pts, vec![Point { x: 0, y: 0 }, Point { x: 3_000_000, y: 3_000_000 }, Point { x: 8_000_000, y: 3_000_000 }]);
+        let pad = node.iter().find_map(|(_, it)| matches!(it, Item::Solid(_)).then(|| it.clone())).unwrap();
+        assert_eq!(breakouts(200_000, &pad).len(), 8);
     }
 
     #[test]
