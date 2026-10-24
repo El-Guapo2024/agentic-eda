@@ -14,11 +14,10 @@
 
 use eda_model::ir::{Point, Nm};
 use eda_pns::from_ir::build_node;
-use eda_pns::item::{net_of, Item, ItemId};
+use eda_pns::item::{Item, ItemId};
 use eda_pns::line::Line;
 use eda_pns::node::Node;
 use std::collections::HashSet;
-use eda_pns::line_placer::LinePlacer;
 use eda_pns::dragger::{DragKind, DragPreview, Dragger};
 use eda_pns::router::{RouteCommit, Router};
 use eda_pns::settings::{Mode, OptEffort, RoutingSettings};
@@ -202,10 +201,15 @@ fn simple_shove_1_pushes_the_same_13_tracks_and_leaves_the_board_clean() {
     // the replay routes with the Default net class's width (the event's own 155 µm is not what KiCad used)
     let width = model.board.width_of("");
     let layer = layers.index_of("F.Cu").unwrap();
-    let placer = LinePlacer::start(&node, pt(&events[0]["position"]), None, net_of("(unconnected)"), layer, width);
+    let _ = layer;
+    // a route started in empty space, on no net (`LINE_PLACER::Start`: `GetOrphanedNetHandle()`), as KiCad's recorded head has `net: ""`
+    let mut router = Router::new(&design, &model);
+    router.settings = settings;
+    router.start(pt(&events[0]["position"]), "F.Cu", width).expect("a route starts in empty space");
+    assert_eq!(router.current_net().as_deref(), Some(""), "on no net");
     let mut last = None;
     for e in &events[1..] {
-        last = Some(placer.preview(&node, &model.board, &settings, pt(&e["position"])));
+        last = router.preview(pt(&e["position"]));
     }
     let pv = last.unwrap();
     assert!(!pv.colliding);

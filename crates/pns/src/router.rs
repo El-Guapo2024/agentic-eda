@@ -190,22 +190,44 @@ impl Router {
     /// a pad, a via or a track end, or -- in the middle of a track --
     /// the track itself, which is split there (`LINE_PLACER::initPlacement`:
     /// `SplitAdjacentSegments( rootNode, m_startItem, m_currentStart )`; nothing
-    /// is committed unless the route places something). This port requires
-    /// starting on a connectable item (a real net), unlike upstream, which
-    /// also allows starting from bare space onto an orphaned net; starting
-    /// mid-air has no obvious net to resolve to in this project's model and
-    /// isn't a mode the task asked for. Replaces any route already in
-    /// progress (matching `StopRouting()` + fresh `StartRouting()`, not an
-    /// error).
+    /// is committed unless the route places something). With nothing there the
+    /// route starts in empty space on no net (`LINE_PLACER::Start`: `m_currentNet =
+    /// aStartItem ? aStartItem->Net() : GetOrphanedNetHandle()`), and commits
+    /// tracks on no net, as KiCad's recorded `simple-shove-1` session does.
+    /// **Differs:** a pad or via that has no net is still refused ("that item
+    /// has no net to route"): the router's pads do not say whether they are
+    /// non-plated holes, which KiCad refuses ("Cannot start routing from a
+    /// non-plated hole."). `ROUTER::isStartingPointRoutable` first, unless
+    /// violations are allowed: a start whose dot of track collides at the
+    /// route's width and at the board's minimum width is refused ("The routing
+    /// start point violates DRC.", findings p5 F2-8). Replaces any route
+    /// already in progress (matching `StopRouting()` + fresh `StartRouting()`,
+    /// not an error).
     pub fn start(&mut self, at: Point, layer_name: &str, width: Nm) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
-        let Some(pick) = self.pick_start(at, layer) else {
-            return Err("no pad, via, or track end there to route from".into());
+        let pick = self.pick_start(at, layer);
+        let net = match &pick {
+            Some(pick) => self.world.get(pick.item).map(|i| i.net().clone()).filter(|n| n.is_some()).ok_or("that item has no net to route")?,
+            // the orphaned net: a net of its own, named "" -- the route's own legs are one net with each other (a `None` net is no net,
+            // and every item of no net collides with every other), and it commits as tracks on no net
+            None => Some(std::rc::Rc::from("")),
         };
-        let Some(net) = self.world.get(pick.item).map(|i| i.net().clone()).filter(|n| n.is_some()) else {
-            return Err("that item has no net to route".into());
+        let start_pos = pick.as_ref().map_or(at, |p| p.pos);
+        if !self.settings.allow_drc_violations() {
+            // `isStartingPointRoutable`: "If the only reason we collide is track width; it's better to allow the user to start anyway and just
+            // highlight the resulting collisions, so they can change width later."
+            let collides = |w: Nm| self.world.first_colliding(&eda_drc::kimath::Shape::Stadium { a: start_pos, b: start_pos, r: w / 2 }, &net, LayerRange::single(layer), &self.rules, &[]).is_some();
+            if collides(width) && collides(self.rules.track_width_min_nm) {
+                return Err("The routing start point violates DRC.".into());
+            }
+        }
+        let mut placer = LinePlacer::start(&self.world, start_pos, pick.as_ref().map(|p| p.item), net, layer, width);
+        let Some(pick) = pick else {
+            self.drag = None;
+            self.diff = None;
+            self.session = Some(Session { placer, pending_via_layer: None, world: None, splits: Vec::new(), pending_via_kind: ViaKind::Through, placed_vias: Vec::new() });
+            return Ok(());
         };
-        let mut placer = LinePlacer::start(&self.world, pick.pos, Some(pick.item), net, layer, width);
         let (mut world, mut splits) = (None, Vec::new());
         if let Some(seg) = pick.split {
             // the track is cut in two in the session's own copy of the world; it stays whole in the router's
@@ -1300,12 +1322,33 @@ mod tests {
         assert!(err.contains("nothing is left"), "{err}");
     }
 
+    /// findings p5 F2-8 / P-2: with nothing under the cursor the route starts in empty space on no net (`m_currentNet =
+    /// GetOrphanedNetHandle()`) and commits a track on no net.
     #[test]
-    fn start_fails_off_any_item() {
+    fn start_in_empty_space_routes_an_unconnected_track() {
         let (design, model) = two_pad_board();
         let mut router = Router::new(&design, &model);
-        assert!(router.start(Point { x: 50_000_000, y: 50_000_000 }, "F.Cu", 200_000).is_err());
+        let at = Point { x: 50_000_000, y: 50_000_000 };
+        router.start(at, "F.Cu", 200_000).expect("a route in empty space");
+        assert!(router.is_routing() && router.current_net().as_deref() == Some(""));
+        router.preview(Point { x: 53_000_000, y: 50_000_000 });
+        let commit = router.finish(Point { x: 53_000_000, y: 50_000_000 }).expect("nothing in the way");
+        assert_eq!(commit.tracks.len(), 1);
+        assert_eq!((commit.tracks[0].net.as_str(), commit.tracks[0].pts.first().copied()), ("", Some(at)));
+    }
+
+    /// findings p5 F2-8 / F3-4: `isStartingPointRoutable` refuses a start whose dot of track collides at the route's width and at the board's
+    /// minimum width -- unless violations are allowed (Highlight collisions with "Allow DRC violations").
+    #[test]
+    fn a_start_point_that_violates_drc_is_refused() {
+        let (mut design, model) = track_and_via_board();
+        // a GND track ending 300 um from the end of the SIG track: 100 um of copper gap at 200 um widths, under the 200 um clearance
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "trkG".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 1_300_000, y: 0 }, Point { x: 1_300_000, y: 3_000_000 }], arc_mid_offset: None });
+        let mut router = Router::new(&design, &model);
+        assert_eq!(router.start(Point { x: 1_000_000, y: 0 }, "F.Cu", 200_000), Err("The routing start point violates DRC.".to_string()));
         assert!(!router.is_routing());
+        router.settings = RoutingSettings { mode: crate::settings::Mode::MarkObstacles, can_violate_drc: true, ..RoutingSettings::default() };
+        assert!(router.start(Point { x: 1_000_000, y: 0 }, "F.Cu", 200_000).is_ok());
     }
 
     #[test]
