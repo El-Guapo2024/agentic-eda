@@ -58,6 +58,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-fix-bc-board-io` | Fix batches B and C of the 2026-10-23 findings: zones keep their holes, SMD pads on `*.Cu`, paste-only pads, curves with a control point on an end, footprint Edge.Cuts in the footprint (with the outline's footprint pass), rectangle corner radius, the Extruded 3D Body kept, importers' `.kicad_dru`, a project's DRC exclusions; Fill All keeps the teardrops' fills. `PARITY-pcb.md` section 52 | done, gated | the ERC exclusions of an imported project (batch D's file); Repeat Layout's target area without holes; the canvas draws a rounded rectangle sharp |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
