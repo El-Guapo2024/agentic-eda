@@ -433,7 +433,7 @@ mod verb_tests {
     }
 
     fn board(m: &ConstraintModel) -> Board<'_> {
-        Board::new(design(), m, 100, 300)
+        Board::new(design(), m, 100_000, 300_000)
     }
 
     fn pad(number: &str, x: i64) -> LibraryPad {

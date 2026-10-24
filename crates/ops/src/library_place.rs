@@ -207,7 +207,7 @@ mod tests {
                 "placement":{"outline":[{"x":0,"y":0},{"x":100000,"y":0},{"x":100000,"y":100000},{"x":0,"y":100000}],"footprints":[],"modules":[]}}"#,
         )
         .unwrap();
-        Board::new(design, model, 100, 300)
+        Board::new(design, model, 100_000, 300_000)
     }
 
     /// `MountingHole_3.2mm_M3.kicad_mod` of KiCad's library, as the file has it.
@@ -278,16 +278,16 @@ mod tests {
     fn a_placed_footprint_is_a_part_of_its_own_with_the_next_free_reference() {
         let model = ConstraintModel::default();
         let mut b = board(&model);
-        let place = |b: &mut Board, x: i64| b.apply(&Cmd::PlaceFootprint { footprint: "MountingHole:MountingHole_3.2mm_M3".into(), at: Point { x, y: 5_000 }, reference: String::new(), value: String::new(), definition: Some(hole()) });
-        place(&mut b, 10_000).unwrap();
-        place(&mut b, 20_000).unwrap();
+        let place = |b: &mut Board, x: i64| b.apply(&Cmd::PlaceFootprint { footprint: "MountingHole:MountingHole_3.2mm_M3".into(), at: Point { x, y: 5_000_000 }, reference: String::new(), value: String::new(), definition: Some(hole()) });
+        place(&mut b, 10_000_000).unwrap();
+        place(&mut b, 20_000_000).unwrap();
         let dr = b.design().drawings.as_ref().unwrap();
         assert_eq!(dr.board_parts.iter().map(|p| p.reference.as_str()).collect::<Vec<_>>(), ["H1", "H2"]);
         assert_eq!(dr.board_parts[0].value.as_deref(), Some("MountingHole_3.2mm_M3"), "KiCad's value is the footprint's name");
         assert_eq!(dr.board_parts[0].footprint, "MountingHole:MountingHole_3.2mm_M3");
         assert!(dr.board_parts[0].definition.is_some(), "the pads travel with the part");
         let poses: Vec<(&str, i64)> = b.design().placement.as_ref().unwrap().footprints.iter().map(|f| (f.id.as_str(), f.at.x)).collect();
-        assert_eq!(poses, [("H1", 10_000), ("H2", 20_000)]);
+        assert_eq!(poses, [("H1", 10_000_000), ("H2", 20_000_000)]);
         assert!(b.design().placement.as_ref().unwrap().footprints.iter().all(|f| f.rot == 0 && f.side == Side::Top));
     }
 

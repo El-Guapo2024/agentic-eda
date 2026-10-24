@@ -1489,7 +1489,7 @@ mod tests {
         it.set("Orientation", Prop::Double(90.0));
         it.footprint = Some(Rc::new(FootprintFacts { reference: "U1".into(), fpid: "Package:QFN".into(), fields: vec![("Value".into(), "MCU".into()), ("Supplier".into(), "ACME".into())], ..Default::default() }));
         it.plated = false;
-        it.position = Point { x: 12_000, y: 0 };
+        it.position = Point { x: 12_000_000, y: 0 };
         Rc::new(it)
     }
 

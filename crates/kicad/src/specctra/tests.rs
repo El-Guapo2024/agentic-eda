@@ -73,10 +73,10 @@ pub(super) fn sample_board() -> (Design, ConstraintModel) {
         ..Default::default()
     };
     let placement = PlacementSection {
-        outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
+        outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }],
         footprints: vec![
-            FootprintInstance { id: "U1".into(), at: Point { x: 5_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
-            FootprintInstance { id: "C1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 90_000, side: Side::Bottom, label: Default::default() },
+            FootprintInstance { id: "U1".into(), at: Point { x: 5_000_000, y: 5_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+            FootprintInstance { id: "C1".into(), at: Point { x: 10_000_000, y: 10_000_000 }, rot: 90_000, side: Side::Bottom, label: Default::default() },
         ],
         modules: Vec::new(),
     };
@@ -91,9 +91,9 @@ pub(super) fn sample_board() -> (Design, ConstraintModel) {
         nets: None,
         placement: Some(placement),
         routing: Some(RoutingSection {
-            tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }, Point { x: 10_000, y: 8_000 }], arc_mid_offset: None }],
-            vias: vec![Via { id: String::new(), net: "VIN".into(), at: Point { x: 10_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
-            zones: vec![Zone { net: "GND".into(), layer: "B.Cu".into(), outline: vec![Point { x: 1_000, y: 1_000 }, Point { x: 19_000, y: 1_000 }, Point { x: 19_000, y: 19_000 }, Point { x: 1_000, y: 19_000 }], ..Zone::default() }],
+            tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 5_000_000, y: 5_000_000 }, Point { x: 10_000_000, y: 5_000_000 }, Point { x: 10_000_000, y: 8_000_000 }], arc_mid_offset: None }],
+            vias: vec![Via { id: String::new(), net: "VIN".into(), at: Point { x: 10_000_000, y: 8_000_000 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
+            zones: vec![Zone { net: "GND".into(), layer: "B.Cu".into(), outline: vec![Point { x: 1_000_000, y: 1_000_000 }, Point { x: 19_000_000, y: 1_000_000 }, Point { x: 19_000_000, y: 19_000_000 }, Point { x: 1_000_000, y: 19_000_000 }], ..Zone::default() }],
             track_width_presets: vec![],
             via_presets: vec![],
             teardrop_settings: Default::default(),
@@ -279,16 +279,16 @@ fn a_session_brings_back_the_routing_and_the_placement_the_dsn_had() {
     let segs: Vec<(Point, Point, i64, &str, &str)> = got.tracks.iter().map(|(t, _)| (t.pts[0], t.pts[1], t.width, t.layer.as_str(), t.net.as_str())).collect();
     assert_eq!(
         segs,
-        vec![(Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }, 200, "F.Cu", "VIN"), (Point { x: 10_000, y: 5_000 }, Point { x: 10_000, y: 8_000 }, 200, "F.Cu", "VIN")]
+        vec![(Point { x: 5_000_000, y: 5_000_000 }, Point { x: 10_000_000, y: 5_000_000 }, 200_000, "F.Cu", "VIN"), (Point { x: 10_000_000, y: 5_000_000 }, Point { x: 10_000_000, y: 8_000_000 }, 200_000, "F.Cu", "VIN")]
     );
     assert!(got.tracks.iter().all(|(_, locked)| !locked));
     assert_eq!(got.vias.len(), 1);
     let v = &got.vias[0];
-    assert_eq!((v.via.at, v.via.diameter, v.via.drill, v.via.from_layer.as_str(), v.via.to_layer.as_str(), v.via.net.as_str()), (Point { x: 10_000, y: 8_000 }, 600, 300, "F.Cu", "B.Cu", "VIN"));
+    assert_eq!((v.via.at, v.via.diameter, v.via.drill, v.via.from_layer.as_str(), v.via.to_layer.as_str(), v.via.net.as_str()), (Point { x: 10_000_000, y: 8_000_000 }, 600_000, 300_000, "F.Cu", "B.Cu", "VIN"));
     assert_eq!(v.kind, ViaKind::Through);
     let mut places: Vec<_> = got.placements.iter().map(|p| (p.reference.as_str(), p.at, p.rot, p.side)).collect();
     places.sort_by(|a, b| a.0.cmp(b.0));
-    assert_eq!(places, vec![("C1", Point { x: 10_000, y: 10_000 }, 90_000, Side::Bottom), ("U1", Point { x: 5_000, y: 5_000 }, 0, Side::Top)]);
+    assert_eq!(places, vec![("C1", Point { x: 10_000_000, y: 10_000_000 }, 90_000, Side::Bottom), ("U1", Point { x: 5_000_000, y: 5_000_000 }, 0, Side::Top)]);
 }
 
 fn session_with(routes: &str) -> String {

@@ -4654,10 +4654,10 @@ mod tests {
             },
             schematic: Some(SchematicSection {
                 symbols: vec![
-                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800_000, y: 63_500_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100_000, y: 63_500_000 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
                 ],
-                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }], bus: false }],
+                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000_000, y: 60_000_000 }, Point { x: 48_000_000, y: 60_000_000 }], bus: false }],
                 labels: vec![],
                 texts: vec![],
                 power_symbols: vec![],
@@ -4713,10 +4713,10 @@ mod tests {
     // -------------------------------------------------------- item ids
 
     fn track(net: &str, layer: &str, pts: &[(Nm, Nm)]) -> Track {
-        Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width: 200, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect(), arc_mid_offset: None }
+        Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width: 200_000, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect(), arc_mid_offset: None }
     }
     fn via(net: &str, x: Nm, y: Nm) -> Via {
-        Via { id: String::new(), net: net.into(), at: Point { x, y }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+        Via { id: String::new(), net: net.into(), at: Point { x, y }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
     /// A `design.json` written before ids existed: no `id` key on any
@@ -4753,7 +4753,7 @@ mod tests {
     /// save -> load round trip is stable.
     #[test]
     fn id_assignment_is_deterministic_and_stable_on_resave() {
-        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![via("GND", 500, 500)], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1_000_000)])], vias: vec![via("GND", 500_000, 500_000)], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
 
         let mut a = build();
         a.assign_missing_ids();
@@ -4773,7 +4773,7 @@ mod tests {
     /// same tracks must not change which id lands on which track.
     #[test]
     fn ids_do_not_depend_on_array_order() {
-        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1_000_000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt1.assign_missing_ids();
         rt2.assign_missing_ids();
@@ -4786,7 +4786,7 @@ mod tests {
     /// verbatim) must still get two distinct ids.
     #[test]
     fn duplicate_content_gets_distinct_ids() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)]), track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         assert_ne!(rt.tracks[0].id, rt.tracks[1].id);
     }
@@ -4796,18 +4796,18 @@ mod tests {
     /// assigned -- callers (the web UI, `DeleteTrack`) hold onto it.
     #[test]
     fn changing_width_after_assignment_does_not_move_the_id() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         let id = rt.tracks[0].id.clone();
-        rt.tracks[0].width = 500; // what `SetTrackWidth` does
+        rt.tracks[0].width = 500_000; // what `SetTrackWidth` does
         assert_eq!(rt.tracks[0].id, id);
     }
 
     #[test]
     fn shape_and_text_ids_backfill_the_same_way() {
         let mut dr = DrawingsSection {
-            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } }],
-            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000_000, y: 0 } }],
+            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: TextJustify::Center, mirror: false }],
             ..Default::default()
         };
         dr.assign_missing_ids();
@@ -4819,9 +4819,9 @@ mod tests {
 
     #[test]
     fn shape_translate_moves_every_point() {
-        let mut s = Shape::Rect { id: "shp_1".into(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 100, y: 100 } };
-        s.translate(10, 20);
-        assert_eq!(s.points(), vec![Point { x: 10, y: 20 }, Point { x: 110, y: 120 }]);
+        let mut s = Shape::Rect { id: "shp_1".into(), layer: "F.SilkS".into(), stroke_width: 100_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 100_000, y: 100_000 } };
+        s.translate(10_000, 20_000);
+        assert_eq!(s.points(), vec![Point { x: 10_000, y: 20_000 }, Point { x: 110_000, y: 120_000 }]);
     }
 
     // -------------------------------------------------- footprint library
@@ -4832,7 +4832,7 @@ mod tests {
             number: number.into(),
             at: Point { x, y },
             offset: Point::default(),
-            size: (1000, 1000),
+            size: (1_000_000, 1_000_000),
             shape: LibraryPadShape::RoundRect,
             kind: crate::footprint::PadKind::Smd,
             drill: None,
@@ -4857,7 +4857,7 @@ mod tests {
     #[test]
     fn footprint_library_pad_ids_are_assigned_and_stable() {
         let mut fp = LibraryFootprint::new_empty("Test:Lib");
-        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1000, 0)];
+        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1_000_000, 0)];
         fp.assign_missing_ids();
         assert!(fp.pads.iter().all(|p| !p.id.is_empty()), "{:?}", fp.pads);
         assert_ne!(fp.pads[0].id, fp.pads[1].id);
@@ -4873,13 +4873,13 @@ mod tests {
         assert_eq!(empty.next_pad_number(), "1");
 
         let mut fp = LibraryFootprint::new_empty("Test:Lib");
-        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1000, 0)];
+        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1_000_000, 0)];
         assert_eq!(fp.next_pad_number(), "3");
 
         // `GetNextPadNumber( "3" )` with "3" free is "3" (it was "5": the integer was counted up before it was tried); with "3" taken, the next free one
-        fp.pads.push(lib_pad("4", 2000, 0));
+        fp.pads.push(lib_pad("4", 2_000_000, 0));
         assert_eq!(fp.next_pad_number_after("3"), "3");
-        fp.pads.push(lib_pad("3", 3000, 0));
+        fp.pads.push(lib_pad("3", 3_000_000, 0));
         assert_eq!(fp.next_pad_number_after("3"), "5");
         // the last number "1" of a footprint just loaded fills the first gap, as KiCad's pad tool does
         fp.pads.retain(|p| p.number != "1");
@@ -4891,16 +4891,16 @@ mod tests {
 
     #[test]
     fn library_pad_round_trips_through_engine_pad_for_simple_shapes() {
-        let p = lib_pad("1", 500, -500);
+        let p = lib_pad("1", 500_000, -500_000);
         let engine = p.to_engine_pad();
         assert_eq!(engine.number, "1");
-        assert_eq!(engine.at, (500, -500));
+        assert_eq!(engine.at, (500_000, -500_000));
         assert_eq!(engine.shape, crate::footprint::PadShape::RoundRect);
         assert_eq!(engine.roundrect_ratio, Some(0.25));
 
         let back = LibraryPad::from_engine_pad(&engine);
         assert_eq!(back.number, engine.number);
-        assert_eq!(back.at, Point { x: 500, y: -500 });
+        assert_eq!(back.at, Point { x: 500_000, y: -500_000 });
         assert_eq!(back.shape, LibraryPadShape::RoundRect);
         assert!(back.id.is_empty(), "from_engine_pad must leave id for the caller to assign");
     }
@@ -4911,11 +4911,11 @@ mod tests {
         let mut trap = lib_pad("1", 0, 0);
         trap.shape = LibraryPadShape::Trapezoid;
         trap.roundrect_ratio = None;
-        trap.trapezoid_delta = Some((200, 0));
-        trap.offset = Point { x: 100, y: -50 };
+        trap.trapezoid_delta = Some((200_000, 0));
+        trap.offset = Point { x: 100_000, y: -50_000 };
         let engine = trap.to_engine_pad();
-        assert_eq!((engine.shape, engine.ext.trapezoid_delta, engine.ext.offset), (PadShape::Trapezoid, Some((200, 0)), Some((100, -50))));
-        assert_eq!(LibraryPad::from_engine_pad(&engine).trapezoid_delta, Some((200, 0)));
+        assert_eq!((engine.shape, engine.ext.trapezoid_delta, engine.ext.offset), (PadShape::Trapezoid, Some((200_000, 0)), Some((100_000, -50_000))));
+        assert_eq!(LibraryPad::from_engine_pad(&engine).trapezoid_delta, Some((200_000, 0)));
 
         let mut chf = lib_pad("1", 0, 0);
         chf.shape = LibraryPadShape::ChamferedRect;
@@ -4929,7 +4929,7 @@ mod tests {
         let mut custom = lib_pad("1", 0, 0);
         custom.shape = LibraryPadShape::Custom;
         custom.roundrect_ratio = None;
-        let prim = PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } }, proxy: false };
+        let prim = PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000_000, y: 0 } }, proxy: false };
         custom.custom = Some(PadCustom { anchor: PadAnchor::Rect, zone: Default::default(), primitives: vec![prim] });
         let engine = custom.to_engine_pad();
         assert_eq!(engine.shape, PadShape::Custom);

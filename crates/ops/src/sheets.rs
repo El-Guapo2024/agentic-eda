@@ -174,7 +174,7 @@ mod tests {
     fn flat_board(model: &ConstraintModel) -> Board<'_> {
         let mut design: Design = eda_engine::derive_schematic(model, &EngineOptions::new(1, "t")).unwrap();
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
-        Board::new(design, model, 100, 300)
+        Board::new(design, model, 100_000, 300_000)
     }
 
     fn drawn_nets(model: &ConstraintModel) -> BTreeMap<String, Vec<String>> {
@@ -253,7 +253,7 @@ mod tests {
         let mut design: Design = eda_engine::derive_schematic(&model, &EngineOptions::new(1, "t")).unwrap();
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
         design.nets = Some(stale.nets.clone());
-        let mut b = Board::new(design, &stale, 100, 300).with_intent_nets(model.nets.clone());
+        let mut b = Board::new(design, &stale, 100_000, 300_000).with_intent_nets(model.nets.clone());
         b.apply(&Cmd::ReorganizeSheets).unwrap();
         assert_eq!(traced(&model, b.design()), drawn_nets(&model));
         assert_eq!(b.design().schematic.as_ref().unwrap().sheets.len(), 3);
@@ -271,7 +271,7 @@ mod tests {
         let mut design: Design = eda_engine::derive_schematic(model, &EngineOptions::new(1, "t")).unwrap();
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
         edit(design.schematic.as_mut().unwrap());
-        Board::new(design, model, 100, 300)
+        Board::new(design, model, 100_000, 300_000)
     }
 
     fn screen_with<'d>(d: &'d Design, reference: &str) -> &'d eda_model::ir::SchematicSection {
@@ -424,12 +424,12 @@ mod tests {
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
         {
             let root = design.schematic.as_mut().unwrap();
-            for (unit, x) in [(1, 300_000), (2, 330_000), (3, 360_000)] {
-                root.symbols.push(unit_of(&model, "U9", unit, Point { x, y: 20_000 }));
+            for (unit, x) in [(1, 300_000_000), (2, 330_000_000), (3, 360_000_000)] {
+                root.symbols.push(unit_of(&model, "U9", unit, Point { x, y: 20_000_000 }));
             }
             root.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
         }
-        let mut b = Board::new(design, &model, 100, 300);
+        let mut b = Board::new(design, &model, 100_000, 300_000);
         b.apply(&Cmd::ReorganizeSheets).unwrap();
         let d = b.design();
         let units: Vec<(String, u32)> = d.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.symbols.iter()).filter(|s| s.id == "U9").map(|s| (s.id.clone(), s.unit)).collect();
@@ -506,7 +506,7 @@ mod tests {
         }
         root.extras.set_locked("R3", true);
         root.extras.set_locked("U1", true);
-        let mut b = Board::new(design, &model, 100, 300);
+        let mut b = Board::new(design, &model, 100_000, 300_000);
         b.apply(&Cmd::ReorganizeSheets).unwrap();
         let d = b.design();
         let screens = d.sheet_contents.as_ref().unwrap();

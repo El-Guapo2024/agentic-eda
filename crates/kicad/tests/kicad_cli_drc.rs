@@ -190,11 +190,11 @@ fn kicad_cli_drc_bottom_side_pads() {
     };
     let at = |id: &str, x: Nm, y: Nm, rot, side| FootprintInstance { id: id.into(), at: Point { x, y }, rot, side, label: Default::default() };
     let footprints = vec![
-        at("U1", 6_000, 6_000, 0, Side::Bottom),
-        at("U2", 14_000, 6_000, 90_000, Side::Bottom),
-        at("U3", 22_000, 6_000, 90_000, Side::Top),
-        at("R1", 6_000, 14_000, 0, Side::Bottom),
-        at("J1", 6_000, 18_000, 0, Side::Top),
+        at("U1", 6_000_000, 6_000_000, 0, Side::Bottom),
+        at("U2", 14_000_000, 6_000_000, 90_000, Side::Bottom),
+        at("U3", 22_000_000, 6_000_000, 90_000, Side::Top),
+        at("R1", 6_000_000, 14_000_000, 0, Side::Bottom),
+        at("J1", 6_000_000, 18_000_000, 0, Side::Top),
     ];
 
     let instance = |pin: &str| footprints.iter().find(|f| pin.split_once('.').unwrap().0 == f.id).unwrap();
@@ -205,8 +205,8 @@ fn kicad_cli_drc_bottom_side_pads() {
     };
     // The premise: the engine mirrors a bottom part (U1's pin 1 is at
     // local x < 0) and leaves a top one alone.
-    assert!(pad_at("U1.1").x > 6_000 && pad_at("R1.1").x > 6_000, "the engine no longer mirrors bottom-side parts");
-    assert!(pad_at("U3.1").y < 6_000, "the engine mirrors a top-side part");
+    assert!(pad_at("U1.1").x > 6_000_000 && pad_at("R1.1").x > 6_000_000, "the engine no longer mirrors bottom-side parts");
+    assert!(pad_at("U3.1").y < 6_000_000, "the engine mirrors a top-side part");
 
     let tracks: Vec<Track> = model
         .nets
@@ -222,7 +222,7 @@ fn kicad_cli_drc_bottom_side_pads() {
             arc_mid_offset: None,
         })
         .collect();
-    let outline = vec![Point { x: 0, y: 0 }, Point { x: 28_000, y: 0 }, Point { x: 28_000, y: 22_000 }, Point { x: 0, y: 22_000 }];
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 28_000_000, y: 0 }, Point { x: 28_000_000, y: 22_000_000 }, Point { x: 0, y: 22_000_000 }];
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
         schema: eda_model::ir::SCHEMA_VERSION,
@@ -264,34 +264,34 @@ fn kicad_cli_drc_shapes_and_text() {
 
     let mut drawings = eda_model::ir::DrawingsSection {
         shapes: vec![
-            eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 1_000, y: 1_000 }, end: Point { x: 9_000, y: 1_000 } },
+            eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: 1_000_000, y: 1_000_000 }, end: Point { x: 9_000_000, y: 1_000_000 } },
             eda_model::ir::Shape::Arc {
                 id: String::new(),
                 layer: "Cmts.User".into(),
-                stroke_width: 100,
+                stroke_width: 100_000,
                 filled: false,
-                start: Point { x: 15_000, y: 5_000 },
-                mid: Point { x: 12_071, y: 12_071 },
-                end: Point { x: 5_000, y: 15_000 },
+                start: Point { x: 15_000_000, y: 5_000_000 },
+                mid: Point { x: 12_071_068, y: 12_071_068 },
+                end: Point { x: 5_000_000, y: 15_000_000 },
             },
-            eda_model::ir::Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: true, start: Point { x: 1_000, y: 1_000 }, end: Point { x: 9_000, y: 9_000 } },
-            eda_model::ir::Shape::Circle { id: String::new(), layer: "B.SilkS".into(), stroke_width: 120, filled: false, center: Point { x: 10_000, y: 10_000 }, end: Point { x: 12_000, y: 10_000 } },
+            eda_model::ir::Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: true, start: Point { x: 1_000_000, y: 1_000_000 }, end: Point { x: 9_000_000, y: 9_000_000 } },
+            eda_model::ir::Shape::Circle { id: String::new(), layer: "B.SilkS".into(), stroke_width: 120_000, filled: false, center: Point { x: 10_000_000, y: 10_000_000 }, end: Point { x: 12_000_000, y: 10_000_000 } },
             eda_model::ir::Shape::Polygon {
                 id: String::new(),
                 layer: "F.CrtYd".into(),
-                stroke_width: 50,
+                stroke_width: 50_000,
                 filled: true,
-                pts: vec![Point { x: 1_000, y: 1_000 }, Point { x: 4_000, y: 1_000 }, Point { x: 4_000, y: 4_000 }, Point { x: 1_000, y: 4_000 }],
+                pts: vec![Point { x: 1_000_000, y: 1_000_000 }, Point { x: 4_000_000, y: 1_000_000 }, Point { x: 4_000_000, y: 4_000_000 }, Point { x: 1_000_000, y: 4_000_000 }],
             },
         ],
         texts: vec![eda_model::ir::Text {
             id: String::new(),
             content: "REV A".into(),
-            at: Point { x: 5_000, y: 18_000 },
+            at: Point { x: 5_000_000, y: 18_000_000 },
             angle: 0,
             layer: "F.SilkS".into(),
-            size_nm: 1_000,
-            stroke_width: 150,
+            size_nm: 1_000_000,
+            stroke_width: 150_000,
             justify: eda_model::ir::TextJustify::Center,
             mirror: false,
         }],
@@ -305,7 +305,7 @@ fn kicad_cli_drc_shapes_and_text() {
         provenance: Provenance { engine_version: "0".into(), intent_hash: "shapes_text_drc".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection {
-            outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }],
             footprints: vec![],
             modules: Vec::new(),
         }),
@@ -390,10 +390,10 @@ fn kicad_cli_drc_real_footprints() {
         ..Default::default()
     };
 
-    let outline = vec![Point { x: 0, y: 0 }, Point { x: 40_000, y: 0 }, Point { x: 40_000, y: 30_000 }, Point { x: 0, y: 30_000 }];
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 40_000_000, y: 0 }, Point { x: 40_000_000, y: 30_000_000 }, Point { x: 0, y: 30_000_000 }];
     let footprints = vec![
-        FootprintInstance { id: "J1".into(), at: Point { x: 12_000, y: 8_000 }, rot: 0, side: Side::Top, label: Default::default() },
-        FootprintInstance { id: "SW1".into(), at: Point { x: 30_000, y: 20_000 }, rot: 0, side: Side::Top, label: Default::default() },
+        FootprintInstance { id: "J1".into(), at: Point { x: 12_000_000, y: 8_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+        FootprintInstance { id: "SW1".into(), at: Point { x: 30_000_000, y: 20_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
     ];
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
@@ -431,16 +431,16 @@ fn kicad_cli_drc_rule_area_reports_items_not_allowed_and_exports_gerbers() {
     };
     let net = |name: &str| Net { name: name.into(), pins: vec![] };
     let model = ConstraintModel { nets: vec![net("A"), net("B")], ..Default::default() };
-    let track = |net: &str, y: Nm| Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 250, pts: vec![Point { x: 2_000, y }, Point { x: 12_000, y }], arc_mid_offset: None };
+    let track = |net: &str, y: Nm| Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 250_000, pts: vec![Point { x: 2_000_000, y }, Point { x: 12_000_000, y }], arc_mid_offset: None };
     let mut routing = RoutingSection {
         // One track through the keepout, one well clear of it.
-        tracks: vec![track("A", 5_000), track("B", 15_000)],
+        tracks: vec![track("A", 5_000_000), track("B", 15_000_000)],
         vias: vec![],
         zones: vec![eda_model::ir::Zone {
             id: String::new(),
             net: String::new(),
             layer: "F.Cu".into(),
-            outline: vec![Point { x: 4_000, y: 3_000 }, Point { x: 10_000, y: 3_000 }, Point { x: 10_000, y: 8_000 }, Point { x: 4_000, y: 8_000 }],
+            outline: vec![Point { x: 4_000_000, y: 3_000_000 }, Point { x: 10_000_000, y: 3_000_000 }, Point { x: 10_000_000, y: 8_000_000 }, Point { x: 4_000_000, y: 8_000_000 }],
             is_rule_area: true,
             keepout_tracks: true,
             ..Default::default()
@@ -455,7 +455,7 @@ fn kicad_cli_drc_rule_area_reports_items_not_allowed_and_exports_gerbers() {
         schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "rule_area".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
-        placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }], footprints: vec![], modules: Vec::new() }),
+        placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }], footprints: vec![], modules: Vec::new() }),
         routing: Some(routing),
         drawings: None,
     };

@@ -51,7 +51,7 @@ fn model() -> ConstraintModel {
 /// The gate placed in `style`, a wire from each of its pins in that style out to a label: `NET_A`, `NET_B`, `NET_Y`. With `wires_of`, the wires meet the pins of that
 /// other style instead.
 fn sheet(model: &ConstraintModel, style: u32, wires_of: u32) -> Design {
-    let at = Point { x: 76_200, y: 76_200 };
+    let at = Point { x: 76_200_000, y: 76_200_000 };
     let sym = SymbolInstance { id: "U1".into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
     let mut sch = SchematicSection { symbols: vec![sym.clone()], ..Default::default() };
     let part = model.part("U1").unwrap();
@@ -60,7 +60,7 @@ fn sheet(model: &ConstraintModel, style: u32, wires_of: u32) -> Design {
     let tips = eda_engine::placed::pin_points(&sym, part, model.real_symbol_of_instance(&wired, &sym, part).as_ref());
     for (number, tip) in tips {
         let left = number != "3";
-        let end = Point { x: tip.x + if left { -12_700 } else { 12_700 }, y: tip.y };
+        let end = Point { x: tip.x + if left { -12_700_000 } else { 12_700_000 }, y: tip.y };
         let net = format!("NET_{}", ["A", "B", "Y"][number.parse::<usize>().unwrap() - 1]);
         sch.wires.push(Wire { id: format!("w_{net}"), net: net.clone(), pins: vec![], pts: vec![tip, end], bus: false });
         sch.labels.push(NetLabel { id: format!("l_{net}"), net, at: end, kind: LabelKind::Local });

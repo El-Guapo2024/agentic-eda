@@ -57,7 +57,7 @@ fn design(sch: SchematicSection) -> Design {
 fn sheet() -> SchematicSection {
     let sym = SymbolInstance {
         id: "V1".into(),
-        at: Point { x: 50_800, y: 50_800 },
+        at: Point { x: 50_800_000, y: 50_800_000 },
         rot: 0,
         mirrored: false,
         mirror_y: false,

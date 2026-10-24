@@ -711,7 +711,7 @@ mod tests {
     use eda_model::pcb_items::TextBox;
 
     fn bx() -> TextBox {
-        TextBox::new("F.SilkS", Point { x: 10_000, y: 10_000 }, Point { x: 30_000, y: 20_000 }, 1_000, 120)
+        TextBox::new("F.SilkS", Point { x: 10_000_000, y: 10_000_000 }, Point { x: 30_000_000, y: 20_000_000 }, 1_000_000, 120_000)
     }
 
     fn rot(angle_cw: i64) -> Xform {
@@ -724,7 +724,7 @@ mod tests {
         transform_text_box(&mut t, rot(90_000), 2);
         assert!(t.is_rect());
         // clockwise on the screen: (x, y) -> (-y, x)
-        assert_eq!((t.start, t.end), (Point { x: -10_000, y: 10_000 }, Point { x: -20_000, y: 30_000 }));
+        assert_eq!((t.start, t.end), (Point { x: -10_000_000, y: 10_000_000 }, Point { x: -20_000_000, y: 30_000_000 }));
         assert_eq!(t.angle, 270_000, "the text angle is KiCad's, counter-clockwise: a clockwise quarter turn takes 90 from 0");
         // ... and the next brings the frame round to 180
         transform_text_box(&mut t, rot(90_000), 2);
@@ -752,7 +752,7 @@ mod tests {
         assert!(t.is_rect(), "the polygon is a rectangle again at a multiple of 90 degrees: {t:?}");
         let [x0, y0, x1, y1] = t.bounds();
         // The rounding of two 45 degree turns is a micrometre at most.
-        assert!((x0 - 10_000).abs() <= 1 && (y0 - 10_000).abs() <= 1 && (x1 - 30_000).abs() <= 1 && (y1 - 20_000).abs() <= 1, "{:?}", t.bounds());
+        assert!((x0 - 10_000_000).abs() <= 1 && (y0 - 10_000_000).abs() <= 1 && (x1 - 30_000_000).abs() <= 1 && (y1 - 20_000_000).abs() <= 1, "{:?}", t.bounds());
         assert_eq!(t.angle, 0);
     }
 
@@ -762,25 +762,25 @@ mod tests {
         transform_text_box(&mut t, Xform::Flip { pivot: Point { x: 0, y: 0 }, dir: FlipDirection::LeftRight }, 2);
         assert_eq!(t.layer, "B.SilkS");
         assert!(t.mirror, "text on a back layer reads mirrored");
-        assert_eq!((t.start, t.end), (Point { x: -10_000, y: 10_000 }, Point { x: -30_000, y: 20_000 }));
+        assert_eq!((t.start, t.end), (Point { x: -10_000_000, y: 10_000_000 }, Point { x: -30_000_000, y: 20_000_000 }));
         assert_eq!(t.angle, 0);
         let mut u = bx();
         u.angle = 90_000;
         transform_text_box(&mut u, Xform::Flip { pivot: Point { x: 0, y: 0 }, dir: FlipDirection::TopBottom }, 2);
         assert_eq!(u.angle, 90_000, "180 - 90");
-        assert_eq!((u.start.y, u.end.y), (-10_000, -20_000));
+        assert_eq!((u.start.y, u.end.y), (-10_000_000, -20_000_000));
     }
 
     #[test]
     fn corners_follow_the_text_frame() {
         let mut t = bx();
         let at = |a| corners_in_sequence(&t, a);
-        assert_eq!(at(0)[0], Point { x: 10_000, y: 10_000 });
-        assert_eq!(at(90_000)[0], Point { x: 10_000, y: 20_000 });
-        assert_eq!(at(180_000)[0], Point { x: 30_000, y: 20_000 });
-        assert_eq!(at(270_000)[0], Point { x: 30_000, y: 10_000 });
-        t.pts = vec![Point { x: 0, y: 0 }, Point { x: 5_000, y: 5_000 }, Point { x: 0, y: 10_000 }, Point { x: -5_000, y: 5_000 }];
+        assert_eq!(at(0)[0], Point { x: 10_000_000, y: 10_000_000 });
+        assert_eq!(at(90_000)[0], Point { x: 10_000_000, y: 20_000_000 });
+        assert_eq!(at(180_000)[0], Point { x: 30_000_000, y: 20_000_000 });
+        assert_eq!(at(270_000)[0], Point { x: 30_000_000, y: 10_000_000 });
+        t.pts = vec![Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 5_000_000 }, Point { x: 0, y: 10_000_000 }, Point { x: -5_000_000, y: 5_000_000 }];
         // 45 degrees: minX, minY, maxX, maxY
-        assert_eq!(corners_in_sequence(&t, 45_000), [Point { x: -5_000, y: 5_000 }, Point { x: 0, y: 0 }, Point { x: 5_000, y: 5_000 }, Point { x: 0, y: 10_000 }]);
+        assert_eq!(corners_in_sequence(&t, 45_000), [Point { x: -5_000_000, y: 5_000_000 }, Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 5_000_000 }, Point { x: 0, y: 10_000_000 }]);
     }
 }

@@ -135,7 +135,7 @@ mod tests {
         let m = model();
         let before = design();
         let locked_before = before.drawings.as_ref().unwrap().locked_ids.clone();
-        let mut b = Board::new(before, &m, 100, 300);
+        let mut b = Board::new(before, &m, 100_000, 300_000);
         let cmd = Cmd::Specctra { session: SESSION.into(), name: "r.ses".into() };
         assert!(cmd.imports_session() && !cmd.clears_routing() && !cmd.spans_both_editors());
         b.apply(&cmd).unwrap();
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn a_refused_session_changes_nothing() {
         let m = model();
-        let mut b = Board::new(design(), &m, 100, 300);
+        let mut b = Board::new(design(), &m, 100_000, 300_000);
         let bad = SESSION.replace("(path B.Cu", "(path In3.Cu");
         let e = b.apply(&Cmd::Specctra { session: bad, name: "r.ses".into() }).unwrap_err();
         assert_eq!(e[0].hint.as_deref(), Some("Session file uses invalid layer id 'In3.Cu'."), "{e:?}");

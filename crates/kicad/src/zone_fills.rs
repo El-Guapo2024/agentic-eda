@@ -682,7 +682,7 @@ mod tests {
 )"#;
 
     fn zone(id: &str, uuid: &str) -> Zone {
-        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }], ..Default::default() }
+        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 0 }, Point { x: 10_000_000, y: 10_000_000 }], ..Default::default() }
     }
 
     fn design(zones: Vec<Zone>) -> Design {
@@ -752,7 +752,7 @@ mod tests {
         assert!(fills.rings(z, "In1.Cu").is_empty());
         assert_eq!(fills.tally(&d), (1, 0));
 
-        // The copper in micrometres, a polygon per ring.
+        // The copper in nanometres, a polygon per ring.
         let copper = fills.copper(&d);
         let f = copper.get("zone-a", "F.Cu").expect("a fill");
         assert_eq!(f.polys.len(), 1);
@@ -760,7 +760,7 @@ mod tests {
 
         // An edit elsewhere on the board changes nothing about the zone; an edit to the zone itself empties it.
         let mut moved = z.clone();
-        moved.outline[2] = Point { x: 11_000, y: 10_000 };
+        moved.outline[2] = Point { x: 11_000_000, y: 10_000_000 };
         assert!(fills.current(&moved).is_none() && fills.rings(&moved, "F.Cu").is_empty());
         let d2 = design(vec![moved.clone()]);
         assert_eq!(fills.tally(&d2), (0, 1), "one zone out of date");
