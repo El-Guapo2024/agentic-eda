@@ -1869,6 +1869,29 @@ mod tests {
         serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\n").unwrap()
     }
 
+    /// findings p5 F1-1: an F.Cu head ending in a through via meets a B.Cu track through its via only. KiCad's `ShoveObstacleLine` shoves
+    /// that track round the via's hull alone (`viaOnEnd && !aCurLine.LayersOverlap( &obstacleLine )` -> `shoveLineFromLoneVia`): it bends
+    /// round the via and never round the F.Cu segment's hull, which reaches past both ends of the head.
+    #[test]
+    fn a_head_via_shoves_a_track_on_the_other_layer_around_the_via_only() {
+        let mut node = Node::new();
+        // a B.Cu track under the F.Cu head, 350 um to its side: inside the hull of the via (600 um) and of the F.Cu segment (400 um)
+        node.add(Item::Segment(Segment { net: net_of("B"), layer: 1, a: Point { x: -2_000_000, y: 350_000 }, b: Point { x: 8_000_000, y: 350_000 }, width: 200_000, source_track: Some(("trkB".into(), 0)), locked: false }));
+        let rules = rules();
+        let settings = RoutingSettings { mode: crate::settings::Mode::Shove, ..RoutingSettings::default() };
+        let line = Line::from_points(net_of("A"), 0, 200_000, vec![Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 0 }]);
+        let via = Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: 5_000_000, y: 0 }, diameter: 600_000, drill: 300_000, source_via: None, locked: false, is_virtual: false };
+        let outcome = shove_heads_after(&node, vec![ShoveHead { line, via: Some(via) }], &rules, &settings, None).expect("the B.Cu track can be shoved round the via");
+        assert_eq!(outcome.displaced_lines.len(), 1);
+        let moved = &outcome.displaced_lines[0].line;
+        assert_eq!(moved.layer, 1);
+        // away from the via the track stays where it was: the F.Cu segment is no obstacle to it
+        assert!(moved.pts.iter().filter(|p| p.x < 4_000_000).all(|p| p.y == 350_000), "only bent round the via: {:?}", moved.pts);
+        // round the via's hull, on the side the clockwise walk takes (`checkShoveDirection` tests the head's first point, which is far away)
+        assert!(moved.pts.iter().any(|p| p.y.abs() >= 600_000), "clear of the via's hull: {:?}", moved.pts);
+        assert_eq!((moved.first(), moved.last()), (Some(Point { x: -2_000_000, y: 350_000 }), Some(Point { x: 8_000_000, y: 350_000 })));
+    }
+
     #[test]
     fn pushes_a_crossing_track_out_of_the_way() {
         let mut node = Node::new();
