@@ -109,6 +109,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 | 25, 2 | Footprint graphics: silkscreen, fab and assembly drawings and texts are the footprint's own (IR, `.kicad_mod` and `.kicad_pcb`, canvas, 3D, in-house checks) | **Done** (limits in item 25) | `task-fp-graphics` (10-10, not merged) |
 | 30 | The 3D models of a footprint: the 3D Models tab in both Footprint Properties dialogs, the list's verbs and file entries, the Footprint Chooser's 3D view, Migrate 3D Models | **Done** (limits in item 30) | `task-fp-3d` (10-13, not merged) |
 | 32 | Design blocks: `.kicad_blocks` libraries and their table, the Design Blocks panes of the schematic and the board editor, Place (flat, as a sheet, linked), Save Sheet / Board / Selection, Update, Properties, Delete, a group's library link | **Done** (limits in item 32) | `task-design-blocks` (10-20, not merged) |
+| 33 | A studio project survives KiCad's Update PCB from Schematic (F8): KiCad's net names everywhere (the user's decision of 10-23), one footprint name, the footprint's link to its symbol, the symbol's fields and the pads' pin types on the board, a flipped footprint in KiCad's frame (fix batch A; PARITY-pcb.md section 52) | Mostly done (P14-2 for footprints read from a file; an impedance target's pattern and saved net colours keep the old names) | `task-fix-a-kicad-names` (10-24) |
 
 Not moved: items 15, 19, 20, 24.
 

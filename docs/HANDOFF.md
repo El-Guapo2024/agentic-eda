@@ -58,6 +58,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-fix-a-kicad-names` | Fix batch A: KiCad's net names everywhere (the board loader traces the schematic, `crates/cli/src/net_names.rs`), one footprint name (`footprint_lib_id`), `(path)`/`sheetname`/`sheetfile`, symbol fields and `pinfunction`/`pintype` on the board, `unconnected-(..)` pads, a flipped footprint in KiCad's frame | done; parity DRC 0 on opamp, ldo, mcu30 (`crates/cli/tests/kicad_names.rs`) | P14-2 for footprints read from a file; net names that lose their meaning when a net is unlabelled (a pair drawn as wires); commands take KiCad's names (see PARITY-pcb.md 52) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

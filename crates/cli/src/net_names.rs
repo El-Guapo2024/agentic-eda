@@ -148,11 +148,16 @@ pub(crate) fn apply(model: &mut ConstraintModel, renames: &BTreeMap<String, Stri
             pour.net = new.clone();
         }
     }
-    // a custom rule that names a net (`A.NetName == 'PA7'`) names it by its new name, in the rules text kicad-cli reads and in the rules parsed from it
+    // a custom rule that compares a net's name (`A.NetName == 'PA7'`) names it by its new name, in the rules text kicad-cli reads and in the rules parsed
+    // from it (only there: `A.NetClass == 'HV'` names a class, whatever net is called HV)
     let requote = |text: &str| -> String {
         let mut out = text.to_string();
         for (old, new) in renames {
-            out = out.replace(&format!("'{old}'"), &format!("'{new}'"));
+            for op in ["==", "!="] {
+                for gap in ["", " "] {
+                    out = out.replace(&format!("NetName{gap}{op}{gap}'{old}'"), &format!("NetName{gap}{op}{gap}'{new}'"));
+                }
+            }
         }
         out
     };
