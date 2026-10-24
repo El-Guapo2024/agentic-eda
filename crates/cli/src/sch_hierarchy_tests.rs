@@ -1069,7 +1069,7 @@ fn qa_traced(rel: &str) -> Option<(Vec<Vec<String>>, Vec<Vec<String>>)> {
     let aliases = design.bus_aliases.clone();
     let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
     let global_power = |lib_id: &str| -> Option<bool> { model.symbol_of(lib_id).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power) };
+    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power) };
     let mut ours: Vec<Vec<String>> = crate::board::trace_design(&mut design.clone(), &model, &naming).into_iter().map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).collect::<Vec<_>>()).filter(|p: &Vec<String>| p.len() >= 2).collect();
     for g in ours.iter_mut() {
         g.sort();

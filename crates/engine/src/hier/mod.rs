@@ -219,6 +219,13 @@ fn number_power(ctx: &Ctx, modules: &[FunctionalModule], outs: &mut [sheet::Shee
 /// A design that is one module: one sheet, laid out like a module sheet (the anchor in the middle, the passives that serve it
 /// beside it, everything inside the frame), no root above it.
 pub fn derive_single_sheet(model: &ConstraintModel, opts: &EngineOptions, module: &FunctionalModule, keep: &Keep) -> Result<Design, Vec<CheckResult>> {
+    // drawn from the intent's names of the nets (`crate::drawn_names`)
+    if let Some((drawn, back)) = crate::drawn_names(model) {
+        return derive_single_sheet(&drawn, opts, module, keep).map(|mut d| {
+            crate::name_drawn_wires(&mut d, &back);
+            d
+        });
+    }
     let errors = validate(model);
     if !errors.is_empty() {
         return Err(errors);
@@ -273,6 +280,13 @@ pub fn derive_hierarchy(model: &ConstraintModel, opts: &EngineOptions, modules: 
 }
 
 pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modules: &[FunctionalModule], keep: &Keep) -> Result<Derived, Vec<CheckResult>> {
+    // drawn from the intent's names of the nets (`crate::drawn_names`)
+    if let Some((drawn, back)) = crate::drawn_names(model) {
+        return derive_hierarchy_full(&drawn, opts, modules, keep).map(|mut d| {
+            crate::name_drawn_wires(&mut d.design, &back);
+            d
+        });
+    }
     let errors = validate(model);
     if !errors.is_empty() {
         return Err(errors);
@@ -370,6 +384,13 @@ pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modu
 /// a design with only one module is one sheet, laid out the same way. A model with no parts at all gets `derive_schematic`'s
 /// empty one.
 pub fn derive_schematic_modules_with(model: &ConstraintModel, opts: &EngineOptions, recorded: &[eda_model::ir::ModuleRegion]) -> Result<Design, Vec<CheckResult>> {
+    // the modules are found from the intent's names of the nets too (`crate::drawn_names`)
+    if let Some((drawn, back)) = crate::drawn_names(model) {
+        return derive_schematic_modules_with(&drawn, opts, recorded).map(|mut d| {
+            crate::name_drawn_wires(&mut d, &back);
+            d
+        });
+    }
     let modules = infer_modules(model, recorded);
     match modules.len() {
         0 => crate::derive_schematic(model, opts),

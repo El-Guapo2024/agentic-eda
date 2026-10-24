@@ -165,10 +165,11 @@ fn the_models_follow_their_footprint_and_a_bottom_one_is_written_in_kicads_frame
     assert_eq!(sent(&dir, "U1"), Some(vec![placed.clone()]), "flipped: the footprint's list is the same, in the frame of the footprint on the top side");
     let pcb = derived_board(&dir);
     let block = footprint_block(&pcb, "U1");
-    assert!(block.contains("(xyz -1 -2 0.5)") && block.contains("(xyz 90 0 -150)"), "the file's bottom-side frame: the half turn about z: {block}");
+    // KiCad's frame of a flipped footprint: y mirrored, the half turn in the orientation (`FOOTPRINT::Flip`), the model as it is held
+    assert!(block.contains("(xyz 1 2 0.5)") && block.contains("(xyz 90 0 30)"), "the file's bottom-side frame is KiCad's: {block}");
     let (_, back, _) = eda_kicad::import_kicad_pcb(&pcb).unwrap();
     let u1 = back.parts.iter().find(|p| p.reference == "U1").unwrap();
-    assert_eq!(back.footprint_of(u1).unwrap().models3d, vec![placed], "read back, the list is the one it was written from");
+    assert_eq!(back.footprint_of(u1).unwrap().models3d, vec![placed.flipped_frame()], "read back, the list is held in the reader's frame of a KiCad bottom footprint");
 }
 
 /// The Footprint Editor's list reaches the board once the footprint is updated on it (`UpdateFootprintOnBoard`: "Update Footprint from Library"), for every instance, and an

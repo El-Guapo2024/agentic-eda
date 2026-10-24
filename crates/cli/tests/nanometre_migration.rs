@@ -61,6 +61,9 @@ fn pt(v: &Value) -> (i64, i64) {
 /// schematic's symbols and wires.
 fn lengths(d: &Value, k: i64) -> Vec<String> {
     let mut out = Vec::new();
+    // not the net: the board's loader gives a track the KiCad name of its net (`/FB` for the label FB on the root, `Net-(C1-Pad1)` for a net no label
+    // names), which this test does not hold the old file to
+    let net = |_: &Value| -> &str { "" };
     let s = |p: (i64, i64)| format!("{} {}", p.0 * k, p.1 * k);
     for f in d["placement"]["footprints"].as_array().into_iter().flatten() {
         out.push(format!("fp {} {} {} {}", f["id"], s(pt(&f["at"])), f["rot"], f["side"]));
@@ -70,14 +73,14 @@ fn lengths(d: &Value, k: i64) -> Vec<String> {
     }
     for t in d["routing"]["tracks"].as_array().into_iter().flatten() {
         let pts: Vec<String> = t["pts"].as_array().unwrap().iter().map(|p| s(pt(p))).collect();
-        out.push(format!("track {} {} {} {}", t["net"], t["layer"], t["width"].as_i64().unwrap() * k, pts.join(",")));
+        out.push(format!("track {} {} {} {}", net(&t["net"]), t["layer"], t["width"].as_i64().unwrap() * k, pts.join(",")));
     }
     for v in d["routing"]["vias"].as_array().into_iter().flatten() {
-        out.push(format!("via {} {} {} {}", v["net"], s(pt(&v["at"])), v["drill"].as_i64().unwrap() * k, v["diameter"].as_i64().unwrap() * k));
+        out.push(format!("via {} {} {} {}", net(&v["net"]), s(pt(&v["at"])), v["drill"].as_i64().unwrap() * k, v["diameter"].as_i64().unwrap() * k));
     }
     for z in d["routing"]["zones"].as_array().into_iter().flatten() {
         let pts: Vec<String> = z["outline"].as_array().unwrap().iter().map(|p| s(pt(p))).collect();
-        out.push(format!("zone {} {} {}", z["net"], z["layer"], pts.join(",")));
+        out.push(format!("zone {} {} {}", net(&z["net"]), z["layer"], pts.join(",")));
     }
     for t in d["drawings"]["texts"].as_array().into_iter().flatten() {
         let size = t.get("size_nm").or_else(|| t.get("size_um")).and_then(Value::as_i64).unwrap();
@@ -88,7 +91,7 @@ fn lengths(d: &Value, k: i64) -> Vec<String> {
     }
     for w in d["schematic"]["wires"].as_array().into_iter().flatten() {
         let pts: Vec<String> = w["pts"].as_array().unwrap().iter().map(|p| s(pt(p))).collect();
-        out.push(format!("wire {} {}", w["net"], pts.join(",")));
+        out.push(format!("wire {} {}", net(&w["net"]), pts.join(",")));
     }
     out.sort();
     out

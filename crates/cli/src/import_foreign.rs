@@ -552,7 +552,8 @@ mod tests {
         assert_eq!(parts(&dir), vec!["J9"], "the old board's model is back, with the board");
         let (_, back, model) = crate::board::load(&dir).unwrap();
         assert_eq!(back.placement.as_ref().unwrap().footprints[0].id, "J9");
-        assert!(back.drawings.as_ref().and_then(|d| d.intent_file.clone()).is_none() && model.nets.iter().any(|n| n.name == "OLD"));
+        // (the old board's net OLD, J9.1 to J9.2, under the name KiCad gives what its schematic draws)
+        assert!(back.drawings.as_ref().and_then(|d| d.intent_file.clone()).is_none() && model.nets.iter().any(|n| n.pins == ["J9.1", "J9.2"]));
         assert!(crate::board::undo(&dir, "test", Some(Domain::Pcb)).is_err(), "and that was the one step");
 
         crate::board::redo(&dir, "test", Some(Domain::Pcb)).expect("a redo");
@@ -617,7 +618,7 @@ mod tests {
         let (_, back, model) = crate::board::load(&dir).unwrap();
         assert!(back.schematic.is_none() && back.nets.is_none() && back.sheet_contents.is_none(), "the old drawing: none stored");
         assert_eq!(parts(&dir), vec!["J9"]);
-        assert!(model.nets.iter().any(|n| n.name == "OLD"));
+        assert!(model.nets.iter().any(|n| n.pins == ["J9.1", "J9.2"]), "the old board's net OLD");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -56,6 +56,20 @@ pub(super) fn traced(model: &ConstraintModel, d: &Design) -> BTreeMap<String, Ve
     trace_nets(&mut view).into_iter().filter(|n| n.pins.len() >= 2).map(|n| (n.name, n.pins)).collect()
 }
 
+/// `traced` against `drawn_nets`: the same pins in the same nets, each named as KiCad names what the sheets draw -- the intent's name for a global one
+/// (a power net), the intent's name with a sheet path in front (`/MCU (U1)/RESET`) for a labelled one, or its best pin's (`Net-(D1-Pad1)`) for one no
+/// label names.
+pub(super) fn assert_traces_back(got: &BTreeMap<String, Vec<String>>, want: &BTreeMap<String, Vec<String>>, what: &str) {
+    let by_pins = |m: &BTreeMap<String, Vec<String>>| -> BTreeMap<Vec<String>, String> { m.iter().map(|(n, p)| (p.clone(), n.clone())).collect() };
+    let (got_pins, want_pins) = (by_pins(got), by_pins(want));
+    assert_eq!(got_pins.keys().collect::<Vec<_>>(), want_pins.keys().collect::<Vec<_>>(), "{what}: the sheets do not trace back to the intent's nets");
+    for (pins, name) in &got_pins {
+        let intent = &want_pins[pins];
+        let kicad = name == intent || (name.starts_with('/') && name.ends_with(&format!("/{intent}"))) || name.starts_with("Net-(");
+        assert!(kicad, "{what}: {pins:?} is the intent's {intent}, traced as {name}");
+    }
+}
+
 fn drawn_nets(model: &ConstraintModel) -> BTreeMap<String, Vec<String>> {
     model
         .nets
@@ -229,7 +243,7 @@ fn pins_side_by_side_on_one_rail_share_a_power_symbol_beyond_the_parts_texts() {
 #[test]
 fn mcu30_module_sheets_trace_back_to_the_intent_nets() {
     let (model, d) = mcu30();
-    assert_eq!(traced(&model, &d), drawn_nets(&model));
+    assert_traces_back(&traced(&model, &d), &drawn_nets(&model), "mcu30");
 }
 
 #[test]
@@ -250,7 +264,7 @@ fn every_example_with_modules_traces_back_and_is_tidy() {
         let modules = infer_modules(&model, &[]);
         let d = derive_schematic_modules(&model, &opts()).unwrap_or_else(|e| panic!("{}: {e:?}", f.display()));
         let label = f.file_name().unwrap().to_string_lossy().to_string();
-        assert_eq!(traced(&model, &d), drawn_nets(&model), "{label}: the sheets do not trace back to the intent's nets");
+        assert_traces_back(&traced(&model, &d), &drawn_nets(&model), &label);
         assert_tidy(&model, &d, &label);
         if modules.len() >= 2 {
             hierarchical += 1;

@@ -799,7 +799,7 @@ fn traced(sch: &eda_model::ir::SchematicSection) -> Vec<(Vec<String>, Option<Str
     }
     let mut copy = sch.clone();
     let mut screens = vec![eda_engine::nets::ScreenIn { path: Vec::new(), sch: &mut copy, file: String::new(), pins }];
-    let naming = eda_engine::nets::Naming { wire_hints: false, ..Default::default() };
+    let naming = eda_engine::nets::Naming::default();
     let mut out: Vec<(Vec<String>, Option<String>)> = eda_engine::nets::trace_nets_with(&mut screens, &naming).into_iter().map(|t| (t.pins.clone(), t.driven.then(|| t.name.clone()))).collect();
     out.sort();
     out

@@ -311,6 +311,8 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let model = ConstraintModel { schema: eda_model::INTENT_SCHEMA_VERSION,
         parts,
         nets,
+        intent_net_names: Default::default(),
+        symbol_links: Default::default(),
         clusters: vec![],
         placement_rules: vec![],
         stackup: import_stackup(root),

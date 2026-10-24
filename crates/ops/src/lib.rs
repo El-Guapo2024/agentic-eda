@@ -75,7 +75,7 @@ pub use import_graphics::{board_items as graphics_board_items, GraphicsFormat, I
 mod import_graphics_sch;
 pub use import_graphics_sch::{sch_items as graphics_sch_items, symbol_items as graphics_symbol_items, ImportSchGraphics, ImportSymbolGraphics};
 mod fp_exchange;
-pub use fp_exchange::{board_footprint, footprint_name_of, pending_footprint_changes, BoardFootprint, ExchangeOptions, FootprintChange};
+pub use fp_exchange::{board_footprint, footprint_name_of, names_footprint_of, pending_footprint_changes, BoardFootprint, ExchangeOptions, FootprintChange};
 mod library_place;
 pub mod microwave;
 mod outline;

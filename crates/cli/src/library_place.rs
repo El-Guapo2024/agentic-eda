@@ -176,7 +176,7 @@ pub(crate) fn footprint_found<F: LibSource + ?Sized>(wanted: &str, id: &str, des
 fn exchange_for_field<F: LibSource + ?Sized>(id: &str, wanted: &str, design: &Design, model: &ConstraintModel, footprints: &F) -> Option<Cmd> {
     let wanted = wanted.trim();
     let part = model.part(id)?;
-    if wanted.is_empty() || footprint_name_of(part) == wanted {
+    if wanted.is_empty() || eda_ops::names_footprint_of(part, wanted) {
         return None;
     }
     // `replaceFootprint` does not change a locked footprint ("Could not change %s footprint from '%s' to '%s' (footprint is locked)."): Update PCB lists it

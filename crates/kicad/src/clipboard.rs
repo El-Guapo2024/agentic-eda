@@ -208,7 +208,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
     if picked.total() == 1 && picked.footprints.len() == 1 {
         let (part, footprint, moved) = fp_pieces(picked.footprints[0])?;
         let mut out = String::new();
-        write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, design, false, "", &FpExtra::of(design, &moved.id, &footprint));
+        write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, design, false, "", &FpExtra::of(design, &moved.id, &footprint), &Default::default());
         return Ok(out);
     }
 
@@ -245,7 +245,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
 
     for fp in &picked.footprints {
         let (part, footprint, moved) = fp_pieces(fp)?;
-        let uuid = write_footprint(&mut out, &moved, part, &footprint, &net_num, model, design, false, "", &FpExtra::of(design, &moved.id, &footprint));
+        let uuid = write_footprint(&mut out, &moved, part, &footprint, &net_num, model, design, false, "", &FpExtra::of(design, &moved.id, &footprint), &Default::default());
         written.entry(fp.id.clone()).or_default().push(uuid);
     }
     for t in &picked.tracks {

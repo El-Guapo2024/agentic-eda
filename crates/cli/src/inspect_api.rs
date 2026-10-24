@@ -186,7 +186,8 @@ mod tests {
         assert_eq!(page["resolutions"][0]["rule"], "netclass 'HV'");
         let lines = page["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n");
         assert!(lines.contains("<h7>Clearance resolution for:</h7>"), "{lines}");
-        assert!(lines.contains("Pad 1 [HV] of U1 on F.Cu [netclass HV and Default]") || lines.contains("Pad 1 [HV] of U1 on F.Cu [netclass HV"), "{lines}");
+        // the intent's HV is U1.1 alone: KiCad calls the net `unconnected-(U1-Pad1)`, and the class the intent put HV in has it
+        assert!(lines.contains("Pad 1 [unconnected-(U1-Pad1)] of U1 on F.Cu [netclass HV and Default]") || lines.contains("Pad 1 [unconnected-(U1-Pad1)] of U1 on F.Cu [netclass HV"), "{lines}");
         assert!(lines.contains("Resolved min clearance: 0.5 mm."), "{lines}");
         assert!(page["resolutions"][0]["considered"].as_array().unwrap().len() >= 3);
         // the same item twice is refused, as KiCad refuses it
@@ -250,14 +251,15 @@ mod tests {
         setup(&dir, 3_000_000, hv_rules(None));
         // a two-segment track on GND: 4 mm up, then 6 mm along
         let pts = vec![Point { x: 2_000_000, y: 2_000_000 }, Point { x: 2_000_000, y: 6_000_000 }, Point { x: 8_000_000, y: 6_000_000 }];
-        board::step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 250_000, pts }, false, "test").unwrap();
+        // the intent's GND is U1.2 alone, which KiCad calls `unconnected-(U1-Pad2)`
+        board::step(&dir, Cmd::AddTrack { net: "unconnected-(U1-Pad2)".into(), layer: "F.Cu".into(), width: 250_000, pts }, false, "test").unwrap();
         let (_, design, _) = board::load(&dir).unwrap();
         let id = design.routing.unwrap().tracks[0].id.clone();
         let first = clearance(&dir, &body(json!({"a": "U1.1", "b": id, "b_at": [2.0, 3.0]})));
         let second = clearance(&dir, &body(json!({"a": "U1.1", "b": id, "b_at": [6.0, 6.0]})));
         let text = |r: &Value| r["pages"][0]["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n");
-        assert!(text(&first).contains("Track [GND] on F.Cu, length 4.0000 mm [netclass Default]"), "{}", text(&first));
-        assert!(text(&second).contains("Track [GND] on F.Cu, length 6.0000 mm [netclass Default]"), "{}", text(&second));
+        assert!(text(&first).contains("Track [unconnected-(U1-Pad2)] on F.Cu, length 4.0000 mm [netclass Default]"), "{}", text(&first));
+        assert!(text(&second).contains("Track [unconnected-(U1-Pad2)] on F.Cu, length 6.0000 mm [netclass Default]"), "{}", text(&second));
         // with no point: the first segment
         let none = clearance(&dir, &body(json!({"a": "U1.1", "b": id})));
         assert!(text(&none).contains("length 4.0000 mm"), "{}", text(&none));
@@ -273,14 +275,14 @@ mod tests {
         assert!(t.contains("Resolved width constraints: min 7.87402 mils; opt 7.87402 mils; max <i>undefined</i>."), "{t}");
         assert!(t.contains("length 157.48 mils"), "a track's description is in the frame's units too: {t}");
         // a via: the pages of a via, its description by its layers
-        board::step(&dir, Cmd::AddVia { net: "GND".into(), x: 9_000_000, y: 3_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        board::step(&dir, Cmd::AddVia { net: "unconnected-(U1-Pad2)".into(), x: 9_000_000, y: 3_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
         let (_, design, _) = board::load(&dir).unwrap();
         let via = design.routing.unwrap().vias[0].id.clone();
         let v = constraints(&dir, &body(json!({"item": via})));
         let vt: Vec<_> = v["pages"].as_array().unwrap().iter().map(|p| p["title"].as_str().unwrap().to_string()).collect();
         assert_eq!(vt, ["Via Diameter", "Via Annular Width", "Hole Size", "Solder Mask", "Keepouts", "Assertions"], "{v}");
         let head = v["pages"][0]["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n");
-        assert!(head.contains("Via [GND] on all copper layers [netclass Default]"), "{head}");
+        assert!(head.contains("Via [unconnected-(U1-Pad2)] on all copper layers [netclass Default]"), "{head}");
         // the via and a pad: the hole pages come with them
         let hv = clearance(&dir, &body(json!({"a": via, "b": "U1.1"})));
         let titles: Vec<_> = hv["pages"].as_array().unwrap().iter().map(|p| p["title"].as_str().unwrap().to_string()).collect();

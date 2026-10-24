@@ -118,7 +118,68 @@ struct Laid {
     edges: Vec<(String, Vec<String>, Vec<graph::Point>)>,
 }
 
+/// The model a schematic is drawn from, and the way back: its nets under the names the intent gave them (`ConstraintModel::intent_net_names`), which the
+/// labels, sheet pins and power symbols drawn for them show; `None` when every net already has that name. The map goes from the intent's name to the
+/// net's own (KiCad's) one, for the wires of what was drawn ([`name_drawn_wires`]).
+///
+/// A net the loader did not rename but whose name is KiCad's name of a label (`/MCU/RESET`: a design's own net list, read from a drawing) is drawn
+/// with the label's text (`RESET`), when no other net would be drawn with it: KiCad's name of what is drawn is then the same text under the new sheet's
+/// path.
+pub fn drawn_names(model: &ConstraintModel) -> Option<(ConstraintModel, BTreeMap<String, String>)> {
+    let label_text = |name: &str| -> Option<String> {
+        if let Some(intent) = model.intent_net_names.get(name) {
+            return Some(intent.clone());
+        }
+        let rest = name.strip_prefix('/')?;
+        rest.rsplit('/').next().filter(|t| !t.is_empty()).map(str::to_string)
+    };
+    let mut texts: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for n in &model.nets {
+        if let Some(t) = label_text(&n.name).filter(|t| *t != n.name) {
+            texts.entry(t).or_default().push(n.name.as_str());
+        }
+    }
+    let own: BTreeSet<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+    // a text two nets would share, or that another net already has, is no way back
+    let back: BTreeMap<String, String> = texts.into_iter().filter(|(t, names)| names.len() == 1 && !own.contains(t.as_str())).map(|(t, names)| (t, names[0].to_string())).collect();
+    if back.is_empty() {
+        return None;
+    }
+    let forth: BTreeMap<&str, &str> = back.iter().map(|(t, n)| (n.as_str(), t.as_str())).collect();
+    let mut drawn = model.clone();
+    drawn.intent_net_names.clear();
+    for n in drawn.nets.iter_mut() {
+        if let Some(t) = forth.get(n.name.as_str()) {
+            n.name = (*t).to_string();
+        }
+    }
+    Some((drawn, back))
+}
+
+/// What [`drawn_names`] took off a drawing put back on its wires: each wire carries its net's own name, the label's text staying on the label.
+pub fn name_drawn_wires(design: &mut Design, back: &BTreeMap<String, String>) {
+    let sections = design.schematic.iter_mut().chain(design.sheet_contents.iter_mut().flat_map(|c| c.values_mut()));
+    for sec in sections {
+        for w in sec.wires.iter_mut() {
+            if let Some(n) = back.get(&w.net) {
+                w.net = n.clone();
+            }
+        }
+    }
+}
+
+/// [`derive_schematic_drawn`] from the names the intent gave the nets ([`drawn_names`]).
 pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result<Design, Vec<CheckResult>> {
+    match drawn_names(model) {
+        Some((drawn, back)) => derive_schematic_drawn(&drawn, opts).map(|mut d| {
+            name_drawn_wires(&mut d, &back);
+            d
+        }),
+        None => derive_schematic_drawn(model, opts),
+    }
+}
+
+fn derive_schematic_drawn(model: &ConstraintModel, opts: &EngineOptions) -> Result<Design, Vec<CheckResult>> {
     let mut errors = Vec::new();
 
     // Validate reference uniqueness.
