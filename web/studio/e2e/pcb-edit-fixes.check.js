@@ -163,6 +163,56 @@
       t((await snapshot()) === base, "undone, the board is as it was");
     });
 
+    // ----- p6 F10, F18
+    await scenario("a locked zone has no handles, a double click on a zone's edge opens its properties, and L locks a group", async (t) => {
+      toScreen = (await screenOf()) ?? toScreen;
+      const net = two.pads.find((q) => q.net)?.net;
+      const [zx, zy] = [two.at[0] / 1e6 + 6, two.at[1] / 1e6 - 10];
+      const mm = (x, y) => ({ x: Math.round(x * 1e6), y: Math.round(y * 1e6) });
+      await post({ op: "add_zone", net, layer: "B.Cu", outline: [mm(zx, zy), mm(zx + 6, zy), mm(zx + 6, zy + 4), mm(zx, zy + 4)] });
+      await sleep(500);
+      const zone = ((await state()).routing?.zones ?? []).find((z) => z.outline[0][0] === mm(zx, zy).x && z.outline[0][1] === mm(zx, zy).y);
+      t(!!zone, "a zone drawn");
+      if (!zone) return;
+      await select([zone.id]);
+      await __eda.run("pcbnew.EditorControl.lock"); await sleep(600);
+      t(((await state()).locked ?? []).includes(zone.id), "L locks it");
+      await select([zone.id]);
+      const [cx, cy] = toScreen(zx + 6, zy + 4);
+      const [dx, dy] = toScreen(zx + 8, zy + 6);
+      fire("pointermove", cx, cy); await sleep(120);
+      fire("pointerdown", cx, cy, { buttons: 1 }); await sleep(80);
+      for (let i = 1; i <= 6; i++) { fire("pointermove", cx + ((dx - cx) * i) / 6, cy + ((dy - cy) * i) / 6, { buttons: 1 }); await sleep(60); }
+      fire("pointerup", dx, dy); await sleep(1000);
+      const z1 = ((await state()).routing?.zones ?? []).find((z) => z.id === zone.id);
+      t(!!z1 && JSON.stringify(z1.outline) === JSON.stringify(zone.outline), "dragging a corner of the locked zone changes nothing");
+      await escape();
+      await select([zone.id]);
+      const [ex, ey] = toScreen(zx + 3, zy);
+      fire("pointermove", ex, ey); await sleep(120);
+      canvasBox().querySelector("canvas")?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: canvasBox().getBoundingClientRect().left + ex, clientY: canvasBox().getBoundingClientRect().top + ey }));
+      (canvasBox().querySelector("canvas") ? null : canvasBox().dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: canvasBox().getBoundingClientRect().left + ex, clientY: canvasBox().getBoundingClientRect().top + ey })));
+      await sleep(800);
+      const z2 = ((await state()).routing?.zones ?? []).find((z) => z.id === zone.id);
+      t(!!z2 && z2.outline.length === 4, `the double click added no corner (${z2 ? z2.outline.length : "gone"})`);
+      t(!!document.querySelector('[data-testid="zone-dialog"]'), "it opened the zone's properties");
+      await closeDialogs();
+      // L on a group
+      const seg = (y) => ({ kind: "segment", layer: "F.SilkS", stroke_width: 150_000, filled: false, start: mm(zx, y), end: mm(zx + 3, y) });
+      const before = new Set(((await state()).drawings?.shapes ?? []).map((s) => s.id));
+      await post({ op: "add_shape", shape: seg(zy + 7) });
+      await post({ op: "add_shape", shape: seg(zy + 8) });
+      const mine = ((await state()).drawings?.shapes ?? []).filter((s) => !before.has(s.id)).map((s) => s.id);
+      await post({ op: "group", ids: mine });
+      await sleep(400);
+      const g = ((await state()).drawings?.groups ?? []).find((x) => x.member_ids.includes(mine[0]));
+      await select([g.id]);
+      await __eda.run("pcbnew.EditorControl.lock"); await sleep(600);
+      t(((await state()).locked ?? []).includes(g.id), `L locks the group (${(await state()).locked})`);
+      for (let i = 0; i < 8 && (await snapshot()) !== base; i++) await undo();
+      t((await snapshot()) === base, "undone, the board is as it was");
+    });
+
     // ----- p6 F2
     await scenario("a handle drag of a grouped line and Mirror of a grouped track keep them in their group", async (t) => {
       const [x0, y0] = [two.at[0] / 1e6 + 4, two.at[1] / 1e6 + 6];

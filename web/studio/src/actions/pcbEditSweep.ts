@@ -32,6 +32,7 @@ import { registerPcbMultichannelActions } from "./pcbMultichannelActions";
 import { registerPcbAssignNetclass } from "./assignNetclass";
 import { DEFAULT_FILTER_OPTIONS, filterSelection, netItems, netsOfItems, unrouteSelected, type FilterOptions } from "../kicad-port/pcbSelectionOps";
 import { itemKind } from "../kicad-port/pcbItems";
+import { isLocked } from "../kicad-port/pcbTransform";
 import { mirrorReferencePoint, mirrorableIds, planMirror, type FlipDirection } from "../kicad-port/pcbMirror";
 import { modifyResultCmds } from "../kicad-port/shapeFill";
 import { healShapes, isLineModifiable, lineSelectionError, modifyLines, simplifyPolygonRing, type LineRoutine, type ModifyResult } from "../kicad-port/pcbModify";
@@ -199,9 +200,11 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
         const k = itemKind(board, id);
         return k === "track" || k === "via" || k === "zone" || k === "shape" || k === "text" || k === "group";
       });
-      const items = mirrorableIds(board, ids).filter((id) => !lockedIds.has(id));
+      // `FilterCollectorForLockedItems`: an item that is locked, in a locked group, or a group with a locked item in it, is left out -- then its members.
+      const free = ids.filter((id) => !isLocked(board, id));
+      const items = mirrorableIds(board, free).filter((id) => !lockedIds.has(id) && !isLocked(board, id));
       if (items.length === 0) return;
-      let centre = mirrorReferencePoint(board, ids);
+      let centre = mirrorReferencePoint(board, free);
       if (!centre) return;
       // `updateModificationPoint`: several items mirror about the centre of the selection moved to the best snap anchor (anchors, else the grid).
       if (ids.length > 1) centre = modificationSnapFor(state)(centre);

@@ -22,7 +22,7 @@ import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
 import { drawStrokeWidthNm } from "../../kicad-port/layerDefaults";
 import { activeLayerName } from "../../kicad-port/layerPresets";
-import { carryStart } from "../../kicad-port/pcbTransform";
+import { carryStart, isLocked } from "../../kicad-port/pcbTransform";
 import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
 import { EXTRA_KINDS, extraItemLabel } from "../../kicad-port/pcbExtraItems";
 import { fieldById } from "../../kicad-port/fpFields";
@@ -71,7 +71,7 @@ import { useActionRunner } from "../../actions/useActionRunner";
 import { SchContextMenu } from "../schematic/SchContextMenu";
 import { buildPcbMenu } from "./pcbMenuBuilder";
 import type { MenuNode } from "../../kicad/types";
-import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner } from "../../kicad-port/zonePointEditor";
+import { findNearestCorner, moveCorner } from "../../kicad-port/zonePointEditor";
 import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
@@ -910,7 +910,8 @@ export function Canvas() {
     if (board && e.button === 0 && !e.altKey && state.activeTool === "select" && state.selection.size === 1) {
       const soleId = [...state.selection][0]!;
       const zone = api.zoneById(soleId);
-      if (zone) {
+      // `PCB_POINT_EDITOR::OnSelectionChange`: `if( !item || item->IsLocked() ) return 0;` -- a locked zone (or one in a locked group) has no handles.
+      if (zone && !isLocked(board, zone.id)) {
         const idx = findNearestCorner(zone.outline, wx, wy, zoneCornerToleranceNm(state.view.scale));
         if (idx != null) {
           dragRef.current = { kind: "zoneCorner", zoneId: zone.id, cornerIndex: idx, baseOutline: zone.outline };
@@ -1450,25 +1451,8 @@ export function Canvas() {
       showDrcInDialog({ api, dispatch }, "violations", markerHit);
       return;
     }
-    // pcb_point_editor.cpp: double-clicking a single selected zone's edge
-    // (not one of its corners -- grabbing a corner is onPointerDown's own
-    // drag-start check, above) adds a new corner there.
-    if (state.activeTool === "select" && state.selection.size === 1) {
-      const zone = api.zoneById([...state.selection][0]!);
-      if (zone) {
-        const [wx, wy] = worldAt(e);
-        const toleranceNm = zoneCornerToleranceNm(state.view.scale);
-        if (findNearestCorner(zone.outline, wx, wy, toleranceNm) == null) {
-          const insertAt = findNearestEdgeInsertionIndex(zone.outline, wx, wy, toleranceNm);
-          if (insertAt != null) {
-            const [sx, sy] = snap.align("insert", [wx, wy], snapMods(e), "current");
-            const next = insertCorner(zone.outline, insertAt, sx, sy);
-            api.cmd({ op: "set_zone_outline", id: zone.id, outline: next.map(([x, y]) => ({ x, y })) });
-            return;
-          }
-        }
-      }
-    }
+    // A double click on a selected zone's edge opens the zone's properties, as on any item: KiCad's point editor has no double-click (`PCB_SELECTION_TOOL::Main`'s
+    // `IsDblClick` opens the item's properties); a corner is added with Create Corner (Insert, `pcbnew.PointEditor.addCorner`).
     let refs = [...state.selection];
     if (refs.length === 0) {
       const [wx, wy] = worldAt(e);

@@ -1685,8 +1685,13 @@ export function useActionRunner() {
       // ---- toggleLock / lock / unlock -- board_editor_control.cpp BOARD_EDITOR_CONTROL::modifyLockSelected
       const modifyLock = (mode: "toggle" | "on" | "off") =>
         pcbOnly(() => {
-          // A selection that is empty falls back to selectionCursor (the item under the cursor). Free pads are never locked (n/a here: no free pads).
-          const ids = requestSelection().filter((id) => Boolean(api.partByRef(id)?.placed || api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id) || (extraItemById(board, id) && extraItemById(board, id)!.kind !== "point")));
+          // A selection that is empty falls back to selectionCursor (the item under the cursor). Every `BOARD_ITEM` but a pad: groups, dimensions and tables
+          // too (`set_locked` takes them); a point has no lock in the file.
+          const lockable = (id: string) => {
+            const k = board ? itemKind(board, id) : null;
+            return k === "group" || k === "dimension" || k === "table";
+          };
+          const ids = requestSelection().filter((id) => Boolean(api.partByRef(id)?.placed || api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id) || lockable(id) || (extraItemById(board, id) && extraItemById(board, id)!.kind !== "point")));
           if (ids.length === 0) return;
           const locked = mode === "toggle" ? resolveToggleLock(ids, lockedSet) : mode === "on";
           void api.cmd({ op: "set_locked", ids, locked });
