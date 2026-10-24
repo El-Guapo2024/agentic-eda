@@ -1,19 +1,21 @@
-# Handoff: the KiCad port, 2026-10-22
+# Handoff: the KiCad port, 2026-10-23 (paused by the user)
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
 ## Where it stands
 
-- `main` is green (see "Gates" for the last run) and pushed to GitHub.
-- 682 of KiCad's 766 editor actions are wired: pcbnew 322/350, eeschema 197/233, common 163/183 (`docs/parity/UI-ACTIONS.md`).
-- Of the 84 that are not, 44 are kept out on purpose, each with its reason in `web/studio/tools/ui-parity-missing.json`, and 40 are still to do (below).
-- A real KiCad board brought through the studio gives kicad-cli's DRC the same findings as the original on all 12 QA boards, in both file formats (`docs/parity/REPORT.md` section 2).
+- **Paused on 2026-10-23 at the user's request.** `main` (this commit) is green and pushed: `tools/check.sh fast` Rust 3627 passed, web 2449, and `tools/run-all-checks.sh` 42/42 browser checks (see "Gates").
+- 738 of KiCad's 785 editor actions are wired: pcbnew 346/369, eeschema 220/233, common 172/183 (`docs/parity/UI-ACTIONS.md`). The other 47 each carry a reason in `web/studio/tools/ui-parity-missing.json`.
+- Every task of the 2026-10-21 list is merged (below), and so are function-by-function reviews against KiCad's source of every port merged on 10-23, plus the library editors (P3/P17) and the schematic core (P4/P10).
+- **In progress:** `task-nanometres`, the IR's lengths from µm to KiCad's nm (the user's decision, 2026-10-23). Not merged and not gated: see "Open branches".
+- **Found, not fixed:** findings-only reviews of every other package, in `docs/parity/findings/` (`INDEX.md`: 39 high, 87 medium, 71 low, in six fix batches A–F).
+- A real KiCad board brought through the studio gives kicad-cli's DRC the same findings as the original on all 12 QA boards (`docs/parity/REPORT.md` section 2); connectivity agrees with kicad-cli on 97.8% of counts over 186 boards.
 - The rules that don't change:
   - `design.json` plus the intent is the only source of truth; KiCad files are derived from it.
   - kicad-cli is the only DRC, ERC, plot, export and zone-fill engine.
   - Every edit is one undoable `/api/cmd` verb.
 
-## What landed (2026-10-14 to 10-22)
+## What landed (2026-10-14 to 10-23)
 
 Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` section.
 
@@ -54,12 +56,9 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 ## Open branches (on GitHub, not merged)
 
-None after 2026-10-23's merges, apart from those started below.
-
-Each was cut from an older main. Merge `main` into it first.
-
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-nanometres` (worktree `~/work/agentic-eda-specctra` on the box) | The IR's lengths in KiCad's integer nanometres (`Nm`); `design.json` schema 2, with old µm files and `.history` migrated on load (×1000, once). The plan, every field and boundary, and the schematic's 100 nm unit are in `docs/NANOMETRES.md` on the branch. | Converted and committed: model, kicad readers and writers (exact), drc, engine, layout, connectivity, place, freeroute, gates, lint, pns (KiCad's own tolerances back), render, judge, grid, interchange, cypress, intent, bench, kicad-engine, ops, the cli server. The last commit `0f5a248` is a WIP: the cli tests' literals and the web studio's conversion (363 files) as they were when paused, **unverified**. | Finish the cli tests and `web/studio`, then every gate: cargo check, `check.sh fast`, the slow tier with `KICAD_QA_DATA` set (the `crates/pns` replays skip silently without it), `parity_report.py` (re-export 12/12, connectivity at least 97.8%, raise the floor), `run-all-checks.sh` 42/42, and the migration test (a board saved by main's binary loads with every length ×1000 and the same kicad-cli DRC). Merge nothing cut before it without converting its unit literals. |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -68,18 +67,20 @@ Gates for any of them:
 4. If the readers or writers changed, the 12-board re-export with a private `TMPDIR`: `EDA_SLOW_TESTS=1 EDA_PARITY_PARTS=reexport python3 tools/parity_report.py`.
 5. The browser check: `web/studio/e2e/<name>.check.js`, pasted into a served page and run through `window.__eda`.
 
-## Next tasks, in order (the user's decisions of 2026-10-21)
+## Next tasks, in order (the user's decisions of 2026-10-23)
 
-1. ~~**Finish Specctra**~~ merged 2026-10-23 (`9cd36d7`).
-2. ~~**Finish embedded files**, then merge `task-pad-details-wip`~~ both merged 2026-10-23.
-3. ~~**The simulator**~~ merged 2026-10-23. (P21; 32 rows of `ui-parity-missing.json`): `kicad-cli sch export netlist --format spice`, then ngspice (`ngspice -b`, or libngspice), parsed into a Simulation panel. ngspice is a separate program, not a crate. KiCad bundles libngspice; on the box, `sudo apt-get install ngspice`. Port the panels from `eeschema/sim/`.
-4. ~~**The graphical rule editor**~~ merged 2026-10-23. (P9b, `pcbnew.DRETool.drcRuleEditor`), after the simulator. Custom Rules is edited as text today.
-5. **Details** listed in `GAPS.md`:
-   - ~~the router: springback, rounded corners, virtual vias~~ merged 2026-10-23 (left: springback in the dragger and the pair placer);
-   - ~~the schematic: copying and pasting whole sheets, buses across sheets, a label's own fields~~ merged 2026-10-23;
-   - ~~KiCad 10 items the reader skips~~ merged 2026-10-23;
-   - ~~browser checks for the older areas (P20)~~ merged 2026-10-23: `tools/run-all-checks.sh` runs all 42, 42/42.
-   - ~~re-running `tools/parity_report.py`~~ merged 2026-10-23: the connectivity set is fixed at 186 boards, 97.8%.
+The 2026-10-21 list is done: Specctra, embedded files and the pad-details fix, the simulator, the rule editor, the router details, the schematic details, the KiCad 10 items, P20's browser checks, and the connectivity measure (each row under "What landed").
+
+1. **Finish `task-nanometres`** (above), gate it and merge it.
+2. **Fix the findings, batch by batch, from the new main** (`docs/parity/findings/INDEX.md`). Each batch's findings carry our `file:line`, KiCad's function, a repro and the failing test to write. A–D can run in parallel, then E and F.
+   - **A. KiCad compatibility of what we derive (first).** Today a studio project opened in KiCad and updated from its schematic (F8) renames every net and duplicates every footprint. **The user chose (2026-10-23) KiCad's own net names everywhere, the studio's display included**: `/sheet/NAME`, `/NAME` on a flat sheet, `Net-(REF-PadN)` unlabelled; global and power names unchanged. Also: one footprint name everywhere (the installed KiCad footprint), the footprint-to-symbol `(path ...)` link, symbol fields on footprints, `pinfunction`/`pintype`, the flipped footprint's frame. Prove it: kicad-cli's `--schematic-parity` DRC on the examples finds 0 differences (it finds 76 on mcu30 today).
+   - **B. Board reader and writer losses:** zones with holes read as two zones, SMD pads on `*.Cu`, paste-only pads, curves with a control point on an end, footprint Edge.Cuts, rectangle corner radius, Extruded 3D Body, importers' `.kicad_dru`, a project's DRC/ERC exclusions.
+   - **C. Teardrops:** Fill All and every refill before DRC or a plot wipe every teardrop's fill.
+   - **D. Schematic connectivity:** buses joined by a shared member name, hidden power pins, `${#}` per placement, bus aliases, unit-0 pins, the ERC exclusion key on shared sheets.
+   - **E. Router:** the walk-around detour, lost end vias, Walk-around via violations, Esc discarding fixed segments, the diff-pair gap, and the replay tests' macOS default path.
+   - **F. Editing:** point edit and Mirror dropping items from groups, footprint bounding boxes, the carry's rotate pivot, Position Relative's angle, Recombine, Repeat Layout's nets and groups, design-block copper, the Net Inspector.
+   - Then the mediums and lows, and the wrong doc claims listed at the end of `INDEX.md`.
+3. **Leftovers named in the merges** (each in GAPS.md): springback in the dragger and the pair placer, a shared screen inside a shared screen, the Symbol Editor's pin and New Symbol dialogs, Both sides placement files, the checks P20 left uncovered.
 
 TODO (the user, 2026-10-23: not now): check the kicad-cli fallbacks on a kicad-cli without `pcb export specctra`, `idf` or `gencad` (the Mac's 10.99.0-5334); delete the deprecated Specctra exporter once every machine has the command (scope in GAPS.md P19).
 
@@ -121,13 +122,19 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
 - **Never commit `web/studio/node_modules`:** it can be a symlink to another checkout. Add files by explicit path.
 - **Browser checks** need a browser on a served board (`target/debug/eda board serve -C <dir> --port <p> --ui web/studio/dist`, after `npm run build`). On the box, Playwright and Chromium are installed outside the repo (`~/tools/pw`, 2026-10-23): `PLAYWRIGHT_MODULE=~/tools/pw/node_modules/playwright/index.mjs node web/studio/e2e/run-check.mjs http://localhost:<p>/ web/studio/e2e/<name>.check.js [minutes]` runs one check and exits 0 when it passes (pad-details: 10/10). `tools/run-all-checks.sh [-j N] [name ...]` runs all of them (or some), each on a fresh copy of the board its header names (`// run-all-checks: board=...`), on ports 8810-8814. A board copied in by hand (`cp design.json`) is an undoable "changed outside a command" step: clear its `.history` first, or a check's undo-until-clean loop unplaces the board.
 
+- **Agents sharing the box:** give each its own scratch directory and its own port range, and kill only processes it started. Never use `pkill -f` with a pattern that also matches your own shell's command line: it kills that shell. Check a port is free (`ss -ltn`) before serving: two agents once drove each other's studios.
+
 ## Not in git (what a fresh session may need)
 
 - **The KiCad source:** the port reads it, and the slow tests take their QA boards from `qa/data`.
-  - The Mac has commit `8303b2ad` at `~/ws/kicad-src-8303b2ad` (544 MB). The box has none, so copy it or clone KiCad at `8303b2ad`.
-  - Set `KICAD_SRC_DIR` to it.
-- **The agent briefs:** the brief template, the task briefs and a stall watch are on the Mac in `.claude/briefs/`. Their task texts are summarised above; the template's rules are under "How the work was run".
-- **The user's boards in `work/`** (for example `work/mcu30`, which the studio on 8766 serves) are the user's own and not needed for development. Its J1 drag from 10-07 left broken nets; don't undo or reorganize it without asking the user.
+  - On the box: `~/src/kicad-src-8303b2ad` (`KICAD_SRC_DIR`; its macOS `._*` files were deleted, they broke `tools/parity_report.py`), and `~/src/kicad-src-25ec2335`, the box kicad-cli's commit, for KiCad 10 items newer than 8303b2ad (cited as "KiCad 25ec2335").
+  - On the Mac: `~/ws/kicad-src-8303b2ad`.
+  - `tools/parity_report.py` and the slow tests need `KICAD_QA_DATA=$KICAD_SRC_DIR/qa/data`.
+- **Tools installed on the box, outside the repo:**
+  - Playwright + Chromium in `~/tools/pw` (`PLAYWRIGHT_MODULE=~/tools/pw/node_modules/playwright/index.mjs`) for `web/studio/e2e/run-check.mjs` and `tools/run-all-checks.sh`.
+  - ngspice 42 extracted to `~/tools/ngspice`, linked at `~/.local/bin/ngspice`. apt's ngspice conflicts with the nightly's `libngspice-kicad`, so don't apt-install it.
+- **Agent briefs:** `docs/agent-briefs/common.md` (the rules every port agent got) and `findings.md` (the findings-only reviews). One worktree and one agent per task, each brief starting from `common.md`.
+- **The user's boards in `work/`** are the user's own and not needed for development. The real ones are on the Mac; the box's `work/mcu30` is a near-empty scratch, backed up in `~/backups/` before the nanometre work. Don't undo or reorganize them without asking. After `task-nanometres` merges, they are migrated on first load, one way.
 
 ## Gates of the last main
 
