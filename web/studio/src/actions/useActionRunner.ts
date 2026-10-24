@@ -828,7 +828,7 @@ export function useActionRunner() {
       // `drag_start` silently replaces it. One backend call covers both
       // kinds (`POST /api/route/cancel` drops whatever's active on the
       // shared `Router`), so route/drag/diff-pair all share this one branch.
-      if (state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair") cancelInteractiveRoute(dispatch);
+      if (state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair") cancelInteractiveRoute(dispatch, api);
       // `PlaceTuningPattern`: Escape drops the pattern being placed (or the edit of one) and the tool goes on; with none started it leaves the tool (the ESCAPE below).
       if (state.activeTool === "tune" && cancelTune(state, dispatch)) return;
       // RouteSelected's loop (`m_cancelled = true` when Escape arrives while `m_inRouteSelected`): the whole run ends and the tool is popped.

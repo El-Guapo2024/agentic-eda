@@ -488,6 +488,37 @@ impl Router {
         Some(commit)
     }
 
+    /// `ROUTER::CommitRouting()` where the route ends without a last fix -- Esc, or a finish that was refused because the head still collides
+    /// (`router_tool.cpp::performRouting`: the cancel branch only does `break;`, the finish branch `FixRoute( .. ); break;`, and after the loop
+    /// `m_router->CommitRouting()`): what the clicks have fixed is committed, as `LINE_PLACER::CommitPlacement` / `DIFF_PAIR_PLACER::CommitPlacement`
+    /// commit `m_lastNode`, and the session ends. `None` when nothing was fixed ("`if( m_state == ROUTE_TRACK && !m_placer->HasPlacedAnything() )
+    /// return;`"), or no route or pair is in progress.
+    pub fn commit_fixed(&mut self) -> Option<RouteCommit> {
+        if let Some(dp) = self.diff.as_mut() {
+            let c = dp.commit();
+            self.diff = None;
+            if c.legs.is_empty() {
+                return None;
+            }
+            let mut commit = self.build_dp_commit(&c);
+            self.drop_redundant(&mut commit);
+            return Some(commit);
+        }
+        let s = self.session.as_mut()?;
+        let runs = s.placer.commit_fixed();
+        if runs.is_empty() && s.placer.fixed_vias.is_empty() {
+            self.session = None;
+            return None;
+        }
+        let (net, layer, width) = (s.placer.net.clone(), s.placer.current_layer, s.placer.width);
+        let mut commit = self.build_commit(&net, runs, layer, width);
+        let splits = self.session_splits(true);
+        self.apply_splits(&splits, &mut commit);
+        self.drop_redundant(&mut commit);
+        self.session = None;
+        Some(commit)
+    }
+
     /// The tracks the session cuts: the one it started in the middle of, and -- once it has ended there -- the one it ended in the
     /// middle of (`Move`: `SplitAdjacentSegments( m_lastNode, aEndItem, splitPoint )`, which does nothing where a joint already is).
     fn session_splits(&self, with_end: bool) -> Vec<TrackSplit> {

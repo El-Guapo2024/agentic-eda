@@ -760,6 +760,18 @@ impl LinePlacer {
         Some(self.placed_runs())
     }
 
+    /// `LINE_PLACER::CommitPlacement` without a last `FixRoute` (Esc, or a finish that was refused: `router_tool.cpp::performRouting` ends
+    /// every way out of its loop with `m_router->CommitRouting()`): what the clicks fixed -- the runs, the vias, and the shoves the clicks
+    /// locked (`m_shove->RewindToLastLockedNode(); m_lastNode = m_shove->CurrentNode()`), not the head's. Ends the placement.
+    pub fn commit_fixed(&mut self) -> Vec<Line> {
+        let world = self.springback.borrow().locked_top();
+        self.take_displacement(&world);
+        *self.last_world.borrow_mut() = world;
+        self.idle = true;
+        self.placing_via = false;
+        self.placed_runs()
+    }
+
     /// `LINE_PLACER::removeLoops`, adapted to this port's "one commit per
     /// whole finished connection" granularity (`crate::router`'s own doc
     /// comment on why a multi-run, via-switching session still becomes one

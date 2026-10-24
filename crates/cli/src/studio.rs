@@ -967,7 +967,7 @@ fn handle(
         ("POST", "/api/route/via") => respond(stream, "200 OK", "application/json", route_api::via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/finish") => respond(stream, "200 OK", "application/json", route_api::finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/continue_from_end") => respond(stream, "200 OK", "application/json", route_api::continue_from_end(dir, route_session, &body).to_string().as_bytes()),
-        ("POST", "/api/route/cancel") => respond(stream, "200 OK", "application/json", route_api::cancel(route_session).to_string().as_bytes()),
+        ("POST", "/api/route/cancel") => respond(stream, "200 OK", "application/json", route_api::cancel(dir, route_session).to_string().as_bytes()),
         ("POST", "/api/route/mode") => respond(stream, "200 OK", "application/json", route_api::set_mode(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/settings") => respond(stream, "200 OK", "application/json", route_api::set_settings(route_session, &body).to_string().as_bytes()),
         // D (stage 5): drag an existing track segment/corner or via,

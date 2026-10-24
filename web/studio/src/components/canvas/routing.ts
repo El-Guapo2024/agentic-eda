@@ -95,13 +95,15 @@ export async function continueInteractiveRouteFromEnd(at: [number, number], draw
 }
 
 /** Esc while routing (or dragging -- `routeCancel`'s own doc comment:
- * `POST /api/route/cancel` drops whatever session is active on the shared
- * `Router`, a route or a drag alike): cancel server-side (fire-and-forget
- * -- the UI doesn't need to wait for the ack) and clear the local preview
- * immediately. */
-export function cancelInteractiveRoute(dispatch: Dispatch<Action>): void {
-  void routeCancel();
+ * `POST /api/route/cancel` ends whatever session is active on the shared
+ * `Router`, a route or a drag alike): clear the local preview immediately
+ * and end the session server-side. A route or a pair commits what its
+ * clicks fixed there (`ROUTER_TOOL::performRouting`: the cancel branch
+ * breaks out of the loop and `CommitRouting()` follows), so the board is
+ * refreshed when the reply says something was committed. */
+export function cancelInteractiveRoute(dispatch: Dispatch<Action>, api?: Pick<StudioApi, "refresh">): void {
   dispatch({ type: "SET_DRAW_STATE", draw: null });
+  void routeCancel().then((reply) => (reply.committed && api ? api.refresh() : undefined));
 }
 
 export interface RouteAnchor {

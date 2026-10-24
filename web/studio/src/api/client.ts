@@ -579,7 +579,8 @@ export function routeFinish(x: Nm, y: Nm): Promise<CmdReply> {
   return postJson("/api/route/finish", { x, y });
 }
 
-export function routeCancel(): Promise<{ ok: boolean }> {
+/** Esc: a route or a pair commits what its clicks fixed (`committed`); a drag leaves the board as it was. */
+export function routeCancel(): Promise<{ ok: boolean; committed?: boolean }> {
   return postJson("/api/route/cancel", {});
 }
 
