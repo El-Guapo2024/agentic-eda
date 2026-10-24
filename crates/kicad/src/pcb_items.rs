@@ -192,11 +192,14 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
     }
     writeln!(out, ")").unwrap();
 
-    writeln!(out, "\t\t(polygon (pts").unwrap();
-    for p in &z.outline {
-        writeln!(out, "\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
+    // `SHAPE_POLY_SET::POLYGON poly = aZone->Outline()->Polygon(0); for( const SHAPE_LINE_CHAIN& chain : poly )`: the outline, then each of its holes.
+    for ring in std::iter::once(&z.outline).chain(z.holes.iter().filter(|h| h.len() >= 3)) {
+        writeln!(out, "\t\t(polygon (pts").unwrap();
+        for p in ring {
+            writeln!(out, "\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
+        }
+        writeln!(out, "\t\t))").unwrap();
     }
-    writeln!(out, "\t\t))").unwrap();
 
     if !rule_area {
         // `for( PCB_LAYER_ID layer : aZone->GetLayerSet().Seq() )`: each layer's fill, in `PCB_LAYER_ID` order.

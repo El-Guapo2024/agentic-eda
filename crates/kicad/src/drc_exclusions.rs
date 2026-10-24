@@ -103,7 +103,7 @@ pub fn error_type(check: &str) -> Option<&'static str> {
 
 /// The checks whose marker also carries the layer it is on, which a report does not say (`DRCE_COPPER_SLIVER`, `DRCE_STARVED_THERMAL`,
 /// `DRCE_GENERIC_WARNING`, `DRCE_GENERIC_ERROR`) and the drawing-sheet variable check, whose items are not preserved between runs.
-const LAYERED: &[&str] = &["copper_sliver", "starved_thermal", "generic-warning", "generic-error", "unresolved_variable"];
+const LAYERED: &[&str] = &["copper_sliver", "starved_thermal", "generic_warning", "generic_error", "unresolved_variable"];
 
 /// The markers (`kiapi.board.DrcMarker` as protobuf JSON) to list in the project for one exclusion, one for each position worth trying, sorted and
 /// listed once. Empty when the exclusion has no position to try, its check is not one the project can name, or its marker has a part (the layer) a
@@ -140,6 +140,95 @@ pub fn project_entries(exclusions: &[DrcExclusion]) -> Vec<Value> {
         }
     }
     entries.into_values().collect()
+}
+
+/// One exclusion as a project lists it: the check's settings key, the file uuids of its items, the marker's position (nm) and the comment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Listed {
+    pub check: String,
+    pub items: Vec<String>,
+    pub at: [i64; 2],
+    pub comment: String,
+}
+
+/// `KIID::niluuid`, which a marker with one item names as its second.
+const NIL_UUID: &str = "00000000-0000-0000-0000-000000000000";
+
+/// The exclusions of a project's `board.design_settings.drc_exclusions`, in every form KiCad has written them (`BOARD_DESIGN_SETTINGS`'s `drc_exclusions` parameter and
+/// `migrateSchema2to3`): a record (`kiapi.board.DrcExclusion` as protobuf JSON: `{ "marker": { "error_type"|"errorType", "position": { "x_nm"|"xNm", .. }, "items":
+/// [ { "value" } ] }, "comment" }`, the names as the proto has them or in camel case, as `JsonStringToMessage` takes both), a `[ "<marker>", "<comment>" ]` pair (KiCad 8 and 9)
+/// or the marker's text alone (KiCad 7). The text is `PCB_MARKER::SerializeToString`'s, read as `DeserializeFromString` reads it: `key|x|y|main|aux` and the checks that
+/// write it otherwise (`copper_sliver`, `generic_warning`, `generic_error`: `key|x|y|main|layer`; `unconnected_items`: `key|x|y|layer|type|main|aux`, before 9.0.4
+/// `key|x|y|main|aux`). An entry that names no item, or a check this port does not know, is left out.
+pub fn read_project(pro_text: &str) -> Vec<Listed> {
+    let Ok(pro) = serde_json::from_str::<Value>(pro_text) else { return Vec::new() };
+    let Some(entries) = pro.pointer("/board/design_settings/drc_exclusions").and_then(Value::as_array) else { return Vec::new() };
+    entries.iter().filter_map(listed).filter(|l| !l.items.is_empty()).collect()
+}
+
+fn listed(entry: &Value) -> Option<Listed> {
+    match entry {
+        Value::Object(_) => {
+            let marker = entry.get("marker")?;
+            let field = |v: &Value, a: &str, b: &str| v.get(a).or_else(|| v.get(b)).cloned();
+            let error_type = field(marker, "error_type", "errorType")?;
+            let check = ERROR_TYPES.iter().find(|(_, t)| Some(*t) == error_type.as_str()).map(|(k, _)| k.to_string())?;
+            let pos = marker.get("position").cloned().unwrap_or(Value::Null);
+            // protobuf JSON prints a 64-bit integer as a string; a number is taken too.
+            let nm = |v: Option<Value>| v.and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0);
+            let at = [nm(field(&pos, "x_nm", "xNm")), nm(field(&pos, "y_nm", "yNm"))];
+            let items = marker.get("items").and_then(Value::as_array).map(|a| a.iter().filter_map(|i| i.get("value").and_then(Value::as_str)).filter(|u| *u != NIL_UUID).map(String::from).collect()).unwrap_or_default();
+            Some(Listed { check, items, at, comment: entry.get("comment").and_then(Value::as_str).unwrap_or("").to_string() })
+        }
+        Value::Array(pair) => {
+            let mut l = from_text(pair.first()?.as_str()?)?;
+            l.comment = pair.get(1).and_then(Value::as_str).unwrap_or("").to_string();
+            Some(l)
+        }
+        Value::String(text) => from_text(text),
+        _ => None,
+    }
+}
+
+/// `PCB_MARKER::DeserializeFromString`.
+fn from_text(text: &str) -> Option<Listed> {
+    let props: Vec<&str> = text.split('|').collect();
+    let check = props.first()?.to_string();
+    error_type(&check)?;
+    let num = |i: usize| props.get(i).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0);
+    let item = |i: usize| props.get(i).map(|s| s.trim()).filter(|s| !s.is_empty() && *s != NIL_UUID).map(String::from);
+    let items: Vec<String> = match check.as_str() {
+        "copper_sliver" | "generic_warning" | "generic_error" => item(3).into_iter().collect(),
+        "unconnected_items" if props.len() < 6 => item(3).into_iter().chain(item(4)).collect(),
+        "unconnected_items" => item(5).into_iter().chain(item(6)).collect(),
+        _ => item(3).into_iter().chain(item(4)).collect(),
+    };
+    Some(Listed { check, items, at: [num(1), num(2)], comment: String::new() })
+}
+
+/// A KiCad project's own DRC exclusions as the design's (`DrawingsSection::drc_exclusions`), for a board imported from that project: each item named by the uuid
+/// it had in the file is found by the id the import gave it (`item_ids`, `ImportNotes::item_ids`), and then by the uuid the derived board gives it (`derived`, the
+/// map `export_kicad_pcb_mapped` returns), so the derived project lists the exclusion as kicad-cli will match it; the marker's position is the one position to try. An
+/// exclusion with an item the import does not have is left out, as KiCad drops one no marker matches. Several records of one (check, items) are one exclusion with
+/// their positions.
+pub fn from_project(pro_text: &str, item_ids: &BTreeMap<String, String>, derived: &std::collections::HashMap<String, String>) -> Vec<DrcExclusion> {
+    let mut uuid_of: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut by_uuid: Vec<(&String, &String)> = derived.iter().collect();
+    by_uuid.sort();
+    for (uuid, id) in by_uuid {
+        uuid_of.entry(id.as_str()).or_insert(uuid.as_str());
+    }
+    let mut out: BTreeMap<(String, Vec<String>), DrcExclusion> = BTreeMap::new();
+    for l in read_project(pro_text) {
+        let Some(ids) = l.items.iter().map(|u| item_ids.get(u).cloned()).collect::<Option<Vec<String>>>() else { continue };
+        let Some(items) = ids.iter().map(|id| uuid_of.get(id.as_str()).map(|u| u.to_string())).collect::<Option<Vec<String>>>() else { continue };
+        let e = out.entry((l.check.clone(), items.clone())).or_insert_with(|| DrcExclusion { check: l.check.clone(), items, ids, positions_nm: Vec::new(), comment: l.comment.clone() });
+        e.positions_nm.push(l.at);
+        if e.comment.is_empty() {
+            e.comment = l.comment;
+        }
+    }
+    out.into_values().collect()
 }
 
 #[cfg(test)]

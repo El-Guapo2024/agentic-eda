@@ -26,6 +26,7 @@ Opening a studio project in KiCad and running Update PCB (F8) renames every net 
 - p13-p16 P14-2: a flipped footprint is written in a frame KiCad never produces.
 
 ### B. Board reader and writer losses (`crates/kicad/src/import.rs`, `pcb.rs`)
+**Fixed on `task-fix-bc-board-io`** (2026-10-24): all nine; F6 for the DRC exclusions only (the ERC half needs `sch_import.rs`, batch D's). F2's proposed connectivity test contradicted KiCad (`CN_LIST::Add( PAD* )` puts the pad on its front-most layer), see p22-p24-p25.md.
 - p22 F1: a zone with a hole becomes two zones, the hole a filled zone (`ZONE::AddPolygon`). Every board is affected.
 - p22 F2: an SMD pad on `*.Cu` keeps only one side.
 - p7-p8 F2: paste-only pads are dropped (the stencil loses openings).
@@ -37,6 +38,7 @@ Opening a studio project in KiCad and running Update PCB (F8) renames every net 
 - p13-p16 F6 (P15): a project's own DRC/ERC exclusions are dropped on import.
 
 ### C. Zone fill and teardrops (`crates/kicad/src/zone_fills.rs`, `fill_api`)
+**Fixed on `task-fix-bc-board-io`** (2026-10-24): `(legacy_teardrops yes)` while the design has teardrops, uuid-less teardrops matched by layer and outline, KiCad's teardrop priorities; slow test `refill_keeps_teardrop_fills`.
 - p13-p16 P13-1: Fill All, and every refill before DRC or a plot, wipes every teardrop's fill, so Gerbers lose the copper. Causes: `(legacy_teardrops no)`, no pad/via teardrop parameters, and uuid-less rebuilt teardrops.
 
 ### D. Schematic connectivity (`crates/engine/src/nets.rs`, `crates/kicad/src/symbol_lib.rs`, `sch_import.rs`)
@@ -72,8 +74,8 @@ Opening a studio project in KiCad and running Update PCB (F8) renames every net 
 - p12 O10: placement uses the outline's bounding box.
 
 ## Docs found wrong (fix with the batches)
-- PARITY-pcb.md §25: the `issue24078` claim and the description of the closing arc.
-- PARITY-pcb.md §29: "keeps the dash" is false on the board.
+- PARITY-pcb.md §25: the `issue24078` claim and the description of the closing arc. **Fixed on `task-fix-bc-board-io`.**
+- PARITY-pcb.md §29: "keeps the dash" is false on the board. **Fixed on `task-fix-bc-board-io`** (the doc; the board still has no line style, p7-p8 F3).
 - PARITY-pcb.md §36: the "identical in effect" claim for design-block references.
-- The note that a `--refill-zones` run skips courtyard checks (not true on `fill_bad`).
+- The note that a `--refill-zones` run skips courtyard checks (not true on `fill_bad`). **Fixed on `task-fix-bc-board-io`** (re-run on the box: `courtyards_overlap` either way; lib.rs, refill_zones.rs, GAPS.md, ARCHITECTURE.md).
 - CODE-COMPARE-router.md and `dp_placer.rs`: stale notes (listed in p5-router.md). **Fixed on `task-fix-e-router`.**

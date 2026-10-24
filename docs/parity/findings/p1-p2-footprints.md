@@ -36,7 +36,7 @@ The test stops at the first mismatched field (`break`), so each footprint report
 
 ### F1. The board's net names are the intent's; the derived schematic's KiCad net names are path-prefixed or default names. HIGH.
 
-**Fixed** on task-fix-a-kicad-names: fc8ee220 (option (a), the user's decision: the tracer names as `recacheName` does, the board loader gives every net KiCad's name, `crates/cli/src/net_names.rs`; `crates/cli/tests/kicad_names.rs` finds 0 parity differences on `opamp_filter`, `ldo` and `mcu_board_30plus`; web/studio/PARITY-pcb.md section 52).
+**Fixed** on task-fix-a-kicad-names: fc8ee220 (option (a), the user's decision: the tracer names as `recacheName` does, the board loader gives every net KiCad's name, `crates/cli/src/net_names.rs`; `crates/cli/tests/kicad_names.rs` finds 0 parity differences on `opamp_filter`, `ldo` and `mcu_board_30plus`; web/studio/PARITY-pcb.md section 53).
 
 This causes 34 of the 38 net conflicts here. The other 4 come from F1b and F3.
 

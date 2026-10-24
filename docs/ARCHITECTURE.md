@@ -105,8 +105,9 @@ never edited as masters.
     no pour to wait for.
     "Refill all zones before performing DRC" and the Plot dialog's "Check zone
     fills before plotting" fill first, on a copy, and then run the DRC or the
-    export WITHOUT `--refill-zones` (kicad-cli 10.99 skips its courtyard checks
-    on a run that refills). A zone keeps the uuid it had in the imported file
+    export WITHOUT `--refill-zones`, so they judge the fill the studio keeps
+    (a run that refills keeps its courtyard checks on kicad-cli 25ec2335,
+    whatever an older note said). A zone keeps the uuid it had in the imported file
     (`Zone::uuid`): KiCad breaks ties between zones of equal priority by uuid.
   - **Other EDA formats come in through kicad-cli, and nobody else's importer**
     (P22, 2026-10-15: `kicad-cli pcb import` and `sch import`, new in the 10.99

@@ -24,6 +24,8 @@ Part 1 is the board outline (GAPS item 27, P12; `PARITY-pcb.md` section 25). Par
 
 ### O1. A `gr_curve` whose control point equals an end point is dropped by the reader; the slot it closes opens, and the curve is lost on export (high)
 
+**Fixed** on task-fix-bc-board-io: 185d48fe.
+
 **What differs.**
 - `poly_points` (`crates/kicad/src/import.rs:2411-2418`) drops a point equal to the one before it:
   ```rust
@@ -50,6 +52,8 @@ Part 1 is the board outline (GAPS item 27, P12; `PARITY-pcb.md` section 25). Par
 **Unit-sensitive:** no.
 
 ### O2. A footprint's Edge.Cuts are taken out of the footprint: our outline differs where KiCad's footprint pass matters, and the exported file is a different board to KiCad (high)
+
+**Fixed** on task-fix-bc-board-io: de31232b (the footprint pass of `BuildBoardPolygonOutlines`; the pads' boxes stand for `GetEffectivePolygon` in `isCopperOutside`).
 
 **What differs.**
 - `footprint_edge_cuts` (`import.rs:2140-2169`) turns every `fp_*` Edge.Cuts item into a board-level shape. The writer emits it as a `gr_*` item. The footprint keeps none: QA `issue22826`'s card-edge connector J1 has 11 `fp_` Edge.Cuts items in the original and 0 in our export, where 32 `gr_` items stand.
@@ -83,6 +87,8 @@ Part 1 is the board outline (GAPS item 27, P12; `PARITY-pcb.md` section 25). Par
 **Unit-sensitive:** no.
 
 ### O3. A rectangle's corner radius is dropped (outline and file) (high; already listed as a gap, now measured)
+
+**Fixed** on task-fix-bc-board-io: 185d48fe (and the canvas draws it, with the browser check `board-io.check.js`).
 
 **What differs.**
 - `graphic_shape`'s `gr_rect` arm (`import.rs:2117`) does not read `(radius R)`, and the IR's `Shape::Rect` has no field for it.

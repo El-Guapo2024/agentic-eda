@@ -13,8 +13,8 @@
 //! involution) and a text's angle and mirror flag follow `PCB_TEXT::Flip` ([`eda_model::fp_edit::FieldLayout`] has the angle arithmetic).
 //!
 //! What is read: `fp_line`, `fp_arc` (also the pre-KiCad-7 `(start CENTRE) (end START) (angle A)` form), `fp_circle`, `fp_rect`, `fp_poly`
-//! (an `(arc ..)` among its points is flattened at 5 micrometres), `fp_curve` and `fp_text user`, on every layer but the courtyard and
-//! the board edge (see [`eda_model::fp_art`]). A hidden text is kept, hidden, and written `(hide yes)`: KiCad 10 turns it into a hidden field on load, as it does the
+//! (an `(arc ..)` among its points is flattened at 5 micrometres), `fp_curve` and `fp_text user`, on every layer but the courtyard
+//! (see [`eda_model::fp_art`]); a footprint's Edge.Cuts are its art. A hidden text is kept, hidden, and written `(hide yes)`: KiCad 10 turns it into a hidden field on load, as it does the
 //! original, and a footprint without it does not match its library's (a MountingHole has one).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -297,12 +297,15 @@ fn layer_rank(layer: &str) -> usize {
     1000
 }
 
-/// `formatLayers( mask, false )`: both outer copper layers are `"*.Cu"`, a front and back pair of any other side-specific layer `"*.X"`, and the rest
-/// one by one in layer order.
+/// `formatLayers( mask, false )`: the two outer copper layers and no inner one are `"*.Cu"` (`( aLayerMask & cu_board_mask ) == fr_bk`), a front and back pair of any
+/// other side-specific layer `"*.X"`, and the rest one by one in layer order. A set with inner copper is listed layer by layer: KiCad folds it into `"*.Cu"` only when it is
+/// every copper layer of the board (`== cu_board_mask`), which this function does not know -- a caller that does folds such a set to the two outer layers first, as the
+/// board writer does for an SMD pad on `*.Cu` -- and `"*.Cu"` read back is every copper layer, more than F, In1 and B on a board of four.
 fn layers_token(layers: &[String]) -> String {
     let mut rest: BTreeSet<&str> = layers.iter().map(String::as_str).collect();
     let mut words: Vec<String> = Vec::new();
-    if rest.contains("F.Cu") && rest.contains("B.Cu") {
+    let inner = rest.iter().any(|l| l.starts_with("In") && l.ends_with(".Cu"));
+    if rest.contains("F.Cu") && rest.contains("B.Cu") && !inner {
         words.push("*.Cu".into());
         rest.remove("F.Cu");
         rest.remove("B.Cu");
@@ -454,8 +457,9 @@ mod tests {
     #[test]
     fn every_shape_kind_is_read_with_its_layer_width_style_and_fill() {
         let art = read_art(&parse(FIXTURE), Side::Top, 0);
-        // The courtyard rectangle and the Edge.Cuts line have homes of their own; the hidden text is kept, hidden.
-        assert_eq!(art.shapes.len(), 8, "{:#?}", art.shapes);
+        // The courtyard rectangle has a home of its own; the Edge.Cuts line is the footprint's art, as in KiCad; the hidden text is kept, hidden.
+        assert_eq!(art.shapes.len(), 9, "{:#?}", art.shapes);
+        assert_eq!(art.shapes[8].layer(), "Edge.Cuts");
         assert_eq!(art.texts.len(), 3);
         assert_eq!(art.texts.iter().map(|t| t.layout.visible).collect::<Vec<_>>(), [true, true, false]);
 
@@ -584,5 +588,7 @@ mod tests {
         assert_eq!(l(&["B.Cu", "F.Cu", "F.Mask", "B.Mask"]), "(layers \"*.Cu\" \"*.Mask\")");
         assert_eq!(l(&["F.Fab", "B.Fab", "Dwgs.User"]), "(layers \"*.Fab\" \"Dwgs.User\")");
         assert_eq!(l(&["F.SilkS", "B.Paste"]), "(layers \"B.Paste\" \"F.SilkS\")");
+        // F, In1 and B on a board of four is not every copper layer: listed, not `*.Cu` (which reads back as all four).
+        assert_eq!(l(&["F.Cu", "In1.Cu", "B.Cu", "F.Mask"]), "(layers \"F.Cu\" \"In1.Cu\" \"B.Cu\" \"F.Mask\")");
     }
 }

@@ -2012,7 +2012,7 @@ mod tests {
         let (mut eng, _) = engine(&rules, &["A"], None, &[ko]);
         // the engine's env must know the area
         let mut area_env = Env::simple(&["F.Cu", "B.Cu"]);
-        area_env.areas = vec![Rc::new(crate::rule_item::AreaFacts { id: "ko1".into(), name: "no tracks".into(), layers: vec!["F.Cu".into()], outline: vec![eda_model::ir::Point { x: 0, y: 0 }, eda_model::ir::Point { x: 10_000_000, y: 0 }, eda_model::ir::Point { x: 10_000_000, y: 10_000_000 }, eda_model::ir::Point { x: 0, y: 10_000_000 }], parent_footprint: None })];
+        area_env.areas = vec![Rc::new(crate::rule_item::AreaFacts { id: "ko1".into(), name: "no tracks".into(), layers: vec!["F.Cu".into()], outline: vec![eda_model::ir::Point { x: 0, y: 0 }, eda_model::ir::Point { x: 10_000_000, y: 0 }, eda_model::ir::Point { x: 10_000_000, y: 10_000_000 }, eda_model::ir::Point { x: 0, y: 10_000_000 }], holes: Vec::new(), parent_footprint: None })];
         eng.env = Rc::new(area_env);
         eng.compile_implicit();
         let mut t = (*track("A", "F.Cu", 200_000)).clone();

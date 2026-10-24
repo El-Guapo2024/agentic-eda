@@ -956,8 +956,9 @@ pub struct DrcOptions {
 ///
 /// The DRC judges the fills the exported board carries: the ones kicad-cli made when the zones were last filled (Fill All Zones, kept beside the design), or none for
 /// a zone that was never filled, as in KiCad. `refill_zones` (KiCad's "Refill all zones before performing DRC") fills them first: kicad-cli's filler runs on a copy
-/// of the board ([`refill_zones`]) and the DRC then runs on the board with that fill in it, without `--refill-zones`, which in kicad-cli 10.99 skips the courtyard
-/// checks (`courtyards_overlap`, `pth_inside_courtyard`, ...) on a run that refills. The fills come back in [`DrcReport::zone_fills`] for the caller to keep. A
+/// of the board ([`refill_zones`]) and the DRC then runs on the board with that fill in it, without `--refill-zones`, so the fill it judges is the one that comes
+/// back in [`DrcReport::zone_fills`] for the caller to keep (the canvas, the plots and the next DRC see the same copper). (An earlier note here said a run that
+/// refills skips the courtyard checks; it does not on kicad-cli 25ec2335: `fill_bad` with one footprint moved onto the other reports `courtyards_overlap` either way.) A
 /// kicad-cli that cannot refill (9.0) gives the DRC of the board as it is. Every kicad-cli start costs a third of a second, so this neither asks for its version nor
 /// probes its options: the version comes off the report.
 pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: bool) -> Result<DrcReport, Vec<CheckResult>> {
@@ -970,7 +971,7 @@ pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: 
 pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: DrcOptions) -> Result<DrcReport, Vec<CheckResult>> {
     let cli = need_cli()?;
     // "Refill all zones before performing DRC": kicad-cli's filler runs first, on a copy of the board (`refill_zones`), and the DRC then judges the board with that fill
-    // in it -- not `--refill-zones` on the DRC run itself, which drops the courtyard checks. A kicad-cli that cannot refill (9.0) gives the DRC of the board as it is.
+    // in it -- not `--refill-zones` on the DRC run itself, whose fill would be one nobody keeps. A kicad-cli that cannot refill (9.0) gives the DRC of the board as it is.
     let refilled = if opts.refill_zones {
         match refill_zones(design, model, work) {
             Ok(fills) => Some(fills),
@@ -990,7 +991,7 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
         export_schematic(design, model, work, "board")?;
     }
     let report = work.join("drc.json");
-    // No `--refill-zones` on this run: a run that refills drops the courtyard checks in kicad-cli 10.99, and the fills it judges are the ones the board carries (above).
+    // No `--refill-zones` on this run: the fills it judges are the ones the board carries (above), which the caller keeps.
     let mut cmd = cli_command(&cli, Some(&pcb.with_extension("kicad_pro")));
     cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]);
     if opts.schematic_parity {
@@ -1064,6 +1065,9 @@ pub fn refill_zones(design: &Design, model: &ConstraintModel, work: &Path) -> Re
         let why = said.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("it printed nothing");
         return Err(fail("kicad_cli_refill", "kicad-cli", format!("kicad-cli could not refill the zones (it needs --refill-zones and --save-board): {why}")));
     }
+    // The teardrops come back without the uuid they were written with (`format( const ZONE* )` writes none for one): they are found by their layer and outline.
+    let mut map = map;
+    map.extend(eda_kicad::zone_fills::teardrop_keys(design));
     let zones = eda_kicad::zone_fills::entries_by_zone(design, eda_kicad::zone_fills::scan_zone_fills(&refilled), &map);
     Ok(KicadFills::new(engine, String::new(), started.elapsed().as_millis() as u64, zones))
 }
@@ -2120,7 +2124,7 @@ fi"#;
         let calls: Vec<String> = std::fs::read_to_string(&log).unwrap().lines().map(String::from).collect();
         assert_eq!(calls.len(), 2, "the refill, then the DRC: {calls:?}");
         assert!(calls[0].starts_with("yes yes "), "{calls:?}");
-        assert!(calls[1].starts_with("no no ") && !calls[1].contains("--refill-zones"), "kicad-cli 10.99 drops its courtyard checks on a run that refills: {calls:?}");
+        assert!(calls[1].starts_with("no no ") && !calls[1].contains("--refill-zones"), "the DRC judges the fill the refill made and the caller keeps: {calls:?}");
         let judged = std::fs::read_to_string(work.join("board.kicad_pcb.given")).unwrap();
         assert!(judged.contains("(filled_polygon"), "the DRC judges the board with the fill in it");
         let flat = judged.split_whitespace().collect::<Vec<_>>().join(" ");

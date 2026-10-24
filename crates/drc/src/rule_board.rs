@@ -169,7 +169,7 @@ impl<'a> RuleBoard<'a> {
         let mut out = Vec::new();
         if let Some(rt) = &self.design.routing {
             for z in &rt.zones {
-                out.push(Rc::new(AreaFacts { id: z.id.clone(), name: z.name.clone(), layers: vec![z.layer.clone()], outline: z.outline.clone(), parent_footprint: z.parent_footprint.clone() }));
+                out.push(Rc::new(AreaFacts { id: z.id.clone(), name: z.name.clone(), layers: vec![z.layer.clone()], outline: z.outline.clone(), holes: z.holes.clone(), parent_footprint: z.parent_footprint.clone() }));
             }
         }
         out
@@ -511,6 +511,7 @@ impl<'a> RuleBoard<'a> {
         it.layers = vec![z.layer.clone()];
         it.layer = Some(z.layer.clone());
         it.outline = z.outline.clone();
+        it.holes = z.holes.clone();
         it.shapes = vec![Shape::Polygon { pts: z.outline.clone() }];
         it.rule_area = z.is_rule_area;
         it.keepout = z.is_rule_area && (z.keepout_tracks || z.keepout_vias || z.keepout_pads || z.keepout_copper_pour || z.keepout_footprints);

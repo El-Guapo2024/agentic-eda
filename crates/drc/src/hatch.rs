@@ -371,7 +371,13 @@ fn prepare(design: &Design, model: Option<&ConstraintModel>, shape: &Shape) -> O
     if uncapped == 0 {
         return None;
     }
-    let mut area = ShapePolySet::from_outline(outline_of(shape)?);
+    // `EDA_SHAPE::UpdateHatching`, `case SHAPE_T::RECTANGLE`: `ROUNDRECT rr( SHAPE_RECT( .. ), GetCornerRadius() ); rr.TransformToPolygon( shapeBuffer, getMaxError() )`.
+    let radius = design.drawings.as_ref().map(|d| d.board_items.corner_radius_of(shape.id())).unwrap_or(0);
+    let own = match shape {
+        Shape::Rect { start, end, .. } if radius > 0 => eda_model::outline::rounded_rect_ring(*start, *end, radius, MAX_ERROR_NM as f64).into_iter().map(p64).collect(),
+        _ => outline_of(shape)?,
+    };
+    let mut area = ShapePolySet::from_outline(own);
     // At most a hundred lines along the longer side.
     let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
     for p in area.outline(0) {

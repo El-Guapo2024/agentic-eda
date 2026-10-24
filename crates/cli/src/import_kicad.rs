@@ -94,6 +94,8 @@ struct Sources {
     board: Option<(String, String, Option<PathBuf>)>,
     /// The `.kicad_pro` kicad-cli wrote for a board it converted: its design rules and net classes.
     project: Option<String>,
+    /// The custom rules (`.kicad_dru`) the importer of a converted board wrote (`eda_kicad_engine::foreign::imported_rules`).
+    rules: Option<String>,
     /// A schematic's sheets: the name each is placed under and what it holds.
     sheets: Vec<(String, SheetFile)>,
     /// kicad-cli's runs, in the order they were made.
@@ -120,7 +122,7 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
 fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
     let input = PathBuf::from(&args.input);
     let ext = input.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    let mut s = Sources { board: None, project: None, sheets: Vec::new(), imports: Vec::new() };
+    let mut s = Sources { board: None, project: None, rules: None, sheets: Vec::new(), imports: Vec::new() };
     let mut runs = 0;
     let mut convert_one = |s: &mut Sources, path: &Path, kind: Option<Kind>| -> Result<ForeignImport, Vec<CheckResult>> {
         runs += 1;
@@ -154,6 +156,7 @@ fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
                 let import = convert_one(&mut s, board, Some(Kind::Board))?;
                 s.board = Some((name_of(board), import.text.clone(), None));
                 s.project = import.project.clone();
+                s.rules = import.rules.clone();
             }
             let mut parts = Vec::new();
             for sheet in &project.sheets {
@@ -185,6 +188,7 @@ fn put(s: &mut Sources, kind: Kind, path: &Path, import: &ForeignImport) -> Resu
         Kind::Board => {
             s.board = Some((name_of(path), import.text.clone(), None));
             s.project = import.project.clone();
+            s.rules = import.rules.clone();
         }
         Kind::Schematic => s.sheets.push((stem_of(path), foreign::sheet_file_of(import)?)),
     }
@@ -212,7 +216,7 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
 
     let (design, model, notes, setup) = match &sources.board {
         Some((name, text, project_dir)) => {
-            let (design, mut model, notes) = eda::import_kicad_pcb(text)?;
+            let (mut design, mut model, notes) = eda::import_kicad_pcb(text)?;
             if args.keep_names && project_dir.is_none() {
                 model.board.layer_setup.names.clear();
             }
@@ -232,6 +236,14 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
                     eda::merge_project_design_rules(&mut model, &pro_text);
                     // Board Setup's smaller pages: Formatting's footprint boxes, the Length-tuning Patterns, the Tuning Profiles and the profile each net class names.
                     eda::merge_project_setup_pages(&mut model, &pro_text);
+                    // The project's own DRC exclusions (`board.design_settings.drc_exclusions`, `BOARD_DESIGN_SETTINGS::m_DrcExclusions`), their items named as the
+                    // derived board names them, so kicad-cli still waives them.
+                    let derived = eda_kicad::export_kicad_pcb_mapped(&design, &model, &eda_kicad::ExportMeta { date: "", title: "" }).map(|(_, map)| map).unwrap_or_default();
+                    let waived = eda_kicad::drc_exclusions::from_project(&pro_text, &notes.item_ids, &derived);
+                    if !waived.is_empty() {
+                        println!("  {} DRC exclusion(s) of the project kept", waived.len());
+                        design.drawings.get_or_insert_with(Default::default).drc_exclusions = waived;
+                    }
                 }
                 // A `.kicad_dru` custom-rule file (task item 4) is its own sibling file, not a section inside `.kicad_pro`.
                 if let Ok(dru_text) = std::fs::read_to_string(board_file.with_extension("kicad_dru")) {
@@ -246,6 +258,10 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
                 if args.keep_names {
                     model.board.layer_setup.names.clear();
                 }
+            }
+            // And the custom rules its importer wrote (`.kicad_dru`): the Eagle class-to-class clearances, the PADS diff-pair gaps, EasyEDA Pro's spacing rules.
+            if let Some(dru) = &sources.rules {
+                eda::merge_custom_rules(&mut model, dru);
             }
             let _ = name;
             (design, model, Some(notes), setup)

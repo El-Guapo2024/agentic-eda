@@ -416,8 +416,14 @@ pub enum Cmd {
     /// remove one) -- this app has no live point-by-point drag state on
     /// the backend, so the whole edited outline is sent at once, same
     /// "replace wholesale" shape `EditZone`'s settings already use. Net/
-    /// layer/settings untouched.
-    SetZoneOutline { id: String, outline: Vec<Point> },
+    /// layer/settings untouched. `holes`, when given, replaces the zone's holes too (a mirror moves the whole polygon set, `ZONE::Mirror`: `m_Poly->Mirror`);
+    /// absent leaves them as they are (a corner edit of the outline).
+    SetZoneOutline {
+        id: String,
+        outline: Vec<Point>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        holes: Option<Vec<Vec<Point>>>,
+    },
     /// `dialog_copper_zones.cpp`'s "OK": replace a zone's net/layer and
     /// every `ZONE_SETTINGS` field at once -- KiCad has no concept of
     /// editing just one field of the panel, the whole thing commits
@@ -883,6 +889,10 @@ pub enum Cmd {
         /// The `.kicad_pro` `kicad-cli import` wrote for the board: the design rules and the net classes the importer set, which the server puts in the board's model.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project: Option<String>,
+        /// The custom DRC rules (`.kicad_dru`) the importer wrote beside the board or the file it read (`eda_kicad_engine::foreign::imported_rules`), which the server
+        /// sets as the board's custom rules.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rules: Option<String>,
     },
     /// File > Import > Non-KiCad Schematic File... (`eeschema.EditorControl.importNonKicadSchematic`, `SCH_EDIT_FRAME::OnImportProject`): the schematic -- the root sheet and every
     /// sheet under it -- is replaced by the one kicad-cli made of another EDA format's file (`content`, read by `eda_kicad::load_sheet_file`; `name` is the file it came from).
@@ -2697,14 +2707,15 @@ impl<'a> Board<'a> {
         let groups_before = self.group_universe();
         let sch_groups_before = self.sch_group_universe();
         let patterns_before = self.tuning_universe();
-        let edge_before = outline::snapshot(&self.design);
+        // A board brought in whole (`ReplaceBoard`) comes with its own summary, made with its own model, which this board's model is not.
+        let edge_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { outline::snapshot(&self.design, self.model) };
         let shared_before = self.shared_screens_before();
         self.apply_cmd(cmd)?;
         self.tidy_shared_screens(shared_before);
         self.tidy_groups(groups_before);
         self.tidy_sch_groups(sch_groups_before);
         self.tidy_tuning_patterns(patterns_before);
-        outline::refresh_if_changed(&mut self.design, edge_before);
+        outline::refresh_if_changed(&mut self.design, self.model, edge_before);
         Ok(())
     }
 
@@ -2800,7 +2811,7 @@ impl<'a> Board<'a> {
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
-            Cmd::SetZoneOutline { id, outline } => self.set_zone_outline(id, outline),
+            Cmd::SetZoneOutline { id, outline, holes } => self.set_zone_outline(id, outline, holes.as_deref()),
             Cmd::EditZone {
                 id,
                 net,
@@ -2945,7 +2956,7 @@ impl<'a> Board<'a> {
                 None => Err(vec![CheckResult::fail("ops_sheet_file_not_read", source, format!("the file '{source}' was not read, so there is nothing to import"))]),
             },
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),
-            Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project } => self.replace_board(text, name, *keep_kicad_layer_names, project.as_deref()),
+            Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project, rules } => self.replace_board(text, name, *keep_kicad_layer_names, project.as_deref(), rules.as_deref()),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
             Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode).map(|_| ()),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
@@ -3838,13 +3849,16 @@ impl<'a> Board<'a> {
 
     /// `pcb_point_editor.cpp`'s zone corner drag/add/remove -- see
     /// `Cmd::SetZoneOutline`'s own doc on why the whole outline is sent.
-    fn set_zone_outline(&mut self, id: &str, outline: &[Point]) -> Result<(), Vec<CheckResult>> {
+    fn set_zone_outline(&mut self, id: &str, outline: &[Point], holes: Option<&[Vec<Point>]>) -> Result<(), Vec<CheckResult>> {
         if outline.len() < 3 {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "a zone outline needs at least three points")]);
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let z = rt.zones.iter_mut().find(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
         z.outline = outline.to_vec();
+        if let Some(holes) = holes {
+            z.holes = holes.iter().filter(|h| h.len() >= 3).cloned().collect();
+        }
         Ok(())
     }
 
@@ -4147,15 +4161,20 @@ impl<'a> Board<'a> {
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let zi = rt.zones.iter().position(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
         let chain = |pts: &[Point]| pts.iter().map(|p| Point64::new(p.x, p.y)).collect::<Vec<_>>();
+        // `SHAPE_POLY_SET originalOutline( *aZone.Outline() )`: the outline with its holes.
         let mut remaining = ShapePolySet::from_outline(chain(&rt.zones[zi].outline));
+        for hole in rt.zones[zi].holes.iter().filter(|h| h.len() >= 3) {
+            remaining.add_hole(chain(hole), Some(0));
+        }
         let before_area = remaining.area();
         remaining.boolean_subtract(&ShapePolySet::from_outline(chain(cutout)));
         if (remaining.area() - before_area).abs() < 0.5 {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "the cutout does not overlap the zone")]);
         }
-        // One zone per remaining main outline; holes ride along fractured.
-        remaining.fracture(false);
+        // `ZONE_CREATE_HELPER::performZoneCutout`: "a zone can have only one main outline, so create as many zones as originalOutline contains main outlines",
+        // each with its own holes (`newZoneOutline->AddHole( originalOutline.CHole( outline, hole ) )`).
         let template = rt.zones.remove(zi);
+        let ring_of = |r: &Vec<Point64>| r.iter().map(|p| Point { x: p.x, y: p.y }).collect::<Vec<Point>>();
         for poly in &remaining.polys {
             let ring = &poly[0];
             if ring.len() < 3 {
@@ -4164,7 +4183,8 @@ impl<'a> Board<'a> {
             let mut z = template.clone();
             z.id = String::new();
             z.uuid.clear();
-            z.outline = ring.iter().map(|p| Point { x: p.x, y: p.y }).collect();
+            z.outline = ring_of(ring);
+            z.holes = poly[1..].iter().filter(|h| h.len() >= 3).map(ring_of).collect();
             rt.zones.push(z);
         }
         rt.assign_missing_ids();

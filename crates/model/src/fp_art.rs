@@ -14,8 +14,11 @@
 //! on a side-specific layer), mirrors x like a pad ([`crate::footprint::to_board`]) and, for a text, turns the sense of its angle and toggles
 //! its mirror flag. User layers (`Dwgs.User`, `User.1` ...) are on both sides.
 //!
+//! A footprint's own `Edge.Cuts` (a slot, a card edge's notch) are art too, as in KiCad (`FOOTPRINT::GraphicalItems`): they move, turn and flip with it, and the
+//! board outline takes them in with `BuildBoardPolygonOutlines`' footprint pass (`eda_drc::outline::board_outline_with`).
+//!
 //! Not in the art, because the footprint already has a home for them: the courtyard (`F.CrtYd`/`B.CrtYd`, [`crate::Footprint::courtyard_outlines`]),
-//! the board outline (`Edge.Cuts`, which an importer promotes to board-level shapes), the Reference, the Value and the user fields
+//! the Reference, the Value and the user fields
 //! ([`crate::fp_edit::FootprintEdit`]).
 //!
 //! # Texts
@@ -67,9 +70,9 @@ pub fn layer_on_side(layer: &str, side: Side) -> String {
     }
 }
 
-/// Is `layer` one the art keeps? The courtyard and the board edge have homes of their own (module doc).
+/// Is `layer` one the art keeps? Every layer but the courtyard, which has a home of its own (module doc); a footprint's Edge.Cuts are its art.
 pub fn is_art_layer(layer: &str) -> bool {
-    !(layer == "Edge.Cuts" || layer == "F.CrtYd" || layer == "B.CrtYd")
+    !(layer == "F.CrtYd" || layer == "B.CrtYd")
 }
 
 // ------------------------------------------------------------------------------------------------------------------------- shapes

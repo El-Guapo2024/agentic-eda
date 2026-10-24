@@ -1,4 +1,4 @@
-# Handoff: the KiCad port, 2026-10-24 (paused by the user: session limit)
+# Handoff: the KiCad port, 2026-10-24 (resumed)
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
@@ -17,6 +17,8 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 
 ## What landed (2026-10-14 to 10-24)
 
+- 2026-10-24: **fix batches B and C** (`28ba30c4`): zones keep their holes, SMD pads on several copper layers, paste-only pads, curves, footprint Edge.Cuts (KiCad's footprint outline pass), rectangle corner radius (the router's edge as KiCad's effective shapes), Extruded 3D Body, importers' `.kicad_dru`, a project's DRC exclusions; refills keep teardrop copper via `(legacy_teardrops yes)` (trade-off: GAPS 13). Open: imported ERC exclusions (batch D's file), Repeat Layout target holes.
+- 2026-10-24: **fix batch F, editing** (`963764f7`): items edited in place keep their group, the real courtyard box, R/F while carrying, Position Relative's angle, Recombine, Repeat Layout's nets and groups, design-block layers and padless nets (`board_nets`), KiCad's Net Inspector with per-layer lengths; one-member groups kept, the < 2 rule only on groups a verb touched.
 - 2026-10-24: **fix batch E, the router** (`a6e4500a`): all 7 highs, 18/21 mediums; KiCad's 7 router QA sessions replay exactly; F is Attempt Finish, Esc commits fixed legs, empty-space routes on no net. Plus `ea752e1a`, the tuner's default board thickness (1.6 µm → 1.6 mm, a nanometre leftover).
 
 Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` section.
@@ -60,9 +62,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names everywhere (the board loader traces the schematic, `crates/cli/src/net_names.rs`), one footprint name (`footprint_lib_id`), `(path)`/`sheetname`/`sheetfile`, symbol fields and `pinfunction`/`pintype` on the board, `unconnected-(..)` pads, a flipped footprint in KiCad's frame | done, gated; parity DRC 0 on opamp, ldo, mcu30 (`crates/cli/tests/kicad_names.rs`) | review vs KiCad, merge; P14-2 for footprints read from a file; commands take KiCad's names (PARITY-pcb.md 52); then batch D |
-| `task-fix-bc-board-io` (`~/work/agentic-eda-exports`) | Batches B and C: zones with holes, `*.Cu` SMD pads, paste-only pads, curves, footprint Edge.Cuts, corner radius, 3D body, `.kicad_dru`, DRC exclusions; teardrop fills (`legacy_teardrops yes`, trade-off in GAPS 13) | done, reviewed vs KiCad, review fixes R1-R3 in; main merged in (02696874) | the lead's own gate (cargo check, fast, parity report) was stopped by the pause: rerun it, then merge |
-| `task-fix-f-editing` (`~/work/agentic-eda-rules`) | Batch F: editing (groups, bounding boxes, carry R/F, Position Relative, Recombine, Repeat Layout, design blocks, Net Inspector) | reviewed vs KiCad; review fixes M1 and 2-6 committed, main merged in, gates rerun | merge; left as GAPS: Override locks, "Only ...", zone edge handles, the placer's outline and symmetric box |
+| `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names everywhere (the loader traces the schematic, `crates/cli/src/net_names.rs`; the derived schematic labels every net the intent names), one footprint name (`footprint_lib_id`), `(path)`/`sheetname`/`sheetfile`, fields, `pinfunction`/`pintype`, `unconnected-(..)`, the flip frame | review fixes R1-R6 in progress | gate, merge; then batch D |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

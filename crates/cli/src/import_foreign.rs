@@ -252,14 +252,18 @@ pub(crate) fn merge_project(model: &mut eda_model::ConstraintModel, pro_text: &s
 /// `board::step` before the command, from the same text the command carries, so the file is there for whatever loads the board after it -- an undo or a redo included
 /// (the file is named by the hash of the text, and left where it is).
 pub(crate) fn prepare_board(cmd: &Cmd, dir: &Path) -> Result<(), Vec<CheckResult>> {
-    let Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project } = cmd else { return Ok(()) };
+    let Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project, rules } = cmd else { return Ok(()) };
     let (design, mut model, notes) = eda::import_kicad_pcb(text).map_err(|e| fail("ops_bad_board", name, format!("'{name}' did not convert to a board this reader takes: {}", e.iter().filter_map(|c| c.hint.clone()).collect::<Vec<_>>().join("; "))))?;
-    let file = eda_ops::imported_intent_file(&design.provenance.intent_hash, *keep_kicad_layer_names, project.as_deref());
+    let file = eda_ops::imported_intent_file(&design.provenance.intent_hash, *keep_kicad_layer_names, project.as_deref(), rules.as_deref());
     let path = dir.join(&file);
     if !path.is_file() {
         // The rules and the net classes the importer set are in the project kicad-cli wrote with the board, as a project's own are in its `.kicad_pro` (`eda import-kicad` of a project).
         if let Some(pro) = project {
             merge_project(&mut model, pro);
+        }
+        // The custom rules the importer wrote (`.kicad_dru`), as a project's own `.kicad_dru` is merged (`eda import-kicad` of a project).
+        if let Some(dru) = rules {
+            eda::merge_custom_rules(&mut model, dru);
         }
         // `OpenProjectFiles`: with "Keep KiCad layer names" every layer of the loaded board gets its standard name back (`SetLayerName( layer, wxEmptyString )`).
         if *keep_kicad_layer_names {
@@ -389,10 +393,10 @@ mod tests {
     fn a_board_brings_its_model_as_a_file_under_the_boards_folder_named_by_the_hash_of_its_text() {
         let d = scratch("prepare");
         let text = "(kicad_pcb (version 20260901) (generator \"pcbnew\") (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal)) (footprint \"L:A\" (layer \"F.Cu\") (uuid \"f\") (at 1 1) (property \"Reference\" \"R1\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"p\")) (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net \"SIG\") (uuid \"a\"))))";
-        let cmd = Cmd::ReplaceBoard { text: text.into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: None };
+        let cmd = Cmd::ReplaceBoard { text: text.into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: None, rules: None };
         prepare_board(&cmd, &d).unwrap();
         let (design, _, _) = eda::import_kicad_pcb(text).unwrap();
-        let file = d.join(eda_ops::imported_intent_file(&design.provenance.intent_hash, false, None));
+        let file = d.join(eda_ops::imported_intent_file(&design.provenance.intent_hash, false, None, None));
         assert!(file.is_file(), "{}", file.display());
         let model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(model.parts.iter().map(|p| p.reference.as_str()).collect::<Vec<_>>(), vec!["R1"]);
@@ -402,7 +406,7 @@ mod tests {
         prepare_board(&cmd, &d).unwrap();
         assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), first);
         prepare_board(&Cmd::Rip { part: "R1".into() }, &d).unwrap();
-        let bad = Cmd::ReplaceBoard { text: "hello".into(), name: "y.brd".into(), keep_kicad_layer_names: false, project: None };
+        let bad = Cmd::ReplaceBoard { text: "hello".into(), name: "y.brd".into(), keep_kicad_layer_names: false, project: None, rules: None };
         assert_eq!(prepare_board(&bad, &d).unwrap_err()[0].check, "ops_bad_board");
         assert_eq!(std::fs::read_dir(d.join("imports")).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(&d);
@@ -482,10 +486,10 @@ mod tests {
         let d = scratch("names");
         let text = FOREIGN_BOARD.replace("(0 \"F.Cu\" signal)", "(0 \"F.Cu\" signal \"Top Layer\")");
         let model_of = |keep: bool| {
-            let cmd = Cmd::ReplaceBoard { text: text.clone(), name: "x.brd".into(), keep_kicad_layer_names: keep, project: None };
+            let cmd = Cmd::ReplaceBoard { text: text.clone(), name: "x.brd".into(), keep_kicad_layer_names: keep, project: None, rules: None };
             prepare_board(&cmd, &d).unwrap();
             let (design, _, _) = eda::import_kicad_pcb(&text).unwrap();
-            let yaml = std::fs::read_to_string(d.join(eda_ops::imported_intent_file(&design.provenance.intent_hash, keep, None))).unwrap();
+            let yaml = std::fs::read_to_string(d.join(eda_ops::imported_intent_file(&design.provenance.intent_hash, keep, None, None))).unwrap();
             serde_yaml::from_str::<eda_model::ConstraintModel>(&yaml).unwrap()
         };
         assert_eq!(model_of(false).board.layer_setup.names.get("F.Cu").map(String::as_str), Some("Top Layer"));
@@ -503,7 +507,7 @@ mod tests {
             "net_settings": { "classes": [ { "name": "Default", "clearance": 0.2, "track_width": 0.2 }, { "name": "highpower", "track_width": 0.3048, "clearance": 0.2 } ],
                               "netclass_patterns": [ { "netclass": "highpower", "pattern": "VCC" } ] } }"#;
         let dir = board_dir("project");
-        let import = |project: Option<&str>| Cmd::ReplaceBoard { text: FOREIGN_BOARD.into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: project.map(String::from) };
+        let import = |project: Option<&str>| Cmd::ReplaceBoard { text: FOREIGN_BOARD.into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: project.map(String::from), rules: None };
 
         crate::board::step(&dir, import(None), false, "test").unwrap();
         let (_, _, plain) = crate::board::load(&dir).unwrap();
@@ -529,6 +533,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// p22 F3: the custom rules the importer wrote (`.kicad_dru`, which `Cmd::ReplaceBoard` carries as `rules`) are the imported board's custom rules, and the same text with
+    /// them is another model (another file).
+    #[test]
+    fn a_board_brings_the_custom_rules_its_importer_wrote() {
+        let dru = "(version 1)\n(rule \"DiffPair_D1_gap\" (condition \"A.NetName == 'N1' && B.NetName == 'N2'\") (constraint clearance (min 0.3048mm)))\n";
+        let dir = board_dir("rules");
+        let import = |rules: Option<&str>| Cmd::ReplaceBoard { text: FOREIGN_BOARD.into(), name: "x.asc".into(), keep_kicad_layer_names: false, project: None, rules: rules.map(String::from) };
+        crate::board::step(&dir, import(None), false, "test").unwrap();
+        let (_, _, plain) = crate::board::load(&dir).unwrap();
+        assert!(plain.board.custom_rules_text.is_none());
+        crate::board::step(&dir, import(Some(dru)), false, "test").unwrap();
+        let (_, _, model) = crate::board::load(&dir).unwrap();
+        assert!(model.board.custom_rules_text.as_deref().is_some_and(|t| t.contains("DiffPair_D1_gap")), "{:?}", model.board.custom_rules_text);
+        assert_eq!(std::fs::read_dir(dir.join("imports")).unwrap().count(), 2, "the same text with rules is another model, so another file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// File > Import > Non-KiCad Board is one step of the history: the parts, nets and footprints of the file replace the board's (not the intent's file, which is
     /// the old board's and stays), the gates do not refuse it, and an undo brings the old board back with its model; a redo, the imported one.
     #[test]
@@ -536,7 +557,7 @@ mod tests {
         use eda_ops::Domain;
         let dir = board_dir("replace");
         assert_eq!(parts(&dir), vec!["J9"]);
-        let cmd = Cmd::ReplaceBoard { text: FOREIGN_BOARD.into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: None };
+        let cmd = Cmd::ReplaceBoard { text: FOREIGN_BOARD.into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: None, rules: None };
         // `strict`: the gates would refuse a move that makes the board worse; an import is not one.
         crate::board::step(&dir, cmd, true, "test").expect("the import");
         assert_eq!(parts(&dir), vec!["R1"], "the old board's J9 is gone, the file's R1 is the board");
@@ -560,7 +581,7 @@ mod tests {
         assert_eq!(parts(&dir), vec!["R1"], "the imported board again, from the file the first run left");
         // A second import replaces the first, and undoes back to it.
         let other = FOREIGN_BOARD.replace("\"R1\"", "\"C7\"");
-        crate::board::step(&dir, Cmd::ReplaceBoard { text: other, name: "y.brd".into(), keep_kicad_layer_names: false, project: None }, false, "test").unwrap();
+        crate::board::step(&dir, Cmd::ReplaceBoard { text: other, name: "y.brd".into(), keep_kicad_layer_names: false, project: None, rules: None }, false, "test").unwrap();
         assert_eq!(parts(&dir), vec!["C7"]);
         crate::board::undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(parts(&dir), vec!["R1"]);
@@ -572,7 +593,7 @@ mod tests {
     fn a_file_that_is_no_board_changes_nothing() {
         let dir = board_dir("refused");
         let before = std::fs::read_to_string(dir.join("design.json")).unwrap();
-        let e = crate::board::step(&dir, Cmd::ReplaceBoard { text: "not a board".into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: None }, false, "test").unwrap_err();
+        let e = crate::board::step(&dir, Cmd::ReplaceBoard { text: "not a board".into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: None, rules: None }, false, "test").unwrap_err();
         assert_eq!(e[0].check, "ops_bad_board");
         assert_eq!(std::fs::read_to_string(dir.join("design.json")).unwrap(), before);
         assert!(!dir.join("imports").exists());
@@ -635,6 +656,7 @@ mod tests {
             log: vec![],
             files: ["x-eagle-import.kicad_sym", "x_10.kicad_sch", "x_2.kicad_sch", "child.kicad_sch", "x_3.kicad_sch", "sym-lib-table", "sub/inner.kicad_sch", "x.kicad_sch"].map(String::from).to_vec(),
             project: None,
+            rules: None,
         };
         let mut first = SheetFile::default();
         first.screens.insert("child.kicad_sch".into(), SchematicSection::default());

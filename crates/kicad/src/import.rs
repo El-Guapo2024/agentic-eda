@@ -38,7 +38,7 @@
 //!   curves, cutouts, several loops, an outline that does not close -- stays what it is: every item is a
 //!   [`eda_model::ir::Shape`] on layer `Edge.Cuts` ([`eda_model::ir::DrawingsSection::outline_is_shapes`]),
 //!   the writer emits the same shapes, and `placement.outline` is only the summary of the outline they
-//!   make. A footprint's own Edge.Cuts graphics become board-level shapes. Nothing is closed that was not
+//!   make. A footprint's own Edge.Cuts graphics stay in the footprint (its art). Nothing is closed that was not
 //!   closed: what KiCad reports as a malformed outline is in [`ImportNotes::outline_errors`]. A track
 //!   `(arc ...)` is kept as an arc ([`eda_model::ir::Track::new_arc`], counted in
 //!   [`ImportNotes::track_arcs_kept`], and written back as an arc), and a board-level `gr_arc` is a
@@ -87,8 +87,9 @@ pub struct ImportNotes {
     /// older build still reads.)
     pub non_rect_pad_shapes_approximated: usize,
     /// A `(pad ...)` whose own `(layers ...)` list names no copper layer at
-    /// all (no `F.Cu`/`B.Cu`/`*.Cu`/inner `.Cu`) -- dropped on import rather
-    /// than kept as a phantom copper pad. Real boards use this for a
+    /// all (no `F.Cu`/`B.Cu`/`*.Cu`/inner `.Cu`) -- not a pad of the model's footprint rather
+    /// than a phantom copper pad; it is kept as the file wrote it (`FootprintExtra::aux_pads`, and a mask
+    /// aperture also as a mask graphic for the DRC) and written back, so the stencil keeps its openings. Real boards use this for a
     /// paste-stencil-only or mask-only auxiliary "pad" (a generator's way to
     /// carry extra paste/mask geometry, e.g. a thermal pad split into
     /// solder-paste quadrants for a QFN/SON "PullBack" footprint): it has no
@@ -130,6 +131,10 @@ pub struct ImportNotes {
     /// (`eda_kicad::zone_fills::entries_of_imported_file`) files them beside `design.json`, so an imported board shows the fills it was saved with.
     #[serde(skip)]
     pub zone_fills: Vec<crate::zone_fills::ScannedFill>,
+    /// The id each item of the file has in the design, by the uuid the file gave it (`(uuid ..)`, `(tstamp ..)`): footprints, pads (`REF.NUM`), tracks, vias, zones,
+    /// shapes, texts and the other items. What a project's DRC exclusions name their items by (`eda_kicad::drc_exclusions::from_project`).
+    #[serde(skip)]
+    pub item_ids: BTreeMap<String, String>,
 }
 
 /// Parse a `.kicad_pcb` file's text into our own design + constraint
@@ -162,7 +167,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let (tracks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts, text_extras) = import_drawings(root, &net_names, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
-    let (outline, outline_is_shapes, outline_width_nm) = import_outline(root, &mut shapes, &mut refs, &mut notes);
+    let (outline, outline_is_shapes, outline_width_nm) = import_outline(&mut shapes, &mut refs, &mut notes);
     let dimensions = import_items::import_dimensions(root, &mut refs);
     let barcodes = crate::barcode_io::read_all(root, &mut refs.barcodes);
     let board_items = crate::pcb_items_io::read_all(root, &mut refs.board_items);
@@ -300,6 +305,9 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
     // uuid, and `locked` rides on each item (`BOARD_ITEM::IsLocked()`).
     let (groups, locked_ids) = refs.resolve(&design, &import_items::import_groups(root));
+    for (uuid, id) in refs.item_ids(&design) {
+        notes.item_ids.entry(uuid).or_insert(id);
+    }
     if !groups.is_empty() || !locked_ids.is_empty() {
         let dr = design.drawings.get_or_insert_with(Default::default);
         dr.groups = groups;
@@ -308,7 +316,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     }
     // `(generated ..)`: the tuning patterns, named by the same file uuids.
     crate::pcb_generated::attach_patterns(&mut design, root, &refs);
-    let model = ConstraintModel { schema: eda_model::INTENT_SCHEMA_VERSION,
+    let mut model = ConstraintModel { schema: eda_model::INTENT_SCHEMA_VERSION,
         parts,
         nets,
         intent_net_names: Default::default(),
@@ -327,6 +335,22 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         allow: Default::default(),
         solver: Default::default(),
     };
+    // The summary of an outline made of shapes, now that the shapes have their styles (a rectangle's corner radius) and the model holds the footprints' own Edge.Cuts
+    // (a card-edge tab a footprint closes): `BuildBoardPolygonOutlines` with its footprint pass.
+    eda_drc::outline::refresh_outline_summary(&mut design, Some(&model));
+    // The footprints' own Edge.Cuts (their art) take part in the outline, through `BuildBoardPolygonOutlines`' footprint pass: what the notes say of the outline is
+    // then the check of the whole, as kicad-cli's `testOutline` makes it.
+    if !eda_drc::outline::footprint_edge_cuts_shapes(&design, &model).is_empty() {
+        let built = eda_drc::outline::board_outline_with(&design, Some(&model), true);
+        notes.outline_open = !built.valid;
+        notes.outline_errors = eda_drc::outline::check_board_outline_with(&design, Some(&model))
+            .iter()
+            .map(|e| format!("{} at ({:.3}, {:.3}) mm", e.describe(), eda_model::units::to_mm(e.at.x), eda_model::units::to_mm(e.at.y)))
+            .collect();
+        if notes.outline_source != "none" {
+            model.board.outline_closed = Some(!notes.outline_open);
+        }
+    }
     Ok((design, model, notes))
 }
 
@@ -1282,10 +1306,12 @@ pub(crate) fn parse_pad_geometry_in(pad: &[Sexpr], fp_side: Side, fp_rot: u32, n
             return None;
         }
         // An SMD pad on the other outer layer than its footprint (layers
-        // on file are already flipped for a back-side footprint).
+        // on file are already flipped for a back-side footprint). A pad on several copper layers is on the front-most of them as far as connectivity goes
+        // (`CN_LIST::Add( PAD* )`: `LSEQ lmsk = pad->GetLayerSet().CuStack(); item->SetLayer( lmsk.front() )`), which is `F.Cu` whenever the set has it.
         if pad_kind == PadKind::Smd {
-            let (f, b) = (names.contains(&"F.Cu"), names.contains(&"B.Cu"));
-            opposite_side = if fp_side == Side::Bottom { f && !b } else { b && !f };
+            let f = names.iter().any(|l| matches!(*l, "F.Cu" | "*.Cu" | "F&B.Cu"));
+            let b = names.iter().any(|l| matches!(*l, "B.Cu" | "*.Cu" | "F&B.Cu"));
+            opposite_side = if fp_side == Side::Bottom { f } else { b && !f };
         }
     }
 
@@ -1564,6 +1590,10 @@ fn import_footprints(
                 }
                 if let Some(h) = layerless_hole(pad, side, rot, file_version, notes) {
                     extra.holes.push(h);
+                } else if let Some(aux) = aux_pad(pad, net_names) {
+                    // A paste-only or mask-only pad (no copper): kept as the file had it (`FootprintExtra::aux_pads`).
+                    extra.aux_pads.push(aux);
+                    extra.aux_pads_rot = rot;
                 }
                 continue;
             };
@@ -1586,6 +1616,9 @@ fn import_footprints(
                     pin_nets.push((format!("{reference}.{}", p.number), name));
                 }
                 pins.push(Pin { number: p.number.clone(), name: None, kind: PinKind::Signal });
+            }
+            if let Some(u) = import_items::item_uuid(pad) {
+                notes.item_ids.entry(u).or_insert_with(|| format!("{reference}.{}", p.number));
             }
             pads.push(p);
         }
@@ -1666,6 +1699,9 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
             Some("property") => matches!(sexpr::txt(item, 1), Some("Datasheet") | Some("Description") | Some("ki_fp_filters") | Some("ki_keywords") | Some("ki_locked") | Some("ki_description")),
             // In pre-9.0 files a paste margin of 0 meant "inherit" (the parser reads it so, `parseFOOTPRINT_unchecked`); written to a new file it would be a margin of its own.
             Some("solder_paste_margin") | Some("solder_paste_ratio") | Some("solder_paste_margin_ratio") => !(file_version <= 20240201 && sexpr::num(item, 1) == Some(0.0)),
+            // KiCad 10's typed model, the Extruded 3D Body (`(model (type extruded) (overall_height ..) (body_pcb_gap ..) ..)`: `parseFOOTPRINT`'s `case T_model:` "Typed
+            // model", written by `format( FOOTPRINT )`'s "Save extruded 3D body info."): it has no path, so `models_from` does not take it; kept as the file wrote it.
+            Some("model") => sexpr::txt(item, 1).is_none(),
             Some(t) => !OWN.contains(&t),
             None => false,
         };
@@ -1763,6 +1799,11 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
         info.connector = sexpr::txt(pad, 2) == Some("connect");
         let smd = matches!(sexpr::txt(pad, 2), Some("smd") | Some("connect"));
         info.no_paste = smd && !info.layers.iter().any(|l| l.ends_with(".Paste"));
+        // An SMD pad on several copper layers keeps its set (`PadMaskInfo::smd_layers`).
+        if sexpr::txt(pad, 2) == Some("smd") && info.layers.iter().filter(|l| l.ends_with(".Cu")).count() > 1 {
+            info.smd_layers = info.layers.iter().filter(|l| l.ends_with(".Cu") || l.ends_with(".Mask") || l.ends_with(".Paste")).map(|l| eda_model::fp_art::layer_on_side(l, side)).collect();
+            info.smd_layers.sort();
+        }
         info.no_mask = !info.layers.iter().any(|l| l.ends_with(".Mask"));
     }
     if let Some(m) = sexpr::find(pad, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
@@ -1820,6 +1861,18 @@ fn layerless_hole(pad: &[Sexpr], fp_side: Side, fp_rot: u32, file_version: i64, 
     // `(clearance C)` on the pad (`PAD::SetLocalClearance`); in pre-9.0 files 0 meant "inherit".
     let clearance = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_nm).filter(|&c| !(file_version <= 20240201 && c == 0));
     Some(eda_model::ir::FootprintHole { pad: p, clearance })
+}
+
+/// A pad with no copper layer, as the file wrote it, its `(net ..)` taken out and named ([`eda_model::ir::FootprintAuxPad`]); `None` for a pad with copper or no
+/// `(layers ..)` (one [`parse_pad_geometry_in`] keeps or cannot place).
+fn aux_pad(pad: &[Sexpr], net_names: &BTreeMap<i64, String>) -> Option<eda_model::ir::FootprintAuxPad> {
+    let names: Vec<&str> = sexpr::find(pad, "layers")?.iter().skip(1).filter_map(Sexpr::text).collect();
+    if names.is_empty() || names.iter().any(|l| l.ends_with(".Cu")) {
+        return None;
+    }
+    let net = net_ref(sexpr::find(pad, "net"), net_names);
+    let kept: Vec<Sexpr> = pad.iter().filter(|c| !c.as_list().is_some_and(|l| sexpr::tag(l) == Some("net"))).cloned().collect();
+    Some(eda_model::ir::FootprintAuxPad { text: sexpr::to_text(&Sexpr::List(kept)), net })
 }
 
 /// A pad with no copper layer but a mask layer is a pure mask aperture
@@ -2126,9 +2179,11 @@ pub(crate) fn graphic_shape(item: &[Sexpr], tag: &str, at: impl Fn(Point) -> Poi
         "gr_rect" => Shape::Rect { id: String::new(), layer, stroke_width, filled, start: pt("start")?, end: pt("end")? },
         "gr_circle" => Shape::Circle { id: String::new(), layer, stroke_width, filled, center: pt("center")?, end: pt("end")? },
         "gr_poly" => Shape::Polygon { id: String::new(), layer, stroke_width, filled, pts: poly_points(item)?.into_iter().map(&at).collect() },
-        // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`), never filled.
+        // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`), never filled. The four points as they are (`parsePCB_SHAPE`,
+        // `case T_pts` then `SetStart`, `SetBezierC1`, `SetBezierC2`, `SetEnd`): a control point on an end point, which KiCad's curve tool leaves until it is dragged, is no
+        // repeated point to drop as in a polygon.
         "gr_curve" => {
-            let pts: Vec<Point> = poly_points(item)?.into_iter().map(&at).collect();
+            let pts: Vec<Point> = sexpr::find(item, "pts")?.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l) == Some("xy")).filter_map(xy_point).map(&at).collect();
             let [start, c1, c2, end] = pts[..] else { return None };
             Shape::Bezier { id: String::new(), layer, stroke_width, filled: false, start, c1, c2, end }
         }
@@ -2138,47 +2193,7 @@ pub(crate) fn graphic_shape(item: &[Sexpr], tag: &str, at: impl Fn(Point) -> Poi
 
 // ---------------------------------------------------------------- outline
 
-fn is_edge_cuts(item: &[Sexpr]) -> bool {
-    sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("Edge.Cuts")
-}
-
-/// A footprint's own Edge.Cuts graphics (`fp_line`, `fp_arc`, `fp_rect`, `fp_circle`, `fp_poly`, `fp_curve`) as board-level shapes.
-/// `BuildBoardPolygonOutlines` collects every Edge.Cuts shape of the board, a footprint's included -- a card-edge connector's tab, a
-/// connector's mounting slot -- and chains them with the board's own, so they are board-level shapes here. A footprint's items are in its own
-/// frame: board = position + RotatePoint( local, orientation ). A rectangle that the footprint's turn leaves tilted is a polygon.
-fn footprint_edge_cuts(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs) {
-    for fp in sexpr::find_all(root, "footprint").chain(sexpr::find_all(root, "module")) {
-        let Some(at) = sexpr::find(fp, "at") else { continue };
-        let (Some(fx), Some(fy)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
-        let angle = sexpr::num(at, 3).unwrap_or(0.0);
-        let (sin, cos) = angle.to_radians().sin_cos();
-        let (ox, oy) = (mm_to_nm(fx), mm_to_nm(fy));
-        let to_board = |p: Point| -> Point {
-            let (x, y) = (p.x as f64, p.y as f64);
-            Point { x: ox + (x * cos + y * sin).round() as i64, y: oy + (-x * sin + y * cos).round() as i64 }
-        };
-        let square_turn = angle.rem_euclid(90.0) == 0.0;
-        for tag in ["fp_line", "fp_arc", "fp_rect", "fp_circle", "fp_poly", "fp_curve"] {
-            for item in sexpr::find_all(fp, tag).filter(|it| is_edge_cuts(it)) {
-                let board_tag = tag.replace("fp_", "gr_");
-                let Some(shape) = graphic_shape(item, &board_tag, to_board) else { continue };
-                let shape = match shape {
-                    Shape::Rect { id, layer, stroke_width, filled, start, end } if !square_turn => {
-                        // Turn the corners one by one: `start` and `end` of a tilted rectangle are not opposite corners of a rectangle.
-                        let (a, b) = (sexpr::find(item, "start").and_then(xy_point).unwrap_or(start), sexpr::find(item, "end").and_then(xy_point).unwrap_or(end));
-                        let pts = edge::rect_corners(a, b).map(to_board).to_vec();
-                        Shape::Polygon { id, layer, stroke_width, filled, pts }
-                    }
-                    other => other,
-                };
-                shapes.push(shape);
-                refs.shapes.push(ItemRef::of(item));
-            }
-        }
-    }
-}
-
-/// The board outline, from the Edge.Cuts shapes in `shapes` (the board's and, promoted, its footprints').
+/// The board outline, from the board-level Edge.Cuts shapes in `shapes` (a footprint's own stay in the footprint).
 ///
 /// KiCad builds the board outline from these (`BOARD::GetBoardPolygonOutlines`, ported in `eda_drc::outline`): lines, arcs, circles, rectangles,
 /// polygons and curves chained end to end into closed contours, a contour inside another being a cutout. The common board is lines that chain
@@ -2189,8 +2204,9 @@ fn footprint_edge_cuts(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs)
 ///
 /// Returns the polygon for `placement.outline`, whether the shapes are the outline, and, when the outline is the loop of lines, the one width they are drawn at
 /// (`DrawingsSection::outline_width_nm`; lines of different widths are not one loop of lines here, they stay shapes).
-fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNotes) -> (Vec<Point>, bool, Option<i64>) {
-    footprint_edge_cuts(root, shapes, refs);
+fn import_outline(shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNotes) -> (Vec<Point>, bool, Option<i64>) {
+    // A footprint's own Edge.Cuts stay in the footprint, as its art (`fp_art_io`), where KiCad keeps them (`FOOTPRINT::GraphicalItems`): they move with it, and the
+    // outline takes them in with `BuildBoardPolygonOutlines`' footprint pass (`eda_drc::outline::board_outline_with`).
     let items: Vec<Shape> = shapes.iter().filter(|s| edge::is_edge_cuts(s)).cloned().collect();
     if items.is_empty() {
         notes.outline_source = "none";
@@ -2226,9 +2242,9 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
 /// copper pours, teardrops (`(attr (teardrop ...))`) and rule areas
 /// (`(keepout ...)`/`(placement ...)`). A zone keeps its layer set
 /// (`Zone::layers`: `(layers "F.Cu" "B.Cu")`, `*.Cu`, `F&B.Cu`, `*.Mask`), and a zone
-/// with no copper layer in it is a non-copper zone. This IR's `Zone` has a single
-/// outline, so a zone with several `(polygon ...)` outlines (the first is the outline,
-/// the others its holes) becomes one `Zone` per `(polygon ...)`. The stored `(filled_polygon ...)`s are not part of the
+/// with no copper layer in it is a non-copper zone. A zone has one
+/// outline and its holes (`Zone::holes`): the first `(polygon ...)` is the outline, the others
+/// its holes (`ZONE::AddPolygon`). The stored `(filled_polygon ...)`s are not part of the
 /// design: the scan of the file (`eda_kicad::zone_fills::scan_zone_fills`) is handed out in [`ImportNotes::zone_fills`] and kept beside `design.json` as the board's fills (KiCad's
 /// own, as saved), which is what kicad-cli's `pcb drc --refill-zones` replaces on the next Fill All Zones. Footprint-level
 /// zones are imported too, tagged with their parent footprint.
@@ -2405,11 +2421,12 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         }
         // `ZONE::m_Uuid` (`(uuid ..)`, `(tstamp ..)` before KiCad 8): the tie between zones of equal priority is decided by it (`ZONE::HigherPriority`).
         zone.uuid = sexpr::find(z, "uuid").or_else(|| sexpr::find(z, "tstamp")).and_then(|u| sexpr::txt(u, 1)).unwrap_or("").to_string();
-        let item_ref = ItemRef::of(z);
-        for outline in &outlines {
-            out.push(Zone { outline: outline.clone(), ..zone.clone() });
-            refs.zones.push(item_ref.clone());
-        }
+        // `case T_polygon` then `ZONE::AddPolygon`: the first `(polygon ...)` is the outline, every later one a hole in it (`m_Poly->AddHole( aPolygon )`).
+        let mut outlines = outlines.into_iter();
+        zone.outline = outlines.next().unwrap_or_default();
+        zone.holes = outlines.collect();
+        out.push(zone);
+        refs.zones.push(ItemRef::of(z));
     }
     out
 }

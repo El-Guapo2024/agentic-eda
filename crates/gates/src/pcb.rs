@@ -34,16 +34,21 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
     inside
 }
 
+/// Inside the zone's outline and in none of its holes.
+fn in_zone(p: Point, z: &eda_model::ir::Zone) -> bool {
+    point_in_polygon(p, &z.outline) && !z.holes.iter().any(|h| h.len() >= 3 && point_in_polygon(p, h))
+}
+
 /// What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for the board's Edge.Cuts, from the live port of the same
 /// check (`eda_drc::outline::check_board_outline`): a gap wider than the chaining epsilon, a chain that crosses itself, a contour that crosses another,
 /// a line a few nanometres long. One finding per place, located at the Edge.Cuts items it names (or `outline`). A board whose outline is its polygon has
 /// nothing to check, and says nothing; one with other Edge.Cuts items passes once when they chain cleanly. This is not a second DRC -- kicad-cli's
 /// run on the exported file is the judge -- it is the outline the router and the 3D view are working from, reported while it is drawn.
-fn outline_malformed(design: &Design) -> Vec<CheckResult> {
-    if !(eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design)) {
+fn outline_malformed(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
+    if !(eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design) || has_footprint_edges(design, model)) {
         return Vec::new();
     }
-    let errors = eda_drc::outline::check_board_outline(design);
+    let errors = eda_drc::outline::check_board_outline_with(design, Some(model));
     if errors.is_empty() {
         return vec![CheckResult::pass("placement_outline_malformed")];
     }
@@ -59,6 +64,11 @@ fn outline_malformed(design: &Design) -> Vec<CheckResult> {
         .collect()
 }
 
+/// Some footprint has Edge.Cuts of its own (a slot, a notch), which the outline takes in.
+fn has_footprint_edges(design: &Design, model: &ConstraintModel) -> bool {
+    !eda_drc::outline::footprint_edge_cuts_shapes(design, model).is_empty()
+}
+
 /// Where the board's parts and copper must lie: `placement.outline` as the plain polygon it is for a board that has nothing else on Edge.Cuts, or,
 /// when Edge.Cuts has cutouts, arcs or several outlines, the outline KiCad builds from them (`eda_drc::outline`) -- a courtyard in a cutout is not
 /// on the board. A malformed outline (it does not chain) falls back to the polygon, which is then the rectangle round the edges.
@@ -68,9 +78,9 @@ enum Region<'a> {
 }
 
 impl<'a> Region<'a> {
-    fn of(design: &Design, polygon: &'a [Point]) -> Region<'a> {
-        if eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design) {
-            let outline = eda_drc::outline::board_outline(design, false);
+    fn of(design: &Design, model: &ConstraintModel, polygon: &'a [Point]) -> Region<'a> {
+        if eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design) || has_footprint_edges(design, model) {
+            let outline = eda_drc::outline::board_outline_with(design, Some(model), false);
             if outline.valid && !outline.polys.is_empty() {
                 return Region::Complex(outline);
             }
@@ -216,7 +226,7 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
         out.push(CheckResult::fail("placement_outline", "design.placement.outline", "outline needs at least 3 points"));
         return out;
     }
-    out.extend(outline_malformed(design));
+    out.extend(outline_malformed(design, model));
 
     // Coverage.
     let mut seen: HashMap<&str, usize> = HashMap::new();
@@ -271,7 +281,7 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
     }
 
     let mut inside_ok = true;
-    let region = Region::of(design, &pl.outline);
+    let region = Region::of(design, model, &pl.outline);
     for (id, (r, _)) in &courtyards {
         if !r.corners().iter().all(|c| region.inside(*c)) {
             inside_ok = false;
@@ -696,7 +706,7 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     // Track width against the net class is `eda-lint`'s (below); outline
     // containment has no KiCad equivalent and stays exactly as it was.
     let mut outline_ok = true;
-    let region = Region::of(design, &pl.outline);
+    let region = Region::of(design, model, &pl.outline);
     for (i, t) in rt.tracks.iter().enumerate() {
         for p in &t.pts {
             if !region.inside_or_on(*p) {
@@ -1174,13 +1184,13 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
         let zone_base = via_base + vias.len();
         for (zi, z) in zones.iter().enumerate() {
             for (pi, pad) in net_pads.iter().enumerate() {
-                if pad.layers.iter().any(|l| z.is_on_layer(l)) && point_in_polygon(Point { x: (pad.rect.0 + pad.rect.2) / 2, y: (pad.rect.1 + pad.rect.3) / 2 }, &z.outline) {
+                if pad.layers.iter().any(|l| z.is_on_layer(l)) && in_zone(Point { x: (pad.rect.0 + pad.rect.2) / 2, y: (pad.rect.1 + pad.rect.3) / 2 }, z) {
                     uf.union(pi, zone_base + zi);
                 }
             }
             for (vi, v) in vias.iter().enumerate() {
                 let spans = z.is_on_layer(&v.from_layer) || z.is_on_layer(&v.to_layer);
-                if spans && point_in_polygon(v.at, &z.outline) {
+                if spans && in_zone(v.at, z) {
                     uf.union(via_base + vi, zone_base + zi);
                 }
             }

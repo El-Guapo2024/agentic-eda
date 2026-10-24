@@ -877,7 +877,7 @@ fn a_replaced_boards_drill_chart_lists_its_footprints_holes_in_the_same_step() {
     };
     let dir = scratch("drill_chart_replace");
     setup(&dir);
-    step(&dir, Cmd::ReplaceBoard { text, name: "api_kitchen_sink.kicad_pcb".into(), keep_kicad_layer_names: false, project: None }, false, "test").unwrap();
+    step(&dir, Cmd::ReplaceBoard { text, name: "api_kitchen_sink.kicad_pcb".into(), keep_kicad_layer_names: false, project: None, rules: None }, false, "test").unwrap();
     let dr = load(&dir).unwrap().1.drawings.unwrap();
     let chart = dr.board_items.drill_charts.first().expect("the kitchen sink's chart");
     let t = dr.tables.iter().find(|t| t.id == chart.table_id).unwrap();
@@ -903,7 +903,7 @@ fn fill_all_regenerates_a_via_stitching_over_the_new_fill() {
     }
     let dir = scratch("stitch_fill");
     setup(&dir);
-    step(&dir, Cmd::ReplaceBoard { text, name: "stitch_fp_rulearea.kicad_pcb".into(), keep_kicad_layer_names: false, project: None }, false, "test").unwrap();
+    step(&dir, Cmd::ReplaceBoard { text, name: "stitch_fp_rulearea.kicad_pcb".into(), keep_kicad_layer_names: false, project: None, rules: None }, false, "test").unwrap();
     let design = load(&dir).unwrap().1;
     let v = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
     let kicad: std::collections::BTreeSet<(i64, i64)> = design.routing.as_ref().unwrap().vias.iter().filter(|x| v.member_ids.contains(&x.id)).map(|x| (x.at.x, x.at.y)).collect();

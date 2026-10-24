@@ -14,9 +14,10 @@
 //!
 //! Differences from the C++, all in how the data is held and none in the geometry:
 //! - the KD-tree of end points is a grid of the same epsilon, with the same "two nearest end points" rule (`findNext`);
-//! - a footprint's own Edge.Cuts graphics are board-level shapes here (the importer promotes them), so `BuildBoardPolygonOutlines`' pass
-//!   over footprints (holes when copper lies outside a footprint's contour) is the ordinary hierarchy test: a closed contour inside the
-//!   board is a hole;
+//! - a footprint's own Edge.Cuts graphics are its art (`eda_model::fp_art`, in the footprint's frame, so they move with it); the outline
+//!   of a design together with its model ([`board_outline_with`], [`check_board_outline_with`]) has `BuildBoardPolygonOutlines`' pass over
+//!   the footprints (a footprint's contours are holes, subtracted at the end, when copper lies outside them or there are several), and
+//!   the outline of a design alone ([`board_outline`]) leaves them out;
 //! - a closed shape's own start and end (a circle's centre and rim, a rectangle's corners) are not end points a chain can attach to;
 //! - arcs are always flattened (`aAllowUseArcsInPolygons` is false), the setting every consumer except the STEP export uses.
 //!
@@ -902,7 +903,81 @@ pub fn board_outline(design: &Design, infer: bool) -> BoardOutline {
             return BoardOutline { polys: ShapePolySet::from_outline(to_line_chain(ring)), valid: true, inferred: false, errors: Vec::new() };
         }
     }
-    board_outline_of(&edge::edge_cuts_shapes(design), infer)
+    board_outline_of(&edge::edge_cuts_outline_shapes(design), infer)
+}
+
+/// The Edge.Cuts of each placed footprint (its art on Edge.Cuts, on the board, each shape named by the footprint), with the boxes of its pads on the board.
+fn footprint_edge_cuts(design: &Design, model: &eda_model::ConstraintModel) -> Vec<(Vec<Shape>, Vec<(Point, Point)>)> {
+    let Some(pl) = &design.placement else { return Vec::new() };
+    let mut out = Vec::new();
+    for fp in &pl.footprints {
+        let Some(part) = model.part(&fp.id) else { continue };
+        let Some(footprint) = model.footprint_of(part) else { continue };
+        let mut shapes: Vec<Shape> = footprint.art.shapes.iter().filter(|s| s.shape.layer() == edge::EDGE_CUTS).map(|s| s.placed(fp).shape).collect();
+        if shapes.is_empty() {
+            continue;
+        }
+        for s in &mut shapes {
+            s.set_id(fp.id.clone());
+        }
+        let pads = footprint.pads.iter().map(|p| {
+            let g = eda_model::footprint::placed_pad_of(fp, p);
+            let (hw, hh) = (g.size.0 / 2, g.size.1 / 2);
+            (Point { x: g.center.x - hw, y: g.center.y - hh }, Point { x: g.center.x + hw, y: g.center.y + hh })
+        });
+        out.push((shapes, pads.collect()));
+    }
+    out
+}
+
+/// Every placed footprint's own Edge.Cuts, on the board.
+pub fn footprint_edge_cuts_shapes(design: &Design, model: &eda_model::ConstraintModel) -> Vec<Shape> {
+    footprint_edge_cuts(design, model).into_iter().flat_map(|(s, _)| s).collect()
+}
+
+/// `isCopperOutside( aFootprint, aShape )`: a pad of the footprint has nothing in common with its contours (`poly.BooleanIntersection( *pad->GetEffectivePolygon(
+/// .. ) ); if( poly.OutlineCount() == 0 ) padOutside = true`). The pad is its box here.
+fn copper_outside(contours: &ShapePolySet, pads: &[(Point, Point)]) -> bool {
+    pads.iter().any(|(lo, hi)| {
+        let mut poly = contours.clone();
+        poly.boolean_intersection(&ShapePolySet::from_outline(to_line_chain(&[*lo, Point { x: hi.x, y: lo.y }, *hi, Point { x: lo.x, y: hi.y }])));
+        poly.outline_count() == 0
+    })
+}
+
+/// `BuildBoardPolygonOutlines`' first pass: each footprint's Edge.Cuts made into contours on their own (`doConvertOutlineToPolygon( fpSegList, .., false, nullptr, .. )`,
+/// no error reported "here; the second pass also gets an opportunity to use these segments"); the contours of a footprint that has copper outside them, or several,
+/// are holes (`fpHoles.Append( fpOutlines )`), and the shapes of every other footprint go on to the board's own pass. Returns the items of that pass (the board's
+/// Edge.Cuts first), the holes, and every footprint Edge.Cuts shape.
+fn footprint_pass(design: &Design, model: &eda_model::ConstraintModel, max_error: f64) -> (Vec<Shape>, ShapePolySet, Vec<Shape>) {
+    let mut items = edge::edge_cuts_outline_shapes(design);
+    let mut holes = ShapePolySet::new();
+    let mut all = Vec::new();
+    for (shapes, pads) in footprint_edge_cuts(design, model) {
+        all.extend(shapes.iter().cloned());
+        let r = convert(&shapes, max_error, CHAINING_EPSILON_NM, false);
+        if r.success && (copper_outside(&r.polys, &pads) || r.polys.outline_count() > 1) {
+            holes.polys.extend(r.polys.polys);
+        } else {
+            items.extend(shapes);
+        }
+    }
+    (items, holes, all)
+}
+
+/// [`board_outline`] with the footprints' own Edge.Cuts, which the model holds (`BuildBoardPolygonOutlines`, both passes): a footprint's contours that are holes
+/// are taken out of the outline at the end (`fpHoles.Simplify(); aOutlines.BooleanSubtract( fpHoles )`), a footprint's other Edge.Cuts are board edges like
+/// any other. Without `model`, or with no footprint that has Edge.Cuts, this is [`board_outline`].
+pub fn board_outline_with(design: &Design, model: Option<&eda_model::ConstraintModel>, infer: bool) -> BoardOutline {
+    let Some(model) = model.filter(|m| !footprint_edge_cuts(design, m).is_empty()) else { return board_outline(design, infer) };
+    let (items, mut holes, _) = footprint_pass(design, model, MAX_ERROR_NM as f64);
+    let mut out = build_board_polygon_outlines(&items, MAX_ERROR_NM as f64, CHAINING_EPSILON_NM, infer);
+    if !holes.is_empty() {
+        holes.simplify();
+        out.polys.boolean_subtract(&holes);
+    }
+    out.polys.simplify();
+    out
 }
 
 /// [`board_outline`] of a list of Edge.Cuts items.
@@ -917,11 +992,13 @@ pub fn board_outline_of(shapes: &[Shape], infer: bool) -> BoardOutline {
 /// largest outline as a ring, or nothing when there is none. A design whose outline is its polygon is left alone.
 ///
 /// [`DrawingsSection::outline_is_shapes`]: eda_model::ir::DrawingsSection::outline_is_shapes
-pub fn refresh_outline_summary(design: &mut Design) {
+///
+/// With `model`, the outline is [`board_outline_with`]'s: the footprints' own Edge.Cuts take part (a card-edge tab a footprint closes), as do the rounded rectangles.
+pub fn refresh_outline_summary(design: &mut Design, model: Option<&eda_model::ConstraintModel>) {
     if !edge::outline_is_shapes(design) {
         return;
     }
-    let ring = board_outline(design, true).main_ring();
+    let ring = board_outline_with(design, model, true).main_ring();
     if let Some(pl) = design.placement.as_mut() {
         if pl.outline != ring {
             pl.outline = ring;
@@ -1114,7 +1191,23 @@ fn chained_loops(shapes: &[Shape], open: &[usize], max_error: f64, epsilon: Nm) 
 /// `kicad-cli pcb drc` reports `invalid_outline` ("Board has malformed outline") on the exported file. Empty when the outline is
 /// well-formed, and for a board that has none (`kicad-cli` has its own "(no edges found on Edge.Cuts layer)" for that).
 pub fn check_board_outline(design: &Design) -> Vec<OutlineError> {
-    check_edge_cuts(&edge::edge_cuts_shapes(design))
+    check_edge_cuts(&edge::edge_cuts_outline_shapes(design))
+}
+
+/// [`check_board_outline`] with the footprints' own Edge.Cuts ([`board_outline_with`]): `TestBoardOutlinesGraphicItems` looks at every Edge.Cuts shape, the
+/// footprints' too; the chaining only at those the footprint pass left to the board.
+pub fn check_board_outline_with(design: &Design, model: Option<&eda_model::ConstraintModel>) -> Vec<OutlineError> {
+    let Some(model) = model.filter(|m| !footprint_edge_cuts(design, m).is_empty()) else { return check_board_outline(design) };
+    let (items, _, fp_shapes) = footprint_pass(design, model, 50.0);
+    let mut every = edge::edge_cuts_outline_shapes(design);
+    every.extend(fp_shapes);
+    let mut errors = test_board_outlines_graphic_items(&every, 1.0, MAX_ERROR_NM as f64, CHAINING_EPSILON_NM);
+    let built = build_board_polygon_outlines(&items, 50.0, CHAINING_EPSILON_NM, true);
+    errors.extend(built.errors);
+    if !built.valid && errors.is_empty() {
+        errors.push(OutlineError { message: "(no edges found on Edge.Cuts layer)".to_string(), item_a: None, item_b: None, at: Point::default() });
+    }
+    errors
 }
 
 /// [`check_board_outline`] of a list of Edge.Cuts items.
@@ -1453,7 +1546,7 @@ mod tests {
         let out = board_outline(&d, true);
         assert!(out.valid, "{:?}", out.errors);
         assert_eq!((out.polys.outline_count(), out.polys.hole_count(0)), (1, 1));
-        refresh_outline_summary(&mut d);
+        refresh_outline_summary(&mut d, None);
         let summary = &d.placement.as_ref().expect("placement").outline;
         assert!(summary.len() > 60 && summary.iter().all(|q| (0..=40_000_000).contains(&q.x) && (0..=30_000_000).contains(&q.y)), "{} points", summary.len());
     }

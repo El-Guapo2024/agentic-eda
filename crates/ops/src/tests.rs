@@ -829,15 +829,62 @@ fn set_zone_outline_replaces_the_outline_only() {
     b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.priority = 5)).unwrap();
 
     let new_outline = vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }];
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: new_outline.clone() }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: new_outline.clone(), holes: None }).unwrap();
     let z = &b.design().routing.as_ref().unwrap().zones[0];
     assert_eq!(z.id, id, "id is stable across an outline edit");
     assert_eq!(z.outline, new_outline);
     assert_eq!(z.priority, 5, "SetZoneOutline must not touch any other setting");
 
-    let e = b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: vec![Point { x: 0, y: 0 }, Point { x: 1, y: 1 }] }).unwrap_err();
+    let e = b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: vec![Point { x: 0, y: 0 }, Point { x: 1, y: 1 }], holes: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
-    assert_eq!(b.apply(&Cmd::SetZoneOutline { id: "zone_nope".into(), outline: new_outline }).unwrap_err()[0].check, "ops_unknown_zone");
+    assert_eq!(b.apply(&Cmd::SetZoneOutline { id: "zone_nope".into(), outline: new_outline, holes: None }).unwrap_err()[0].check, "ops_unknown_zone");
+}
+
+/// A mirror sends the zone's holes with its outline (`ZONE::Mirror`: the whole polygon set); a corner edit sends none and keeps them.
+#[test]
+fn set_zone_outline_with_holes_replaces_them_and_without_keeps_them() {
+    let m = net_model();
+    let mut b = board(&m);
+    let sq = |x0: i64, y0: i64, x1: i64, y1: i64| vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }];
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: sq(0, 0, 10_000_000, 10_000_000) }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    let hole = sq(2_000_000, 2_000_000, 4_000_000, 4_000_000);
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(0, 0, 10_000_000, 10_000_000), holes: Some(vec![hole.clone()]) }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![hole.clone()]);
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(0, 0, 12_000_000, 10_000_000), holes: None }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![hole], "a corner edit leaves the holes");
+    let mirrored = sq(-4_000_000, 2_000_000, -2_000_000, 4_000_000);
+    b.apply(&Cmd::SetZoneOutline { id, outline: sq(-12_000_000, 0, 0, 10_000_000), holes: Some(vec![mirrored.clone()]) }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![mirrored]);
+}
+
+/// Moving a footprint with Edge.Cuts of its own moves the board's outline: the summary (`placement.outline`) follows (`BuildBoardPolygonOutlines`' footprint pass).
+#[test]
+fn moving_a_footprint_with_edge_cuts_refreshes_the_summary_outline() {
+    let text = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+    (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+    (net 0 "")
+    (gr_line (start 15 0) (end 0 0) (stroke (width 0.05) (type default)) (layer "Edge.Cuts") (uuid "e1"))
+    (gr_line (start 0 0) (end 0 30) (stroke (width 0.05) (type default)) (layer "Edge.Cuts") (uuid "e2"))
+    (gr_line (start 0 30) (end 40 30) (stroke (width 0.05) (type default)) (layer "Edge.Cuts") (uuid "e3"))
+    (gr_line (start 40 30) (end 40 0) (stroke (width 0.06) (type default)) (layer "Edge.Cuts") (uuid "e4"))
+    (gr_line (start 40 0) (end 25 0) (stroke (width 0.05) (type default)) (layer "Edge.Cuts") (uuid "e5"))
+    (footprint "L:Tab" (layer "F.Cu") (uuid "f1") (at 20 0)
+        (property "Reference" "J1" (at 0 2 0) (layer "F.SilkS") (uuid "p1"))
+        (fp_line (start -5 0) (end -5 -5) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts") (uuid "t1"))
+        (fp_line (start -5 -5) (end 5 -5) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts") (uuid "t2"))
+        (fp_line (start 5 -5) (end 5 0) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts") (uuid "t3"))
+        (pad "1" smd rect (at 0 -3) (size 1 2) (layers "F.Cu" "F.Mask") (uuid "a1")))
+)"#;
+    let (design, model, _) = eda_kicad::import_kicad_pcb(text).unwrap();
+    let mut b = Board::new(design, &model, 100_000, 300_000);
+    let min_y = |b: &Board| b.design().placement.as_ref().unwrap().outline.iter().map(|p| p.y).min().unwrap();
+    assert_eq!(min_y(&b), -5_000_000);
+    b.apply(&Cmd::MoveItems { ids: vec!["J1".into()], dx: 0, dy: -2_000_000 }).unwrap();
+    // The tab no longer meets the board's lines: KiCad's outline is open, the summary its inferred box; either way the summary changed with the footprint.
+    assert_ne!(min_y(&b), -5_000_000, "the summary followed J1: {:?}", b.design().placement.as_ref().unwrap().outline);
+    b.apply(&Cmd::MoveItems { ids: vec!["J1".into()], dx: 0, dy: 2_000_000 }).unwrap();
+    assert_eq!(min_y(&b), -5_000_000);
 }
 
 // ----------------------------------------------------------- teardrops
@@ -946,7 +993,7 @@ fn the_outline_summary_follows_the_edge_cuts_shapes_when_they_are_the_outline() 
         ..Default::default()
     });
     d.drawings.as_mut().unwrap().assign_missing_ids();
-    eda_drc::outline::refresh_outline_summary(&mut d);
+    eda_drc::outline::refresh_outline_summary(&mut d, None);
     let mut b = Board::new(d, &m, 100_000, 300_000);
     let area = |b: &Board| {
         let o = &b.design().placement.as_ref().unwrap().outline;
@@ -2864,7 +2911,7 @@ fn zone_cutout_that_splits_the_zone_makes_one_zone_per_piece() {
 }
 
 #[test]
-fn zone_cutout_inside_the_zone_is_a_fractured_hole_with_the_right_area() {
+fn zone_cutout_inside_the_zone_is_a_hole_of_the_zone_with_the_right_area() {
     let m = net_model();
     let mut b = board(&m);
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000_000, 10_000_000) }).unwrap();
@@ -2872,8 +2919,11 @@ fn zone_cutout_inside_the_zone_is_a_fractured_hole_with_the_right_area() {
     b.apply(&Cmd::ZoneCutout { id, cutout: square(3_000_000, 3_000_000, 5_000_000, 5_000_000) }).unwrap();
     let zones = &b.design().routing.as_ref().unwrap().zones;
     assert_eq!(zones.len(), 1);
-    assert!(zones[0].outline.len() > 4, "outline plus bridged hole ring");
-    assert!((zone_area(&zones[0]) - 96_000_000_000_000.0).abs() < 1e6, "100 - 4 mm^2 (slit has no width)");
+    // `performZoneCutout`: the zone keeps the outline, and the cutout is a hole of it (`newZoneOutline->AddHole`), not fractured into the outline.
+    assert_eq!(zones[0].outline.len(), 4, "the outline as it was: {:?}", zones[0].outline);
+    assert_eq!(zones[0].holes.len(), 1);
+    let hole = Zone { outline: zones[0].holes[0].clone(), ..Default::default() };
+    assert!((zone_area(&zones[0]) - zone_area(&hole) - 96_000_000_000_000.0).abs() < 1e6, "100 - 4 mm^2");
 }
 
 #[test]
