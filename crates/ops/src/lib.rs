@@ -3172,6 +3172,24 @@ impl<'a> Board<'a> {
         )
     }
 
+    /// The board as KiCad's autoplacer works from it (`AR_AUTOPLACER`: `m_board->GetBoardPolygonOutlines( m_boardShape, true )`, the free area
+    /// `m_topFreeArea = m_boardShape`): every outline with its holes, not the box round the largest one.
+    fn board_region(&self) -> eda_drc::outline::BoardOutline {
+        eda_drc::outline::board_outline(&self.design, true)
+    }
+
+    /// Whether the courtyard box `cr` is on the board: inside an outline of `region` and clear of its holes (the box less the board is
+    /// nothing). A board with no outline at all leaves it to the box test.
+    fn courtyard_on_board(region: &eda_drc::outline::BoardOutline, cr: (Nm, Nm, Nm, Nm)) -> bool {
+        if region.polys.outline_count() == 0 {
+            return true;
+        }
+        let ring = vec![eda_clipper2::Point64::new(cr.0, cr.1), eda_clipper2::Point64::new(cr.2, cr.1), eda_clipper2::Point64::new(cr.2, cr.3), eda_clipper2::Point64::new(cr.0, cr.3)];
+        let mut outside = eda_shape_poly_set::ShapePolySet::from_outline(ring);
+        outside.boolean_subtract(&region.polys);
+        outside.is_empty()
+    }
+
     /// Whether `fp`'s pad copper keeps the board's copper-to-edge clearance
     /// from the outline (its bounding box -- the placer's own notion of the
     /// board, as everywhere else in this file).
@@ -3238,6 +3256,7 @@ impl<'a> Board<'a> {
         // Slide perpendicular to the placement direction.
         let (sx, sy) = if dx != 0 { (0, 1) } else { (1, 0) };
         let bb = self.board_bbox();
+        let board_area = self.board_region();
         for step in 0..MAX_SLIDE_STEPS {
             for sign in [1i64, -1] {
                 if step == 0 && sign < 0 {
@@ -3249,6 +3268,9 @@ impl<'a> Board<'a> {
                 let Ok(cr) = self.courtyard_at(part, &fp) else { continue };
                 if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
                     continue; // a corner on the boundary is not inside it
+                }
+                if !Self::courtyard_on_board(&board_area, cr) {
+                    continue; // in a cutout, or off the piece of the board it is on
                 }
                 if !self.pads_clear_of_edge(part, &fp, bb) {
                     continue;
@@ -3276,6 +3298,7 @@ impl<'a> Board<'a> {
         self.require_unplaced(part)?;
         let bb = self.board_bbox();
         let (fx, fy) = region.fractions();
+        let board_area = self.board_region();
         let centre = (
             bb.0 + ((bb.2 - bb.0) as f64 * fx) as Nm,
             bb.1 + ((bb.3 - bb.1) as f64 * fy) as Nm,
@@ -3297,6 +3320,9 @@ impl<'a> Board<'a> {
                 let Ok(cr) = self.courtyard_at(part, &fp) else { continue };
                 if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
                     continue; // a corner on the boundary is not inside it
+                }
+                if !Self::courtyard_on_board(&board_area, cr) {
+                    continue; // in a cutout, or off the piece of the board it is on
                 }
                 if !self.pads_clear_of_edge(part, &fp, bb) {
                     continue;
@@ -3389,7 +3415,7 @@ impl<'a> Board<'a> {
         // a 40.3mm header went onto a 40mm edge and failed
         // `placement_within_outline` instead of being refused here.
         let cy = self.courtyard_at(part, &fp)?;
-        if cy.0 < bb.0 || cy.1 < bb.1 || cy.2 > bb.2 || cy.3 > bb.3 {
+        if cy.0 < bb.0 || cy.1 < bb.1 || cy.2 > bb.2 || cy.3 > bb.3 || !Self::courtyard_on_board(&self.board_region(), cy) {
             return Err(vec![CheckResult::fail(
                 "ops_no_room",
                 part,
@@ -3435,6 +3461,9 @@ impl<'a> Board<'a> {
                 part,
                 "that position puts the part's courtyard on or past the board edge",
             )]);
+        }
+        if !Self::courtyard_on_board(&self.board_region(), cr) {
+            return Err(vec![CheckResult::fail("ops_outside_board", part, "that position puts the part's courtyard over a cutout or off the board")]);
         }
         let kr = self.keepout_at(part, &fp)?;
         if self.collides(part, kr) {
