@@ -381,8 +381,8 @@ pub fn cancel(dir: &Path, cell: &RouteCell) -> Value {
 }
 
 /// `POST /api/route/mode`: `{mode}` (`"mark_obstacles" | "walkaround" | "shove"`) -- `ROUTER_TOOL::ChangeRouterMode` /
-/// `CycleRouterMode` (`settings.SetMode( mode )`) applied to the session that is running right now (route, drag or diff pair), so
-/// the next `move` already uses it. With no session there is nothing to change (the studio keeps the mode for the next one).
+/// `CycleRouterMode` (`settings.SetMode( mode )`) applied to the session that is running right now (a route or a diff pair), so
+/// the next `move` already uses it; a drag keeps the mode it started in (`DRAGGER::Start`: `m_currentMode = Settings().Mode()`). With no session there is nothing to change (the studio keeps the mode for the next one).
 pub fn set_mode(cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());

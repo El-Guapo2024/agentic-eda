@@ -139,6 +139,9 @@ pub struct Router {
     via_kinds: HashMap<String, ViaKind>,
     /// The `pins` of every board track that has some, by id: a track [`Self::simplify_new_lines`] takes into a new one hands them on.
     track_pins: HashMap<String, Vec<String>>,
+    /// The mode the drag in progress started in (`DRAGGER::Start`: `m_currentMode = Settings().Mode()`, and a shove made only for Shove): a
+    /// mode changed in the middle of a drag waits for the next one (findings p5 F3-12). The other settings are read live, as KiCad's are.
+    drag_mode: Option<crate::settings::Mode>,
 }
 
 impl Router {
@@ -146,7 +149,7 @@ impl Router {
         let (world, layers) = crate::from_ir::build_node(design, model);
         let via_kinds = design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|e| e.kind != ViaKind::Through).map(|e| (e.id.clone(), e.kind)).collect();
         let track_pins = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| !t.pins.is_empty()).map(|t| (t.id.clone(), t.pins.clone())).collect();
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, via_kinds, track_pins }
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, via_kinds, track_pins, drag_mode: None }
     }
 
     /// The type of the board's via `id` (a through via unless the board says otherwise).
@@ -915,14 +918,21 @@ impl Router {
         self.session = None;
         self.diff = None;
         self.drag = Some(dragger);
+        self.drag_mode = Some(self.settings.mode);
         Ok(())
     }
 
     /// `ROUTER::Move`/`moveDragging`: the live drag preview, `DRAGGER::Drag` at `at`. The drag remembers the last position that
     /// worked: one that does not shows that one again (`DragPreview::restored`).
     pub fn drag_preview(&mut self, at: Point) -> Option<crate::dragger::DragPreview> {
-        let (world, rules, settings) = (&self.world, &self.rules, &self.settings);
-        self.drag.as_mut().map(|d| d.drag(world, rules, settings, at))
+        let settings = self.drag_settings();
+        let (world, rules) = (&self.world, &self.rules);
+        self.drag.as_mut().map(|d| d.drag(world, rules, &settings, at))
+    }
+
+    /// The router's settings with the mode the drag started in.
+    fn drag_settings(&self) -> RoutingSettings {
+        RoutingSettings { mode: self.drag_mode.unwrap_or(self.settings.mode), ..self.settings.clone() }
     }
 
     /// The IR tracks the dragged line stands on: what the cursor must not snap to while dragging (`checkSnap`).
@@ -962,7 +972,8 @@ impl Router {
     /// and `force_commit` (Ctrl+click) is not set -- and the drag session stays
     /// open, so the caller can keep adjusting or explicitly cancel.
     pub fn drag_finish_with(&mut self, at: Point, force_commit: bool) -> Option<RouteCommit> {
-        let drag_commit = self.drag.as_mut()?.finish(&self.world, &self.rules, &self.settings, at, force_commit)?;
+        let settings = self.drag_settings();
+        let drag_commit = self.drag.as_mut()?.finish(&self.world, &self.rules, &settings, at, force_commit)?;
         let mut commit = RouteCommit { remove_track_ids: drag_commit.remove_track_ids, remove_via_ids: drag_commit.remove_via_ids, ..RouteCommit::default() };
         for line in &drag_commit.tracks {
             commit.tracks.extend(self.line_tracks(line, None));
@@ -1481,6 +1492,19 @@ mod tests {
         router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
         let err = router.continue_from_end(Point { x: 1_000_000, y: 0 }).expect_err("everything is connected");
         assert!(err.contains("nothing is left"), "{err}");
+    }
+
+    /// findings p5 F3-12: a drag keeps the mode it started in (`m_currentMode = Settings().Mode()` in `DRAGGER::Start`).
+    #[test]
+    fn a_drag_keeps_the_mode_it_started_in() {
+        let (design, model) = track_and_via_board();
+        let mut router = Router::new(&design, &model);
+        router.settings.mode = crate::settings::Mode::MarkObstacles;
+        router.drag_start(Point { x: 1_000_000, y: 0 }, "F.Cu").expect("the track's end");
+        router.settings.mode = crate::settings::Mode::Shove;
+        // dragged onto the GND via: marked, not shoved
+        let pv = router.drag_preview(Point { x: 5_000_000, y: 0 }).unwrap();
+        assert!(pv.colliding && pv.displaced_vias.is_empty(), "{pv:?}");
     }
 
     /// findings p5 F2-9: AttemptFinish routes to the nearest unconnected anchor of the net (`ROUTER::Finish`), not to the cursor.
