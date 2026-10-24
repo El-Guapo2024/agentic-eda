@@ -13,8 +13,8 @@
 //! involution) and a text's angle and mirror flag follow `PCB_TEXT::Flip` ([`eda_model::fp_edit::FieldLayout`] has the angle arithmetic).
 //!
 //! What is read: `fp_line`, `fp_arc` (also the pre-KiCad-7 `(start CENTRE) (end START) (angle A)` form), `fp_circle`, `fp_rect`, `fp_poly`
-//! (an `(arc ..)` among its points is flattened at 5 micrometres), `fp_curve` and `fp_text user`, on every layer but the courtyard and
-//! the board edge (see [`eda_model::fp_art`]). A hidden text is kept, hidden, and written `(hide yes)`: KiCad 10 turns it into a hidden field on load, as it does the
+//! (an `(arc ..)` among its points is flattened at 5 micrometres), `fp_curve` and `fp_text user`, on every layer but the courtyard
+//! (see [`eda_model::fp_art`]); a footprint's Edge.Cuts are its art. A hidden text is kept, hidden, and written `(hide yes)`: KiCad 10 turns it into a hidden field on load, as it does the
 //! original, and a footprint without it does not match its library's (a MountingHole has one).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -454,8 +454,9 @@ mod tests {
     #[test]
     fn every_shape_kind_is_read_with_its_layer_width_style_and_fill() {
         let art = read_art(&parse(FIXTURE), Side::Top, 0);
-        // The courtyard rectangle and the Edge.Cuts line have homes of their own; the hidden text is kept, hidden.
-        assert_eq!(art.shapes.len(), 8, "{:#?}", art.shapes);
+        // The courtyard rectangle has a home of its own; the Edge.Cuts line is the footprint's art, as in KiCad; the hidden text is kept, hidden.
+        assert_eq!(art.shapes.len(), 9, "{:#?}", art.shapes);
+        assert_eq!(art.shapes[8].layer(), "Edge.Cuts");
         assert_eq!(art.texts.len(), 3);
         assert_eq!(art.texts.iter().map(|t| t.layout.visible).collect::<Vec<_>>(), [true, true, false]);
 

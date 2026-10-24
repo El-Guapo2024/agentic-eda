@@ -203,3 +203,44 @@ fn a_board_rectangles_corner_radius_is_read_and_written_back() {
     };
     assert!(lines.iter().all(|(a, b)| !outside(*a) && !outside(*b)), "a hatch line in a rounded-off corner: {lines:?}");
 }
+
+/// p12 O2: a footprint's Edge.Cuts stay in the footprint (`FOOTPRINT::GraphicalItems`) and are written there as `fp_*`; the board outline takes them in with
+/// `BuildBoardPolygonOutlines`' footprint pass: a footprint with copper outside its contour makes that contour a hole, subtracted at the end and reported by
+/// no chaining error, so a notch across the board's edge cuts the board (KiCad: 2000 - 6 x 2 = 1988 mm^2), and a contour off the board is no second board.
+#[test]
+fn a_footprints_edge_cuts_are_written_inside_the_footprint_and_cut_the_outline() {
+    let board = |fp_at: &str| {
+        format!(
+            r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+        (net 0 "")
+        (gr_rect (start 0 0) (end 50 40) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts") (uuid "e"))
+        (footprint "L:Notch" (layer "F.Cu") (uuid "f1") (at {fp_at})
+            (property "Reference" "J1" (at 0 0 0) (layer "F.SilkS") (uuid "p1"))
+            (fp_rect (start -3 -2) (end 3 2) (stroke (width 0.05) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "n1"))
+            (pad "1" smd rect (at 0 5) (size 1 1) (layers "F.Cu" "F.Mask") (uuid "a1")))
+    )"#
+        )
+    };
+    // A: the notch across the top edge, its pad on the board.
+    let (design, model, _) = import_kicad_pcb(&board("25 0")).expect("parses");
+    assert!(design.drawings.as_ref().map_or(true, |d| d.shapes.iter().all(|s| s.layer() != "Edge.Cuts" || matches!(s, eda_model::ir::Shape::Rect { .. }) && s.stroke_width() == 50_000)), "no footprint edge became a board shape");
+    let out = export(&design, &model);
+    let fp = blocks(&out, "footprint")[0];
+    assert!(fp.contains("(fp_rect (start -3 -2) (end 3 2)") && fp.contains("(layer \"Edge.Cuts\")"), "{fp}");
+    let outline = eda_drc::outline::board_outline_with(&design, Some(&model), true);
+    assert!(outline.valid, "{:?}", outline.errors);
+    assert!((outline.polys.area() / 1e12 - 1988.0).abs() < 0.01, "{}", outline.polys.area() / 1e12);
+    // Moving the footprint moves the notch: it is in the footprint's frame.
+    let mut moved = design.clone();
+    moved.placement.as_mut().unwrap().footprints[0].at = p(10 * MM, 0);
+    let after = eda_drc::outline::board_outline_with(&moved, Some(&model), true);
+    assert!((after.polys.area() / 1e12 - 1988.0).abs() < 0.01);
+    assert_ne!(after.polys.outline(0), outline.polys.outline(0));
+
+    // B: the contour off the board, its pad outside it: subtracted from nothing, and no second board piece.
+    let (design, model, _) = import_kicad_pcb(&board("60 20")).expect("parses");
+    let outline = eda_drc::outline::board_outline_with(&design, Some(&model), true);
+    assert_eq!(outline.polys.outline_count(), 1);
+    assert!((outline.polys.area() / 1e12 - 2000.0).abs() < 0.01, "{}", outline.polys.area() / 1e12);
+}

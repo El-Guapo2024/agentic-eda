@@ -38,7 +38,7 @@
 //!   curves, cutouts, several loops, an outline that does not close -- stays what it is: every item is a
 //!   [`eda_model::ir::Shape`] on layer `Edge.Cuts` ([`eda_model::ir::DrawingsSection::outline_is_shapes`]),
 //!   the writer emits the same shapes, and `placement.outline` is only the summary of the outline they
-//!   make. A footprint's own Edge.Cuts graphics become board-level shapes. Nothing is closed that was not
+//!   make. A footprint's own Edge.Cuts graphics stay in the footprint (its art). Nothing is closed that was not
 //!   closed: what KiCad reports as a malformed outline is in [`ImportNotes::outline_errors`]. A track
 //!   `(arc ...)` is kept as an arc ([`eda_model::ir::Track::new_arc`], counted in
 //!   [`ImportNotes::track_arcs_kept`], and written back as an arc), and a board-level `gr_arc` is a
@@ -163,7 +163,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let (tracks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts, text_extras) = import_drawings(root, &net_names, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
-    let (outline, outline_is_shapes, outline_width_nm) = import_outline(root, &mut shapes, &mut refs, &mut notes);
+    let (outline, outline_is_shapes, outline_width_nm) = import_outline(&mut shapes, &mut refs, &mut notes);
     let dimensions = import_items::import_dimensions(root, &mut refs);
     let barcodes = crate::barcode_io::read_all(root, &mut refs.barcodes);
     let board_items = crate::pcb_items_io::read_all(root, &mut refs.board_items);
@@ -309,7 +309,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     }
     // `(generated ..)`: the tuning patterns, named by the same file uuids.
     crate::pcb_generated::attach_patterns(&mut design, root, &refs);
-    let model = ConstraintModel { schema: eda_model::INTENT_SCHEMA_VERSION,
+    let mut model = ConstraintModel { schema: eda_model::INTENT_SCHEMA_VERSION,
         parts,
         nets,
         clusters: vec![],
@@ -326,6 +326,19 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         allow: Default::default(),
         solver: Default::default(),
     };
+    // The footprints' own Edge.Cuts (their art) take part in the outline, through `BuildBoardPolygonOutlines`' footprint pass: what the notes say of the outline is
+    // then the check of the whole, as kicad-cli's `testOutline` makes it.
+    if !eda_drc::outline::footprint_edge_cuts_shapes(&design, &model).is_empty() {
+        let built = eda_drc::outline::board_outline_with(&design, Some(&model), true);
+        notes.outline_open = !built.valid;
+        notes.outline_errors = eda_drc::outline::check_board_outline_with(&design, Some(&model))
+            .iter()
+            .map(|e| format!("{} at ({:.3}, {:.3}) mm", e.describe(), eda_model::units::to_mm(e.at.x), eda_model::units::to_mm(e.at.y)))
+            .collect();
+        if notes.outline_source != "none" {
+            model.board.outline_closed = Some(!notes.outline_open);
+        }
+    }
     Ok((design, model, notes))
 }
 
@@ -2162,47 +2175,7 @@ pub(crate) fn graphic_shape(item: &[Sexpr], tag: &str, at: impl Fn(Point) -> Poi
 
 // ---------------------------------------------------------------- outline
 
-fn is_edge_cuts(item: &[Sexpr]) -> bool {
-    sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("Edge.Cuts")
-}
-
-/// A footprint's own Edge.Cuts graphics (`fp_line`, `fp_arc`, `fp_rect`, `fp_circle`, `fp_poly`, `fp_curve`) as board-level shapes.
-/// `BuildBoardPolygonOutlines` collects every Edge.Cuts shape of the board, a footprint's included -- a card-edge connector's tab, a
-/// connector's mounting slot -- and chains them with the board's own, so they are board-level shapes here. A footprint's items are in its own
-/// frame: board = position + RotatePoint( local, orientation ). A rectangle that the footprint's turn leaves tilted is a polygon.
-fn footprint_edge_cuts(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs) {
-    for fp in sexpr::find_all(root, "footprint").chain(sexpr::find_all(root, "module")) {
-        let Some(at) = sexpr::find(fp, "at") else { continue };
-        let (Some(fx), Some(fy)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
-        let angle = sexpr::num(at, 3).unwrap_or(0.0);
-        let (sin, cos) = angle.to_radians().sin_cos();
-        let (ox, oy) = (mm_to_nm(fx), mm_to_nm(fy));
-        let to_board = |p: Point| -> Point {
-            let (x, y) = (p.x as f64, p.y as f64);
-            Point { x: ox + (x * cos + y * sin).round() as i64, y: oy + (-x * sin + y * cos).round() as i64 }
-        };
-        let square_turn = angle.rem_euclid(90.0) == 0.0;
-        for tag in ["fp_line", "fp_arc", "fp_rect", "fp_circle", "fp_poly", "fp_curve"] {
-            for item in sexpr::find_all(fp, tag).filter(|it| is_edge_cuts(it)) {
-                let board_tag = tag.replace("fp_", "gr_");
-                let Some(shape) = graphic_shape(item, &board_tag, to_board) else { continue };
-                let shape = match shape {
-                    Shape::Rect { id, layer, stroke_width, filled, start, end } if !square_turn => {
-                        // Turn the corners one by one: `start` and `end` of a tilted rectangle are not opposite corners of a rectangle.
-                        let (a, b) = (sexpr::find(item, "start").and_then(xy_point).unwrap_or(start), sexpr::find(item, "end").and_then(xy_point).unwrap_or(end));
-                        let pts = edge::rect_corners(a, b).map(to_board).to_vec();
-                        Shape::Polygon { id, layer, stroke_width, filled, pts }
-                    }
-                    other => other,
-                };
-                shapes.push(shape);
-                refs.shapes.push(ItemRef::of(item));
-            }
-        }
-    }
-}
-
-/// The board outline, from the Edge.Cuts shapes in `shapes` (the board's and, promoted, its footprints').
+/// The board outline, from the board-level Edge.Cuts shapes in `shapes` (a footprint's own stay in the footprint).
 ///
 /// KiCad builds the board outline from these (`BOARD::GetBoardPolygonOutlines`, ported in `eda_drc::outline`): lines, arcs, circles, rectangles,
 /// polygons and curves chained end to end into closed contours, a contour inside another being a cutout. The common board is lines that chain
@@ -2213,8 +2186,9 @@ fn footprint_edge_cuts(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs)
 ///
 /// Returns the polygon for `placement.outline`, whether the shapes are the outline, and, when the outline is the loop of lines, the one width they are drawn at
 /// (`DrawingsSection::outline_width_nm`; lines of different widths are not one loop of lines here, they stay shapes).
-fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNotes) -> (Vec<Point>, bool, Option<i64>) {
-    footprint_edge_cuts(root, shapes, refs);
+fn import_outline(shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNotes) -> (Vec<Point>, bool, Option<i64>) {
+    // A footprint's own Edge.Cuts stay in the footprint, as its art (`fp_art_io`), where KiCad keeps them (`FOOTPRINT::GraphicalItems`): they move with it, and the
+    // outline takes them in with `BuildBoardPolygonOutlines`' footprint pass (`eda_drc::outline::board_outline_with`).
     let items: Vec<Shape> = shapes.iter().filter(|s| edge::is_edge_cuts(s)).cloned().collect();
     if items.is_empty() {
         notes.outline_source = "none";

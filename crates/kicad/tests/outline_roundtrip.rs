@@ -174,7 +174,7 @@ fn an_outline_that_does_not_close_stays_open_and_is_reported() {
 }
 
 #[test]
-fn a_footprints_edge_cuts_are_board_shapes_in_board_space() {
+fn a_footprints_edge_cuts_stay_in_the_footprint_and_are_placed_in_board_space() {
     // A connector with a 4 mm slot cut out of the board: a line pair and two arcs in the footprint's own frame, turned 90 degrees.
     let text = board(
         r#"	(gr_rect (start 0 0) (end 40 30) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts") (uuid "33333333-0000-0000-0000-000000000001"))
@@ -187,12 +187,18 @@ fn a_footprints_edge_cuts_are_board_shapes_in_board_space() {
 		(pad "1" smd rect (at 0 3 0) (size 1 1) (layers "F.Cu")))
 "#,
     );
-    let (design, _model, notes) = import_kicad_pcb(&text).expect("imports");
-    assert_eq!(notes.outline_source, "shapes");
-    assert_eq!(counts(&design), [("arc", 2), ("line", 2), ("rect", 1)].into_iter().collect());
+    let (design, model, notes) = import_kicad_pcb(&text).expect("imports");
+    // The slot stays the footprint's (`FOOTPRINT::GraphicalItems`): the board has its rectangle alone.
+    assert_eq!(counts(&design), [("rect", 1)].into_iter().collect());
     assert!(notes.outline_errors.is_empty(), "{:?}", notes.outline_errors);
+    let placed = eda_drc::outline::footprint_edge_cuts_shapes(&design, &model);
+    assert_eq!(placed.len(), 4);
+    // The footprint pass: its pad lies outside the slot, so the slot is a hole of the board, and nothing is reported.
+    let outline = eda_drc::outline::board_outline_with(&design, Some(&model), true);
+    assert!(outline.valid && eda_drc::outline::check_board_outline_with(&design, Some(&model)).is_empty());
+    assert_eq!((outline.polys.outline_count(), outline.polys.hole_count(0)), (1, 1));
     // Turned 90 degrees about (20, 15), the slot lies along y: the line (-3,-1)-(3,-1) is at x = 20 + 1 (KiCad turns clockwise on screen).
-    let line = edge_shapes(&design).into_iter().find(|s| matches!(s, Shape::Segment { .. })).expect("a line");
+    let line = placed.into_iter().find(|s| matches!(s, Shape::Segment { .. })).expect("a line");
     let pts = line.points();
     assert!(pts.iter().all(|q| q.x == 19_000_000 || q.x == 21_000_000), "{pts:?}");
     assert!(pts.iter().all(|q| q.y == 12_000_000 || q.y == 18_000_000), "{pts:?}");
@@ -229,9 +235,13 @@ fn a_tilted_footprint_rectangle_becomes_a_polygon() {
 		(fp_rect (start -2 -2) (end 2 2) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts") (uuid "44444444-0000-0000-0000-000000000002")))
 "#,
     );
-    let (design, _model, notes) = import_kicad_pcb(&text).expect("imports");
-    assert_eq!(counts(&design), [("poly", 1), ("rect", 1)].into_iter().collect());
+    let (design, model, notes) = import_kicad_pcb(&text).expect("imports");
+    assert_eq!(counts(&design), [("rect", 1)].into_iter().collect());
     assert!(notes.outline_errors.is_empty(), "{:?}", notes.outline_errors);
+    // On the board, turned 45 degrees, the footprint's rectangle is a polygon (`FpShape::placed`).
+    let placed = eda_drc::outline::footprint_edge_cuts_shapes(&design, &model);
+    assert!(matches!(placed.as_slice(), [Shape::Polygon { pts, .. }] if pts.len() == 4), "{placed:?}");
+    assert!(eda_drc::outline::check_board_outline_with(&design, Some(&model)).is_empty());
 }
 
 // ----------------------------------------------------------------------------------------------------------------------
