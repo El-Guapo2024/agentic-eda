@@ -4,7 +4,7 @@
 // cursor, turn a click/move into the right `/api/route/drag_*` call and
 // `DrawState` update), not a second copy of `eda_pns::dragger::Dragger`'s
 // own algorithm.
-import type { BoardState } from "../../api/types";
+import type { BoardState, CmdReply } from "../../api/types";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
 import { routeDragFinish, routeDragStart } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
@@ -106,7 +106,7 @@ export async function startInlineDrag(x: number, y: number, hit: DraggableHit, b
 }
 
 /** `ROUTER_STATUS_VIEW_ITEM`'s message while a drag only marks obstacles and the position violates DRC (router_tool.cpp `InlineDrag`). */
-export const DRAG_VIOLATION_HINT = "Track violates DRC. (Ctrl+click to commit anyway.)";
+export const DRAG_VIOLATION_HINT = "Track violates DRC. (Ctrl+Click to commit anyway.)";
 
 /** A click while dragging: commit at `(x, y)` -- a drag has no multi-leg
  * concept the way a route does, so (unlike `fixInteractiveRoute`) this is
@@ -119,8 +119,10 @@ export const DRAG_VIOLATION_HINT = "Track violates DRC. (Ctrl+click to commit an
  * (`DRAGGER::FixRoute`); `forceCommit` (Ctrl+click) commits the violation of a
  * drag that only marks obstacles. */
 export async function finishInlineDrag(x: number, y: number, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">, forceCommit = false): Promise<void> {
-  const reply = await routeDragFinish(x, y, forceCommit);
+  const reply = (await routeDragFinish(x, y, forceCommit)) as CmdReply & { dragging?: boolean };
   if (!reply.ok) dispatch({ type: "TOAST", message: reply.message || "Can't drop it there -- still colliding.", kind: "error" });
+  // `performDragging`: a click `FixRoute` refuses leaves the drag going (`if( m_router->FixRoute( .. ) ) break;`)
+  if (!reply.ok && reply.dragging) return;
   dispatch({ type: "SET_DRAW_STATE", draw: null });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
   await api.refresh();

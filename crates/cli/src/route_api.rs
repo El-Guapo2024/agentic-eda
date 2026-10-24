@@ -504,17 +504,20 @@ pub fn drag_move(cell: &RouteCell, body: &[u8]) -> Value {
 /// `force_commit` (Ctrl+click) and not otherwise.
 pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
-    let mut router = match cell.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        Some(r) => r,
-        None => return err("not dragging"),
-    };
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut().filter(|r| r.is_dragging()) else { return err("not dragging") };
     let at = point_of(&req);
     let force_commit = req.get("force_commit").and_then(Value::as_bool).unwrap_or(false);
     let marking = router.drag_forces_mark_obstacles();
+    // `performDragging`: "if( m_router->FixRoute( m_endSnapPoint, m_endItem, false, forceCommit ) ) break;" -- a click the drag refuses
+    // leaves it going (`dragging`), the hint up (findings p5 F3-2)
     let Some(commit) = router.drag_finish_with(at, force_commit) else {
-        let message = if marking { "Track violates DRC. Ctrl+click to commit anyway." } else { "drag target still collides; left uncommitted" };
-        return json!({ "ok": false, "message": message });
+        // `_( "Track violates DRC." )` and `wxString::Format( _( "(%s to commit anyway.)" ), KeyNameFromKeyCode( MD_CTRL + PSEUDO_WXK_CLICK ) )`
+        let message = if marking { "Track violates DRC. (Ctrl+Click to commit anyway.)" } else { "drag target still collides; left uncommitted" };
+        return json!({ "ok": false, "dragging": true, "message": message });
     };
+    *guard = None;
+    drop(guard);
     let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary }),
@@ -1049,9 +1052,12 @@ mod tests {
         assert_eq!((started["forced_mark_obstacles"].clone(), started["colliding"].clone()), (json!(true), json!(true)), "{started}");
         let refused = drag_finish(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_300_000 })));
         assert_eq!(refused["ok"], json!(false), "{refused}");
-        assert!(refused["message"].as_str().unwrap().contains("Ctrl+click"), "{refused}");
-        let started = drag_start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_200_000, "layer": "F.Cu" })));
-        assert_eq!(started["forced_mark_obstacles"], json!(true));
+        assert_eq!(refused["message"], json!("Track violates DRC. (Ctrl+Click to commit anyway.)"), "{refused}");
+        // findings p5 F3-2: the refused click leaves the drag going, in its forced-mark state (`performDragging` breaks only on a fix)
+        assert_eq!(refused["dragging"], json!(true));
+        let moved = drag_move(&cell, &body(json!({ "x": 10_000_000, "y": 5_300_000 })));
+        assert_eq!(moved["ok"], json!(true), "{moved}");
+        assert_eq!(moved["forced_mark_obstacles"], json!(true), "{moved}");
         let forced = drag_finish(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_300_000, "force_commit": true })));
         assert_eq!(forced["ok"], json!(true), "{forced}");
     }
