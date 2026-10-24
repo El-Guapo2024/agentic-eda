@@ -15,7 +15,7 @@ import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port
 import { revisionOf } from "../kicad-port/checkRevision";
 import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type CarryStep, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -2100,7 +2100,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   }, [refresh, refreshSchematic, refreshRatsnest, refreshLint, refreshFill, applyRemoteView]);
 
   const runCmd = useCallback(
-    async (cmd: Parameters<typeof postCmd>[0], carry?: "begin" | "commit") => {
+    async (cmd: Parameters<typeof postCmd>[0], carry?: CarryStep) => {
       // On a nested sheet every schematic edit is addressed to that sheet (`Cmd::OnSheet`), as KiCad edits whichever sheet is open.
       // With a group entered on the board, what a command adds joins it (`BOARD_COMMIT::Push`: `Cmd::InGroup`).
       const st = stateRef.current;
@@ -2123,7 +2123,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   );
 
   /** One undo step for N Cmds (`Cmd::Batch`); a lone Cmd is sent as itself. */
-  const runBatch = async (cmds: Cmd[], carry?: "begin" | "commit"): Promise<boolean> => {
+  const runBatch = async (cmds: Cmd[], carry?: CarryStep): Promise<boolean> => {
     if (cmds.length === 0) return true;
     return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds }, carry);
   };
@@ -2132,7 +2132,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const gridSnap = () => modificationSnapFor(stateRef.current);
 
   /** Sends a transform plan (kicad-port/pcbTransform.ts) as one undo step; says so when the locks left nothing to do (`ReportFilteredLockedItems`). */
-  const runPlan = async (plan: TransformPlan, carry?: "begin" | "commit"): Promise<boolean> => {
+  const runPlan = async (plan: TransformPlan, carry?: CarryStep): Promise<boolean> => {
     if (plan.cmds.length === 0) {
       if (plan.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
       return false;
@@ -2164,7 +2164,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const advanceMoveQueue = (queue: readonly string[] = stateRef.current.pcbx.moveQueue) => {
     const board = stateRef.current.board;
     if (queue.length === 0 || !board) {
-      // Last item dropped/skipped: Move Individually is over.
+      // Last item dropped/skipped: Move Individually is over. The drops held open are one step (a skip of the last item ends it with nothing more to send).
+      if (stateRef.current.pcbx.movingIndividually && carriedPlacementRef.current) {
+        carriedPlacementRef.current = false;
+        void postCarry("commit");
+      }
       if (stateRef.current.pcbx.movingIndividually) {
         dispatch({ type: "PCBX", patch: { movingIndividually: false } });
         dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
@@ -2296,7 +2300,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // sends nothing, or one the backend refuses, leaves the duplicate or the paste standing as a step of its own.
       const carrying = carriedPlacementRef.current;
       carriedPlacementRef.current = false;
-      const carry = carrying ? ("commit" as const) : undefined;
+      // Move Individually: every drop but the last joins one held-open step (`doMoveSelection` picks the next item up into the same `aCommit`, pushed
+      // once), so the whole of it is one undo step and Escape reverts every drop (`revertCarriedPlacement`).
+      const individually = kind === "pcb" && stateRef.current.pcbx.movingIndividually && stateRef.current.pcbx.moveQueue.length > 0;
+      const carry: CarryStep | undefined = individually ? "hold" : carrying ? "commit" : undefined;
       const settle = async (sent: boolean, ok: boolean) => {
         if (carrying && (!sent || !ok)) await postCarry("commit");
       };
@@ -2306,7 +2313,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         const prefs = stateRef.current.prefs;
         const plan = board ? planCarry(board, refs, dxNm, dyNm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap(), prefs.rotationStepDeg, prefs.flipDirection, ops) : null;
         const ok = plan ? await runPlan(plan, carry) : false;
-        await settle(plan !== null && plan.cmds.length > 0, ok);
+        if (individually) {
+          // the step stays open for the next item (a drop that sent nothing leaves it as it was)
+          carriedPlacementRef.current = carrying || (plan !== null && plan.cmds.length > 0 && ok);
+        } else await settle(plan !== null && plan.cmds.length > 0, ok);
         advanceMoveQueue();
         // a placement that asked to go on after its drop (Place Design Block with repeated copies) goes on
         const next = afterDropRef.current;

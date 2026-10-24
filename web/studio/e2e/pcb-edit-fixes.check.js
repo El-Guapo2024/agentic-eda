@@ -314,6 +314,38 @@
       t((await snapshot()) === base, "undone, the board is as it was");
     });
 
+    // ----- p6 F6
+    await scenario("Move Individually is one undo step, and Escape puts back every item already dropped", async (t) => {
+      toScreen = (await screenOf()) ?? toScreen;
+      const three = placed.slice(0, 3).map((p) => p.ref);
+      if (three.length < 3) { t(false, "needs three footprints"); return; }
+      const at0 = await Promise.all(three.map(async (r) => (await partOf(r)).at));
+      const drops = async (n) => {
+        for (let i = 0; i < n; i++) {
+          const a = at0[i];
+          await hover(toScreen, a[0] / 1e6 + 0.0001, a[1] / 1e6);
+          await hover(toScreen, a[0] / 1e6 + 1, a[1] / 1e6 + 1);
+          await click(toScreen, a[0] / 1e6 + 1, a[1] / 1e6 + 1);
+        }
+      };
+      await select(three);
+      await __eda.run("pcbnew.InteractiveMove.moveIndividually"); await sleep(500);
+      await drops(2);
+      const moved = await partOf(three[0]);
+      t(JSON.stringify(moved.at) !== JSON.stringify(at0[0]), `the first is dropped elsewhere (${moved.at})`);
+      await escape();
+      const back = await Promise.all(three.map(async (r) => (await partOf(r)).at));
+      t(JSON.stringify(back) === JSON.stringify(at0), `Escape puts all three back (${back.map((a) => a.join(",")).join(" | ")})`);
+      t((await snapshot()) === base, "and leaves no step");
+      await select(three);
+      await __eda.run("pcbnew.InteractiveMove.moveIndividually"); await sleep(500);
+      await drops(3);
+      const after = await Promise.all(three.map(async (r) => (await partOf(r)).at));
+      t(after.every((a, i) => JSON.stringify(a) !== JSON.stringify(at0[i])), "all three dropped");
+      await undo();
+      t((await snapshot()) === base, "one Undo puts all three back");
+    });
+
     // ----- p6 F17
     await scenario("Duplicate of a locked footprint leaves nothing behind (the copy is locked, so nothing is carried and the commit is reverted)", async (t) => {
       await post({ op: "set_locked", ids: [two.ref], locked: true });

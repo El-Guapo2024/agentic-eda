@@ -879,7 +879,7 @@ pub(crate) fn step_with(dir: &Path, cmd: Cmd, strictness: Strictness, by: &str) 
 /// drop. Any command that is not the drop first settles a step held open as a step of its own.
 pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &str, carry: Option<carry::Carry>) -> Result<String, Vec<CheckResult>> {
     let _lock = lock(dir);
-    if carry != Some(carry::Carry::Commit) {
+    if carry != Some(carry::Carry::Commit) && carry != Some(carry::Carry::Hold) {
         carry::settle_locked(dir);
     }
     sync_external_edits_locked(dir);

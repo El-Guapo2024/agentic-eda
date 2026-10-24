@@ -221,7 +221,10 @@ export async function fetchBoardGlb(retry = false): Promise<BoardGlbResult> {
  * the *only* non-KiCad toggle in the whole app (see the Strict switch in
  * the status bar).
  */
-export async function postCmd(cmd: Cmd, strict: boolean, carry?: "begin" | "commit"): Promise<CmdReply> {
+/** Where a command stands in a carried placement (crates/cli/src/carry.rs): it begins one, joins the one held open (Move Individually's drops before the last), or ends it. */
+export type CarryStep = "begin" | "hold" | "commit";
+
+export async function postCmd(cmd: Cmd, strict: boolean, carry?: CarryStep): Promise<CmdReply> {
   const r = await fetch("/api/cmd", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
