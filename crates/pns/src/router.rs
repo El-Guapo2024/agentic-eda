@@ -55,19 +55,14 @@ struct Session {
     splits: Vec<TrackSplit>,
     /// The type of the via armed with [`Router::toggle_via_typed`] (`SIZES_SETTINGS::ViaType()`), for the next fix.
     pending_via_kind: ViaKind,
-    /// The vias the session's fixes placed, in order: where, on which layers, how big, and of which type (`VIA::ViaType()`, which
-    /// `PNS_KICAD_IFACE::AddItem` gives the board via: "`via_board->SetViaType( via->ViaType() )`"). The commit finds the via of each change of
-    /// layer here; one Backspace took away is no longer at a run's end, and so is not found.
+    /// The type of each via the session placed (`VIA::ViaType()`, which `PNS_KICAD_IFACE::AddItem` gives the board via: "`via_board->SetViaType(
+    /// via->ViaType() )`"), one per [`LinePlacer::fixed_vias`], in the same order (Backspace takes both away together).
     placed_vias: Vec<PlacedVia>,
 }
 
 /// A via a fix of the session placed: see [`Session::placed_vias`].
 #[derive(Debug, Clone, Copy)]
 struct PlacedVia {
-    at: Point,
-    layers: LayerRange,
-    diameter: Nm,
-    drill: Nm,
     kind: ViaKind,
 }
 
@@ -338,10 +333,9 @@ impl Router {
         let world = s.world.as_ref().unwrap_or(&self.world);
         if let Some(to_layer) = s.pending_via_layer.take() {
             let (diameter, drill) = (s.placer.via_diameter, s.placer.via_drill);
-            let layers = s.placer.via_span.unwrap_or_else(|| LayerRange::new(s.placer.current_layer, to_layer));
             s.placer.switch_layer(world, &self.rules, &self.settings, at, to_layer, diameter, drill);
             let kind = std::mem::take(&mut s.pending_via_kind);
-            s.placed_vias.push(PlacedVia { at: s.placer.fixed_start(), layers, diameter, drill, kind });
+            s.placed_vias.push(PlacedVia { kind });
             return Some(FixOutcome::Fixed { real_end: false });
         }
         Some(s.placer.fix(world, &self.rules, &self.settings, at))
@@ -369,11 +363,8 @@ impl Router {
         for run in &runs {
             node.add_line(run, None, false);
         }
-        for w in runs.windows(2) {
-            if w[0].layer != w[1].layer && w[0].last() == w[1].first() {
-                let (l0, l1) = (w[0].layer, w[1].layer);
-                node.add(Item::Via(crate::item::Via { net: net.clone(), layers: LayerRange::new(l0, l1), pos: w[0].last().unwrap(), diameter: placer.via_diameter.max(1), drill: placer.via_drill.max(1), source_via: None, locked: false, is_virtual: false }));
-            }
+        for (v, _) in &placer.fixed_vias {
+            node.add(Item::Via(crate::item::Via { diameter: v.diameter.max(1), drill: v.drill.max(1), ..v.clone() }));
         }
         let current_end = head.last().unwrap_or_else(|| placer.fixed_start());
         let (from, layers) = if head.segment_count() > 0 {
@@ -449,7 +440,11 @@ impl Router {
 
     /// `ROUTER::UndoLastSegment` (Backspace).
     pub fn undo_last_segment(&mut self) -> bool {
-        self.session.as_mut().map(|s| s.placer.undo_last_segment()).unwrap_or(false)
+        self.session.as_mut().is_some_and(|s| {
+            let undone = s.placer.undo_last_segment();
+            s.placed_vias.truncate(s.placer.fixed_vias.len());
+            undone
+        })
     }
 
     /// `ROUTER::StopRouting()` without committing.
@@ -472,7 +467,14 @@ impl Router {
         let runs = {
             let s = self.session.as_mut()?;
             let world = s.world.as_ref().unwrap_or(&self.world);
-            s.placer.finish(world, &self.rules, &self.settings, at)?
+            let runs = s.placer.finish(world, &self.rules, &self.settings, at)?;
+            // a via armed at the finish is committed (`FixRoute`: the head ends in it)
+            if s.placer.fixed_vias.len() > s.placed_vias.len() {
+                let kind = std::mem::take(&mut s.pending_via_kind);
+                s.placed_vias.push(PlacedVia { kind });
+                s.pending_via_layer = None;
+            }
+            runs
         };
         let mut commit = self.build_commit(&net_name, runs, layer, width);
         // nothing placed, nothing committed (`CommitRouting`: "if( m_state == ROUTE_TRACK && !m_placer->HasPlacedAnything() ) return"),
@@ -632,31 +634,22 @@ impl Router {
         for run in &runs {
             commit.tracks.extend(self.line_tracks(run, Some(&net_name)));
         }
-        // Vias this session placed sit at the shared endpoint between two
-        // consecutive runs (see `LinePlacer::switch_layer`'s doc comment);
-        // reconstruct them from the run boundaries rather than threading a
-        // separate via list through `LinePlacer`, since a run's own first/
-        // last point already says exactly where one must be.
+        // Every via the session's fixes placed (`FixRoute` adds the via a head ends in to `m_lastNode`, whose diff `CommitRouting` writes): between
+        // two runs, at the very start of the route (a via before any segment), or at its end (a route finished on a via). A via is where the
+        // walk or the shove left it, which is where the run before it ends and the run after it starts.
         if let Some(s) = self.session() {
-            for w in runs.windows(2) {
-                // A real via changes layer; a same-layer shared endpoint is
-                // just an intermediate fix click (D1).
-                if w[0].layer != w[1].layer && w[0].last() == w[1].first() {
-                    let at = w[0].last().unwrap();
-                    // the via the fix placed there, with its own layers, size and type (the last one, should Backspace have taken one back there)
-                    let placed = s.placed_vias.iter().rev().find(|v| v.at == at && v.layers.overlaps(&LayerRange::single(w[0].layer)) && v.layers.overlaps(&LayerRange::single(w[1].layer)));
-                    let (layers, diameter, drill, kind) = placed.map_or((LayerRange::new(w[0].layer, w[1].layer), s.placer.via_diameter, s.placer.via_drill, ViaKind::Through), |v| (v.layers, v.diameter, v.drill, v.kind));
-                    commit.vias.push(eda_model::ir::Via {
-                        id: String::new(),
-                        net: net_name.clone(),
-                        at,
-                        drill: drill.max(1),
-                        diameter: diameter.max(1),
-                        from_layer: self.layer_name(layers.start()).to_string(),
-                        to_layer: self.layer_name(layers.end()).to_string(),
-                    });
-                    Self::note_via_kind(&mut commit, kind);
-                }
+            for (k, (v, _)) in s.placer.fixed_vias.iter().enumerate() {
+                let kind = s.placed_vias.get(k).map_or(ViaKind::Through, |p| p.kind);
+                commit.vias.push(eda_model::ir::Via {
+                    id: String::new(),
+                    net: net_name.clone(),
+                    at: v.pos,
+                    drill: v.drill.max(1),
+                    diameter: v.diameter.max(1),
+                    from_layer: self.layer_name(v.layers.start()).to_string(),
+                    to_layer: self.layer_name(v.layers.end()).to_string(),
+                });
+                Self::note_via_kind(&mut commit, kind);
             }
             for (track_id, lines) in s.placer.displaced_tracks() {
                 commit.remove_track_ids.push(track_id.to_string());

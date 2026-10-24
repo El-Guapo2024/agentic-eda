@@ -112,3 +112,74 @@ fn the_same_via_in_walkaround_mode_moves_the_via_not_the_track() {
     let (at, _, _) = pv.via.expect("a via");
     assert_ne!(at, p(-3_450_000, 0), "the via was pushed off the track");
 }
+
+/// findings p5 F2-2: in Walk around the via is pushed off the track *before* the head is built to it (`rhWalkBase` / `buildInitialLine`:
+/// `BuildInitialTrace( m_p_start, aP + force, .. )`, then `v.SetPos( walkFull.CLastPoint() )`), so the head ends at the via, the next leg
+/// starts there, and the commit has the via where the preview drew it -- clear of the GND track, where the cursor's point was 150 um short.
+#[test]
+fn a_walkaround_via_is_committed_where_it_was_pushed_and_the_route_goes_on_from_it() {
+    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(-3_000_000, -4_000_000), p(-3_000_000, 4_000_000)])]);
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(p(-9_000_000, 0), "F.Cu", 200_000).unwrap();
+    router.toggle_via(true, 600_000, 300_000, Some(1));
+    let pv = router.preview(p(-3_450_000, 0)).expect("a route in progress");
+    let (at, _, _) = pv.via.expect("a via");
+    assert!(!pv.colliding && at != p(-3_450_000, 0), "{pv:?}");
+    assert_eq!(pv.head.last(), Some(at), "the head ends at the pushed via");
+    assert!(router.fix(p(-3_450_000, 0)).is_some());
+    router.preview(p(-3_450_000, 3_000_000));
+    let commit = router.finish(p(-3_450_000, 3_000_000)).expect("the route goes on on B.Cu");
+    assert_eq!(commit.vias.len(), 1);
+    assert_eq!(commit.vias[0].at, at, "committed where it was pushed to");
+    let b = commit.tracks.iter().find(|t| t.layer == "B.Cu").expect("a B.Cu leg");
+    assert_eq!(b.pts.first(), Some(&at), "the B.Cu leg starts on the via");
+    let after = committed(&design, &commit);
+    assert!(violations(&after, &model).is_empty(), "the committed board is clean: {:?}", violations(&after, &model));
+}
+
+/// findings p5 F2-1: a via that ends the route is committed (`FixRoute`: `if( pl.EndsWithVia() ) .. m_lastNode->Add( std::move( newVia ) )`),
+/// whether it was fixed with a click and the route finished on it, or is still armed when the route is finished, or was placed before
+/// any segment (an SMD fan-out: out of the pad, V, click, finish).
+#[test]
+fn a_via_that_ends_the_route_is_committed() {
+    let (design, model) = board(vec![]);
+    let start = p(-9_000_000, 0);
+    let end = p(-5_000_000, 0);
+    // fixed with the click, finished on it
+    let mut router = Router::new(&design, &model);
+    router.start(start, "F.Cu", 200_000).unwrap();
+    router.toggle_via(true, 600_000, 300_000, Some(1));
+    router.preview(end);
+    assert!(router.fix(end).is_some());
+    let commit = router.finish(end).expect("finished on the via");
+    assert_eq!(commit.vias.iter().map(|v| v.at).collect::<Vec<_>>(), vec![end], "{commit:?}");
+    assert_eq!(commit.tracks.len(), 1);
+    // armed, and the route finished with the head ending in it
+    let mut router = Router::new(&design, &model);
+    router.start(start, "F.Cu", 200_000).unwrap();
+    router.toggle_via(true, 600_000, 300_000, Some(1));
+    router.preview(end);
+    let commit = router.finish(end).expect("finished with the via armed");
+    assert_eq!(commit.vias.iter().map(|v| (v.at, v.from_layer.as_str(), v.to_layer.as_str())).collect::<Vec<_>>(), vec![(end, "F.Cu", "B.Cu")], "{commit:?}");
+    // placed at the start of the route, before any segment, and the route goes on on B.Cu
+    let mut router = Router::new(&design, &model);
+    router.start(start, "F.Cu", 200_000).unwrap();
+    router.toggle_via(true, 600_000, 300_000, Some(1));
+    assert!(router.fix(start).is_some());
+    router.preview(p(-9_000_000, 3_000_000));
+    let commit = router.finish(p(-9_000_000, 3_000_000)).expect("the B.Cu leg");
+    assert_eq!(commit.vias.iter().map(|v| v.at).collect::<Vec<_>>(), vec![start], "{commit:?}");
+    assert!(commit.tracks.iter().all(|t| t.layer == "B.Cu"));
+    // and Backspace takes the via away with the run it ended
+    let mut router = Router::new(&design, &model);
+    router.start(start, "F.Cu", 200_000).unwrap();
+    router.toggle_via(true, 600_000, 300_000, Some(1));
+    router.preview(end);
+    assert!(router.fix(end).is_some());
+    assert!(router.undo_last_segment());
+    router.preview(p(-7_000_000, 0));
+    let commit = router.finish(p(-7_000_000, 0)).expect("a plain F.Cu route");
+    assert!(commit.vias.is_empty(), "{commit:?}");
+    assert!(commit.tracks.iter().all(|t| t.layer == "F.Cu"), "back on the layer the undone run was on: {commit:?}");
+}
