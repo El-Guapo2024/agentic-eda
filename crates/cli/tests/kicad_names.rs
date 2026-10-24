@@ -272,6 +272,49 @@ fn assert_kicad_agrees(example: &str) {
     assert!(said.is_empty(), "{example}: kicad-cli's parity DRC finds {} differences:\n{}", said.len(), said.join("\n"));
     let differences = f8_differences(&dir);
     assert!(differences.is_empty(), "{example}: F8 would change {} things:\n{}", differences.len(), differences.join("\n"));
+    // the routed board after the loader renamed its nets: no copper of two nets touches, and every net is connected
+    let shorts: Vec<&Value> = drc["violations"].as_array().into_iter().flatten().filter(|v| v["type"] == "shorting_items").collect();
+    assert!(shorts.is_empty(), "{example}: kicad-cli's DRC finds shorts: {shorts:#?}");
+    let unconnected = drc["unconnected_items"].as_array().map_or(0, Vec::len);
+    assert_eq!(unconnected, 0, "{example}: kicad-cli's DRC finds unconnected items: {:#?}", drc["unconnected_items"]);
+    let library = library_differences(&dir);
+    assert!(library.is_empty(), "{example}: Update Footprints from Library would change {} footprints:\n{}", library.len(), library.join("\n"));
+}
+
+/// kicad-cli's library parity DRC (`DRC_TEST_PROVIDER_LIBRARY_PARITY`, `FOOTPRINT::FootprintNeedsUpdate`) of the board against KiCad's installed
+/// libraries: every footprint whose library copy differs from it. The board's project ignores the test (it is KiCad's default, `lib_footprint_issues` and
+/// `lib_footprint_mismatch` warn only with a library table); this copy of it turns them on, with a project table of the libraries the footprints name.
+fn library_differences(dir: &Path) -> Vec<String> {
+    let root = eda_kicad::default_footprint_library_root();
+    let copy = dir.join("library_parity");
+    let _ = std::fs::remove_dir_all(&copy);
+    std::fs::create_dir_all(&copy).unwrap();
+    let kicad = dir.join(".kicad");
+    for name in ["board.kicad_pcb", "board.kicad_pro"] {
+        std::fs::copy(kicad.join(name), copy.join(name)).unwrap();
+    }
+    let pro = std::fs::read_to_string(copy.join("board.kicad_pro")).unwrap();
+    let pro = pro.replace("\"lib_footprint_issues\": \"ignore\"", "\"lib_footprint_issues\": \"error\"").replace("\"lib_footprint_mismatch\": \"ignore\"", "\"lib_footprint_mismatch\": \"error\"");
+    std::fs::write(copy.join("board.kicad_pro"), pro).unwrap();
+    let mut libs: Vec<String> = board(&copy.join("board.kicad_pcb")).values().filter_map(|f| f.fpid.split_once(':').map(|(l, _)| l.to_string())).collect();
+    libs.sort();
+    libs.dedup();
+    let mut table = String::from("(fp_lib_table\n  (version 7)\n");
+    for lib in &libs {
+        table.push_str(&format!("  (lib (name \"{lib}\")(type \"KiCad\")(uri \"{}\")(options \"\")(descr \"\"))\n", root.join(format!("{lib}.pretty")).display()));
+    }
+    table.push_str(")\n");
+    std::fs::write(copy.join("fp-lib-table"), table).unwrap();
+    let report = copy.join("drc.json");
+    Command::new(kicad_cli()).args(["pcb", "drc", "--format", "json", "--severity-all", "-o"]).arg(&report).arg(copy.join("board.kicad_pcb")).output().expect("kicad-cli runs");
+    let drc: Value = serde_json::from_str(&std::fs::read_to_string(&report).expect("kicad-cli wrote its DRC")).unwrap();
+    drc["violations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|v| v["type"].as_str().is_some_and(|t| t.starts_with("lib_footprint")))
+        .map(|v| format!("{}: {}", v["type"].as_str().unwrap_or("?"), v["items"][0]["description"].as_str().unwrap_or("?")))
+        .collect()
 }
 
 /// A flat sheet: every net a local label names is `/<label>` (the root's path), the rest `Net-(..)`; the footprints are the installed ones.

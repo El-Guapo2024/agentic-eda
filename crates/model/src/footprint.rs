@@ -950,11 +950,15 @@ pub struct KicadFootprintRef {
     pub library: String,
     /// The footprint in it: `R_0603_1608Metric`.
     pub name: String,
+    /// The 3D model's file in the library's `.3dshapes` folder, without `.step`: the footprint's name, but for one that shares another's model
+    /// (`SOT-223-3_TabPin2` has `SOT-223.step`).
+    pub model: String,
 }
 
 impl KicadFootprintRef {
     fn new(library: &str, name: impl Into<String>) -> Self {
-        Self { library: library.to_string(), name: name.into() }
+        let name = name.into();
+        Self { library: library.to_string(), model: name.clone(), name }
     }
 
     /// `Lib:Name`, the footprint's id in KiCad's libraries.
@@ -966,7 +970,7 @@ impl KicadFootprintRef {
     /// `grep "(model " .../footprints/**/*.kicad_mod`); older releases name it `KICAD6_3DMODEL_DIR` ... `KICAD9_3DMODEL_DIR`, but `kicad-cli pcb export glb`
     /// resolves whichever variable its own version defines, so this only has to match the version that runs the export.
     pub fn model_path(&self) -> String {
-        format!("${{KICAD10_3DMODEL_DIR}}/{}.3dshapes/{}.step", self.library, self.name)
+        format!("${{KICAD10_3DMODEL_DIR}}/{}.3dshapes/{}.step", self.library, self.model)
     }
 }
 
@@ -1006,7 +1010,8 @@ pub fn kicad_footprint_for(key: &str, reference: &str, value: Option<&str>) -> O
         "SOT-23" => Some(KicadFootprintRef::new("Package_TO_SOT_SMD", "SOT-23")),
         "SOT-23-5" => Some(KicadFootprintRef::new("Package_TO_SOT_SMD", "SOT-23-5")),
         "SOT-23-6" => Some(KicadFootprintRef::new("Package_TO_SOT_SMD", "SOT-23-6")),
-        "SOT-223" => Some(KicadFootprintRef::new("Package_TO_SOT_SMD", "SOT-223")),
+        // the built-in SOT-223 is KiCad's three-pin one with the tab on pin 2 (its two pads "2" one), not `SOT-223`, whose tab is a pad 4
+        "SOT-223" => Some(KicadFootprintRef { model: "SOT-223".into(), ..KicadFootprintRef::new("Package_TO_SOT_SMD", "SOT-223-3_TabPin2") }),
         "SOIC-8" => Some(KicadFootprintRef::new("Package_SO", "SOIC-8_3.9x4.9mm_P1.27mm")),
         "SOIC-14" => Some(KicadFootprintRef::new("Package_SO", "SOIC-14_3.9x8.7mm_P1.27mm")),
         "SOIC-16" => Some(KicadFootprintRef::new("Package_SO", "SOIC-16_3.9x9.9mm_P1.27mm")),

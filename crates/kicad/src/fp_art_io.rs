@@ -106,8 +106,18 @@ fn pts_of(item: &[Sexpr]) -> Vec<Point> {
 /// One `fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly` or `fp_curve` (`parsePCB_SHAPE`). `None` for an item that lacks what it needs, one
 /// that is only on the courtyard or the board edge, or a polygon of fewer than three points.
 fn read_shape(item: &[Sexpr], tag: &str, side: Side) -> Option<FpShape> {
+    read_shape_on(item, tag, side, is_art_layer)
+}
+
+/// The courtyard's graphics of a library footprint, as [`read_art`] reads the art (`FpArt::courtyard`).
+pub(crate) fn read_courtyard(fp: &[Sexpr], side: Side) -> Vec<FpShape> {
+    let on_courtyard = |l: &str| l == "F.CrtYd" || l == "B.CrtYd";
+    fp.iter().filter_map(Sexpr::as_list).filter_map(|item| sexpr::tag(item).filter(|t| SHAPE_TAGS.contains(t)).and_then(|tag| read_shape_on(item, tag, side, on_courtyard))).collect()
+}
+
+fn read_shape_on(item: &[Sexpr], tag: &str, side: Side, keep: impl Fn(&str) -> bool) -> Option<FpShape> {
     let mut file_layers = file_layers(item);
-    file_layers.retain(|l| is_art_layer(l));
+    file_layers.retain(|l| keep(l));
     if file_layers.is_empty() {
         return None;
     }
@@ -234,6 +244,9 @@ fn installed_file(path: &Path, id: &str) -> Option<Arc<Footprint>> {
 /// The art of an installed library footprint put on the pads of the built-in footprint that stands for it: the turn and shift that bring the library's pads
 /// onto the built-in ones ([`crate::fit_pads`], as the 3D model of such a part is placed) carry the art along.
 fn fitted_art(lib: &Footprint, builtin: &Footprint) -> eda_model::fp_art::FpArt {
+    // (not the library's courtyard: the built-in footprint has its own, round its own pads)
+    let lib = Footprint { art: eda_model::fp_art::FpArt { courtyard: vec![], ..lib.art.clone() }, ..lib.clone() };
+    let lib = &lib;
     let pads = |f: &Footprint| -> Vec<(String, (f64, f64))> { f.pads.iter().map(|p| (p.number.clone(), (p.at.0 as f64, p.at.1 as f64))).collect() };
     match crate::fit_pads(&pads(lib), &pads(builtin)) {
         None => lib.art.clone(),
@@ -244,12 +257,33 @@ fn fitted_art(lib: &Footprint, builtin: &Footprint) -> eda_model::fp_art::FpArt 
     }
 }
 
+/// Whether the installed footprint is the built-in one's in the same frame: the same pad numbers, each where the built-in has it (the mean centre of
+/// the pads of a number, within 0.1 mm: the built-in is the library's to the micrometre, or a few tens of micrometres off for a capacitor's or an LED's
+/// pads, which share the resistor's). A built-in whose frame is not the library's (the pin headers are centred, KiCad's have pin 1 at the origin) is
+/// not: a board placed with it would see its pads move.
+fn same_frame(lib: &Footprint, builtin: &Footprint) -> bool {
+    let centres = |f: &Footprint| -> BTreeMap<String, (f64, f64, f64)> {
+        let mut out: BTreeMap<String, (f64, f64, f64)> = BTreeMap::new();
+        for p in f.pads.iter().filter(|p| !p.number.is_empty()) {
+            let e = out.entry(p.number.clone()).or_default();
+            *e = (e.0 + p.at.0 as f64, e.1 + p.at.1 as f64, e.2 + 1.0);
+        }
+        out
+    };
+    let (a, b) = (centres(lib), centres(builtin));
+    !b.is_empty()
+        && a.keys().eq(b.keys())
+        && a.values().zip(b.values()).all(|(p, q)| (p.0 / p.2 - q.0 / q.2).hypot(p.1 / p.2 - q.1 / q.2) <= 100_000.0)
+}
+
 /// For every part whose footprint is one of the studio's built-in packages (no footprint of the intent or the libraries under its name), the art of the installed
 /// KiCad footprint the package stands for (`eda_model::footprint::kicad_footprint_of_part`: `0603` on an `R` is `Resistor_SMD:R_0603_1608Metric`), found
 /// through `find` as any library footprint is: the part's silkscreen, its fab body and its texts, which the built-in pads have none of. Filled into
 /// [`ConstraintModel::installed_art`]. Best-effort: a package whose twin is not installed is left as it was.
 pub(crate) fn attach_installed_art(model: &mut ConstraintModel, find: &mut dyn FnMut(&str) -> Option<PathBuf>) {
     let mut found: BTreeMap<String, eda_model::fp_art::FpArt> = BTreeMap::new();
+    let mut installed: BTreeMap<String, Footprint> = BTreeMap::new();
+    model.installed_footprints.clear();
     for part in &model.parts {
         let keys = [part.footprint.as_deref(), part.package.as_deref()];
         let explicit = keys.into_iter().flatten().any(|k| model.footprints.iter().any(|f| f.name == k || eda_model::footprint::normalize_name(&f.name) == eda_model::footprint::normalize_name(k)));
@@ -260,11 +294,20 @@ pub(crate) fn attach_installed_art(model: &mut ConstraintModel, find: &mut dyn F
         let Some(twin) = eda_model::footprint::kicad_footprint_of_part(part) else { continue };
         let id = twin.id();
         let Some(lib) = find(&id).and_then(|path| installed_file(&path, &id)) else { continue };
-        if !lib.art.is_empty() {
+        // The installed footprint whole when it is the built-in's in the same frame: the board names it (`footprint_lib_id`), so it carries its pads. One
+        // that is not (a header, centred here and on pin 1 in KiCad's) leaves the built-in pads, with its art put on them.
+        if same_frame(&lib, &builtin) {
+            let mut whole = (*lib).clone();
+            if whole.model.is_none() && whole.models3d.is_empty() {
+                whole.model = Some(twin.model_path());
+            }
+            installed.insert(part.reference.clone(), whole);
+        } else if !lib.art.is_empty() {
             found.insert(part.reference.clone(), fitted_art(&lib, &builtin));
         }
     }
     model.installed_art = found;
+    model.installed_footprints = installed;
 }
 
 // ---------------------------------------------------------------------------------------------------------------- writing
@@ -348,7 +391,7 @@ pub(crate) fn write_art(out: &mut String, art: &FpArt, fp: &FootprintInstance) {
     }
 }
 
-fn write_shape(out: &mut String, s: &FpShape, fp: &FootprintInstance, uuid: &str) {
+pub(crate) fn write_shape(out: &mut String, s: &FpShape, fp: &FootprintInstance, uuid: &str) {
     let bottom = fp.side == Side::Bottom;
     let pt = |p: Point| format!("{} {}", mm(if bottom { -p.x } else { p.x }), mm(p.y));
     out.push_str("\t\t");
