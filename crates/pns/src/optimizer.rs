@@ -189,19 +189,22 @@ fn merge_obtuse(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: 
             if Direction45::from_seg(s1a, s1b).angle_to(&Direction45::from_seg(s2a, s2b)) != AngleType::Obtuse {
                 continue;
             }
-            let Some(ip) = intersect_lines(s1a, s1b, s2a, s2b) else { continue };
+            // `*s1.IntersectLines( s2 )`: `SEG::intersects( .., aLines = true )`, which rounds (`rescale`)
+            let Some(ip) = crate::seg_ops::intersect_lines((s1a, s1b), (s2a, s2b)) else { continue };
             // The new corners this would create must *still* be obtuse --
             // i.e. a genuine straightening, not swapping one kind of
             // zigzag for a sharper one.
             if Direction45::from_seg(s1a, ip).angle_to(&Direction45::from_seg(ip, s2b)) != AngleType::Obtuse {
                 continue;
             }
+            // `LINE opt_track( *aLine, opt_path ); if( !checkColliding( &opt_track ) )`: only the bypass `s1.A`, `ip`, `s2.B` is checked, so a
+            // violation elsewhere on the line does not stop the merge (findings p5 F2-14)
+            if collides(node, &[s1a, ip, s2b], layer, width, net, rules, exclude) {
+                continue;
+            }
             let mut candidate = current[..=n].to_vec();
             candidate.push(ip);
             candidate.extend_from_slice(&current[(n + step + 1)..]);
-            if collides(node, &candidate, layer, width, net, rules, exclude) {
-                continue;
-            }
             current = candidate;
             found = true;
             break; // retry at the same (still-wide) span from scratch
@@ -1042,6 +1045,21 @@ mod tests {
         assert_eq!(out.pts, vec![Point { x: 0, y: 0 }, Point { x: 3_000_000, y: 3_000_000 }, Point { x: 8_000_000, y: 3_000_000 }]);
         let pad = node.iter().find_map(|(_, it)| matches!(it, Item::Solid(_)).then(|| it.clone())).unwrap();
         assert_eq!(breakouts(200_000, &pad).len(), 8);
+    }
+
+    /// findings p5 F2-14: `mergeObtuse` checks only the bypass (`opt_path`: `s1.A`, `ip`, `s2.B`) against the world, so a violation elsewhere
+    /// on the line does not stop the merge.
+    #[test]
+    fn merge_obtuse_checks_only_its_bypass() {
+        use crate::item::{Item, Solid};
+        use crate::layer::LayerRange;
+        let net = net_of("SIG");
+        let mut node = Node::new();
+        // a GND pad on the line's last leg, far from the obtuse zigzag at its start
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 0), pos: Point { x: 9_000_000, y: -2_000_000 }, shape: Shape::Circle { c: Point { x: 9_000_000, y: -2_000_000 }, r: 300_000 }, source: "U1.1".into(), edge: false }));
+        let pts = vec![Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 }, Point { x: 3_000_000, y: -500_000 }, Point { x: 4_000_000, y: -1_500_000 }, Point { x: 6_000_000, y: -2_000_000 }, Point { x: 12_000_000, y: -2_000_000 }];
+        let out = merge_obtuse(pts.clone(), &node, 0, 200_000, &net, &rules(), &[]);
+        assert!(out.len() < pts.len(), "merged despite the pad on the last leg: {out:?}");
     }
 
     #[test]
