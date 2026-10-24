@@ -51,7 +51,7 @@ export function registerPcbRouterSweep(m: Map<string, () => void>, ctx: SweepCtx
     m.set(
       "pcbnew.InteractiveRouter.CancelCurrentItem",
       pcbOnly(() => {
-        void skipCurrentRoute(dispatch);
+        void skipCurrentRoute(dispatch, ctx.api);
       })
     );
   }
