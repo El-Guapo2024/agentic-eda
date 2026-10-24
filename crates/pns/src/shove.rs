@@ -209,8 +209,8 @@ pub(crate) fn changed_area(a: &Line, b: &Line) -> Option<Area> {
         let (p1, p2) = (a.pts[i], b.pts[i]);
         if p1 != p2 {
             if i != n - 1 {
-                // `!s.Contains( p2 )`
-                if Seg::new(a.pts[i], a.pts[i + 1]).sq_distance_to_point(p2) > 1 {
+                // `!s.Contains( p2 )`: squared distance <= 3 (findings p5 F1-10)
+                if !crate::seg_ops::contains((a.pts[i], a.pts[i + 1]), p2) {
                     i_start = Some(i);
                     break;
                 }
