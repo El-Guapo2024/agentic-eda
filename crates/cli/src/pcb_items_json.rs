@@ -192,4 +192,8 @@ fn endings_json(json: &mut Value, shape: &eda_model::ir::Shape, items: &eda_mode
     if let Some(net) = &st.net {
         json["net"] = json!(net);
     }
+    // A rectangle's corner radius (`EDA_SHAPE::GetCornerRadius`), drawn rounded.
+    if st.corner_radius > 0 && matches!(shape, eda_model::ir::Shape::Rect { .. }) {
+        json["corner_radius"] = json!(st.corner_radius);
+    }
 }

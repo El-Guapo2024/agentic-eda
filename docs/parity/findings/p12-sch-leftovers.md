@@ -88,7 +88,7 @@ Part 1 is the board outline (GAPS item 27, P12; `PARITY-pcb.md` section 25). Par
 
 ### O3. A rectangle's corner radius is dropped (outline and file) (high; already listed as a gap, now measured)
 
-**Fixed** on task-fix-bc-board-io: 185d48fe (the canvas still draws the corner sharp).
+**Fixed** on task-fix-bc-board-io: 185d48fe (and the canvas draws it, with the browser check `board-io.check.js`).
 
 **What differs.**
 - `graphic_shape`'s `gr_rect` arm (`import.rs:2117`) does not read `(radius R)`, and the IR's `Shape::Rect` has no field for it.

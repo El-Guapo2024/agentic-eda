@@ -573,7 +573,7 @@ interface ShapeCommon {
 export type Shape =
   | (ShapeCommon & { kind: "segment"; start: [Nm, Nm]; end: [Nm, Nm] })
   | (ShapeCommon & { kind: "arc"; start: [Nm, Nm]; mid: [Nm, Nm]; end: [Nm, Nm] })
-  | (ShapeCommon & { kind: "rect"; start: [Nm, Nm]; end: [Nm, Nm] })
+  | (ShapeCommon & { kind: "rect"; start: [Nm, Nm]; end: [Nm, Nm]; /** `EDA_SHAPE::GetCornerRadius()`, absent for a sharp rectangle. */ corner_radius?: Nm })
   | (ShapeCommon & { kind: "circle"; center: [Nm, Nm]; end: [Nm, Nm] })
   | (ShapeCommon & { kind: "polygon"; pts: [Nm, Nm][] })
   /** `PCB_SHAPE` BEZIER: a cubic from `start` to `end` with control points `c1`/`c2` (KiCad's `gr_curve` order). The canvas flattens it with kicad-port/bezierPoly.ts (`BEZIER_POLY::GetPoly`). */

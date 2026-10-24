@@ -818,9 +818,15 @@ export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketc
       ctx.lineTo(s.end[0], s.end[1]);
       ctx.stroke();
       return;
-    case "rect":
-      ctx.rect(s.start[0], s.start[1], s.end[0] - s.start[0], s.end[1] - s.start[1]);
+    case "rect": {
+      // A corner radius rounds the corners (`ROUNDRECT`, clamped to half the smaller side as its constructor does).
+      const [x0, y0] = [Math.min(s.start[0], s.end[0]), Math.min(s.start[1], s.end[1])];
+      const [w, h] = [Math.abs(s.end[0] - s.start[0]), Math.abs(s.end[1] - s.start[1])];
+      const r = Math.min(s.corner_radius ?? 0, Math.min(w, h) / 2);
+      if (r > 0) ctx.roundRect(x0, y0, w, h, r);
+      else ctx.rect(s.start[0], s.start[1], s.end[0] - s.start[0], s.end[1] - s.start[1]);
       break;
+    }
     case "circle": {
       const r = Math.hypot(s.end[0] - s.center[0], s.end[1] - s.center[1]);
       ctx.arc(s.center[0], s.center[1], r, 0, Math.PI * 2);

@@ -694,7 +694,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - The autoplacer and the placement verbs (`crates/place`, `Cmd::PlaceAt` and the rest) still work from the outline's bounding box: a part can be placed inside a cutout's box.
 - The Freerouting DSN boundary (`eda_freeroute::design::to_dsn`) is the summary polygon, with no cutouts, and the autoroute works inside it. (File > Export > Specctra DSN, P19b, is another writer, `FromBOARD`'s: its boundary is the Edge.Cuts outline with its cutouts.)
 - NPTH holes are not cut out of the 3D slab (`aIncludeNPTHAsOutlines`); a mask-only NPTH hole is kept (`FootprintExtra::holes`) and written, so kicad-cli's fill keeps clear of it (item 13).
-- The arcs of a `gr_poly` are not in the IR (a rectangle's corner radius is, 2026-10-24: `ShapeStyle::corner_radius`, `PARITY-pcb.md` section 25; the canvas draws it sharp); there is no outline-specific editor (the generic shape tools draw and edit Edge.Cuts); "Fix discontinuities in board outlines" in
+- The arcs of a `gr_poly` are not in the IR (a rectangle's corner radius is, 2026-10-24: `ShapeStyle::corner_radius`, `PARITY-pcb.md` section 25); there is no outline-specific editor (the generic shape tools draw and edit Edge.Cuts); "Fix discontinuities in board outlines" in
   Update PCB from Schematic has nothing behind it; the footprint pass of `BuildBoardPolygonOutlines` (`isCopperOutside`) is the ordinary nesting test here, and a footprint's Edge.Cuts do not follow it when it
   moves.
 - Port from: `pcbnew/convert_shape_list_to_polygon.cpp`, `pcbnew/board.cpp` (`GetBoardPolygonOutlines`, its `aIncludeNPTHAsOutlines` argument), `pcbnew/specctra_import_export/specctra_export.cpp`,
