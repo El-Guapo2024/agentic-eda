@@ -314,6 +314,21 @@
       t((await snapshot()) === base, "undone, the board is as it was");
     });
 
+    // ----- p6 F17
+    await scenario("Duplicate of a locked footprint leaves nothing behind (the copy is locked, so nothing is carried and the commit is reverted)", async (t) => {
+      await post({ op: "set_locked", ids: [two.ref], locked: true });
+      await sleep(500);
+      const refs0 = (await state()).parts.filter((p) => p.placed).map((p) => p.ref).sort().join();
+      const locked0 = JSON.stringify((await state()).locked ?? []);
+      await select([two.ref]);
+      await __eda.run("common.Interactive.duplicate"); await sleep(1500);
+      const st = await state();
+      t(st.parts.filter((p) => p.placed).map((p) => p.ref).sort().join() === refs0 && JSON.stringify(st.locked ?? []) === locked0, "no copy stays on the board");
+      t(__eda.state().tool === "select", `nothing is carried (${__eda.state().tool})`);
+      await undo();
+      t((await snapshot()) === base && !((await state()).locked ?? []).includes(two.ref), "one Undo takes the lock back: the duplicate left no step");
+    });
+
     // ----- p6 F2
     await scenario("a handle drag of a grouped line and Mirror of a grouped track keep them in their group", async (t) => {
       const [x0, y0] = [two.at[0] / 1e6 + 4, two.at[1] / 1e6 + 6];
